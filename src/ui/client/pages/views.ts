@@ -52,12 +52,11 @@ export const viewPage = (ctx: PageContext, id: string): Page => {
     const headers = d.columns.map((c, i) => {
       const active = sort?.column === i;
       const dir = active ? sort!.direction : null;
-      return h(
+      const btn = h(
         'button',
         {
           type: 'button',
           class: 'sort',
-          'aria-sort': dir === 'asc' ? 'ascending' : dir === 'desc' ? 'descending' : null,
           title: 'Sort (in the browser only)',
           on: {
             click: () => {
@@ -69,6 +68,8 @@ export const viewPage = (ctx: PageContext, id: string): Page => {
         c.label,
         dir ? (dir === 'asc' ? ' ▲' : ' ▼') : '',
       );
+      // aria-sort belongs on the column header (<th>), not on the button inside it.
+      return { cell: btn, attrs: { 'aria-sort': dir === 'asc' ? 'ascending' : dir === 'desc' ? 'descending' : 'none' } };
     });
     replaceChildren(
       body,

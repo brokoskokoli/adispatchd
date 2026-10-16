@@ -67,8 +67,18 @@ export function section(title: Child, ...children: Child[]): HTMLElement {
   return h('section', { class: 'card' }, h('h2', null, title), ...children);
 }
 
+/** Header cell with extra attributes (e.g. `aria-sort`). */
+export interface HeaderCell {
+  cell: Child;
+  attrs: Record<string, string | null>;
+}
+
+function isHeaderCell(x: unknown): x is HeaderCell {
+  return typeof x === 'object' && x !== null && 'cell' in x && 'attrs' in x;
+}
+
 /** Table with header and rows (cells are already safe nodes/strings). */
-export function table(headers: Child[], rows: Child[][], opts: { empty?: string; className?: string } = {}): HTMLElement {
+export function table(headers: Array<Child | HeaderCell>, rows: Child[][], opts: { empty?: string; className?: string } = {}): HTMLElement {
   if (rows.length === 0) return h('p', { class: 'empty' }, opts.empty ?? 'Nothing here.');
   return h(
     'div',
@@ -76,7 +86,7 @@ export function table(headers: Child[], rows: Child[][], opts: { empty?: string;
     h(
       'table',
       { class: opts.className ?? null },
-      h('thead', null, h('tr', null, headers.map((x) => h('th', { scope: 'col' }, x)))),
+      h('thead', null, h('tr', null, headers.map((x) => (isHeaderCell(x) ? h('th', { scope: 'col', ...x.attrs }, x.cell) : h('th', { scope: 'col' }, x))))),
       h('tbody', null, rows.map((r) => h('tr', null, r.map((c) => h('td', null, c))))),
     ),
   );

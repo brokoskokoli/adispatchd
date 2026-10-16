@@ -7,6 +7,7 @@ import { h, replaceChildren, rerender } from '../dom.js';
 import { buildHash } from '../../shared/route.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { LogWindow } from '../../shared/logs.js';
+import { EventList, type EventListChange } from '../../shared/events.js';
 import { eventSummary, formatBytes, formatDuration, stateTone } from '../../shared/format.js';
 import { messageRunId, type Page, type PageContext } from '../page.js';
 import type { Action, LogPage, RunDetail, RunEvent } from '../types.js';
@@ -144,7 +145,7 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
             ['Technical state', badge(d.status, d.active ? 'info' : 'muted')],
             ['Business result', d.businessResult ? badge(d.businessResult, d.businessResult === 'success' ? 'ok' : 'warn') : text(null)],
             ['Final reason', text(d.finalReason)],
-            ['Lifecycle', d.lifecycleStatus ? badge(d.lifecycleFailed ? 'lifecycle failed' : d.lifecycleStatus, stateTone(d.lifecycleStatus)) : text(null)],
+            ['Lifecycle', d.lifecycleStatus ? (d.lifecycleFailed ? badge('lifecycle failed', 'error') : badge(d.lifecycleStatus, stateTone(d.lifecycleStatus))) : text(null)],
             ['Exit code', text(d.exitCode)],
           ]),
         ),
@@ -193,7 +194,10 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
   let stream: 'stdout' | 'stderr' = ctx.route.query.stream === 'stderr' ? 'stderr' : 'stdout';
   const win = new LogWindow();
   let follow = true;
-  let logBusy = false;
+  /** Generation of the log window (bumped on stream switch / reset); in-flight responses of older generations are dropped. */
+  let logGen = 0;
+  /** Generation with a load in flight (-1 = none). */
+  let logBusyGen = -1;
   const logPre = h('pre', { class: 'log', tabindex: 0, 'aria-label': 'Log output' });
   const logInfo = h('div', { class: 'log-info muted' });
   const logButtons = h('div', { class: 'actions' });
@@ -231,24 +235,40 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
     void loadLog('tail');
   };
 
-  /** Load a log range. All requests are bounded pages (LOG_PAGE_BYTES). */
+  /**
+   * Load a log range. All requests are bounded pages (LOG_PAGE_BYTES).
+   * `tail`/`start` (and a stream switch) start a new generation: responses of
+   * older generations are discarded, so bytes of one stream never end up in
+   * the window of another or of a newer range.
+   */
   const loadLog = async (mode: 'tail' | 'earlier' | 'later' | 'start' | 'follow'): Promise<void> => {
-    if (logBusy) return;
-    logBusy = true;
+    if (mode === 'tail' || mode === 'start') logGen++;
+    const gen = logGen;
+    if (logBusyGen === gen) return; // same generation already loading (follow/earlier/later)
+    logBusyGen = gen;
+    const get = async (query: Record<string, number | string>): Promise<LogPage | null> => {
+      const page = await api.get<LogPage>(logUrl(query));
+      return gen === logGen ? page : null;
+    };
     try {
       if (mode === 'tail') {
-        win.reset(await api.get<LogPage>(logUrl(win.tailQuery())));
+        const page = await get(win.tailQuery());
+        if (!page) return;
+        win.reset(page);
         renderLog(true);
       } else if (mode === 'start') {
         follow = false;
-        win.reset(await api.get<LogPage>(logUrl({ offset: 0, limit: win.pageBytes })));
+        const page = await get({ offset: 0, limit: win.pageBytes });
+        if (!page) return;
+        win.reset(page);
         renderLog(false);
         logPre.scrollTop = 0;
       } else if (mode === 'earlier') {
         const q = win.earlierQuery();
         if (!q) return;
         const before = logPre.scrollHeight;
-        const page = await api.get<LogPage>(logUrl(q));
+        const page = await get(q);
+        if (!page) return;
         if (!win.prepend(page)) win.reset(page);
         if (win.hasLater) follow = false;
         renderLog(false);
@@ -257,9 +277,12 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
         // later / follow: read on from `end` (several pages at most per call)
         const stick = atBottom();
         for (let i = 0; i < 4; i++) {
-          const page = await api.get<LogPage>(logUrl(win.laterQuery()));
+          const page = await get(win.laterQuery());
+          if (!page) return;
           if (!win.append(page)) {
-            win.reset(await api.get<LogPage>(logUrl(win.tailQuery())));
+            const tail = await get(win.tailQuery());
+            if (!tail) return;
+            win.reset(tail);
             break;
           }
           if (page.eof || page.length === 0) break;
@@ -267,10 +290,11 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
         renderLog(mode === 'follow' ? stick : false);
       }
     } catch (err) {
+      if (gen !== logGen) return;
       logInfo.textContent = '';
       logInfo.appendChild(errorBox(err));
     } finally {
-      logBusy = false;
+      if (logBusyGen === gen) logBusyGen = -1;
     }
   };
   const followRefresher = createRefresher(() => (follow && tab === 'logs' ? loadLog('follow') : undefined), 1000);
@@ -286,10 +310,13 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
   };
 
   // ---------------------------------------------------------------- events
-  let events: RunEvent[] = [];
-  const seen = new Set<number>();
+  // Contiguous REST cursor + live events (see shared/events.ts): live events are appended only if they
+  // continue the loaded range; otherwise "newer events" are offered and loaded via REST from the cursor.
+  let evList = new EventList<RunEvent>();
+  let evBusy = false;
   const eventsBody = h('tbody');
   const eventsMore = h('div');
+  const eventsDropped = h('div');
   const eventRow = (e: RunEvent): HTMLElement =>
     h(
       'tr',
@@ -301,36 +328,50 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
       h('td', { class: 'event-message' }, eventSummary(e)),
       h('td', null, Object.keys(e.payload ?? {}).length ? h('details', null, h('summary', null, 'payload'), jsonBlock(e.payload, 50_000)) : null),
     );
-  const addEvents = (list: RunEvent[]): void => {
-    for (const e of list) {
-      if (seen.has(e.sequence)) continue;
-      seen.add(e.sequence);
-      events.push(e);
-      eventsBody.appendChild(eventRow(e));
+  const applyEvents = (change: EventListChange<RunEvent> | null): void => {
+    if (change) {
+      for (const e of change.append) eventsBody.appendChild(eventRow(e));
+      for (let i = 0; i < change.drop && eventsBody.firstElementChild; i++) eventsBody.firstElementChild.remove();
     }
+    replaceChildren(
+      eventsDropped,
+      evList.dropped > 0 ? h('p', { class: 'hint' }, `${evList.dropped} older event(s) are not shown (at most ${evList.maxRows} rows are kept).`) : null,
+    );
+    replaceChildren(
+      eventsMore,
+      evList.pending
+        ? h('div', { class: 'alert alert-info' }, 'Newer events are available. ', button(evBusy ? 'Loading…' : 'Load newer events', () => void loadMoreEvents(), { kind: 'primary', disabled: evBusy }))
+        : null,
+    );
   };
   const loadMoreEvents = async (): Promise<void> => {
-    const after = events.reduce((m, e) => Math.max(m, e.sequence), 0);
+    if (evBusy) return;
+    evBusy = true;
+    const list = evList;
+    const q = list.nextQuery(1000);
+    applyEvents(null);
     try {
-      const res = await api.get<{ events: RunEvent[]; hasMore: boolean }>(`/api/v1/runs/${seg(runId)}/events${qs({ after, limit: 1000 })}`);
-      addEvents(res.events);
-      replaceChildren(eventsMore, res.hasMore ? button('Load more events', () => void loadMoreEvents()) : null);
+      const res = await api.get<{ events: RunEvent[]; hasMore: boolean }>(`/api/v1/runs/${seg(runId)}/events${qs(q)}`);
+      if (list === evList) applyEvents(list.page(res.events, res.hasMore, q.after));
     } catch (err) {
-      replaceChildren(eventsMore, errorBox(err));
+      replaceChildren(eventsMore, errorBox(err), button('Retry', () => void loadMoreEvents()));
+      return;
+    } finally {
+      evBusy = false;
     }
+    applyEvents(null);
   };
   const renderEvents = (d: RunDetail): void => {
-    events = [];
-    seen.clear();
+    evList = new EventList<RunEvent>();
     eventsBody.replaceChildren();
-    addEvents(d.events);
-    replaceChildren(eventsMore, d.eventsTruncated ? button('Load more events', () => void loadMoreEvents()) : null);
+    applyEvents(evList.page(d.events, d.eventsTruncated, 0));
     rerender(
       body,
       h(
         'section',
         { class: 'card' },
         h('p', { class: 'hint' }, 'Structured events (worker @@ORCH_EVENT lines and orchestrator events). Events are informational only. Live updates append here.'),
+        eventsDropped,
         h(
           'div',
           { class: 'table-wrap' },
@@ -366,7 +407,6 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
       else if (tab === 'actions') renderActions(d);
       else if (tab === 'events') {
         if (first) renderEvents(d);
-        else addEvents(d.events.filter((e) => !seen.has(e.sequence)));
       } else if (tab === 'logs') {
         if (first) renderLogs();
         else if (wasActive && !d.active) followRefresher.trigger(); // final bytes after the run ended
@@ -393,7 +433,7 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
         return;
       }
       if (msg.type === 'run.event' && tab === 'events') {
-        addEvents([msg.payload as unknown as RunEvent]);
+        applyEvents(evList.live(msg.payload as unknown as RunEvent));
         const t = msg.payload.type;
         if (t !== 'run.status' && t !== 'status' && t !== 'lifecycle.chain') return;
       }
@@ -401,7 +441,11 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
     },
     onResync: () => {
       void refresher.now();
-      if (tab === 'events') void loadMoreEvents();
+      if (tab === 'events') {
+        // Events may have been missed while disconnected: continue from the contiguous cursor.
+        evList.markPending();
+        void loadMoreEvents();
+      }
       if (tab === 'logs' && follow) void loadLog('tail');
     },
     dispose: () => {
