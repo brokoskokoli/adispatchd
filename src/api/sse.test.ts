@@ -113,6 +113,22 @@ describe('EventHub', () => {
     h.close();
   });
 
+  it('resets the stream when the Last-Event-ID is newer than any known event', () => {
+    const run = reserveSource(p, 'wf', 'a:1');
+    publisher.flush();
+    const latest = p.events.latestId();
+    const h = hub();
+    const { res } = connect(h, { lastEventId: latest + 1000 });
+    expect(res.text).toContain('event: stream.reset');
+    expect(res.text).toContain('unknown_last_event_id');
+    expect(res.ids()).toEqual([latest]);
+    // New events after the reset are delivered (not suppressed by the bogus high ID).
+    p.events.append(run.id, 'progress', {});
+    publisher.flush();
+    expect(res.ids()).toEqual([latest, p.events.latestId()]);
+    h.close();
+  });
+
   it('resets the stream when too many events were missed', () => {
     const run = reserveSource(p, 'wf', 'a:1');
     for (let i = 0; i < 20; i++) p.events.append(run.id, 'progress', { i });

@@ -21,6 +21,7 @@ import {
   type FieldType,
   type FieldValue,
   type Logger,
+  type Redactor,
   type SourceAdapter,
   type SourceItem,
 } from '../core/index.js';
@@ -111,6 +112,8 @@ export interface ViewServiceOptions {
   clock?: Clock;
   logger?: Logger;
   cacheTtlMs?: number;
+  /** Redaction of error texts (shared `SecretRedactor`). */
+  redact?: Redactor;
 }
 
 /** Error for unknown views. */
@@ -131,6 +134,7 @@ export class ViewService {
   private readonly clock: Clock;
   private readonly logger: Logger;
   private readonly ttl: number;
+  private readonly redact: Redactor;
   private readonly cache = new Map<string, CacheEntry>();
   private readonly inflight = new Map<string, Promise<ViewItemsResult>>();
 
@@ -138,6 +142,7 @@ export class ViewService {
     this.clock = options.clock ?? systemClock;
     this.logger = (options.logger ?? noopLogger).child({ component: 'views' });
     this.ttl = options.cacheTtlMs ?? DEFAULT_VIEW_CACHE_TTL_MS;
+    this.redact = options.redact ?? ((t) => t);
   }
 
   /** All view definitions, sorted by title. */
@@ -237,7 +242,7 @@ export class ViewService {
           const items = await adapter.listCandidates(pushdown ? { filter: pushdown } : {});
           for (const item of items) loaded.push({ item, adapter });
         } catch (err) {
-          const message = errorMessage(err);
+          const message = this.redact(errorMessage(err));
           this.logger.warn('view source failed', { view: view.id, sourceId, error: message });
           errors.push({ sourceId, message });
         }

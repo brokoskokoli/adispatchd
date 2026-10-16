@@ -15,14 +15,17 @@ import { existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import { isMap, isPair, isScalar, isSeq, parseDocument, visit } from 'yaml';
 import { z } from 'zod';
 import {
   ACTIVE_STATUSES,
   TECHNICAL_STATUSES,
   dataPaths,
   errorMessage,
+  isSecretKey,
   isValidRunId,
   noopLogger,
+  REDACTED,
   redactValue,
   systemClock,
   type Clock,
@@ -52,7 +55,12 @@ const DETAIL_EVENT_LIMIT = 500;
 /** Readiness of the instance (`/ready`). */
 export interface ReadinessReport {
   ready: boolean;
-  checks: { database: boolean; recovery: boolean; config: boolean; scheduler: boolean; shuttingDown: boolean };
+  /**
+   * There is no separate config check: an instance only runs with a fully
+   * validated configuration (invalid YAML prevents the start, a failed reload
+   * keeps the active configuration).
+   */
+  checks: { database: boolean; recovery: boolean; scheduler: boolean; shuttingDown: boolean };
 }
 
 /** Everything the API needs from the application. */
@@ -182,6 +190,31 @@ async function fileSize(file: string): Promise<number | null> {
   }
 }
 
+/** Host names always accepted (loopback access to the local instance). */
+const LOOPBACK_HOST_NAMES: readonly string[] = ['localhost', '127.0.0.1', '[::1]'];
+
+/** Split `name[:port]` / `[v6][:port]` into lower-case name and port (`null` = none). */
+function splitHost(value: string): { name: string; port: string | null } | null {
+  const v = value.trim().toLowerCase();
+  const m = /^(\[[0-9a-f:.]+\]|[a-z0-9.-]+)(?::(\d{1,5}))?$/.exec(v);
+  if (!m) return null;
+  return { name: m[1] as string, port: m[2] ?? null };
+}
+
+/**
+ * True if the `Host` (or an `Origin`'s host) matches an allowed entry: `name`
+ * matches any port, `name:port` only that port.
+ */
+export function isAllowedHost(value: string, allowed: readonly string[]): boolean {
+  const h = splitHost(value);
+  if (!h) return false;
+  return allowed.some((entry) => {
+    const e = splitHost(entry);
+    if (!e) return false;
+    return e.name === h.name && (e.port === null || e.port === (h.port ?? '80'));
+  });
+}
+
 function isLoopbackHost(host: string): boolean {
   const h = host.replace(/^\[|\]$/g, '');
   return h === 'localhost' || h === '::1' || h.startsWith('127.');
@@ -208,7 +241,31 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
   });
 
   // --- Security hooks -------------------------------------------------------
+  const allowedHosts = (): readonly string[] => {
+    const bind = deps.info.host.toLowerCase();
+    const extra = deps.config.current.global.server.allowedHosts;
+    const bindName = bind.includes(':') && !bind.startsWith('[') ? `[${bind}]` : bind;
+    const wildcard = bind === '0.0.0.0' || bind === '::' || bind === '[::]';
+    return [...LOOPBACK_HOST_NAMES, ...(wildcard || isLoopbackHost(bind) ? [] : [bindName]), ...extra];
+  };
   app.addHook('onRequest', async (req) => {
+    // DNS-rebinding protection for ALL requests (incl. GET, SSE, static UI): the Host header must name this server.
+    const host = req.headers.host;
+    if (typeof host !== 'string' || !isAllowedHost(host, allowedHosts())) {
+      throw new ApiError(421, 'host_not_allowed', 'Host header is not allowed (configure server.allowed_hosts for reverse proxies)');
+    }
+    const origin = req.headers.origin;
+    if (origin !== undefined) {
+      let originHost: string | null = null;
+      try {
+        const u = new URL(origin);
+        originHost = u.protocol === 'http:' || u.protocol === 'https:' ? u.host : null;
+      } catch {
+        originHost = null;
+      }
+      const allowed = (deps.allowedOrigins ?? []).includes(origin) || (originHost !== null && isAllowedHost(originHost, allowedHosts()));
+      if (!allowed) throw new ApiError(403, 'origin_not_allowed', 'Request origin is not allowed');
+    }
     if (req.method === 'GET' || req.method === 'HEAD') return;
     if (req.method === 'OPTIONS') throw new ApiError(405, 'method_not_allowed', 'CORS preflight is not supported');
     if (req.headers[CSRF_HEADER] !== '1') {
@@ -216,20 +273,6 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     }
     if (req.headers['sec-fetch-site'] === 'cross-site') {
       throw new ApiError(403, 'cross_site_request', 'Cross-site requests are not allowed');
-    }
-    const origin = req.headers.origin;
-    if (origin !== undefined && origin !== 'null') {
-      const host = req.headers.host;
-      let originHost: string | null = null;
-      try {
-        originHost = new URL(origin).host;
-      } catch {
-        originHost = null;
-      }
-      const allowed = (deps.allowedOrigins ?? []).includes(origin) || (host !== undefined && originHost === host);
-      if (!allowed) throw new ApiError(403, 'origin_not_allowed', 'Request origin is not allowed');
-    } else if (origin === 'null') {
-      throw new ApiError(403, 'origin_not_allowed', 'Request origin is not allowed');
     }
     const hasBody = Number(req.headers['content-length'] ?? 0) > 0 || req.headers['transfer-encoding'] !== undefined;
     const type = String(req.headers['content-type'] ?? '').split(';')[0]?.trim().toLowerCase();
@@ -585,7 +628,8 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
   app.get('/api/v1/views/:id/items', async (req) => {
     const { id } = parse(idParam, req.params, 'path');
     const q = parse(z.object({ refresh: z.enum(['true', 'false', '1', '0']).optional() }).strict(), req.query, 'query');
-    return deps.views.items(id, { refresh: q.refresh === 'true' || q.refresh === '1' });
+    const result = await deps.views.items(id, { refresh: q.refresh === 'true' || q.refresh === '1' });
+    return { ...result, errors: result.errors.map((e) => ({ sourceId: e.sourceId, message: redact(e.message) })) };
   });
 
   // --- Configuration --------------------------------------------------------
@@ -682,10 +726,64 @@ async function readConfigFiles(configDir: string, redact: Redactor): Promise<Arr
       try {
         const st = await stat(path.join(configDir, file));
         if (st.size > 1024 * 1024) return { file, content: null, error: 'file too large' };
-        return { file, content: redact(await readFile(path.join(configDir, file), 'utf8')) };
+        const masked = redactYaml(await readFile(path.join(configDir, file), 'utf8'));
+        if ('error' in masked) return { file, content: null, error: masked.error };
+        return { file, content: redact(masked.content) };
       } catch (err) {
         return { file, content: null, error: errorMessage(err) };
       }
     }),
   );
+}
+
+/** Keys whose values are always masked in displayed YAML (besides {@link isSecretKey}). */
+const MASKED_YAML_KEYS = new Set(['url']);
+/** Keys whose whole sub-tree of values is masked (header values / header env names). */
+const MASKED_YAML_SUBTREES = new Set(['headers', 'headers_env']);
+
+function maskComment(text: string | null | undefined): string | null | undefined {
+  if (!text) return text;
+  // Keep the origin of URLs in comments, never path/query (tokens of webhook URLs).
+  return text.replace(/\b(https?:\/\/[^\s/]+)[^\s]*/gi, (_m, origin: string) => `${origin}/${REDACTED}`);
+}
+
+/**
+ * Structural redaction of a YAML file for read-only display: values of
+ * `url` keys, everything below `headers`/`headers_env` and every key that
+ * looks secret ({@link isSecretKey}) are replaced, URLs in comments are cut
+ * to their origin. Independent of the loaded configuration (also covers
+ * edited, not yet reloaded files). Unparseable files are never returned raw.
+ */
+export function redactYaml(text: string): { content: string } | { error: string } {
+  const doc = parseDocument(text, { prettyErrors: false });
+  if (doc.errors.length > 0) {
+    const e = doc.errors[0]!;
+    const line = e.linePos?.[0]?.line;
+    const message = e.message.split(/:\s*\n/)[0] ?? 'invalid YAML';
+    return { error: `YAML cannot be displayed (syntax error${line ? ` at line ${line}` : ''}: ${message})` };
+  }
+  doc.commentBefore = maskComment(doc.commentBefore) ?? null;
+  doc.comment = maskComment(doc.comment) ?? null;
+  visit(doc, {
+    Node(_key, node) {
+      const n = node as { comment?: string | null; commentBefore?: string | null };
+      if (n.comment) n.comment = maskComment(n.comment) ?? null;
+      if (n.commentBefore) n.commentBefore = maskComment(n.commentBefore) ?? null;
+    },
+    Pair(_key, pair, ancestors) {
+      const keyName = isScalar(pair.key) ? String(pair.key.value) : '';
+      const underMaskedSubtree = ancestors.some((a) => isPair(a) && isScalar(a.key) && MASKED_YAML_SUBTREES.has(String(a.key.value)));
+      const mask = MASKED_YAML_KEYS.has(keyName) || isSecretKey(keyName) || underMaskedSubtree || MASKED_YAML_SUBTREES.has(keyName);
+      if (!mask) return;
+      const maskNode = (value: unknown): void => {
+        if (isScalar(value)) {
+          if (value.value !== null && value.value !== '') value.value = REDACTED;
+        } else if (isMap(value) || isSeq(value)) {
+          for (const item of value.items as unknown[]) maskNode(isPair(item) ? item.value : item);
+        }
+      };
+      maskNode(pair.value);
+    },
+  });
+  return { content: doc.toString() };
 }

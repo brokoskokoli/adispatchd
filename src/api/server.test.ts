@@ -11,6 +11,7 @@ let release: string;
 beforeAll(async () => {
   env = await startAppEnv(
     {
+      allowedHosts: ['orch.example.com', 'proxy.example.com:8443'],
       configExtra: [
         'notifications:',
         '  channels:',
@@ -121,12 +122,54 @@ describe('CSRF protection', () => {
     });
     expect(text.statusCode).toBe(415);
     const preflight = await env.app.http.inject({ method: 'OPTIONS', url: '/api/v1/scheduler/pause', headers: { origin: 'https://evil.example' } });
-    expect(preflight.statusCode).toBe(405);
+    expect(preflight.statusCode).toBe(403); // foreign origin rejected before anything else
+    const localPreflight = await env.app.http.inject({ method: 'OPTIONS', url: '/api/v1/scheduler/pause' });
+    expect(localPreflight.statusCode).toBe(405);
     expect(preflight.headers['access-control-allow-origin']).toBeUndefined();
     const sameOrigin = await env.request('POST', '/api/v1/scheduler/pause', undefined, { origin: 'http://127.0.0.1:8787', host: '127.0.0.1:8787' });
     expect(sameOrigin.status).toBe(200);
     await env.request('POST', '/api/v1/scheduler/resume');
     expect(env.app.controller.status.paused).toBe(false);
+  });
+});
+
+describe('DNS-rebinding protection (Host / Origin allowlist)', () => {
+  it('rejects foreign Host headers for every method, incl. GET, SSE and unknown routes', async () => {
+    const evil = { host: 'attacker.example:8787' };
+    for (const [method, url] of [
+      ['GET', '/api/v1/config/files'],
+      ['GET', '/api/v1/status'],
+      ['GET', '/health'],
+      ['GET', '/api/v1/events'],
+      ['GET', '/nope'],
+      ['POST', '/api/v1/scheduler/pause'],
+    ] as const) {
+      const res = await env.request(method, url, undefined, evil);
+      expect(res.status, `${method} ${url}`).toBe(421);
+      expect(res.json.error.code).toBe('host_not_allowed');
+    }
+    expect(env.app.controller.status.paused).toBe(false);
+    // Rebinding attack: Host and Origin both point to the attacker's name.
+    const both = await env.request('POST', '/api/v1/scheduler/pause', undefined, { host: 'attacker.example:8787', origin: 'http://attacker.example:8787' });
+    expect(both.status).toBe(421);
+    expect(env.app.controller.status.paused).toBe(false);
+  });
+
+  it('accepts loopback names on any port and configured allowed_hosts', async () => {
+    for (const host of ['localhost', '127.0.0.1:8787', '[::1]:9999', 'LOCALHOST:1234', 'orch.example.com', 'orch.example.com:443', 'proxy.example.com:8443']) {
+      expect((await env.request('GET', '/health', undefined, { host })).status, host).toBe(200);
+    }
+    expect((await env.request('GET', '/health', undefined, { host: 'proxy.example.com:8080' })).status).toBe(421);
+    expect((await env.request('GET', '/health', undefined, { host: 'orch.example.com.attacker.example' })).status).toBe(421);
+  });
+
+  it('requires the Origin to name an allowed host as well', async () => {
+    const res = await env.request('GET', '/api/v1/status', undefined, { host: 'localhost', origin: 'https://attacker.example' });
+    expect(res.status).toBe(403);
+    expect(res.json.error.code).toBe('origin_not_allowed');
+    const viaProxy = await env.request('POST', '/api/v1/scheduler/resume', undefined, { host: 'orch.example.com', origin: 'https://orch.example.com' });
+    expect(viaProxy.status).toBe(200);
+    expect((await env.request('GET', '/health', undefined, { origin: 'null' })).status).toBe(403);
   });
 });
 
@@ -139,6 +182,11 @@ describe('scheduler control', () => {
     expect((await env.request('PATCH', '/api/v1/scheduler/runtime', { maxConcurrent: 0 })).status).toBe(400);
     expect((await env.request('PATCH', '/api/v1/scheduler/runtime', { maxConcurrent: null })).json.limits.override).toBeNull();
     expect((await env.request('POST', '/api/v1/scheduler/pause', { bogus: 1 })).status).toBe(400);
+    // Invalid shutdown bodies are rejected before anything happens.
+    const drain = await env.request('POST', '/api/v1/shutdown/drain', { now: true });
+    expect(drain.status).toBe(400);
+    expect((await env.request('POST', '/api/v1/shutdown/cancel-all', { reason: 42 })).status).toBe(400);
+    expect(env.app.controller.status.draining).toBe(false);
   });
 });
 
@@ -327,6 +375,34 @@ describe('configuration and notifications', () => {
     expect(config.content).not.toContain('LITERAL-SECRET-URL');
     expect(files.json.files.map((f: { file: string }) => f.file)).toContain('workflows/coder.yaml');
     expect((await env.request('POST', '/api/v1/config/validate')).json.ok).toBe(true);
+
+    // A secret added on disk without reload is not known to any redactor – the structural redaction still masks it.
+    const configFile = path.join(env.configDir, 'config.yaml');
+    const { readFileSync } = await import('node:fs');
+    const original = readFileSync(configFile, 'utf8');
+    writeFileSync(
+      configFile,
+      original.replace(
+        'LITERAL-SECRET-URL',
+        'LITERAL-SECRET-URL\n      headers_env: { Authorization: HOOK_AUTH_ENV }\n    - id: fresh\n      type: webhook\n      url: https://hooks.example.test/T1/NEW-UNLOADED-SECRET # see https://docs.example.test/path?token=COMMENT-SECRET',
+      ) + 'api_token: plain-token-value\n',
+    );
+    try {
+      const fresh = (await env.request('GET', '/api/v1/config/files')).json.files.find((f: { file: string }) => f.file === 'config.yaml');
+      expect(fresh.content).not.toContain('NEW-UNLOADED-SECRET');
+      expect(fresh.content).not.toContain('COMMENT-SECRET');
+      expect(fresh.content).not.toContain('plain-token-value');
+      expect(fresh.content).not.toContain('HOOK_AUTH_ENV');
+      expect(fresh.content).toContain('id: fresh');
+      expect(fresh.content).toContain('https://docs.example.test/[REDACTED]');
+      writeFileSync(configFile, 'server: { host: [unclosed\nurl: https://hooks.example.test/RAW-SECRET\n');
+      const broken = (await env.request('GET', '/api/v1/config/files')).json.files.find((f: { file: string }) => f.file === 'config.yaml');
+      expect(broken.content).toBeNull();
+      expect(broken.error).toMatch(/cannot be displayed/);
+      expect(JSON.stringify(broken)).not.toContain('RAW-SECRET');
+    } finally {
+      writeFileSync(configFile, original);
+    }
 
     const version = env.app.config.current.version;
     const reload = await env.request('POST', '/api/v1/config/reload');

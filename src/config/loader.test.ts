@@ -178,7 +178,7 @@ describe('loadConfig – spec examples', () => {
     expect(result.warnings.map((w) => w.file)).toEqual(['config.yaml']);
     expect(config.global.workspace.baseDir).toBe(path.join(t.dataDir, 'workspaces'));
     expect(config.global.scheduler).toEqual({ pollingIntervalMs: 30_000, maxConcurrent: 5 });
-    expect(config.global.server).toEqual({ host: '127.0.0.1', port: 8787 });
+    expect(config.global.server).toEqual({ host: '127.0.0.1', port: 8787, allowedHosts: [] });
     expect(config.global.retention.blockedRunsMs).toBeNull();
   });
 

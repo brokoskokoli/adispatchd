@@ -75,11 +75,13 @@ describe('views (scenario 10)', () => {
     const cached = await env.request('GET', '/api/v1/views/needs-maintainer/items');
     expect(cached.json.cached).toBe(true);
     expect(cached.json.rows).toHaveLength(2);
-    env.github.failNext({ method: 'GET', path: '/repos/example/b/issues' }, { status: 404, body: { message: 'Not Found' } }, 5);
+    env.app.redactor.add('LEAKED-SECRET-123');
+    env.github.failNext({ method: 'GET', path: '/repos/example/b/issues' }, { status: 404, body: { message: 'Not Found LEAKED-SECRET-123' } }, 5);
     const fresh = await env.request('GET', '/api/v1/views/needs-maintainer/items?refresh=true');
     expect(fresh.json.cached).toBe(false);
     expect(fresh.json.rows.map((r: { key: string }) => r.key)).toEqual(['repo_a:4', 'repo_a:1']);
     expect(fresh.json.errors).toMatchObject([{ sourceId: 'repo_b' }]);
+    expect(JSON.stringify(fresh.json.errors)).not.toContain('LEAKED-SECRET-123');
   });
 
   it('only allows http(s) links', () => {

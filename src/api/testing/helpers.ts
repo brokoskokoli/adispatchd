@@ -21,6 +21,8 @@ export interface AppEnvOptions {
   /** Extra YAML appended to config.yaml (e.g. `notifications:` / `retention:`). */
   configExtra?: string;
   app?: Partial<AppOptions>;
+  /** `server.allowed_hosts`. */
+  allowedHosts?: string[];
   /** Default true: `start()` and wait until ready. */
   start?: boolean;
 }
@@ -94,7 +96,7 @@ export async function createAppEnv(options: AppEnvOptions = {}): Promise<AppEnv>
   writeFileSync(
     path.join(configDir, 'config.yaml'),
     [
-      'server: { host: 127.0.0.1, port: 8787 }',
+      `server: { host: 127.0.0.1, port: 8787, allowed_hosts: [${(options.allowedHosts ?? []).join(', ')}] }`,
       'scheduler:',
       '  polling_interval: 1h',
       '  max_concurrent: 4',

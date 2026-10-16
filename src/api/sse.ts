@@ -153,7 +153,18 @@ export class EventHub {
     } else {
       client.lastSentId = lastEventId;
       this.send(client, { type: 'stream.open', time: this.now(), runId: null, payload: { lastEventId, replayed: null } }, true);
-      this.replay(client, lastEventId);
+      const latest = this.options.events.latestId();
+      if (lastEventId > latest) {
+        // Unknown future ID (e.g. data dir replaced/restored): resynchronize instead of silently skipping events.
+        client.lastSentId = latest;
+        this.send(
+          client,
+          { id: latest, type: 'stream.reset', time: this.now(), runId: null, payload: { reason: 'unknown_last_event_id', lastEventId: latest } },
+          true,
+        );
+      } else {
+        this.replay(client, lastEventId);
+      }
     }
     if (client.closed) return;
     this.clients.add(client);

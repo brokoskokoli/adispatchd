@@ -348,7 +348,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     maxLogBytesPerRun: () => config.current.global.retention.maxLogSizePerRunBytes,
   });
   const scheduler = new Scheduler({ config, repositories: repos, controller, sources: sourceLookup, clock, timers, logger });
-  const views = new ViewService({ config, sources: sourceLookup, runs: repos.runs, clock, logger, ...(options.viewCacheTtlMs !== undefined ? { cacheTtlMs: options.viewCacheTtlMs } : {}) });
+  const views = new ViewService({ config, sources: sourceLookup, runs: repos.runs, clock, logger, redact: redactor.asRedactor, ...(options.viewCacheTtlMs !== undefined ? { cacheTtlMs: options.viewCacheTtlMs } : {}) });
   const retention = new RetentionService({
     repositories: repos,
     dataDir,
@@ -392,7 +392,6 @@ export async function createApp(options: AppOptions): Promise<App> {
     const checks = {
       database,
       recovery: controller.isReady(),
-      config: true,
       scheduler: schedulerStarted,
       shuttingDown,
     };

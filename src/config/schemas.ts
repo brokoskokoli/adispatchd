@@ -127,8 +127,15 @@ export const globalConfigSchema = z.strictObject({
     .strictObject({
       host: nonEmpty.default(DEFAULTS.serverHost),
       port: z.number().int().min(1).max(65535).default(DEFAULTS.serverPort),
+      /**
+       * Additional host names (optionally `name:port`) accepted in the `Host` / `Origin`
+       * header, e.g. the public name of an authenticating reverse proxy (DNS-rebinding protection).
+       */
+      allowed_hosts: z
+        .array(z.string().regex(/^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(:\d{1,5})?$/, 'Invalid host name (expected "name" or "name:port")'))
+        .default([]),
     })
-    .default({ host: DEFAULTS.serverHost, port: DEFAULTS.serverPort }),
+    .default({ host: DEFAULTS.serverHost, port: DEFAULTS.serverPort, allowed_hosts: [] }),
   scheduler: z
     .strictObject({
       polling_interval: durationSchema.default(parseDuration(DEFAULTS.pollingInterval)),

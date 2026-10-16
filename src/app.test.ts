@@ -85,6 +85,29 @@ describe('createApp', () => {
     await second.shutdown();
   });
 
+  it('API cancel-all cancels active runs (on_cancel runs) and stops with exit code 0', async () => {
+    const env = await createAppEnv();
+    envs.push(env);
+    const release = path.join(env.marks, 'release');
+    sourceWorkflow(env, 'slow', env.script('slow.sh', `while [ ! -f "${release}" ]; do sleep 0.05; done`), 'on_cancel:\n  - type: source.update\n    labels: { add: [cancelled] }\n');
+    env.github.createIssue(REPO_A, { number: 6, title: 'slow' });
+    env.app = await env.createApp();
+    await env.app.start();
+    await env.app.ready;
+    const start = await env.request('POST', '/api/v1/workflows/slow/start', { item: '6' });
+    const runId = start.json.run.id as string;
+    await env.waitRun(runId, (r) => r.status === 'running');
+    const res = await env.request('POST', '/api/v1/shutdown/cancel-all', { reason: 'maintenance' });
+    expect(res.status).toBe(202);
+    expect(res.json).toMatchObject({ accepted: true, mode: 'cancel', activeRuns: [runId] });
+    const result = await env.app.stopped;
+    expect(result).toMatchObject({ exitCode: 0, shutdown: { outcome: 'cancelled', leftActive: [] } });
+    const again = await env.createApp();
+    expect(again.persistence.runs.get(runId)).toMatchObject({ status: 'cancelled', finalReason: 'maintenance' });
+    expect(env.github.labels(REPO_A, 6)).toContain('cancelled');
+    await again.shutdown();
+  });
+
   it('SIGTERM drains with timeout, then cancels; a second signal escalates; a third forces exit', async () => {
     const env = await createAppEnv();
     envs.push(env);

@@ -3,7 +3,7 @@
  * `/health`, `/ready`, SSE event hub and log paging (Spec §15, §21).
  * Other components import from this module only.
  */
-export { createApiServer, CSRF_HEADER, type ApiDeps, type ReadinessReport } from './server.js';
+export { createApiServer, CSRF_HEADER, isAllowedHost, type ApiDeps, type ReadinessReport } from './server.js';
 export { ApiError, ERROR_STATUS, toErrorResponse, type ApiErrorBody } from './errors.js';
 export {
   EventHub,
