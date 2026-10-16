@@ -287,7 +287,9 @@ describe.runIf(supported)('ShellExecutor – process group supervision (Spec §1
   });
 
   it('escalates to SIGKILL when SIGTERM is ignored', async () => {
-    const h = await launch(await makeSpec(`trap '' TERM\n${BACKGROUND_CHILD}\nwait\nwait`));
+    // The leader must never end on its own: with `wait` it could return (and exit 0) inside the grace
+    // period once the background child was gone, so the SIGKILL escalation was not always observable.
+    const h = await launch(await makeSpec(`trap '' TERM\n${BACKGROUND_CHILD}\nwhile :; do sleep 1; done`));
     await h.nextEvent('ready');
     const bg = await backgroundPid(h.spec);
     const before = Date.now();
