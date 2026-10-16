@@ -7,6 +7,7 @@
 import path from 'node:path';
 import { Cron } from 'croner';
 import {
+  extractPlaceholders,
   HOOK_NAMES,
   isSecretKey,
   validateTemplate,
@@ -228,12 +229,37 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
     ),
   );
 
+  wf.conditions.item.forEach((c, i) => {
+    if (c.cacheMs !== null) {
+      issues.error(file, ['conditions', 'item', i, 'cache'], '"cache" is only supported for workflow conditions');
+    }
+  });
+
   // Execute
   const exec = wf.execute;
+  const wdIssues = issues.items.length;
   checkTemplate(exec.workingDirectory, 'path', { run: true, source: isSource, parameters: parameterNames }, issues, file, [
     'execute',
     'working_directory',
   ]);
+  // In path mode a parameter must always have a value: required or with default.
+  const wdPlaceholders = safePlaceholders(exec.workingDirectory);
+  for (const [name, def] of Object.entries(wf.parameters)) {
+    if (!def.required && def.default === null && wdPlaceholders.includes(`parameters.${name}`)) {
+      issues.error(
+        file,
+        ['execute', 'working_directory'],
+        `Parameter "${name}" is optional without default and cannot be used in a path`,
+      );
+    }
+  }
+  if (
+    issues.items.length === wdIssues &&
+    !exec.workingDirectory.startsWith('/') &&
+    !exec.workingDirectory.startsWith('{workspace.base_dir}')
+  ) {
+    issues.error(file, ['execute', 'working_directory'], 'Must be absolute: start with "/" or "{workspace.base_dir}"');
+  }
   const runScope: TemplateScope = { run: true, workspace: true, source: isSource, parameters: parameterNames };
   exec.args.forEach((arg, i) => checkTemplate(arg, 'text', runScope, issues, file, ['execute', 'args', i]));
   for (const [name, value] of Object.entries(exec.env)) {
@@ -266,6 +292,14 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
       actionIds.set(action.id, where);
       validateAction(action, hook, at, isSource, parameterNames, input, issues, file);
     });
+  }
+}
+
+function safePlaceholders(template: string): string[] {
+  try {
+    return extractPlaceholders(template);
+  } catch {
+    return []; // syntax errors are reported by checkTemplate
   }
 }
 

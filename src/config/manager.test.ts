@@ -111,9 +111,9 @@ describe('ConfigManager', () => {
     expect(manager.maxConcurrent).toBe(4);
   });
 
-  it('resets overrides of affected workflows on reload and keeps the others', async () => {
+  it('resets only overrides whose configured value changed, keeps the others', async () => {
     const { t, manager } = await setup();
-    manager.setWorkflowOverrides('a', { enabled: false });
+    manager.setWorkflowOverrides('a', { enabled: false, priority: 99 });
     manager.setWorkflowOverrides('b', { priority: 1 });
     manager.setGlobalMaxConcurrent(2);
 
@@ -122,22 +122,29 @@ describe('ConfigManager', () => {
     expect(same.ok && same.resetOverrides).toEqual([]);
     expect(manager.getWorkflow('a')?.enabled).toBe(false);
 
-    // Workflow a changes, global max_concurrent changes.
+    // Workflow a changes, but none of the overridable values: overrides stay.
+    await t.write({ 'workflows/a.yaml': wf('a', 'name: Renamed\n') });
+    const renamed = await manager.reload();
+    expect(renamed.ok && renamed.diff.changedWorkflows).toEqual(['a']);
+    expect(renamed.ok && renamed.resetOverrides).toEqual([]);
+    expect(manager.getWorkflow('a')).toMatchObject({ enabled: false, priority: 99 });
+
+    // Configured priority of a and global max_concurrent change: only those overrides are reset.
     await t.write({
-      'workflows/a.yaml': wf('a', 'name: Renamed\n'),
+      'workflows/a.yaml': wf('a', 'name: Renamed\n').replace('priority: 10', 'priority: 20'),
       'config.yaml': 'scheduler:\n  max_concurrent: 6\n',
     });
     const result = await manager.reload();
     expect(result.ok && result.resetOverrides).toEqual(['a', '*']);
-    expect(manager.getWorkflow('a')).toMatchObject({ enabled: true, overrides: {} });
+    expect(manager.getWorkflow('a')).toMatchObject({ enabled: false, priority: 20, overrides: { enabled: false } });
     expect(manager.getWorkflow('b')).toMatchObject({ priority: 1, overrides: { priority: 1 } });
     expect(manager.maxConcurrent).toBe(6);
 
-    // Removed workflow: its overrides disappear.
+    // Removed workflow: all of its overrides disappear.
     await t.write({ 'workflows/b.yaml': null });
     const removed = await manager.reload();
     expect(removed.ok && removed.resetOverrides).toEqual(['b']);
-    expect(manager.getOverrides()).toEqual({ global: {}, workflows: {} });
+    expect(manager.getOverrides()).toEqual({ global: {}, workflows: { a: { enabled: false } } });
   });
 
   it('serializes concurrent reloads', async () => {

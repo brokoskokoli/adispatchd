@@ -114,7 +114,7 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
   for (const parsed of workflowFiles) {
     const raw = parseWith(workflowSchema, parsed, parsed.file, issues);
     if (raw) {
-      workflowEntries.push({ workflow: normalizeWorkflow(raw, parsed.file, global), rawParameters: raw.parameters });
+      workflowEntries.push({ workflow: normalizeWorkflow(raw, parsed.file, global, dir), rawParameters: raw.parameters });
     }
   }
   const viewEntries: ViewEntry[] = [];

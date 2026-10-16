@@ -494,6 +494,90 @@ describe('loadConfig – errors with file and path', () => {
   });
 });
 
+describe('loadConfig – review findings', () => {
+  it('resolves relative commands containing "/" against the config dir; bare names stay for PATH lookup', async () => {
+    const t = await tempDir({
+      'workflows/wf.yaml': [
+        'id: wf',
+        'trigger: { type: source, source: repo_a }',
+        'shell_filter: { command: ./scripts/filter.sh }',
+        'conditions:',
+        '  workflow: [{ type: shell, command: scripts/check.sh }]',
+        '  item: [{ type: shell, command: /opt/x/../check-item.sh }]',
+        'execute:',
+        '  type: shell',
+        '  command: scripts/coder.sh',
+        'on_success:',
+        '  - { type: shell, command: bash, args: [-c, "true"] }',
+        '  - { type: shell, command: ../shared/notify.sh }',
+        '',
+      ].join('\n'),
+    });
+    const config = expectOk(await loadConfig(t.dir, { dataDir: t.dataDir }));
+    const wf = config.workflows.wf;
+    expect(wf?.execute.command).toBe(path.join(t.dir, 'scripts/coder.sh'));
+    expect(wf?.shellFilter?.command).toBe(path.join(t.dir, 'scripts/filter.sh'));
+    expect(wf?.conditions.workflow[0]?.command).toBe(path.join(t.dir, 'scripts/check.sh'));
+    expect(wf?.conditions.item[0]?.command).toBe('/opt/check-item.sh');
+    const [bash, notify] = wf?.hooks.on_success ?? [];
+    expect(bash?.type === 'shell' && bash.command).toBe('bash');
+    expect(notify?.type === 'shell' && notify.command).toBe(path.resolve(t.dir, '../shared/notify.sh'));
+  });
+
+  it('requires an absolute working_directory', async () => {
+    const result = await load({
+      'workflows/a.yaml': MANUAL_WF().replace('id: wf', 'id: a') + "  working_directory: 'work/{run.id}'\n",
+      'workflows/b.yaml': MANUAL_WF().replace('id: wf', 'id: b') + "  working_directory: '/srv/work/{workflow.id}/{run.id}'\n",
+    });
+    expectError(result, 'workflows/a.yaml', 'execute.working_directory', /Must be absolute/);
+    expect(errorsOf(result).some((e) => e.file === 'workflows/b.yaml')).toBe(false);
+  });
+
+  it('allows only required or defaulted parameters in working_directory', async () => {
+    const result = await load({
+      'workflows/wf.yaml': [
+        'id: wf',
+        'trigger: { type: manual }',
+        'parameters:',
+        '  env: { type: enum, values: [a, b], required: true }',
+        '  tag: { type: string, default: latest }',
+        '  note: { type: string }',
+        'execute:',
+        '  type: shell',
+        '  command: /bin/true',
+        "  working_directory: '{workspace.base_dir}/{parameters.env}/{parameters.tag}/{parameters.note}'",
+        "  args: ['{parameters.note}']",
+        '',
+      ].join('\n'),
+    });
+    expect(errorsOf(result)).toEqual([
+      expect.objectContaining({
+        path: 'execute.working_directory',
+        message: 'Parameter "note" is optional without default and cannot be used in a path',
+      }),
+    ]);
+  });
+
+  it('stringifies scalar enum defaults like the values', async () => {
+    const config = expectOk(
+      await load({ 'workflows/wf.yaml': MANUAL_WF('parameters:\n  level: { type: enum, values: [1, 2], default: 1 }\n') }),
+    );
+    expect(config.workflows.wf?.parameters.level).toMatchObject({ values: ['1', '2'], default: '1' });
+  });
+
+  it('rejects cache on item conditions and zero execute timeouts', async () => {
+    const cache = await load({
+      'workflows/wf.yaml': SOURCE_WF('conditions:\n  item: [{ type: shell, command: /bin/true, cache: 60s }]\n'),
+    });
+    expectError(cache, 'workflows/wf.yaml', 'conditions.item[0].cache', /only supported for workflow conditions/);
+    const result = await load({
+      'workflows/wf.yaml': SOURCE_WF('', '  timeout: { max_duration: 0s, idle_timeout: 0ms }'),
+    });
+    expectError(result, 'workflows/wf.yaml', 'execute.timeout.max_duration', /greater than 0/);
+    expectError(result, 'workflows/wf.yaml', 'execute.timeout.idle_timeout', /greater than 0/);
+  });
+});
+
 describe('loadConfig – secrets', () => {
   it('never reads or exposes environment secret values', async () => {
     const secret = '-----BEGIN PRIVATE KEY-----\nTOP-SECRET-KEY-MATERIAL\n-----END PRIVATE KEY-----';

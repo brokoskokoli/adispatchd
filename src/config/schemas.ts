@@ -66,6 +66,9 @@ export const durationSchema = z.string('Expected a duration such as 30s, 45m, 6h
   }
 });
 
+/** Duration that must be greater than zero. */
+const positiveDuration = durationSchema.refine((ms) => ms > 0, 'Duration must be greater than 0');
+
 /** Duration or `never` (→ `null`). */
 const durationOrNever = z.string('Expected a duration such as 30d or "never"').transform((value, ctx) => {
   if (value.trim() === 'never') return null;
@@ -238,7 +241,11 @@ const parameterSchema = z.discriminatedUnion('type', [
     type: z.literal('enum'),
     ...parameterBase,
     values: z.array(z.union([z.string(), z.number(), z.boolean()]).transform(String)).min(1, 'Enum needs values'),
-    default: z.unknown().optional(),
+    // Scalars are stringified like `values`, so `values: [1, 2]` + `default: 1` matches.
+    default: z
+      .unknown()
+      .optional()
+      .transform((v) => (typeof v === 'number' || typeof v === 'boolean' ? String(v) : v)),
   }),
 ]);
 
@@ -256,8 +263,8 @@ const executeSchema = z.discriminatedUnion('type', [
     secrets: z.record(envName, z.strictObject({ identity: configId })).default({}),
     timeout: z
       .strictObject({
-        max_duration: durationSchema.optional(),
-        idle_timeout: durationSchema.optional(),
+        max_duration: positiveDuration.optional(),
+        idle_timeout: positiveDuration.optional(),
       })
       .default({}),
     cancel_grace: durationSchema.default(parseDuration(DEFAULTS.cancelGrace)),

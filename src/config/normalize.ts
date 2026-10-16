@@ -30,6 +30,16 @@ export function resolveConfigPath(configDir: string, value: string): string {
   return path.resolve(configDir, value);
 }
 
+/**
+ * Resolve a configured command: absolute paths are normalized, relative paths
+ * containing `/` (e.g. `scripts/coder.sh`, `./x.sh`) are resolved against the
+ * config dir, bare names (e.g. `bash`) stay untouched for PATH lookup.
+ */
+export function resolveCommand(configDir: string, command: string): string {
+  if (path.isAbsolute(command)) return path.normalize(command);
+  return command.includes('/') ? resolveConfigPath(configDir, command) : command;
+}
+
 /** Normalize `config.yaml`. */
 export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir: string): GlobalConfig {
   const baseDir = raw.workspace.base_dir
@@ -113,7 +123,13 @@ function normalizeParameter(raw: RawParameter): ParameterDefinition {
   }
 }
 
-function normalizeAction(raw: RawAction, hook: HookName, index: number, defaults: RetryPolicy): LifecycleActionConfig {
+function normalizeAction(
+  raw: RawAction,
+  hook: HookName,
+  index: number,
+  defaults: RetryPolicy,
+  configDir: string,
+): LifecycleActionConfig {
   const common = {
     id: raw.id ?? `${hook}.${index}`,
     continueOnError: raw.continue_on_error,
@@ -131,7 +147,7 @@ function normalizeAction(raw: RawAction, hook: HookName, index: number, defaults
       return {
         ...common,
         type: 'shell',
-        command: raw.command,
+        command: resolveCommand(configDir, raw.command),
         args: [...raw.args],
         timeoutMs: raw.timeout,
         env: { ...raw.env },
@@ -140,11 +156,16 @@ function normalizeAction(raw: RawAction, hook: HookName, index: number, defaults
 }
 
 /** Normalize one workflow file. */
-export function normalizeWorkflow(raw: RawWorkflow, file: string, global: GlobalConfig): WorkflowConfig {
+export function normalizeWorkflow(
+  raw: RawWorkflow,
+  file: string,
+  global: GlobalConfig,
+  configDir: string,
+): WorkflowConfig {
   const hooks = Object.fromEntries(
     HOOK_NAMES.map((hook) => [
       hook,
-      raw[hook].map((action, i) => normalizeAction(action, hook, i, global.lifecycle.actionRetry)),
+      raw[hook].map((action, i) => normalizeAction(action, hook, i, global.lifecycle.actionRetry, configDir)),
     ]),
   ) as unknown as HooksConfig;
   const parameters: Record<string, ParameterDefinition> = {};
@@ -165,21 +186,21 @@ export function normalizeWorkflow(raw: RawWorkflow, file: string, global: Global
           ? { type: 'source', source: raw.trigger.source }
           : { type: 'manual' },
     filter: raw.filter ?? null,
-    shellFilter: raw.shell_filter ? { command: raw.shell_filter.command, timeoutMs: raw.shell_filter.timeout } : null,
+    shellFilter: raw.shell_filter ? { command: resolveCommand(configDir, raw.shell_filter.command), timeoutMs: raw.shell_filter.timeout } : null,
     itemPriority: raw.item_priority
       ? { rules: raw.item_priority.rules.map((r) => ({ when: r.when, value: r.value })), default: raw.item_priority.default }
       : null,
     conditions: {
       workflow: raw.conditions.workflow.map((c) => ({
         type: c.type,
-        command: c.command,
+        command: resolveCommand(configDir, c.command),
         args: [...c.args],
         timeoutMs: c.timeout,
         cacheMs: c.cache ?? null,
       })),
       item: raw.conditions.item.map((c) => ({
         type: c.type,
-        command: c.command,
+        command: resolveCommand(configDir, c.command),
         args: [...c.args],
         timeoutMs: c.timeout,
         cacheMs: c.cache ?? null,
@@ -188,7 +209,7 @@ export function normalizeWorkflow(raw: RawWorkflow, file: string, global: Global
     parameters,
     execute: {
       type: exec.type,
-      command: exec.command,
+      command: resolveCommand(configDir, exec.command),
       args: [...exec.args],
       workingDirectory: exec.working_directory,
       createDirectory: exec.create_directory,

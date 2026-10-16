@@ -24,6 +24,9 @@ export interface WorkflowOverrides {
   maxConcurrent?: number;
 }
 
+/** Workflow settings that can be overridden at runtime. */
+const OVERRIDE_KEYS = ['enabled', 'priority', 'maxConcurrent'] as const;
+
 /** Runtime overrides of global settings. */
 export interface GlobalOverrides {
   maxConcurrent?: number;
@@ -55,7 +58,11 @@ export type ReloadResult =
       /** False if the content hash is unchanged (the version still increases). */
       changed: boolean;
       diff: ConfigDiff;
-      /** Workflows whose overrides were reset (plus `"*"` if the global override was reset). */
+      /**
+       * Workflows with at least one reset override (a field is reset when its
+       * configured value changed or the workflow was removed), plus `"*"` if the
+       * global override was reset.
+       */
       resetOverrides: string[];
       warnings: ConfigIssue[];
     }
@@ -180,9 +187,30 @@ export class ConfigManager {
     const config = result.config;
     const diff = diffWorkflows(previous, config);
     const resetOverrides: string[] = [];
-    for (const id of [...diff.changedWorkflows, ...diff.removedWorkflows]) {
-      if (this.workflowOverrides.delete(id)) resetOverrides.push(id);
+    for (const [id, overrides] of [...this.workflowOverrides]) {
+      const next = Object.hasOwn(config.workflows, id) ? config.workflows[id] : undefined;
+      const before = previous.workflows[id];
+      if (!next || !before) {
+        // Workflow removed: all of its overrides disappear.
+        this.workflowOverrides.delete(id);
+        resetOverrides.push(id);
+        continue;
+      }
+      // Only reset the overrides whose configured value changed (Spec §19 "affected settings").
+      const remaining: WorkflowOverrides = { ...overrides };
+      let reset = false;
+      for (const key of OVERRIDE_KEYS) {
+        if (key in remaining && before[key] !== next[key]) {
+          delete remaining[key];
+          reset = true;
+        }
+      }
+      if (!reset) continue;
+      resetOverrides.push(id);
+      if (Object.keys(remaining).length === 0) this.workflowOverrides.delete(id);
+      else this.workflowOverrides.set(id, remaining);
     }
+    resetOverrides.sort();
     if (
       this.globalOverrides.maxConcurrent !== undefined &&
       previous.global.scheduler.maxConcurrent !== config.global.scheduler.maxConcurrent
@@ -274,7 +302,7 @@ export class ConfigManager {
     const wf = this.requireWorkflow(workflowId);
     validateOverrides(overrides);
     const merged: WorkflowOverrides = { ...(this.workflowOverrides.get(workflowId) ?? {}) };
-    for (const key of ['enabled', 'priority', 'maxConcurrent'] as const) {
+    for (const key of OVERRIDE_KEYS) {
       if (!(key in overrides)) continue;
       const value = overrides[key];
       if (value === undefined) delete merged[key];
