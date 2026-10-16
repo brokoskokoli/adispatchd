@@ -487,7 +487,15 @@ echo hello`,
     const handle = h.controller.startRun(run.id);
     await waitForStatus(h, env.p, run.id, 'running');
 
-    const result = await h.controller.shutdown({ mode: 'cancel', cancelTimeoutMs: 300 });
+    // Deterministic: start cancel-all without a (short) timeout, wait until the slow on_cancel hook
+    // is actually running, then escalate with cancelTimeoutMs 0 (stricter timeouts replace looser ones).
+    // A fixed short timeout raced with the first on_cancel action under load: the hook could be
+    // interrupted before the slow action had started, so recovery ran it for the first time (sleep 30).
+    const shutdown = h.controller.shutdown({ mode: 'cancel', cancelTimeoutMs: 60_000 });
+    for (let i = 0; i < 1500 && !existsSync(once); i++) await new Promise((r) => setTimeout(r, 10));
+    expect(existsSync(once)).toBe(true);
+    void h.controller.shutdown({ mode: 'cancel', cancelTimeoutMs: 0 });
+    const result = await shutdown;
     expect(result).toEqual({ outcome: 'cancelled', leftActive: [] });
     const left = await handle.done;
     expect(left.status).toBe('finalizing');

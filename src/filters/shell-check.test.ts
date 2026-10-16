@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,16 @@ import { buildCheckContext, CHECK_CONTEXT_ENV, ShellCheckRunner } from './shell-
 
 let dir: string;
 let tempDir: string;
+
+/** True if `pid` exists and is not a zombie (an orphaned, killed child may await reaping by init). */
+function isRunning(pid: number): boolean {
+  try {
+    const stat = execFileSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+    return stat !== '' && !stat.startsWith('Z');
+  } catch {
+    return false; // ps exits 1 when the process does not exist
+  }
+}
 
 async function script(name: string, body: string): Promise<string> {
   const p = join(dir, name);
@@ -42,14 +53,18 @@ describe('ShellCheckRunner', () => {
   });
 
   it('timeout → unknown and the process group is killed', async () => {
+    // Deterministic (no wall-clock bounds): the script records its own PID and the background
+    // child's PID. If the runner had waited for `sleep 5` to end instead of killing the group,
+    // the shell would have created the marker afterwards. Right after the result both processes
+    // must be gone, so the marker can never appear later.
     const marker = join(dir, 'timeout-marker');
-    const cmd = await script('slow.sh', `sleep 5 & wait; touch "${marker}"`);
-    const started = Date.now();
+    const pids = join(dir, 'timeout-pids');
+    const cmd = await script('slow.sh', `echo $$ > "${pids}"; sleep 5 & echo $! >> "${pids}"; wait; touch "${marker}"`);
     const res = await runner().run({ command: cmd, timeoutMs: 200 }, {});
     expect(res).toMatchObject({ value: 'unknown', timedOut: true });
     expect(res.error).toMatch(/timed out after 200ms/);
-    expect(Date.now() - started).toBeLessThan(3000);
-    await new Promise((r) => setTimeout(r, 300));
+    const recorded = (await readFile(pids, 'utf8').catch(() => '')).split('\n').filter(Boolean).map(Number);
+    for (const pid of recorded) expect(isRunning(pid), `process ${pid} still running`).toBe(false);
     await expect(readFile(marker)).rejects.toThrow();
   });
 
