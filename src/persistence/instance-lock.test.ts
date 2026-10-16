@@ -1,49 +1,34 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { InstanceLockedError } from './errors.js';
 import { acquireInstanceLock } from './instance-lock.js';
 import { tempDataDir } from './testing/helpers.js';
 
-/** Child process that takes the lock (same SQLite mechanism) and holds it until killed. */
-const HOLDER_SCRIPT = `
-const { DatabaseSync } = require('node:sqlite');
-const db = new DatabaseSync(process.argv[1]);
-db.exec('PRAGMA busy_timeout = 0');
-db.exec('PRAGMA locking_mode = EXCLUSIVE');
-db.exec('BEGIN EXCLUSIVE');
-db.exec('CREATE TABLE IF NOT EXISTS holder (pid INTEGER NOT NULL, hostname TEXT NOT NULL, acquired_at TEXT NOT NULL)');
-db.exec('DELETE FROM holder');
-db.prepare('INSERT INTO holder VALUES (?, ?, ?)').run(process.pid, 'child', new Date().toISOString());
-db.exec('COMMIT');
-process.stdout.write('locked\\n');
-setInterval(() => {}, 1000);
-`;
+/** Child fixture running the real `acquireInstanceLock` (via tsx). */
+const CHILD = fileURLToPath(new URL('./testing/lock-child.ts', import.meta.url));
 
-/** Run a child that tries to take the lock once; resolves `locked` or `busy`. */
-function probeFromChild(lockPath: string): Promise<string> {
-  const script = `
-const { DatabaseSync } = require('node:sqlite');
-const db = new DatabaseSync(process.argv[1]);
-try {
-  db.exec('PRAGMA busy_timeout = 0');
-  db.exec('PRAGMA locking_mode = EXCLUSIVE');
-  db.exec('BEGIN EXCLUSIVE');
-  process.stdout.write('locked');
-} catch (e) {
-  process.stdout.write(/locked|busy/i.test(e.message) ? 'busy' : 'error:' + e.message);
+function childArgs(dataDir: string, mode: string, extra: string[] = []): string[] {
+  return [...extra, '--import', 'tsx', CHILD, dataDir, mode];
 }
-`;
-  const child = spawn(process.execPath, ['-e', script, lockPath], { stdio: ['ignore', 'pipe', 'inherit'] });
-  return new Promise((resolve) => {
+
+/** Try to take the lock from a fresh process; resolves `locked` or `busy`. */
+function probeFromChild(dataDir: string): Promise<string> {
+  const child = spawn(process.execPath, childArgs(dataDir, 'probe'), { stdio: ['ignore', 'pipe', 'pipe'] });
+  return new Promise((resolve, reject) => {
     let out = '';
+    let err = '';
     child.stdout!.on('data', (d: Buffer) => (out += d.toString()));
-    child.once('exit', () => resolve(out));
+    child.stderr!.on('data', (d: Buffer) => (err += d.toString()));
+    child.once('exit', (code) => (code === 0 ? resolve(out.trim()) : reject(new Error(`probe failed (${code}): ${err}`))));
   });
 }
 
-function startHolder(lockPath: string): Promise<ChildProcess> {
-  const child = spawn(process.execPath, ['-e', HOLDER_SCRIPT, lockPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+/** Start a child that acquires and holds the lock until killed. */
+function startHolder(dataDir: string, mode: 'hold' | 'hold-gc' = 'hold'): Promise<ChildProcess> {
+  const extra = mode === 'hold-gc' ? ['--expose-gc'] : [];
+  const child = spawn(process.execPath, childArgs(dataDir, mode, extra), { stdio: ['ignore', 'pipe', 'pipe'] });
   return new Promise((resolve, reject) => {
     let stderr = '';
     child.stderr!.on('data', (d: Buffer) => (stderr += d.toString()));
@@ -53,11 +38,12 @@ function startHolder(lockPath: string): Promise<ChildProcess> {
 }
 
 describe('acquireInstanceLock', () => {
-  const tmp = tempDataDir();
+  let tmp = tempDataDir();
   const children: ChildProcess[] = [];
   afterEach(() => {
-    for (const c of children) c.kill('SIGKILL');
+    for (const c of children.splice(0)) c.kill('SIGKILL');
     tmp.cleanup();
+    tmp = tempDataDir();
   });
 
   it('rejects a second instance in the same process and allows re-acquire after release', () => {
@@ -82,27 +68,26 @@ describe('acquireInstanceLock', () => {
   it('a failed in-process attempt does not weaken the held lock for other processes', async () => {
     const lock = acquireInstanceLock(tmp.dir);
     expect(() => acquireInstanceLock(tmp.dir)).toThrow(InstanceLockedError);
-    expect(await probeFromChild(lock.path)).toBe('busy');
+    expect(await probeFromChild(tmp.dir)).toBe('busy');
     lock.release();
-    expect(await probeFromChild(lock.path)).toBe('locked');
+    expect(await probeFromChild(tmp.dir)).toBe('locked');
   });
 
   it('rejects while another live process holds the lock', async () => {
-    const lock = acquireInstanceLock(tmp.dir);
-    const lockPath = lock.path;
-    lock.release();
-    const child = await startHolder(lockPath);
-    children.push(child);
+    children.push(await startHolder(tmp.dir));
     expect(() => acquireInstanceLock(tmp.dir)).toThrow(InstanceLockedError);
-    // repeated attempts never succeed while the holder lives
+    expect(() => acquireInstanceLock(tmp.dir)).toThrow(InstanceLockedError);
+    expect(await probeFromChild(tmp.dir)).toBe('busy');
+  });
+
+  it('keeps the lock when the holder drops its handle and GC runs', async () => {
+    children.push(await startHolder(tmp.dir, 'hold-gc'));
+    expect(await probeFromChild(tmp.dir)).toBe('busy');
     expect(() => acquireInstanceLock(tmp.dir)).toThrow(InstanceLockedError);
   });
 
   it('takes over the lock left by a killed process (stale lock)', async () => {
-    const probe = acquireInstanceLock(tmp.dir);
-    const lockPath = probe.path;
-    probe.release();
-    const child = await startHolder(lockPath);
+    const child = await startHolder(tmp.dir);
     children.push(child);
     expect(() => acquireInstanceLock(tmp.dir)).toThrow(InstanceLockedError);
     const exited = new Promise((r) => child.once('exit', r));

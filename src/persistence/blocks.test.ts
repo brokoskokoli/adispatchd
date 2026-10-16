@@ -43,6 +43,19 @@ describe('technical failure counter and blocks', () => {
     expect(p.blocks.isBlocked('coder', 'project_a:1')).toBe(false);
   });
 
+  it('a success starts a new counting period: later block only lists failures after it', () => {
+    const before = runOnce(CRASH);
+    const success = runOnce(SUCCESS);
+    const after = [runOnce(CRASH), runOnce(CRASH), runOnce(CRASH)];
+    const block = p.blocks.activeFor('coder', 'project_a:1')!;
+    expect(block.failureCount).toBe(3);
+    const affected = p.blocks.affectedRunIds(block.id);
+    expect(affected).toHaveLength(3);
+    expect(affected.sort()).toEqual(after.map((r) => r.id).sort());
+    expect(affected).not.toContain(before.id);
+    expect(affected).not.toContain(success.id);
+  });
+
   it('creates the block in the same transaction as finalizing when the limit is reached', () => {
     runOnce(CRASH);
     runOnce(CRASH);

@@ -16,7 +16,7 @@ export {
   type MigrateOptions,
 } from './database.js';
 export { MIGRATIONS, type Migration } from './schema.js';
-export { acquireInstanceLock, type InstanceLock, type InstanceLockHolder } from './instance-lock.js';
+export { acquireInstanceLock, INSTANCE_LOCK_FILES, type InstanceLock, type InstanceLockHolder } from './instance-lock.js';
 export { lockKeyFor, blockScopeKey, type LockKeyInput } from './lock-keys.js';
 export {
   RunRepository,
@@ -71,4 +71,4 @@ export {
   InstanceLockedError,
   MigrationError,
 } from './errors.js';
-export { transaction } from './sqlite.js';
+export { transaction, afterCommit } from './sqlite.js';

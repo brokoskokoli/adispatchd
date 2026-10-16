@@ -10,22 +10,34 @@ export type Row = Record<string, unknown>;
 /** Positional SQL parameters. */
 export type Params = SQLInputValue[];
 
-const depth = new WeakMap<DatabaseSync, number>();
+/** Per-connection transaction state: one callback list per nesting level. */
+const state = new WeakMap<DatabaseSync, { levels: Array<Array<() => void>> }>();
 let savepointCounter = 0;
 
 /**
  * Run `fn` atomically. The outermost call uses `BEGIN IMMEDIATE` (takes the
  * write lock up front, so check-then-insert sequences are atomic also across
- * connections); nested calls use savepoints. Any thrown error rolls back.
+ * connections); nested calls use savepoints. Any thrown error rolls back
+ * (the original error is always re-thrown, also if the rollback itself fails).
+ *
+ * Callbacks registered via {@link afterCommit} run only after the outermost
+ * transaction committed; they are discarded on rollback (also of a nested savepoint).
  */
 export function transaction<T>(db: DatabaseSync, fn: () => T): T {
-  const level = depth.get(db) ?? 0;
-  if (level === 0) {
+  let st = state.get(db);
+  if (!st) {
+    st = { levels: [] };
+    state.set(db, st);
+  }
+  const levels = st.levels;
+  if (levels.length === 0) {
     db.exec('BEGIN IMMEDIATE');
-    depth.set(db, 1);
+    levels.push([]);
+    let callbacks: Array<() => void> = [];
     try {
       const result = fn();
       db.exec('COMMIT');
+      callbacks = levels[0] ?? [];
       return result;
     } catch (err) {
       try {
@@ -35,22 +47,53 @@ export function transaction<T>(db: DatabaseSync, fn: () => T): T {
       }
       throw err;
     } finally {
-      depth.set(db, 0);
+      levels.length = 0;
+      runCallbacks(callbacks);
     }
   }
   const name = `sp_${++savepointCounter}`;
   db.exec(`SAVEPOINT ${name}`);
-  depth.set(db, level + 1);
+  levels.push([]);
   try {
     const result = fn();
     db.exec(`RELEASE ${name}`);
+    const own = levels.pop() ?? [];
+    levels[levels.length - 1]?.push(...own);
     return result;
   } catch (err) {
-    db.exec(`ROLLBACK TO ${name}`);
-    db.exec(`RELEASE ${name}`);
+    levels.pop();
+    try {
+      db.exec(`ROLLBACK TO ${name}`);
+      db.exec(`RELEASE ${name}`);
+    } catch {
+      // outer transaction may already be aborted; the outer level rolls back
+    }
     throw err;
-  } finally {
-    depth.set(db, level);
+  }
+}
+
+/**
+ * Run `callback` after the current outermost transaction commits (immediately
+ * if no transaction is open); dropped if the transaction rolls back. Use this
+ * for side effects outside SQLite, e.g. publishing on the in-process event bus,
+ * so that subscribers never see IDs of rolled-back rows (SQLite may reuse
+ * AUTOINCREMENT values of rolled-back inserts). Callbacks must not throw;
+ * errors are reported via `process.emitWarning` and do not affect other callbacks.
+ */
+export function afterCommit(db: DatabaseSync, callback: () => void): void {
+  const levels = state.get(db)?.levels;
+  const current = levels?.[levels.length - 1];
+  if (current) current.push(callback);
+  else runCallbacks([callback]);
+}
+
+function runCallbacks(callbacks: Array<() => void>): void {
+  for (const cb of callbacks) {
+    try {
+      cb();
+    } catch (err) {
+      process.emitWarning(`afterCommit callback failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 

@@ -8,9 +8,10 @@
  * transition into `finalizing` (see `RunRepository.beginFinalization`), which
  * happens at most once per run – so counting is exactly-once also across
  * crashes/recovery. Technical failures (`crashed|start_error|timed_out`)
- * increment, `completed`+`success` resets to 0, business `failure` and
- * `cancelled` leave it unchanged. Clearing a block resets to 0 and increments
- * `generation` (new counting period); old runs and blocks stay untouched.
+ * increment; `completed`+`success` resets to 0 and starts a new counting
+ * period (`generation + 1`); business `failure` and `cancelled` leave it
+ * unchanged. Clearing a block likewise resets to 0 and increments
+ * `generation`; old runs and blocks stay untouched.
  */
 import type { DatabaseSync } from 'node:sqlite';
 import type { Clock } from '../core/index.js';
@@ -186,11 +187,13 @@ export class BlockRepository {
         [now, workflowId, blockScopeKey(itemKey)],
       );
     } else if (effect === 'reset') {
-      run(this.db, 'UPDATE failure_counters SET consecutive = 0, updated_at = ? WHERE workflow_id = ? AND scope_key = ?', [
-        now,
-        workflowId,
-        blockScopeKey(itemKey),
-      ]);
+      // A success ends the counting period: next failures belong to a new generation,
+      // so `affectedRunIds` of a later block never includes failures before the success.
+      run(
+        this.db,
+        'UPDATE failure_counters SET consecutive = 0, generation = generation + 1, updated_at = ? WHERE workflow_id = ? AND scope_key = ?',
+        [now, workflowId, blockScopeKey(itemKey)],
+      );
     }
     return this.counter(workflowId, itemKey);
   }

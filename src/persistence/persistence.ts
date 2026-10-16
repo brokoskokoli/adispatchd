@@ -11,7 +11,7 @@ import { EventRepository } from './events.js';
 import { NotificationRepository } from './notifications.js';
 import { RetentionRepository } from './retention.js';
 import { RunRepository } from './runs.js';
-import { transaction } from './sqlite.js';
+import { afterCommit, transaction } from './sqlite.js';
 
 /** All repositories over one connection. */
 export interface Repositories {
@@ -24,6 +24,11 @@ export interface Repositories {
   retention: RetentionRepository;
   /** Run `fn` in one transaction (nested repository calls join it via savepoints). */
   transaction<T>(fn: () => T): T;
+  /**
+   * Run `cb` after the outermost open transaction commits (immediately if none);
+   * dropped on rollback. Publish to the in-process event bus / SSE only from here.
+   */
+  afterCommit(cb: () => void): void;
 }
 
 /** Create repositories over an already opened and migrated connection. */
@@ -40,6 +45,7 @@ export function createRepositories(db: DatabaseSync, options: { clock?: Clock } 
     cronFirings: new CronFiringRepository(db, clock),
     retention: new RetentionRepository(db),
     transaction: (fn) => transaction(db, fn),
+    afterCommit: (cb) => afterCommit(db, cb),
   };
 }
 

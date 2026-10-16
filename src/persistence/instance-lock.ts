@@ -16,14 +16,32 @@
  * database and mirrored to `orchestrator.lock.json` for diagnostics only; it
  * never decides who owns the lock.
  *
- * Limitation: advisory `fcntl` locks are unreliable on some network file
- * systems (NFS without lock daemon) – the data dir must be on a local file system.
+ * The connection is kept strongly reachable in a module-level set until
+ * `release()`: otherwise dropping the returned handle would let the garbage
+ * collector close the connection and silently free the OS lock.
+ *
+ * Limitations / rules:
+ * - Advisory `fcntl` locks are unreliable on some network file systems (NFS
+ *   without lock daemon) – the data dir must be on a local file system.
+ * - POSIX `fcntl` locks belong to the process and are dropped when the process
+ *   closes ANY file descriptor of that file. Therefore the holding process must
+ *   never open `orchestrator.lock` otherwise (no `readFileSync`, `fs.cp`,
+ *   copying the data dir, ...). Backup/copy/cleanup routines must exclude
+ *   `orchestrator.lock` (and `orchestrator.lock.json`); `backupDatabase` only
+ *   reads `orchestrator.sqlite` via SQLite. Opening it through `node:sqlite`
+ *   in the same process is safe (SQLite shares lock state per inode).
  */
 import { readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import { dataPaths, systemClock, type Clock } from '../core/index.js';
 import { InstanceLockedError } from './errors.js';
+
+/** Connections holding a lock; strong references prevent GC from closing them. */
+const HELD = new Set<DatabaseSync>();
+
+/** File names inside the data dir that copy/backup/cleanup routines must never open. */
+export const INSTANCE_LOCK_FILES = ['orchestrator.lock', 'orchestrator.lock.json'] as const;
 
 /** A held instance lock. */
 export interface InstanceLock {
@@ -86,6 +104,7 @@ export function acquireInstanceLock(dataDir: string, options: { clock?: Clock } 
   } catch {
     // diagnostics only
   }
+  HELD.add(db);
   let held = true;
   return {
     path: lockPath,
@@ -100,6 +119,7 @@ export function acquireInstanceLock(dataDir: string, options: { clock?: Clock } 
       } catch {
         // diagnostics only
       }
+      HELD.delete(db);
       db.close();
     },
   };

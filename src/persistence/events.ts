@@ -1,7 +1,13 @@
 /**
  * Structured run events (Spec §9.3, §12, §15 SSE). Every event has a
- * globally monotonic `id` (SQLite AUTOINCREMENT: never reused, also after
- * deletions – usable as SSE `Last-Event-ID`) and a per-run `sequence`.
+ * globally monotonic `id` (SQLite AUTOINCREMENT: never reused after deletion
+ * of committed rows – usable as SSE `Last-Event-ID`) and a per-run `sequence`.
+ *
+ * Caveat: the ID of an insert that is rolled back may be handed out again.
+ * Therefore an event (and its ID) must only be published to live consumers
+ * (event bus / SSE) after the surrounding transaction committed – use
+ * `Repositories.afterCommit` / `afterCommit(db, cb)`. Persisted IDs are then
+ * strictly increasing in commit order (single writer connection).
  */
 import type { DatabaseSync } from 'node:sqlite';
 import type { Clock, ExecutorDiagnostic, WorkerEvent } from '../core/index.js';
