@@ -105,6 +105,13 @@ export interface ManualStartResult {
 
 /** Cap of a single timer delay; longer waits are re-armed (also absorbs wall-clock jumps). */
 const MAX_TIMER_DELAY_MS = 60 * 60_000;
+/** Skip decisions recorded only once per series (state change), not per slot. */
+const QUIET_DECISIONS: ReadonlySet<CronSlotDecision> = new Set<CronSlotDecision>([
+  'skipped_disabled',
+  'skipped_paused',
+  'skipped_not_ready',
+  'skipped_draining',
+]);
 /** Bound for scanning missed cron slots. */
 const MAX_CRON_SCAN = 100_000;
 
@@ -119,6 +126,11 @@ interface CronState {
   lastHandled: Date;
   /** True until the first due-check after arming from a persisted firing (downtime catch-up). */
   catchUp: boolean;
+  /**
+   * Decision of the current series of "quiet" skips (disabled / gate closed):
+   * only the first slot of a series gets a `cron_firings` row.
+   */
+  quietDecision: CronSlotDecision | null;
   chain: Promise<void>;
   lastConditions: CheckDiagnosis[];
   removed: boolean;
@@ -465,6 +477,7 @@ export class Scheduler {
         nextSlot: null,
         lastHandled: latest ? new Date(latest.scheduledFor) : now,
         catchUp: latest !== null,
+        quietDecision: latest && QUIET_DECISIONS.has(latest.decision as CronSlotDecision) ? (latest.decision as CronSlotDecision) : null,
         chain: Promise.resolve(),
         lastConditions: [],
         removed: false,
@@ -511,6 +524,15 @@ export class Scheduler {
   private async processDue(state: CronState): Promise<void> {
     if (this.stopped || state.removed) return;
     this.disarm(state);
+    try {
+      await this.decideDue(state);
+    } finally {
+      // Always re-arm: one failing slot (e.g. a DB error) must not stop the schedule.
+      this.armCronTimer(state);
+    }
+  }
+
+  private async decideDue(state: CronState): Promise<void> {
     const now = this.clock.now();
     const due = dueSlots(state.schedule, state.lastHandled, now, { keep: this.maxRecordedMissed + 1, maxScan: MAX_CRON_SCAN });
     const catchUp = state.catchUp;
@@ -522,10 +544,12 @@ export class Scheduler {
       const notRecorded = due.total - due.slots.length;
       missed.forEach((slot, i) => {
         let reason = catchUp
-          ? 'slot passed while the orchestrator was not running'
+          ? state.quietDecision
+            ? `slot passed while the orchestrator was not running (or while still ${state.quietDecision})`
+            : 'slot passed while the orchestrator was not running'
           : `slot handled ${Math.round((now.getTime() - slot.getTime()) / 1000)}s late (tolerance ${Math.round(this.misfireToleranceMs / 1000)}s)`;
         if (i === 0 && (notRecorded > 0 || due.scanLimited)) reason += ` (+${due.scanLimited ? 'at least ' : ''}${notRecorded} older missed slot(s) not recorded)`;
-        this.recordFiring(state.workflowId, slot, 'skipped_missed', reason);
+        this.recordFiring(state, slot, 'skipped_missed', reason);
       });
       if (missed.length > 0) {
         this.logger.warn('cron slots missed (not caught up)', { workflowId: state.workflowId, missed: missed.length + notRecorded });
@@ -533,12 +557,24 @@ export class Scheduler {
       state.lastHandled = latest;
       if (fire) await this.handleSlot(state, latest);
     }
-    this.armCronTimer(state);
   }
 
-  private recordFiring(workflowId: string, slot: Date, decision: CronSlotDecision, reason: string | null, runId?: string): void {
-    const { inserted } = this.repos.cronFirings.record({ workflowId, scheduledFor: slot, decision, reason, ...(runId ? { runId } : {}) });
-    if (inserted) this.logger.info('cron slot', { workflowId, slot: slot.toISOString(), decision, reason });
+  /**
+   * Persist a slot decision. Quiet skips (disabled / gate closed) are written
+   * only for the first slot of a series; later slots of the same series only
+   * advance `lastHandled` (no row flood for frequent schedules).
+   */
+  private recordFiring(state: CronState, slot: Date, decision: CronSlotDecision, reason: string | null): void {
+    const workflowId = state.workflowId;
+    const quiet = QUIET_DECISIONS.has(decision);
+    if (quiet && state.quietDecision === decision) {
+      this.logger.debug('cron slot (series continues, not recorded)', { workflowId, slot: slot.toISOString(), decision });
+      return;
+    }
+    const text = quiet ? `${reason ?? decision}; further slots are not recorded while this state lasts` : reason;
+    const { inserted } = this.repos.cronFirings.record({ workflowId, scheduledFor: slot, decision, reason: text });
+    state.quietDecision = quiet ? decision : null;
+    if (inserted) this.logger.info('cron slot', { workflowId, slot: slot.toISOString(), decision, reason: text });
   }
 
   /** Decide one due slot: start a run or record why not. */
@@ -546,7 +582,7 @@ export class Scheduler {
     const workflowId = state.workflowId;
     if (this.repos.cronFirings.get(workflowId, slot)) return; // already handled (e.g. before a restart)
     const pre = this.slotPrecondition(workflowId);
-    if (pre) return this.recordFiring(workflowId, slot, pre.decision, pre.reason);
+    if (pre) return this.recordFiring(state, slot, pre.decision, pre.reason);
 
     const eff = this.config.getWorkflow(workflowId) as NonNullable<ReturnType<ConfigManager['getWorkflow']>>;
     if (eff.config.conditions.workflow.length > 0) {
@@ -556,12 +592,12 @@ export class Scheduler {
         const f = outcome.failed;
         const what = `workflow condition ${f?.index ?? '?'} (${f?.command ?? ''})`;
         return outcome.value === false
-          ? this.recordFiring(workflowId, slot, 'skipped_condition', `${what} is false`)
-          : this.recordFiring(workflowId, slot, 'skipped_condition_unknown', `${what} is unknown: ${f?.error ?? 'check error'}`);
+          ? this.recordFiring(state, slot, 'skipped_condition', `${what} is false`)
+          : this.recordFiring(state, slot, 'skipped_condition_unknown', `${what} is unknown: ${f?.error ?? 'check error'}`);
       }
       if (this.stopped) return;
       const again = this.slotPrecondition(workflowId);
-      if (again) return this.recordFiring(workflowId, slot, again.decision, again.reason);
+      if (again) return this.recordFiring(state, slot, again.decision, again.reason);
     }
 
     // Synchronous: record + reserve in one transaction (at most one run per slot).
@@ -581,12 +617,13 @@ export class Scheduler {
         return reserved;
       });
     } catch (err) {
-      if (err instanceof BlockedError) return this.recordFiring(workflowId, slot, 'skipped_blocked', `retry block ${err.blockId}`);
-      if (err instanceof LockConflictError) return this.recordFiring(workflowId, slot, 'skipped_lock', `slot lock held by run ${err.holderRunId}`);
+      if (err instanceof BlockedError) return this.recordFiring(state, slot, 'skipped_blocked', `retry block ${err.blockId}`);
+      if (err instanceof LockConflictError) return this.recordFiring(state, slot, 'skipped_lock', `slot lock held by run ${err.holderRunId}`);
       this.logger.error('cron reservation failed', { workflowId, slot: slot.toISOString(), error: errorMessage(err) });
-      return this.recordFiring(workflowId, slot, 'start_failed', errorMessage(err));
+      return this.recordFiring(state, slot, 'start_failed', errorMessage(err));
     }
     if (!run) return;
+    state.quietDecision = null;
     this.logger.info('cron slot', { workflowId, slot: slot.toISOString(), decision: 'started', runId: run.id });
     try {
       this.controller.startRun(run);

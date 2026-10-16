@@ -64,6 +64,31 @@ describe('Scheduler – planning step (Spec §7)', () => {
     expect(s.env.p.runs.get(third.startedRunIds[0] as string)?.sourceItemKey).toBe('repo_a:9');
   });
 
+  it('automatic starts re-check the item: label removed between poll and re-read → cancelled without on_start', async () => {
+    s.workflow('coder', sourceWorkflow('coder', s.env.script('ok.sh', 'exit 0'), READY));
+    // Source lookup of the scheduler: the label disappears right after the poll.
+    const polling = {
+      ...s.env.adapter,
+      fieldDefinitions: () => s.env.adapter.fieldDefinitions(),
+      parseItemRef: (ref: string) => s.env.adapter.parseItemRef(ref),
+      getItem: (id: string) => s.env.adapter.getItem(id),
+      resolveFields: (...a: Parameters<typeof s.env.adapter.resolveFields>) => s.env.adapter.resolveFields(...a),
+      listCandidates: async (...a: Parameters<typeof s.env.adapter.listCandidates>) => {
+        const items = await s.env.adapter.listCandidates(...a);
+        s.env.github.setLabels(REPO, ISSUE, ['manual-label']);
+        return items;
+      },
+    } as typeof s.env.adapter;
+    const b = await s.build({ sources: (id) => (id === 'repo_a' ? polling : undefined) });
+    const report = await b.scheduler.planOnce();
+    expect(report.startedRunIds).toHaveLength(1);
+    const run = await waitStatus(b, s.env, report.startedRunIds[0] as string, 'cancelled');
+    expect(run.finalReason).toContain('no longer matches');
+    expect(s.env.p.actions.listForRun(run.id)).toEqual([]); // on_start never ran
+    expect(s.env.github.labels(REPO, ISSUE)).toEqual(['manual-label']);
+    expect(s.env.p.blocks.counter('coder', ITEM_KEY).consecutive).toBe(0);
+  });
+
   it('a locked or blocked high-priority candidate does not block the next one', async () => {
     s.env.github.setLabels(REPO, ISSUE, ['ready-for-coding', 'priority:high']);
     s.env.github.createIssue(REPO, { number: 8, labels: ['ready-for-coding'] });

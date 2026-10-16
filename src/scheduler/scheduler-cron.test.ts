@@ -97,6 +97,56 @@ describe('Scheduler – cron trigger (Spec §5.5, §7)', () => {
     expect((await waitStatus(b, s.env, runs[0]?.id as string, 'completed')).scheduledFor).toBe('2026-01-01T00:06:00.000Z');
   });
 
+  it('keeps the schedule alive when handling a slot throws (e.g. a database error)', async () => {
+    s.workflow(WF, scheduleWorkflow(WF, s.env.script('ok.sh', 'exit 0'), '* * * * *', 'max_concurrent: 5'));
+    const b = await s.build();
+    const repo = s.env.p.cronFirings;
+    const original = repo.get.bind(repo);
+    let failures = 0;
+    repo.get = (...args: Parameters<typeof repo.get>) => {
+      if (failures === 0) {
+        failures++;
+        throw new Error('database is locked');
+      }
+      return original(...args);
+    };
+    b.scheduler.start();
+    await b.scheduler.whenIdle();
+    await advance(s, b, 30_000); // 00:01 – handling throws
+    expect(failures).toBe(1);
+    expect(firings(s)).toEqual([]);
+    expect(b.scheduler.cronStatus()[0]?.nextSlot).toBe('2026-01-01T00:02:00.000Z');
+    await advance(s, b, 60_000); // 00:02 – decided normally again
+    expect(firings(s)).toEqual([['00:02', 'started']]);
+    expect(s.env.p.runs.list({ workflowId: WF }).total).toBe(1);
+  });
+
+  it('records disabled/paused series only once per state change (no row flood)', async () => {
+    s.workflow(WF, scheduleWorkflow(WF, s.env.script('ok.sh', 'exit 0'), '* * * * *', 'max_concurrent: 5'));
+    const b = await s.build();
+    b.scheduler.start();
+    await b.scheduler.whenIdle();
+    b.config.setWorkflowOverrides(WF, { enabled: false });
+    for (let i = 0; i < 3; i++) await advance(s, b, i === 0 ? 30_000 : 60_000); // 00:01–00:03 disabled
+    b.config.setWorkflowOverrides(WF, { enabled: true });
+    b.h.controller.pause();
+    await advance(s, b, 60_000); // 00:04 paused
+    await advance(s, b, 60_000); // 00:05 paused
+    b.h.controller.resume();
+    await advance(s, b, 60_000); // 00:06 started
+    b.config.setWorkflowOverrides(WF, { enabled: false });
+    await advance(s, b, 60_000); // 00:07 disabled – new series after a start
+    await advance(s, b, 60_000); // 00:08 (not recorded)
+    expect(firings(s)).toEqual([
+      ['00:01', 'skipped_disabled'],
+      ['00:04', 'skipped_paused'],
+      ['00:06', 'started'],
+      ['00:07', 'skipped_disabled'],
+    ]);
+    expect(s.env.p.cronFirings.get(WF, '2026-01-01T00:01:00.000Z')?.reason).toContain('further slots are not recorded');
+    expect(b.scheduler.cronStatus()[0]?.nextSlot).toBe('2026-01-01T00:09:00.000Z');
+  });
+
   it('records slots missed during downtime as skipped_missed and never catches them up', async () => {
     s.clock.set('2026-01-01T00:05:30.000Z');
     s.env.p.cronFirings.record({ workflowId: WF, scheduledFor: '2026-01-01T00:01:00.000Z', decision: 'started' });

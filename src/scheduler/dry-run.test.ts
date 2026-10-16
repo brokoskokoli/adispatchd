@@ -89,10 +89,9 @@ item_priority:
       configSnapshot: b.config.snapshotWorkflow('coder'),
     });
     s.env.p.blocks.create({ workflowId: 'coder', itemKey: 'repo_a:9', reason: 'crashes' });
-    b.h.controller.pause();
     const result = await b.scheduler.dryRun('coder');
     expect(result.capacity).toEqual({ global: { active: 1, max: 4 }, workflow: { active: 1, max: 2 } });
-    expect(result.gate).toEqual({ canStartAutomatically: false, reason: 'paused' });
+    expect(result.gate).toEqual({ canStartAutomatically: true, reason: null });
     expect(result.candidates.map((c) => [c.itemKey, c.itemPriority, c.decision])).toEqual([
       ['repo_a:10', 10, 'would_start'],
       [ITEM_KEY, 0, 'workflow_limit'],
@@ -101,6 +100,18 @@ item_priority:
     ]);
     expect(result.candidates[2]?.runId).toBe(lockRun.id);
     expect(s.env.p.runs.countActive()).toBe(1);
+
+    // Closed gate / disabled workflow: eligible candidates are never counted as would_start.
+    b.h.controller.pause();
+    const paused = await b.scheduler.dryRun('coder');
+    expect(paused.gate).toEqual({ canStartAutomatically: false, reason: 'paused' });
+    expect(paused.candidates.map((c) => c.decision)).toEqual(['gate_closed', 'gate_closed', 'locked', 'blocked']);
+    expect(paused.summary.wouldStart).toBe(0);
+    b.h.controller.resume();
+    b.config.setWorkflowOverrides('coder', { enabled: false });
+    const disabled = await b.scheduler.dryRun('coder');
+    expect(disabled.candidates.map((c) => c.decision)).toEqual(['workflow_unavailable', 'workflow_unavailable', 'locked', 'blocked']);
+    expect(disabled.summary).toMatchObject({ wouldStart: 0, pendingChecks: 0, notStartable: 4 });
   });
 
   it('dry-runs schedule and manual workflows; works without database/controller', async () => {

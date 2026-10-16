@@ -11,7 +11,11 @@ fällt dort auf.
   6 mit Sekunden); Validierung in `config validate` (WI-02).
 - **Höchstens ein automatischer Run pro Slot.** Absicherung doppelt: Primärschlüssel `cron_firings(workflow_id,
   scheduled_for)` und Lock-Key `cron:<slot>` des Runs. Eintrag und Reservierung erfolgen in **einer** Transaktion.
-- **Jeder behandelte Slot bekommt genau einen `cron_firings`-Eintrag** mit `decision`:
+- **Jeder behandelte Slot bekommt höchstens einen `cron_firings`-Eintrag** mit `decision`. Ausnahme Serien:
+  `skipped_disabled`, `skipped_paused`, `skipped_not_ready`, `skipped_draining` werden nur für den **ersten Slot
+  einer Serie** geschrieben (Grund endet mit „further slots are not recorded while this state lasts“); weitere Slots
+  desselben Zustands schreiben nur `lastHandled` im Speicher fort. Jede andere Entscheidung (auch ein Start) beendet
+  die Serie, danach wird ein erneuter Zustand wieder einmal protokolliert:
 
 | decision | Bedeutung |
 |---|---|
@@ -83,5 +87,10 @@ Regel: Jede **Wanduhrzeit** wird höchstens einmal ausgelöst – beim ersten Au
   `skipped_blocked`, bis er entfernt wird.
 - Manuelle Starts eines Schedule-Workflows haben eigene Lock-Keys (`manual:<runId>`), erzeugen keinen
   `cron_firings`-Eintrag, zählen aber zur Auslastung und können dadurch einen Slot zu `skipped_limit` machen.
-- Deaktivierte Workflows werden weiter getaktet, jeder Slot wird als `skipped_disabled` protokolliert (vollständige
-  Historie; bei sehr häufigen Ausdrücken entsprechend viele Zeilen – Retention `deleteCronFirings` räumt auf).
+- Deaktivierte Workflows werden weiter getaktet; protokolliert wird nur der erste Slot einer
+  `skipped_disabled`-Serie (gleiches gilt für Pause/Not-ready/Drain) – keine Zeilenflut bei `* * * * *`.
+- Folge für die Downtime-Erkennung: Startet der Orchestrator neu, während bzw. nachdem eine solche Serie lief, sind
+  die nicht protokollierten Slots nach dem letzten Eintrag nicht von Downtime unterscheidbar; sie werden (begrenzt)
+  als `skipped_missed` mit Grund „… not running (or while still skipped_disabled)“ protokolliert.
+- Fehler bei der Behandlung eines Slots (z. B. DB-Fehler) werden geloggt; der Timer wird **immer** neu gestellt, der
+  nächste Slot wird normal entschieden (der fehlgeschlagene Slot bleibt ohne Eintrag).

@@ -9,6 +9,8 @@
  *   filter/lock/block status even when the limits are exhausted; capacity is
  *   then simulated in priority order (`pending_checks` candidates consume a
  *   slot, assuming their checks pass).
+ * - Eligible candidates of a disabled workflow / with closed controller gate
+ *   are reported as `workflow_unavailable` / `gate_closed`, never `would_start`.
  * - Only the given workflow is considered; higher-priority workflows that
  *   would take global slots first are not simulated.
  */
@@ -104,7 +106,13 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
       const diag = candidate.diagnosis;
       ordered.push(diag);
       if (!eligibility.eligible) continue;
-      if (simGlobal >= capacity.global.max) {
+      if (!eff.enabled) {
+        diag.decision = 'workflow_unavailable';
+        diag.reason = 'eligible, but the workflow is disabled (no automatic starts)';
+      } else if (gate && !gate.canStartAutomatically) {
+        diag.decision = 'gate_closed';
+        diag.reason = `eligible, but automatic starts are currently not possible (${gate.reason ?? 'unknown'})`;
+      } else if (simGlobal >= capacity.global.max) {
         diag.decision = 'global_limit';
         diag.reason = `global limit reached (${simGlobal}/${capacity.global.max}, incl. candidates above)`;
       } else if (simWorkflow >= capacity.workflow.max) {
