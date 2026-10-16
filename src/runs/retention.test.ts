@@ -105,20 +105,29 @@ describe('RetentionService', () => {
     completeRun(p, withFiles('coder', 'a:1').id, SUCCESS);
     clock.advance(31 * DAY);
     const reports: number[] = [];
+    let notify: () => void = () => undefined;
+    const nextReport = () => new Promise<void>((r) => (notify = r));
     const svc = new RetentionService({
       repositories: p,
       dataDir: dir,
       settings: () => settings,
       clock,
       timers: clock,
-      onReport: (r) => reports.push(r.deletedRunIds.length),
+      onReport: (r) => {
+        reports.push(r.deletedRunIds.length);
+        notify();
+      },
     });
     svc.start(1000);
+    let report = nextReport();
     await clock.advanceAsync(1000);
-    await new Promise((r) => setTimeout(r, 50));
+    await report;
     expect(reports).toEqual([1]);
+    // The next pass is armed after the first one finished.
+    for (let i = 0; i < 100 && clock.pendingTimers() === 0; i++) await new Promise((r) => setImmediate(r));
+    report = nextReport();
     await clock.advanceAsync(DAY);
-    await new Promise((r) => setTimeout(r, 50));
+    await report;
     expect(reports).toEqual([1, 0]);
     await svc.stop();
     expect(clock.pendingTimers()).toBe(0);

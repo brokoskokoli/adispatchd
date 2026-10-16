@@ -8,7 +8,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createStartHandler } from './start.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const TSX = path.join(ROOT, 'node_modules', '.bin', 'tsx');
 
 function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -46,7 +45,8 @@ describe('start command', () => {
   it('starts the real binary, becomes ready and exits 0 on SIGTERM', async () => {
     const port = await freePort();
     const { configDir, dataDir } = tempConfig(port);
-    const child = spawn(TSX, [path.join(ROOT, 'src/cli/main.ts'), 'start', '--config-dir', configDir, '--data-dir', dataDir], {
+    // `node --import tsx` (single process): the signal reaches the orchestrator directly, as with the installed binary.
+    const child = spawn(process.execPath, ['--import', 'tsx', path.join(ROOT, 'src/cli/main.ts'), 'start', '--config-dir', configDir, '--data-dir', dataDir], {
       cwd: ROOT,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
