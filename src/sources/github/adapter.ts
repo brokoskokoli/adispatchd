@@ -383,10 +383,15 @@ export function renderMarker(marker: string): string {
   return `<!-- ${marker} -->`;
 }
 
-/** Regex matching the marker on its own line (not inside a quote). */
+/**
+ * Regex matching the marker as the LAST line of the body, i.e. the marker that
+ * `postComment` appends itself. A marker text inside the body (e.g. copied from
+ * untrusted worker output into the message) is followed by the real marker and
+ * therefore never matches — it cannot forge the idempotency check (WI-07 review).
+ */
 function markerPattern(marker: string): RegExp {
   const line = renderMarker(marker).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|\\n)[ \\t]*${line}[ \\t]*(\\r?\\n|$)`);
+  return new RegExp(`(^|\\n)[ \\t]*${line}\\s*$`);
 }
 
 function unknownDependencies(reason: string): Record<string, FieldResolution> {
