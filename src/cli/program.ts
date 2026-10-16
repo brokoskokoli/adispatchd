@@ -32,7 +32,8 @@ export interface CliIo {
   setExitCode: (code: number) => void;
 }
 
-const defaultIo: CliIo = {
+/** CLI I/O bound to the real process streams. */
+export const processIo: CliIo = {
   stdout: (text) => process.stdout.write(text),
   stderr: (text) => process.stderr.write(text),
   setExitCode: (code) => {
@@ -41,7 +42,7 @@ const defaultIo: CliIo = {
 };
 
 /** Build the `agent-orchestrator` command tree. */
-export function createProgram(handlers: CliHandlers = {}, io: CliIo = defaultIo): Command {
+export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo): Command {
   const program = new Command('agent-orchestrator')
     .description('Configuration-driven orchestrator for shell processes and AI agents')
     .version('0.1.0')

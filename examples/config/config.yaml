@@ -1,0 +1,32 @@
+# Global settings (Spec §5.1)
+server:
+  host: 127.0.0.1
+  port: 8787
+
+scheduler:
+  polling_interval: 30s
+  max_concurrent: 5
+
+workspace:
+  base_dir: /var/lib/agent-orchestrator/workspaces
+  cleanup: on_success  # always | on_success | never
+
+lifecycle:
+  action_retry:
+    max_attempts: 3
+    delay: 30s
+
+retention:
+  completed_runs: 30d
+  failed_runs: 90d
+  blocked_runs: never
+  max_log_size_per_run: 100MB
+  cleanup_interval: 24h
+
+notifications:
+  # Admin/orchestrator notifications (Spec §18). Channels are optional, e.g.:
+  # channels:
+  #   - type: webhook
+  #     url_env: SLACK_WEBHOOK_URL
+  #     headers_env: { Authorization: WEBHOOK_AUTH_HEADER }
+  on: [retry_block_created, lifecycle_action_failed, recovery_failed]

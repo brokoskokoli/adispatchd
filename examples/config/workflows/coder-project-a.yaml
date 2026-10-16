@@ -1,0 +1,86 @@
+# workflows/coder-project-a.yaml (Spec §5.4)
+id: coder-project-a
+name: Coder – Project A
+enabled: true
+priority: 50
+max_concurrent: 3
+identity: coder
+
+trigger:
+  type: source
+  source: project_a
+
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-coding }
+    - { field: dependencies.blocked_by_open, operator: equals, value: 0 }
+
+item_priority:
+  rules:
+    - when: { field: labels, operator: contains, value: 'priority:critical' }
+      value: 100
+    - when: { field: labels, operator: contains, value: 'priority:high' }
+      value: 50
+  default: 0
+
+conditions:
+  workflow:
+    - type: shell
+      command: /etc/agent-orchestrator/scripts/check-credits.sh
+      timeout: 15s
+      cache: 60s
+  item: []
+
+execute:
+  type: shell
+  command: /etc/agent-orchestrator/scripts/coder.sh
+  working_directory: '{workspace.base_dir}/{workflow.id}/{run.id}'
+  create_directory: true
+  env:
+    NODE_ENV: production
+  secrets:
+    GH_TOKEN:
+      identity: coder
+  timeout:
+    max_duration: 6h
+    idle_timeout: 45m
+
+retry:
+  max_technical_failures: 3
+
+on_start:
+  - type: source.update
+    labels: { add: [coding], remove: [ready-for-coding] }
+  - type: source.comment
+    message: 'Coder started, run {run.id}.'
+    identity: coder
+
+on_success:
+  - type: source.update
+    labels: { add: [ready-for-review], remove: [coding] }
+  - type: source.comment
+    message: 'Completed: {result.message}'
+    identity: coder
+    continue_on_error: true
+
+on_failure:
+  - type: source.update
+    labels: { add: [needs-maintainer], remove: [coding] }
+  - type: source.comment
+    message: 'Needs maintainer: {result.message}'
+
+on_crash:
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [coding] }
+
+on_start_error:
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [coding] }
+
+on_cancel:
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [coding] }
+
+on_timeout:
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [coding] }
