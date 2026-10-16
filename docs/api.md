@@ -10,6 +10,27 @@ Implementierung: `src/api/` (WI-10). Spec §15, §16, §17, §18, §21.
 - Antworten enthalten keine Secrets (Identities nur als ID, Webhook-URLs redigiert, Fehlertexte redigiert).
   Strings aus Events/Results/Logs/Titeln sind **untrusted** – die UI rendert sie nur als Text.
 
+## Host-/Origin-Allowlist (DNS-Rebinding), alle Requests
+
+Für **jeden** Request (inkl. `GET`, SSE, statische UI, unbekannte Routen) muss der `Host`-Header einen erlaubten Namen tragen,
+sonst `421 host_not_allowed`:
+
+- immer: `localhost`, `127.0.0.1`, `[::1]` (beliebiger Port),
+- bei Bind auf eine konkrete Nicht-Loopback-Adresse zusätzlich diese Adresse,
+- alle Einträge aus `server.allowed_hosts` in `config.yaml` (`name` = beliebiger Port, `name:port` = nur dieser Port), z. B.
+  den öffentlichen Namen eines authentifizierenden Reverse Proxys:
+
+```yaml
+server:
+  host: 127.0.0.1
+  port: 8787
+  allowed_hosts: [orchestrator.example.com]
+```
+
+Sendet der Browser einen `Origin`, muss dessen Host ebenfalls erlaubt sein (sonst `403 origin_not_allowed`, auch bei `GET`);
+`Origin: null` wird abgelehnt. Damit scheitert ein DNS-Rebinding-Angriff (`Host`/`Origin` = Angreifer-Domain), auch wenn der
+Angreifer den CSRF-Header setzen kann.
+
 ## CSRF-Schutz (mutierende Requests)
 
 Für `POST`, `PATCH`, `PUT`, `DELETE` gilt:
@@ -18,7 +39,7 @@ Für `POST`, `PATCH`, `PUT`, `DELETE` gilt:
 |---|---|
 | Header `X-Orchestrator-Request: 1` ist Pflicht | `403 csrf_header_missing` |
 | `Sec-Fetch-Site: cross-site` wird abgelehnt | `403 cross_site_request` |
-| Ein gesendeter `Origin` muss zum `Host` passen (oder in `allowedOrigins` der App stehen); `Origin: null` wird abgelehnt | `403 origin_not_allowed` |
+| `Origin` muss auf einen erlaubten Host zeigen (s. o.; oder in `allowedOrigins` der App stehen) | `403 origin_not_allowed` |
 | Body nur als `application/json` (leerer Body erlaubt) | `415 unsupported_media_type` |
 | `OPTIONS` (CORS-Preflight) | `405 method_not_allowed` |
 
@@ -33,7 +54,8 @@ Beispiel: `curl -X POST -H 'X-Orchestrator-Request: 1' http://127.0.0.1:8787/api
 | HTTP | Codes (Auswahl) |
 |---|---|
 | 400 | `invalid_request` (Schema-Validierung, `details.issues`), `invalid_json`, `manual_item_required`, `manual_item_not_supported`, `manual_item_invalid_ref`, `invalid_parameters` (`details.errors`), `lifecycle_not_skippable`, `validation_error` |
-| 403 | CSRF-Codes (s. o.) |
+| 403 | CSRF-/Origin-Codes (s. o.) |
+| 421 | `host_not_allowed` (Host-Allowlist) |
 | 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found` |
 | 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition` |
 | 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt) |
@@ -48,7 +70,7 @@ Beispiel: `curl -X POST -H 'X-Orchestrator-Request: 1' http://127.0.0.1:8787/api
 | Methode | Pfad | Antwort |
 |---|---|---|
 | GET | `/health` | `200 {"status":"ok","time":"…"}` sobald HTTP läuft |
-| GET | `/ready` | `200` / `503` `{"ready":bool,"checks":{"database","recovery","config","scheduler","shuttingDown"}}` – `ready` erst nach abgeschlossener Recovery und gestartetem Scheduler, `false` während Shutdown |
+| GET | `/ready` | `200` / `503` `{"ready":bool,"checks":{"database","recovery","scheduler","shuttingDown"}}` (kein eigener Config-Check: ohne gültige Konfiguration startet die Instanz nicht, ein gescheiterter Reload behält die aktive) – `ready` erst nach abgeschlossener Recovery und gestartetem Scheduler, `false` während Shutdown |
 | GET | `/api/v1/status` | Scheduler-Zustand, Limits, Auslastung, Zähler (s. u.) |
 
 ```json
@@ -155,7 +177,7 @@ clearedAt, clearedBy, active, affectedRunIds, sourceUrl`.
   "columns": [ { "field": "title", "label": "Titel", "link": "url", "type": "string" }, … ],
   "rows": [ { "key": "project_a:7", "sourceId": "project_a", "itemId": "7", "url": "https://…", "lastRunId": "run-…",
               "cells": [ { "value": "Fix login", "known": true, "link": "https://github.com/…/issues/7" }, … ] } ],
-  "errors": [ { "sourceId": "project_b", "message": "…" } ], "filterUnknown": 0, "truncated": false,
+  "errors": [ { "sourceId": "project_b", "message": "… (redigiert)" } ], "filterUnknown": 0, "truncated": false,
   "fetchedAt": "…", "cached": false }
 ```
 `cells` hat die Reihenfolge von `columns`. Nicht verfügbare Felder: `value: null, known: false`. Links nur `http(s)`.
@@ -167,7 +189,7 @@ Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_res
 | Methode | Pfad | Antwort |
 |---|---|---|
 | GET | `/api/v1/config` | `{"config": LoadedConfig (Webhook-URLs redigiert), "overrides"}` |
-| GET | `/api/v1/config/files` | `{"files":[{"file":"workflows/coder.yaml","content":"…"}]}` – YAML read-only, bekannte Secrets redigiert |
+| GET | `/api/v1/config/files` | `{"files":[{"file":"workflows/coder.yaml","content":"…"}]}` – YAML read-only, **strukturell redigiert** (unabhängig vom geladenen Stand): Werte von `url`-Keys, alles unter `headers`/`headers_env`, Keys wie `*token`, `*secret`, `password`, … sowie Pfad/Query von URLs in Kommentaren → `[REDACTED]`. Nicht parsebare Dateien werden nicht roh ausgeliefert (`content: null`, `error` mit Zeilennummer) |
 | POST | `/api/v1/config/validate` | `{"ok", "errors":[ConfigIssue], "warnings", "hash"?}` – prüft Dateien, aktiviert nichts |
 | POST | `/api/v1/config/reload` | `200 {"ok":true,"version","hash","changed","diff","resetOverrides","warnings"}` / `422 config_invalid` (`details.errors`) – atomar, bei Fehler bleibt die aktive Konfiguration |
 
@@ -194,7 +216,7 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 | `event` | persistent / `id` | Payload |
 |---|---|---|
 | `stream.open` | `id` = aktuelle Basis (ohne Resume) | `{lastEventId, replayed}` |
-| `stream.reset` | `id` = neueste ID | `{reason:"too_many_missed_events", lastEventId}` – Client lädt per REST neu |
+| `stream.reset` | `id` = neueste ID | `{reason:"too_many_missed_events"\|"unknown_last_event_id", lastEventId}` – Client lädt per REST neu (auch wenn die `Last-Event-ID` größer als jede bekannte ID ist, z. B. nach Austausch des data-dir) |
 | `run.event` | ja | RunEvent `{id, runId, sequence, timestamp, origin: worker\|orchestrator, type, payload}`; `type` u. a. `run.status` (`{from,to,target?,blockId?}`), Worker-`status`/`progress`/…, `diagnostic.*`, `lifecycle.action`, `lifecycle.chain`, `run.spawn`, `run.cancel_requested`, `recovery.*`, `workspace.cleanup` |
 | `run.output` | nein | `{runId, stream: stdout\|stderr, data, at}` (Live-Log, redigiert; per REST nachladen) |
 | `run.action` | nein | Action-Journal-Eintrag nach Änderung |
