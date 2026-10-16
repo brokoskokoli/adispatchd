@@ -24,6 +24,11 @@ describe('cli program', () => {
     expect(names).toEqual([
       'init',
       'start',
+      'status',
+      'pause',
+      'resume',
+      'drain',
+      'cancel-all',
       'config validate',
       'config reload',
       'workflow dry-run',
@@ -49,6 +54,47 @@ describe('cli program', () => {
       from: 'user',
     });
     expect(seen).toEqual({ id: 'coder', configDir: './cfg', dataDir: './data' });
+  });
+
+  it('passes command options with defaults', async () => {
+    const io = captureIo();
+    const seen: Record<string, unknown> = {};
+    const program = createProgram(
+      {
+        start: async (opts) => {
+          seen.start = opts;
+          return 0;
+        },
+        drain: async (opts) => {
+          seen.drain = opts;
+          return 0;
+        },
+        serviceInstall: async (opts) => {
+          seen.install = opts;
+          return 0;
+        },
+      },
+      io,
+    );
+    await program.parseAsync(['start', '--config-dir', 'c', '--drain-timeout', '1h'], { from: 'user' });
+    expect(seen.start).toEqual({ configDir: 'c', drainTimeout: '1h', cancelTimeout: '2m' });
+    await createProgram({ drain: async (o) => ((seen.drain = o), 0) }, io).parseAsync(['drain', '--url', 'http://x:1', '--wait'], { from: 'user' });
+    expect(seen.drain).toEqual({ url: 'http://x:1', wait: true });
+    await createProgram({ serviceInstall: async (o) => ((seen.install = o), 0) }, io).parseAsync(
+      ['service', 'install', '--dry-run', '--config-dir', '/etc/o', '--data-dir', '/var/lib/o', '--create-user'],
+      { from: 'user' },
+    );
+    expect(seen.install).toMatchObject({
+      dryRun: true,
+      createUser: true,
+      user: 'agent-orchestrator',
+      name: 'agent-orchestrator',
+      unitDir: '/etc/systemd/system',
+      drainTimeout: '10m',
+      cancelTimeout: '2m',
+      configDir: '/etc/o',
+      dataDir: '/var/lib/o',
+    });
     expect(io.code).toBe(0);
   });
 
