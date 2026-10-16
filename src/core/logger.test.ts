@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FakeClock } from './clock.js';
-import { ConsoleLogger, MemoryLogger, REDACTED, SecretRedactor } from './logger.js';
+import { OrchestratorError } from './errors.js';
+import { ConsoleLogger, isSecretKey, MemoryLogger, REDACTED, redactValue, SecretRedactor } from './logger.js';
 
 describe('logger', () => {
   it('writes JSON lines with bindings and respects the level', () => {
@@ -38,6 +39,39 @@ describe('logger', () => {
     expect(rec.headers).toEqual({ authorization: REDACTED, accept: 'json' });
     expect(rec.err.message).toBe(`token ${REDACTED} rejected`);
     expect(redactor.size).toBe(1);
+  });
+
+  it('anchors secret key detection at segment boundaries', () => {
+    for (const key of ['password', 'passwd', 'GH_TOKEN', 'accessToken', 'access_token', 'x-api-key', 'apiKey',
+      'privateKey', 'private_key', 'client_secret', 'Authorization', 'credentials', 'cookie', 'db.pass']) {
+      expect(isSecretKey(key), key).toBe(true);
+    }
+    for (const key of ['passed', 'bypass', 'tokens_used', 'tokenExpiresAt', 'secretary', 'keyboard', 'cookies_enabled']) {
+      expect(isSecretKey(key), key).toBe(false);
+    }
+  });
+
+  it('renders shared references repeatedly and only marks real cycles', () => {
+    const shared = { a: 1 };
+    const cyclic: Record<string, unknown> = { name: 'x' };
+    cyclic.self = cyclic;
+    expect(redactValue({ first: shared, second: shared, list: [shared, shared] })).toEqual({
+      first: { a: 1 },
+      second: { a: 1 },
+      list: [{ a: 1 }, { a: 1 }],
+    });
+    expect(redactValue(cyclic)).toEqual({ name: 'x', self: '[Circular]' });
+  });
+
+  it('includes redacted OrchestratorError details', () => {
+    const redactor = new SecretRedactor();
+    redactor.add('topsecretvalue');
+    const err = new OrchestratorError('x_failed', 'failed', { details: { url: 'https://h/?q=topsecretvalue', token: 'abc' } });
+    expect(redactValue(err, redactor.asRedactor)).toMatchObject({
+      name: 'OrchestratorError',
+      code: 'x_failed',
+      details: { url: `https://h/?q=${REDACTED}`, token: REDACTED },
+    });
   });
 
   it('MemoryLogger captures redacted records across children', () => {

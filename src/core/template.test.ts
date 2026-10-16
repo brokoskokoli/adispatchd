@@ -137,6 +137,15 @@ describe('renderTemplate path mode (traversal protection)', () => {
     expect(() => renderTemplate('/tmp/{workspace.base_dir}', values, { mode: 'path' })).toThrow(TemplateError);
   });
 
+  it('requires "/" or end after a path root', () => {
+    for (const tpl of ['{workspace.base_dir}{workflow.id}', '{workspace.base_dir}-x/{run.id}', '{workspace.base_dir}..']) {
+      expect(validateTemplate(tpl, { mode: 'path', scope: { run: true } })[0]?.code).toBe('path_root_position');
+      expect(() => renderTemplate(tpl, values, { mode: 'path' })).toThrow(TemplateError);
+    }
+    expect(renderTemplate('{workspace.base_dir}', values, { mode: 'path' })).toBe('/var/lib/orch/workspaces');
+    expect(renderTemplate('{workspace.base_dir}/x', values, { mode: 'path' })).toBe('/var/lib/orch/workspaces/x');
+  });
+
   it('fails on missing values instead of producing a shorter path', () => {
     expect(() => renderTemplate('{workspace.base_dir}/{item.number}', { 'workspace.base_dir': '/w' }, { mode: 'path' })).toThrow(
       /No value/,

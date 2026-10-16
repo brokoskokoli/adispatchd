@@ -71,19 +71,40 @@ export function isTechnicalFailure(status: TechnicalStatus): boolean {
  * Reference state machine for run transitions. Persistence (WI-03) enforces
  * it; any transition not listed is invalid.
  *
+ * **Every terminal status is reached only via `finalizing` — no exceptions.**
+ *
  * Normal path: `reserved → starting → running → finalizing → <terminal>`.
- * Hooks for the final outcome run while the run is `finalizing`; the target
- * terminal status is decided before entering `finalizing` and persisted with it.
+ *
+ * Finalization protocol (WI-03/WI-08):
+ * 1. `X → finalizing` persists the {@link FinalizationTarget} (columns
+ *    `runs.final_status`, `runs.business_result`, `runs.final_reason`) and, for
+ *    technical failures that reach the limit, the retry block — all in ONE
+ *    transaction (Spec §11 "important order").
+ * 2. The completion hook ({@link hookForOutcome}) runs while `finalizing`.
+ *    After a controller crash, recovery resumes the hook chain of runs still
+ *    in `finalizing` from the persisted target.
+ * 3. `finalizing → target.status` (must equal the persisted target, see
+ *    {@link canTransition}); the lock is released in the same transaction.
+ *
+ * Special cases (also via `finalizing`):
+ * - Cancel before the worker started (`reserved`/`starting` → `cancelling`
+ *   or directly → `finalizing` with target `cancelled`): a uniform path keeps
+ *   the journal and recovery logic simple; WI-08 decides whether `on_cancel`
+ *   runs when `on_start` never ran.
+ * - `on_start` chain failed: `starting → finalizing` with target `start_error`.
+ * - Recovery: `recovery_pending → finalizing` with target `crashed` (or
+ *   `cancelled`) once the process is confirmed gone.
+ *
  * `cancelling` is entered on a cancel request; `recovery_pending` marks runs
- * whose process could not be identified or stopped during recovery.
+ * whose process could not be identified or stopped during recovery (keeps the lock).
  */
 export const RUN_STATUS_TRANSITIONS: Readonly<Record<TechnicalStatus, readonly TechnicalStatus[]>> = {
-  reserved: ['starting', 'cancelling', 'finalizing', 'cancelled', 'start_error', 'crashed', 'recovery_pending'],
-  starting: ['running', 'cancelling', 'finalizing', 'start_error', 'crashed', 'recovery_pending'],
-  running: ['cancelling', 'finalizing', 'crashed', 'timed_out', 'recovery_pending'],
-  cancelling: ['finalizing', 'cancelled', 'crashed', 'recovery_pending'],
+  reserved: ['starting', 'cancelling', 'finalizing', 'recovery_pending'],
+  starting: ['running', 'cancelling', 'finalizing', 'recovery_pending'],
+  running: ['cancelling', 'finalizing', 'recovery_pending'],
+  cancelling: ['finalizing', 'recovery_pending'],
   finalizing: ['completed', 'crashed', 'start_error', 'timed_out', 'cancelled'],
-  recovery_pending: ['finalizing', 'crashed', 'cancelled'],
+  recovery_pending: ['finalizing'],
   completed: [],
   crashed: [],
   start_error: [],
@@ -91,9 +112,15 @@ export const RUN_STATUS_TRANSITIONS: Readonly<Record<TechnicalStatus, readonly T
   cancelled: [],
 };
 
-/** True if the reference state machine allows `from → to`. */
-export function canTransition(from: TechnicalStatus, to: TechnicalStatus): boolean {
-  return RUN_STATUS_TRANSITIONS[from].includes(to);
+/**
+ * True if the reference state machine allows `from → to`. For
+ * `finalizing → <terminal>`, pass the persisted `target`; the transition is
+ * then only valid if `to === target.status`.
+ */
+export function canTransition(from: TechnicalStatus, to: TechnicalStatus, target?: FinalizationTarget): boolean {
+  if (!RUN_STATUS_TRANSITIONS[from].includes(to)) return false;
+  if (from === 'finalizing' && target !== undefined) return to === target.status;
+  return true;
 }
 
 /**
@@ -101,6 +128,19 @@ export function canTransition(from: TechnicalStatus, to: TechnicalStatus): boole
  * `null` for every technically failed or cancelled run.
  */
 export type BusinessResult = 'success' | 'failure' | null;
+
+/**
+ * Final outcome decided when a run enters `finalizing`. Persisted with that
+ * transition (`runs.final_status`, `runs.business_result`, `runs.final_reason`)
+ * so that hooks and recovery work from it; the run later moves to exactly
+ * `status`. `businessResult` is non-null only for `completed`.
+ */
+export interface FinalizationTarget {
+  status: TerminalStatus;
+  businessResult: BusinessResult;
+  /** Short explanation, e.g. `exit code 1`, `cancelled by user`, `on_start failed`. */
+  reason: string;
+}
 
 /** How a run was triggered. */
 export type TriggerType = 'source' | 'schedule' | 'manual';
@@ -249,7 +289,7 @@ export interface FieldDefinition {
   operators: readonly FilterOperator[];
   /**
    * Expensive field: not contained in {@link SourceItem.fields} from
-   * `listCandidates`, must be resolved lazily via {@link SourceAdapter.resolveField}
+   * `listCandidates`, must be resolved lazily via {@link SourceAdapter.resolveFields}
    * (e.g. GitHub dependencies; Spec §7 step 5).
    */
   expensive?: boolean;
@@ -287,7 +327,8 @@ export interface SourceItem {
   createdAt?: string;
   /**
    * Cheap field values keyed by the full field name (see {@link FieldDefinition.name}).
-   * Expensive fields are absent until resolved via {@link SourceAdapter.resolveField}.
+   * Expensive fields are absent; they are resolved via {@link SourceAdapter.resolveFields}
+   * and callers never write resolved values back into this record.
    */
   fields: Record<string, FieldValue>;
 }
@@ -380,11 +421,26 @@ export interface SourceAdapter {
   parseItemRef(ref: string): string | null;
 
   /**
-   * Resolve a (typically expensive) field lazily. Must return
-   * `{ known: false }` instead of throwing for permission/availability
-   * problems so that filters evaluate to `unknown` (fail-closed).
+   * Resolve (typically expensive) fields of one item lazily, as a batch.
+   *
+   * Contract:
+   * - Returns an entry for EVERY requested name; unknown field names and
+   *   permission/availability problems yield `{ known: false }` instead of
+   *   throwing, so filters evaluate to `unknown` (fail-closed, Spec §20.7).
+   *   Only unexpected failures (e.g. aborted signal) may reject.
+   * - Adapters keep NO cache across calls: every call reflects the external
+   *   state at call time. Related fields (e.g. all `dependencies.*`) should be
+   *   computed from one API round trip within a call.
+   * - Callers request all expensive fields they need for an item in one call
+   *   (once the first one is needed), hold the result only for the current
+   *   planning step / view request, and never write it back into
+   *   {@link SourceItem.fields}.
    */
-  resolveField(item: SourceItem, field: string, options?: { signal?: AbortSignal }): Promise<FieldResolution>;
+  resolveFields(
+    item: SourceItem,
+    fields: readonly string[],
+    options?: { signal?: AbortSignal },
+  ): Promise<Record<string, FieldResolution>>;
 
   /**
    * Apply a declarative update idempotently: re-read the item first, change
@@ -530,13 +586,9 @@ export interface ExecutionOutcome {
 }
 
 /** Classified final outcome of a run (Spec §8.2 table). */
-export interface OutcomeClassification {
-  status: TerminalStatus;
-  businessResult: BusinessResult;
+export interface OutcomeClassification extends FinalizationTarget {
   /** The valid worker result, only when `status === 'completed'` and a file was present. */
   result: WorkerResult | null;
-  /** Short explanation, e.g. `exit code 1`, `invalid result file: ...`. */
-  reason: string;
 }
 
 /** Handle of a started worker process. */

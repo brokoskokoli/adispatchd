@@ -31,8 +31,19 @@ export const REDACTED = '[REDACTED]';
 
 const LEVEL_ORDER: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
-/** Keys whose values are always redacted, regardless of content. */
-const SECRET_KEY_PATTERN = /(pass(word)?|secret|token|private[_-]?key|authorization|api[_-]?key|credential|cookie)/i;
+/**
+ * Keys whose values are always redacted, regardless of content. Matched
+ * against the key's last segment (camelCase is split first), so `GH_TOKEN`,
+ * `accessToken`, `x-api-key`, `privateKey`, `password` match, while
+ * `passed`, `bypass` or `tokens_used` do not.
+ */
+const SECRET_KEY_PATTERN =
+  /(^|[_.-])(pass(word|wd)?|secret|token|private[_-]?key|authorization|api[_-]?key|credentials?|cookie)$/i;
+
+/** True if values under `key` must always be redacted. */
+export function isSecretKey(key: string): boolean {
+  return SECRET_KEY_PATTERN.test(key.replace(/([a-z0-9])([A-Z])/g, '$1_$2'));
+}
 
 /** Minimum length of a registered secret; shorter values would cause excessive false positives. */
 const MIN_SECRET_LENGTH = 4;
@@ -86,25 +97,33 @@ export class SecretRedactor {
 export function redactValue(value: unknown, redact: Redactor = (s) => s, seen = new WeakSet<object>()): unknown {
   if (typeof value === 'string') return redact(value);
   if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date) return value.toISOString();
+  // `seen` tracks only the current path: shared (non-cyclic) references are
+  // rendered every time, true cycles become "[Circular]".
   if (seen.has(value)) return '[Circular]';
   seen.add(value);
-  if (value instanceof Date) return value.toISOString();
-  if (value instanceof Error) {
-    const out: Record<string, unknown> = { name: value.name, message: redact(value.message) };
-    const code = (value as { code?: unknown }).code;
-    if (code !== undefined) out.code = code;
-    if (value.stack) out.stack = redact(value.stack);
-    if (value.cause !== undefined) out.cause = redactValue(value.cause, redact, seen);
+  try {
+    if (value instanceof Error) {
+      const out: Record<string, unknown> = { name: value.name, message: redact(value.message) };
+      const { code, details } = value as { code?: unknown; details?: unknown };
+      if (code !== undefined) out.code = code;
+      if (details !== undefined) out.details = redactValue(details, redact, seen);
+      if (value.stack) out.stack = redact(value.stack);
+      if (value.cause !== undefined) out.cause = redactValue(value.cause, redact, seen);
+      return out;
+    }
+    if (Array.isArray(value)) return value.map((v) => redactValue(v, redact, seen));
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(value)) {
+      out[key] =
+        isSecretKey(key) && v !== null && v !== undefined && typeof v !== 'boolean'
+          ? REDACTED
+          : redactValue(v, redact, seen);
+    }
     return out;
+  } finally {
+    seen.delete(value);
   }
-  if (Array.isArray(value)) return value.map((v) => redactValue(v, redact, seen));
-  const out: Record<string, unknown> = {};
-  for (const [key, v] of Object.entries(value)) {
-    out[key] = SECRET_KEY_PATTERN.test(key) && v !== null && v !== undefined && typeof v !== 'boolean'
-      ? REDACTED
-      : redactValue(v, redact, seen);
-  }
-  return out;
 }
 
 /** Options for {@link ConsoleLogger}. */

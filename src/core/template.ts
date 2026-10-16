@@ -12,7 +12,8 @@
  * - `path`: every interpolated value becomes exactly one safe path segment
  *   (see {@link sanitizeSegment}: no `/`, no `..`, no NUL). Path-root
  *   placeholders (`{workspace.base_dir}`, `{workspace.path}`) are trusted
- *   absolute directories and may only appear at the very start.
+ *   absolute directories; they may only appear at the very start and must be
+ *   followed by `/` or the end of the template.
  */
 import path from 'node:path';
 import { OrchestratorError } from './errors.js';
@@ -225,12 +226,25 @@ export function validateTemplate(template: string, options: TemplateOptions): Te
       issues.push(issue);
       return;
     }
-    if (options.mode === 'path' && PLACEHOLDER_BY_NAME.get(part.name)?.pathRoot && idx !== 0) {
-      issues.push({
-        code: 'path_root_position',
-        message: `Placeholder "{${part.name}}" is a directory root and must start the path template`,
-        placeholder: part.name,
-      });
+    if (options.mode === 'path' && PLACEHOLDER_BY_NAME.get(part.name)?.pathRoot) {
+      if (idx !== 0) {
+        issues.push({
+          code: 'path_root_position',
+          message: `Placeholder "{${part.name}}" is a directory root and must start the path template`,
+          placeholder: part.name,
+        });
+        return;
+      }
+      // The root must be followed by the end of the template or a literal "/"
+      // so that `{workspace.base_dir}{workflow.id}` cannot extend the root name.
+      const next = parts[idx + 1];
+      if (next !== undefined && !(next.kind === 'literal' && next.text.startsWith('/'))) {
+        issues.push({
+          code: 'path_root_position',
+          message: `Placeholder "{${part.name}}" must be followed by "/" or the end of the path template`,
+          placeholder: part.name,
+        });
+      }
     }
   });
   if (options.mode === 'path' && template.includes('\0')) {

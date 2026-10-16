@@ -23,6 +23,24 @@ describe('run status model', () => {
     for (const s of TERMINAL_STATUSES) expect(RUN_STATUS_TRANSITIONS[s]).toEqual([]);
   });
 
+  it('reaches every terminal status only via finalizing', () => {
+    for (const from of TECHNICAL_STATUSES) {
+      for (const to of TERMINAL_STATUSES) {
+        expect(canTransition(from, to), `${from} -> ${to}`).toBe(from === 'finalizing');
+      }
+    }
+    expect(RUN_STATUS_TRANSITIONS.recovery_pending).toEqual(['finalizing']);
+    for (const from of ACTIVE_STATUSES) {
+      if (from !== 'finalizing') expect(canTransition(from, 'finalizing'), from).toBe(true);
+    }
+  });
+
+  it('finalizing may only move to the persisted target', () => {
+    const target = { status: 'crashed', businessResult: null, reason: 'exit code 1' } as const;
+    expect(canTransition('finalizing', 'crashed', target)).toBe(true);
+    expect(canTransition('finalizing', 'completed', target)).toBe(false);
+  });
+
   it('allows the normal path and rejects shortcuts to completed', () => {
     expect(canTransition('reserved', 'starting')).toBe(true);
     expect(canTransition('starting', 'running')).toBe(true);
