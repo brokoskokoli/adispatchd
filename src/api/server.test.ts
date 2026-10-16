@@ -170,6 +170,12 @@ describe('DNS-rebinding protection (Host / Origin allowlist)', () => {
     const viaProxy = await env.request('POST', '/api/v1/scheduler/resume', undefined, { host: 'orch.example.com', origin: 'https://orch.example.com' });
     expect(viaProxy.status).toBe(200);
     expect((await env.request('GET', '/health', undefined, { origin: 'null' })).status).toBe(403);
+    // Same-origin exactly (host AND port): another local origin (e.g. a dev server on :3000) is refused.
+    const otherPort = await env.request('POST', '/api/v1/scheduler/pause', undefined, { host: '127.0.0.1:8787', origin: 'http://localhost:3000' });
+    expect(otherPort.status).toBe(403);
+    expect((await env.request('GET', '/api/v1/status', undefined, { host: '127.0.0.1:8787', origin: 'http://127.0.0.1:3000' })).status).toBe(403);
+    expect((await env.request('GET', '/api/v1/status', undefined, { host: 'localhost:8787', origin: 'http://localhost:8787' })).status).toBe(200);
+    expect(env.app.controller.status.paused).toBe(false);
   });
 });
 
@@ -387,6 +393,11 @@ describe('configuration and notifications', () => {
         'LITERAL-SECRET-URL\n      headers_env: { Authorization: HOOK_AUTH_ENV }\n    - id: fresh\n      type: webhook\n      url: https://hooks.example.test/T1/NEW-UNLOADED-SECRET # see https://docs.example.test/path?token=COMMENT-SECRET',
       ) + 'api_token: plain-token-value\n',
     );
+    const wfFile = path.join(env.configDir, 'workflows', 'notify.yaml');
+    writeFileSync(
+      wfFile,
+      'id: notify\nname: notify\ntrigger: { type: manual }\nexecute:\n  type: shell\n  command: /bin/true\n  env:\n    SLACK_WEBHOOK: https://hooks.slack.com/services/T/B/x\n    PLAIN: https://example.test\n',
+    );
     try {
       const fresh = (await env.request('GET', '/api/v1/config/files')).json.files.find((f: { file: string }) => f.file === 'config.yaml');
       expect(fresh.content).not.toContain('NEW-UNLOADED-SECRET');
@@ -395,6 +406,10 @@ describe('configuration and notifications', () => {
       expect(fresh.content).not.toContain('HOOK_AUTH_ENV');
       expect(fresh.content).toContain('id: fresh');
       expect(fresh.content).toContain('https://docs.example.test/[REDACTED]');
+      const notify = (await env.request('GET', '/api/v1/config/files')).json.files.find((f: { file: string }) => f.file === 'workflows/notify.yaml');
+      expect(notify.content).toContain('SLACK_WEBHOOK: https://hooks.slack.com/[REDACTED]');
+      expect(notify.content).not.toContain('services/T/B/x');
+      expect(notify.content).toContain('PLAIN: https://example.test');
       writeFileSync(configFile, 'server: { host: [unclosed\nurl: https://hooks.example.test/RAW-SECRET\n');
       const broken = (await env.request('GET', '/api/v1/config/files')).json.files.find((f: { file: string }) => f.file === 'config.yaml');
       expect(broken.content).toBeNull();
@@ -402,6 +417,7 @@ describe('configuration and notifications', () => {
       expect(JSON.stringify(broken)).not.toContain('RAW-SECRET');
     } finally {
       writeFileSync(configFile, original);
+      (await import('node:fs')).rmSync(wfFile, { force: true });
     }
 
     const version = env.app.config.current.version;

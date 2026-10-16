@@ -215,6 +215,26 @@ export function isAllowedHost(value: string, allowed: readonly string[]): boolea
   });
 }
 
+/**
+ * True if `origin` (an http(s) origin) names exactly `host` (the request's
+ * `Host` header). A `Host` without port matches the origin scheme's default
+ * port (80/443), e.g. behind a TLS-terminating reverse proxy.
+ */
+export function originMatchesHost(origin: string, host: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
+  const o = splitHost(url.host);
+  const h = splitHost(host);
+  if (!o || !h || o.name !== h.name) return false;
+  const defaultPort = url.protocol === 'https:' ? '443' : '80';
+  return (o.port ?? defaultPort) === (h.port ?? defaultPort);
+}
+
 function isLoopbackHost(host: string): boolean {
   const h = host.replace(/^\[|\]$/g, '');
   return h === 'localhost' || h === '::1' || h.startsWith('127.');
@@ -256,14 +276,8 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     }
     const origin = req.headers.origin;
     if (origin !== undefined) {
-      let originHost: string | null = null;
-      try {
-        const u = new URL(origin);
-        originHost = u.protocol === 'http:' || u.protocol === 'https:' ? u.host : null;
-      } catch {
-        originHost = null;
-      }
-      const allowed = (deps.allowedOrigins ?? []).includes(origin) || (originHost !== null && isAllowedHost(originHost, allowedHosts()));
+      // Same-origin only: the Origin (scheme default port applied) must name exactly the requested host and port.
+      const allowed = (deps.allowedOrigins ?? []).includes(origin) || originMatchesHost(origin, host);
       if (!allowed) throw new ApiError(403, 'origin_not_allowed', 'Request origin is not allowed');
     }
     if (req.method === 'GET' || req.method === 'HEAD') return;
@@ -741,6 +755,11 @@ const MASKED_YAML_KEYS = new Set(['url']);
 /** Keys whose whole sub-tree of values is masked (header values / header env names). */
 const MASKED_YAML_SUBTREES = new Set(['headers', 'headers_env']);
 
+/** `https://host/path?q` → `https://host/[REDACTED]` (only when something follows the host). */
+function truncateUrl(value: string): string {
+  return value.replace(/^(\s*https?:\/\/[^\s/?#]+)[^\s]*/i, (m, origin: string) => (m === origin ? m : `${origin}/${REDACTED}`));
+}
+
 function maskComment(text: string | null | undefined): string | null | undefined {
   if (!text) return text;
   // Keep the origin of URLs in comments, never path/query (tokens of webhook URLs).
@@ -766,6 +785,10 @@ export function redactYaml(text: string): { content: string } | { error: string 
   doc.comment = maskComment(doc.comment) ?? null;
   visit(doc, {
     Node(_key, node) {
+      // Any URL value (e.g. a literal webhook in `env:`) is cut to scheme + host.
+      if (isScalar(node) && typeof node.value === 'string' && /^\s*https?:\/\//i.test(node.value)) {
+        node.value = truncateUrl(node.value);
+      }
       const n = node as { comment?: string | null; commentBefore?: string | null };
       if (n.comment) n.comment = maskComment(n.comment) ?? null;
       if (n.commentBefore) n.commentBefore = maskComment(n.commentBefore) ?? null;
