@@ -12,21 +12,11 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import {
-  SecretRedactor,
-  dataPaths,
-  errorMessage,
-  noopLogger,
-  systemClock,
-  type Clock,
-  type FetchLike,
-  type SourceAdapter,
-} from '../core/index.js';
-import { ConfigLoadError, ConfigManager, formatConfigIssue, type LoadedConfig } from '../config/index.js';
-import { GitHubAppCredentialProvider } from '../identities/index.js';
+import { dataPaths, errorMessage, systemClock, type Clock, type FetchLike } from '../core/index.js';
+import { ConfigLoadError, ConfigManager, formatConfigIssue } from '../config/index.js';
 import { MIGRATIONS, createRepositories, schemaVersion } from '../persistence/index.js';
 import { dryRunWorkflow, emptyState, formatDryRun, repositoryState, type SchedulingState } from '../scheduler/index.js';
-import { createGitHubSourceFactory } from '../sources/index.js';
+import { SourceRegistry } from '../app.js';
 import type { CliIo, DryRunCliOptions } from './program.js';
 
 /** Injectable dependencies (tests: Fake-GitHub `fetch`, key env). */
@@ -34,33 +24,6 @@ export interface WorkflowDryRunDeps {
   fetch?: FetchLike;
   env?: Readonly<Record<string, string | undefined>>;
   clock?: Clock;
-}
-
-/** Source adapters for all configured sources (V1: GitHub). */
-function buildSources(config: LoadedConfig, deps: WorkflowDryRunDeps, clock: Clock): Map<string, SourceAdapter> {
-  const redactor = new SecretRedactor();
-  const identities = Object.fromEntries(
-    Object.values(config.identities).map((i) => [i.id, { appId: i.appId, installationId: i.installationId, privateKeyEnv: i.privateKeyEnv }]),
-  );
-  const credentials = new GitHubAppCredentialProvider(identities, {
-    clock,
-    redactor,
-    ...(deps.fetch ? { fetch: deps.fetch } : {}),
-    ...(deps.env ? { env: deps.env } : {}),
-  });
-  const factory = createGitHubSourceFactory();
-  const adapters = new Map<string, SourceAdapter>();
-  for (const source of Object.values(config.sources)) {
-    adapters.set(
-      source.id,
-      factory.create(
-        source.id,
-        { owner: source.owner, repository: source.repository, identity: source.identity },
-        { credentials, logger: noopLogger, clock, ...(deps.fetch ? { fetch: deps.fetch } : {}) },
-      ),
-    );
-  }
-  return adapters;
 }
 
 /** Read-only scheduling state from `<dataDir>/orchestrator.sqlite`, if usable. */
@@ -123,7 +86,11 @@ export function createWorkflowDryRunHandler(io: Pick<CliIo, 'stdout' | 'stderr'>
     const notes: string[] = [];
     const { state, close } = openState(opts.dataDir, notes);
     try {
-      const sources = buildSources(config.current, deps, clock);
+      const sources = new SourceRegistry(config.current, {
+        clock,
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(deps.env ? { env: deps.env } : {}),
+      });
       const result = await dryRunWorkflow({ config, sources: (id) => sources.get(id), state, clock, notes }, workflowId);
       io.stdout(opts.json ? `${JSON.stringify(result, null, 2)}\n` : formatDryRun(result));
       return result.source?.error ? 1 : 0;

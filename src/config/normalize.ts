@@ -46,7 +46,7 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
     ? resolveConfigPath(configDir, raw.workspace.base_dir)
     : dataPaths(dataDir).defaultWorkspacesDir;
   return {
-    server: { host: raw.server.host, port: raw.server.port },
+    server: { host: raw.server.host, port: raw.server.port, allowedHosts: raw.server.allowed_hosts.map((h) => h.toLowerCase()) },
     scheduler: {
       pollingIntervalMs: raw.scheduler.polling_interval,
       maxConcurrent: raw.scheduler.max_concurrent,

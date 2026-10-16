@@ -54,7 +54,13 @@ export {
   type CreateBlockInput,
   type FailureCounterState,
 } from './blocks.js';
-export { NotificationRepository, type NotificationRecord, type DeliveryState } from './notifications.js';
+export {
+  NotificationRepository,
+  type NotificationRecord,
+  type NotificationDeliveryRecord,
+  type DeliveryAttemptOutcome,
+  type DeliveryState,
+} from './notifications.js';
 export {
   CronFiringRepository,
   type CronFiringRecord,

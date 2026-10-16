@@ -26,3 +26,4 @@ export {
 export { RunControllerError } from './errors.js';
 export { buildExecutionSpec, executionTemplateValues, type ExecutionInput, type PreparedExecution } from './execution.js';
 export { removeWorkspace, shouldCleanupWorkspace, type WorkspaceRemoval } from './workspace.js';
+export { RetentionService, type RetentionReport, type RetentionServiceOptions } from './retention.js';

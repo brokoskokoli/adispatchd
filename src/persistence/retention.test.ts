@@ -61,9 +61,10 @@ describe('RetentionRepository', () => {
     expect(p.retention.deleteRun(chainDone.id)).toBe(true);
     expect(p.actions.listForRun(chainDone.id)).toHaveLength(0);
 
-    // clearing the block releases its runs for retention
+    // clearing the block releases its runs for retention (category `blocked` since WI-10: `retention.blocked_runs`)
     p.blocks.clear(p.blocks.activeFor('coder', 'a:5')!.id);
-    expect(p.retention.runCandidates('failed', cutoff).map((c) => c.runId)).toContain(blocked.id);
+    expect(p.retention.runCandidates('blocked', cutoff).map((c) => c.runId)).toContain(blocked.id);
+    expect(p.retention.runCandidates('failed', cutoff).map((c) => c.runId)).not.toContain(blocked.id);
   });
 
   it('deletes only cleared blocks, non-pending notifications and old cron firings', () => {

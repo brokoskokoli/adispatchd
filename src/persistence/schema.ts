@@ -160,6 +160,28 @@ CREATE TABLE cron_firings (
 CREATE INDEX cron_firings_recorded ON cron_firings (recorded_at);
 `;
 
+/**
+ * v2 (WI-10): delivery state per notification channel. `notifications.delivery_state`
+ * / `attempts` / `last_error` become the aggregate over the channel deliveries.
+ */
+const V2_DDL = `
+CREATE TABLE notification_deliveries (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  notification_id  INTEGER NOT NULL REFERENCES notifications (id) ON DELETE CASCADE,
+  channel_id       TEXT NOT NULL,
+  state            TEXT NOT NULL CHECK (state IN ('pending','delivered','failed')),
+  attempts         INTEGER NOT NULL DEFAULT 0,
+  last_error       TEXT,
+  last_status      INTEGER,
+  next_attempt_at  TEXT,
+  delivered_at     TEXT,
+  created_at       TEXT NOT NULL,
+  updated_at       TEXT NOT NULL,
+  UNIQUE (notification_id, channel_id)
+);
+CREATE INDEX notification_deliveries_due ON notification_deliveries (state, next_attempt_at);
+`;
+
 /** All built-in migrations, in order. */
 export const MIGRATIONS: readonly Migration[] = [
   {
@@ -167,6 +189,13 @@ export const MIGRATIONS: readonly Migration[] = [
     name: 'initial_schema',
     up(db) {
       db.exec(V1_DDL);
+    },
+  },
+  {
+    version: 2,
+    name: 'notification_deliveries',
+    up(db) {
+      db.exec(V2_DDL);
     },
   },
 ];

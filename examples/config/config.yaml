@@ -2,6 +2,9 @@
 server:
   host: 127.0.0.1
   port: 8787
+  # Extra host names accepted in Host/Origin headers (e.g. the public name of an
+  # authenticating reverse proxy); loopback names are always accepted.
+  allowed_hosts: []
 
 scheduler:
   polling_interval: 30s

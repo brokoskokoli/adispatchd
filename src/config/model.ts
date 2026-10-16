@@ -17,6 +17,11 @@ import type { FilterNode, HookName, NotificationEventType } from '../core/index.
 export interface ServerConfig {
   host: string;
   port: number;
+  /**
+   * Extra accepted `Host`/`Origin` host names (lower case, `name` = any port, `name:port` = exact).
+   * Loopback names are always accepted when bound to loopback (DNS-rebinding protection).
+   */
+  allowedHosts: readonly string[];
 }
 
 /** Scheduler settings. */

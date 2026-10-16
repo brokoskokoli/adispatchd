@@ -6,3 +6,4 @@ export type { CliHandlers, CliIo, DryRunCliOptions, GlobalOptions } from './prog
 export { processIo } from './program.js';
 export { createConfigValidateHandler, EXIT_CONFIG_INVALID, EXIT_CONFIG_VALID } from './config-validate.js';
 export { createWorkflowDryRunHandler, type WorkflowDryRunDeps } from './workflow-dry-run.js';
+export { createStartHandler, type StartDeps } from './start.js';
