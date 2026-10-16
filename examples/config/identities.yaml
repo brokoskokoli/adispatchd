@@ -1,0 +1,18 @@
+# identities.yaml (Spec §5.3) – private keys are read from the named
+# environment variables at runtime, never stored here.
+identities:
+  maintainer:
+    type: github_app
+    app_id: 100001
+    installation_id: 200001
+    private_key_env: GITHUB_MAINTAINER_PRIVATE_KEY
+  coder:
+    type: github_app
+    app_id: 100002
+    installation_id: 200002
+    private_key_env: GITHUB_CODER_PRIVATE_KEY
+  reviewer:
+    type: github_app
+    app_id: 100003
+    installation_id: 200003
+    private_key_env: GITHUB_REVIEWER_PRIVATE_KEY
