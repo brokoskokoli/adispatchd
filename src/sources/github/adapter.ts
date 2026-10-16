@@ -62,9 +62,11 @@ export interface GitHubIssueJson {
 }
 
 interface GitHubCommentJson {
-  id: number;
+  id?: unknown;
   html_url?: string;
   body?: string | null;
+  user?: { login?: string; type?: string } | null;
+  performed_via_github_app?: { id?: number | string; slug?: string } | null;
 }
 
 /** Options beyond {@link SourceAdapterDeps}. */
@@ -89,13 +91,6 @@ export class GitHubSourceAdapter implements SourceAdapter {
   private readonly credentials: CredentialProvider;
   private readonly logger: Logger;
   private readonly repoPath: string;
-  /**
-   * Dependency summary GitHub returned together with an item snapshot. Used
-   * only to detect blockers that are invisible to the identity (e.g. in
-   * repositories the app cannot access). Keyed by the item object, so it is
-   * metadata of that snapshot, not a cross-call cache of field values.
-   */
-  private readonly summaries = new WeakMap<SourceItem, { total?: number; open?: number }>();
 
   constructor(sourceId: string, config: GitHubSourceConfig, deps: SourceAdapterDeps, options: GitHubAdapterOptions = {}) {
     if (!config.owner || !config.repository) throw new SourceError('invalid', `Source "${sourceId}": owner and repository are required`);
@@ -221,6 +216,14 @@ export class GitHubSourceAdapter implements SourceAdapter {
         body: { body: fullBody },
       }),
     );
+    const id = res.data?.id;
+    if ((typeof id !== 'number' && typeof id !== 'string') || String(id) === '') {
+      // The comment may exist although the response is unusable: reconcile via marker.
+      throw new SourceError('transient', `Comment on ${item.key} returned no comment id; outcome unknown`, {
+        status: res.status,
+        outcomeUnknown: true,
+      });
+    }
     return toCommentRef(res.data);
   }
 
@@ -230,28 +233,54 @@ export class GitHubSourceAdapter implements SourceAdapter {
     const comments = await this.withToken(identity, undefined, (token) =>
       this.http.paginate<GitHubCommentJson>(`${this.repoPath}/issues/${item.itemId}/comments`, { token }),
     );
-    const found = comments.find((c) => typeof c.body === 'string' && pattern.test(c.body));
+    const isOwn = this.authorPredicate(identity);
+    const found = comments.find((c) => typeof c.body === 'string' && pattern.test(c.body) && isOwn(c));
     return found ? toCommentRef(found) : null;
+  }
+
+  /**
+   * Only comments written by the identity's own app count as carrying a
+   * marker; otherwise anybody could suppress an orchestrator comment by
+   * posting the marker. With a known app ID (CredentialProvider.describe) the
+   * comment must have `performed_via_github_app.id === appId`; without one,
+   * at least a bot author (`user.type === 'Bot'`) is required.
+   */
+  private authorPredicate(identity: IdentityRef): (c: GitHubCommentJson) => boolean {
+    const appId = this.credentials.describe?.(identity)?.appId;
+    if (appId !== undefined) {
+      return (c) => c.performed_via_github_app?.id !== undefined && String(c.performed_via_github_app.id) === appId;
+    }
+    return (c) => c.user?.type === 'Bot';
   }
 
   // -------------------------------------------------------------------------
 
   private async resolveDependencies(item: SourceItem, signal: AbortSignal | undefined): Promise<Record<string, FieldResolution>> {
     this.assertOwnItem(item);
+    let issue: GitHubIssueJson | null;
     let blockers: GitHubIssueJson[];
     try {
-      blockers = await this.withToken(this.config.identity, signal, (token) =>
-        this.http.paginate<GitHubIssueJson>(`${this.repoPath}/issues/${item.itemId}/dependencies/blocked_by`, {
-          token,
-          ...(signal ? { signal } : {}),
-        }),
-      );
+      // Fresh issue (for the authoritative blocker count) and the visible blocker list.
+      [issue, blockers] = await Promise.all([
+        this.fetchIssue(item.itemId, this.config.identity, signal),
+        this.withToken(this.config.identity, signal, (token) =>
+          this.http.paginate<GitHubIssueJson>(`${this.repoPath}/issues/${item.itemId}/dependencies/blocked_by`, {
+            token,
+            ...(signal ? { signal } : {}),
+          }),
+        ),
+      ]);
     } catch (err) {
       if (signal?.aborted) throw err;
       const reason =
         err instanceof SourceError ? `dependencies unavailable (${err.kind}): ${err.message}` : 'dependencies unavailable (unexpected error)';
       this.logger.warn('Could not resolve dependencies', { item: item.key, reason });
       return unknownDependencies(reason);
+    }
+    if (!issue) return unknownDependencies(`item ${item.key} not found while resolving dependencies`);
+    const summaryTotal = issue.issue_dependencies_summary?.total_blocked_by;
+    if (typeof summaryTotal !== 'number' || !Number.isInteger(summaryTotal) || summaryTotal < 0) {
+      return unknownDependencies('issue_dependencies_summary missing; completeness of blockers cannot be verified');
     }
 
     let open = 0;
@@ -260,10 +289,9 @@ export class GitHubSourceAdapter implements SourceAdapter {
       else if (blocker.state !== 'closed') return unknownDependencies(`blocker with unexpected state "${String(blocker.state)}"`);
     }
     const total = blockers.length;
-    const summary = this.summaries.get(item);
-    if (summary?.total !== undefined && summary.total > total) {
+    if (summaryTotal > total) {
       // GitHub knows more blockers than this identity can see (e.g. cross-repo without access): fail closed.
-      return unknownDependencies(`${summary.total - total} of ${summary.total} blockers not visible to identity (missing access?)`);
+      return unknownDependencies(`${summaryTotal - total} of ${summaryTotal} blockers not visible to identity (missing access?)`);
     }
     return {
       'dependencies.blocked_by_total': { known: true, value: total },
@@ -308,7 +336,7 @@ export class GitHubSourceAdapter implements SourceAdapter {
     const itemId = String(issue.number);
     const isPr = issue.pull_request !== undefined && issue.pull_request !== null;
     const url = issue.html_url ?? `${(this.config.webBaseUrl ?? 'https://github.com').replace(/\/+$/, '')}/${this.repository}/${isPr ? 'pull' : 'issues'}/${itemId}`;
-    const item: SourceItem = {
+    return {
       sourceId: this.sourceId,
       itemId,
       key: sourceItemKey(this.sourceId, itemId),
@@ -329,14 +357,6 @@ export class GitHubSourceAdapter implements SourceAdapter {
         repository: this.repository,
       },
     };
-    const summary = issue.issue_dependencies_summary;
-    if (summary && typeof summary === 'object') {
-      this.summaries.set(item, {
-        ...(typeof summary.total_blocked_by === 'number' ? { total: summary.total_blocked_by } : {}),
-        ...(typeof summary.blocked_by === 'number' ? { open: summary.blocked_by } : {}),
-      });
-    }
-    return item;
   }
 
   private assertOwnItem(item: SourceItem): void {
@@ -402,5 +422,5 @@ function sameRepoUrl(repositoryUrl: string, owner: string, repo: string): boolea
 }
 
 function toCommentRef(comment: GitHubCommentJson): CommentRef {
-  return { id: String(comment.id), ...(comment.html_url ? { url: comment.html_url } : {}) };
+  return { id: String(comment.id as string | number), ...(comment.html_url ? { url: comment.html_url } : {}) };
 }

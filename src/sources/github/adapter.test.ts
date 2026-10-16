@@ -177,6 +177,45 @@ describe('resolveFields / dependencies', () => {
     expect(res['dependencies.status']).toEqual({ known: true, value: 'unknown' });
   });
 
+  it('stays fail-closed for copied items and blockers added after listing', async () => {
+    github.createIssue(REPO);
+    github.createIssue(OTHER);
+    const [listed] = await adapter.listCandidates();
+    const copy = structuredClone(listed) as SourceItem; // e.g. rebuilt from persistence
+    github.addBlockedBy(REPO, 1, OTHER, 1);
+    github.restrictRepo(OTHER);
+    for (const it of [copy, listed as SourceItem]) {
+      const res = await adapter.resolveFields(it, ['dependencies.blocked_by_open', 'dependencies.status']);
+      expect(res['dependencies.blocked_by_open']).toMatchObject({ known: false });
+      expect(res['dependencies.status']).toEqual({ known: true, value: 'unknown' });
+    }
+  });
+
+  it('missing issue_dependencies_summary yields unknown', async () => {
+    github.createIssue(REPO);
+    github.includeDependencySummary = false;
+    const res = await adapter.resolveFields(await item(1), ['dependencies.blocked_by_open', 'dependencies.status']);
+    expect(res['dependencies.blocked_by_open']).toMatchObject({ known: false, reason: expect.stringContaining('summary') });
+    expect(res['dependencies.status']).toEqual({ known: true, value: 'unknown' });
+  });
+
+  it('handles more than 100 blockers and yields unknown when a later page fails', async () => {
+    github.createIssue(REPO);
+    for (let i = 0; i < 120; i++) {
+      const b = github.createIssue(OTHER, { state: i < 5 ? 'open' : 'closed' });
+      github.addBlockedBy(REPO, 1, OTHER, b.number);
+    }
+    const it1 = await item(1);
+    expect(await adapter.resolveFields(it1, ['dependencies.blocked_by_total', 'dependencies.blocked_by_open'])).toEqual({
+      'dependencies.blocked_by_total': { known: true, value: 120 },
+      'dependencies.blocked_by_open': { known: true, value: 5 },
+    });
+    github.failNext({ path: /blocked_by$/, query: { page: '2' } }, { status: 502 });
+    const res = await adapter.resolveFields(it1, ['dependencies.blocked_by_open', 'dependencies.status']);
+    expect(res['dependencies.blocked_by_open']).toMatchObject({ known: false });
+    expect(res['dependencies.status']).toEqual({ known: true, value: 'unknown' });
+  });
+
   it('404 / 5xx / rate limit on the dependency endpoint yield unknown', async () => {
     github.createIssue(REPO);
     const it1 = await item(1);
@@ -276,8 +315,27 @@ describe('comments with marker', () => {
     github.createIssue(REPO);
     for (let i = 0; i < 230; i++) github.addComment(REPO, 1, `comment ${i}`);
     const marker = commentMarker('run-x', '1');
-    github.addComment(REPO, 1, `late\n<!-- ${marker} -->`);
+    github.addComment(REPO, 1, `late\n<!-- ${marker} -->`, 'test-bot[bot]', { type: 'Bot' });
     expect(await adapter.findCommentByMarker(await item(1), marker, 'coder')).not.toBeNull();
+  });
+
+  it('ignores markers posted by other users (also inside code blocks)', async () => {
+    github.createIssue(REPO);
+    const it1 = await item(1);
+    const marker = commentMarker('run-1', 'a1');
+    github.addComment(REPO, 1, `<!-- ${marker} -->`, 'mallory');
+    github.addComment(REPO, 1, `\`\`\`\n<!-- ${marker} -->\n\`\`\``, 'mallory');
+    expect(await adapter.findCommentByMarker(it1, marker, 'coder')).toBeNull();
+  });
+
+  it('treats a 2xx comment response without id as outcome unknown', async () => {
+    github.createIssue(REPO);
+    const it1 = await item(1);
+    github.failNext({ method: 'POST', path: /comments$/ }, { status: 201, body: {} });
+    await expect(adapter.postComment(it1, 'x', commentMarker('run-1', 'a1'), 'coder')).rejects.toMatchObject({
+      kind: 'transient',
+      outcomeUnknown: true,
+    });
   });
 
   it('rejects markers that could break out of the HTML comment', async () => {
@@ -308,8 +366,13 @@ describe('with GitHub App credentials', () => {
     const [it1] = await a.listCandidates();
     const deps = await a.resolveFields(it1 as SourceItem, ['dependencies.blocked_by_open']);
     expect(deps['dependencies.blocked_by_open']).toEqual({ known: true, value: 1 });
-    await a.postComment(it1 as SourceItem, 'hi', commentMarker('run-1', 'a1'), 'coder');
-    expect(github.comments(REPO, 1)[0]?.author).toBe('coder-bot[bot]');
+    const marker = commentMarker('run-1', 'a1');
+    // Another bot (the maintainer app) posting the coder's marker does not count.
+    github.addComment(REPO, 1, `<!-- ${marker} -->`, maintainer.login, { viaAppId: maintainer.appId });
+    expect(await a.findCommentByMarker(it1 as SourceItem, marker, 'coder')).toBeNull();
+    const ref = await a.postComment(it1 as SourceItem, 'hi', marker, 'coder');
+    expect(github.comments(REPO, 1)[1]?.author).toBe('coder-bot[bot]');
+    expect(await a.findCommentByMarker(it1 as SourceItem, marker, 'coder')).toEqual(ref);
 
     // Token revoked server-side → 401 → invalidate + one retry with a fresh token.
     const issuedBefore = github.tokenRequestCount();

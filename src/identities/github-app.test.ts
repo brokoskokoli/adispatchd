@@ -134,6 +134,25 @@ describe('GitHubAppCredentialProvider', () => {
     expect(gh.tokenRequestCount()).toBe(2);
   });
 
+  it('does not let one caller\'s abort fail the shared exchange; describes identities', async () => {
+    const localClock = new FakeClock('2026-10-16T12:00:00Z');
+    const gh = new FakeGitHub({ clock: localClock });
+    const a = gh.createApp();
+    const p = new GitHubAppCredentialProvider(
+      { coder: { appId: a.appId, installationId: a.installationId, privateKeyEnv: 'KEY' } },
+      { clock: localClock, fetch: gh.fetch, env: { KEY: a.privateKeyPem } },
+    );
+    const controller = new AbortController();
+    const first = p.getToken('coder', { signal: controller.signal });
+    const second = p.getToken('coder');
+    controller.abort(new Error('caller gone'));
+    await expect(first).rejects.toThrow('caller gone');
+    await expect(second).resolves.toMatchObject({ token: expect.stringMatching(/^ghs_fake/) });
+    expect(gh.tokenRequestCount()).toBe(1);
+    expect(p.describe('coder')).toEqual({ appId: a.appId });
+    expect(p.describe('nobody')).toBeUndefined();
+  });
+
   it('fails with kind auth for unknown identity, missing env and rejected JWT', async () => {
     const p = provider();
     await expect(p.getToken('nobody')).rejects.toMatchObject({ kind: 'auth' });

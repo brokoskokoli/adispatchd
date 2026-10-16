@@ -15,6 +15,7 @@ import {
   type Clock,
   type CredentialProvider,
   type FetchLike,
+  type IdentityDescription,
   type IdentityRef,
   type Logger,
   type SecretRedactor,
@@ -97,21 +98,28 @@ export class GitHubAppCredentialProvider implements CredentialProvider {
   async getToken(identity: IdentityRef, options: { signal?: AbortSignal } = {}): Promise<AccessToken> {
     const cached = this.cache.get(identity);
     if (cached && cached.expiresAt.getTime() - this.refreshMarginMs > this.clock.now().getTime()) return cached;
-    const pending = this.inflight.get(identity);
-    if (pending) return pending;
-    const generation = this.generation.get(identity) ?? 0;
-    const promise = this.exchange(identity, options.signal)
-      .then((token) => {
-        if ((this.generation.get(identity) ?? 0) === generation) {
-          this.cache.set(identity, token);
-        }
-        return token;
-      })
-      .finally(() => {
-        if (this.inflight.get(identity) === promise) this.inflight.delete(identity);
-      });
-    this.inflight.set(identity, promise);
-    return promise;
+    let shared = this.inflight.get(identity);
+    if (!shared) {
+      const generation = this.generation.get(identity) ?? 0;
+      // The shared exchange is independent of any caller's signal: one caller
+      // aborting must not fail the exchange for the others.
+      const promise: Promise<AccessToken> = this.exchange(identity, undefined)
+        .then((token) => {
+          if ((this.generation.get(identity) ?? 0) === generation) this.cache.set(identity, token);
+          return token;
+        })
+        .finally(() => {
+          if (this.inflight.get(identity) === promise) this.inflight.delete(identity);
+        });
+      this.inflight.set(identity, promise);
+      shared = promise;
+    }
+    return raceWithSignal(shared, options.signal);
+  }
+
+  describe(identity: IdentityRef): IdentityDescription | undefined {
+    const config = this.identities.get(identity);
+    return config ? { appId: String(config.appId) } : undefined;
   }
 
   invalidate(identity: IdentityRef): void {
@@ -188,4 +196,24 @@ export class GitHubAppCredentialProvider implements CredentialProvider {
     this.redactor.add(token.token);
     this.issued.push(token);
   }
+}
+
+/** Resolve/reject with `promise`, but reject early with the signal's reason when `signal` aborts. */
+function raceWithSignal<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException('aborted', 'AbortError'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason ?? new DOMException('aborted', 'AbortError'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (err: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(err);
+      },
+    );
+  });
 }

@@ -10,12 +10,13 @@ gegen die echte API. Ergebnis je Schritt (Datum, API-Version, Beobachtung) unten
 | A1 | `X-GitHub-Api-Version: 2026-03-10` (laut offizieller Doku aktuell) wird akzeptiert und enthält die Dependencies-API. | `GITHUB_API_VERSION` in `src/sources/github/http.ts` |
 | A2 | `GET /repos/{o}/{r}/issues/{n}/dependencies/blocked_by` liefert ein Array von Issue-Objekten mit `state` (`open`/`closed`) und `repository`/`repository_url`; paginiert über `Link` (`per_page` ≤ 100). Laut Doku Statuscodes 200/301/404/410. | `resolveDependencies` in `adapter.ts` |
 | A3 | Cross-Repo-Blocker erscheinen in der Liste, **sofern** die App Zugriff auf das Blocker-Repo hat. | dito |
-| A4 | Blocker in Repos ohne App-Zugriff werden **weggelassen** (oder führen zu 403/404). Das Issue-Objekt enthält `issue_dependencies_summary.total_blocked_by` inkl. unsichtbarer Blocker; ist dieser Wert größer als die sichtbare Liste → `dependencies.status = unknown` (fail-closed). | `summaries`-Abgleich im Adapter |
+| A4 | Blocker in Repos ohne App-Zugriff werden **weggelassen** (oder führen zu 403/404). Das (frisch gelesene) Issue-Objekt enthält `issue_dependencies_summary.total_blocked_by` inkl. unsichtbarer Blocker; ist dieser Wert größer als die sichtbare Liste oder fehlt das Summary → `dependencies.status = unknown` (fail-closed). | `resolveDependencies` |
 | A5 | `issue_dependencies_summary.blocked_by` = Anzahl **offener** Blocker, `total_blocked_by` = alle (Doku nennt nur die Typen). Genutzt wird nur `total_blocked_by`. | dito |
 | A6 | Fehlende Rechte am Dependencies-Endpunkt → 403 (`Resource not accessible by integration`) oder 404. Beides → `unknown`. | dito |
 | A7 | Benötigte App-Rechte: *Issues: read* (Lesen inkl. Dependencies), *Issues: write* (Labels/Kommentare an Issues), *Pull requests: write* (Labels/Kommentare an PRs über die Issues-API), *Metadata: read*. Die Doku der Dependencies-Endpunkte nennt keine Rechte. | – |
 | A8 | Primäres Rate-Limit: 403/429 mit `x-ratelimit-remaining: 0` + `x-ratelimit-reset`; sekundäres: 403/429 mit `retry-after` bzw. Meldung „rate limit“. | `GitHubHttpClient.toError` |
 | A9 | Installation-Tokens laufen nach 1 h ab (`expires_at`); JWT mit `iat = now-60 s`, `exp = now+9 min`, `iss = App-ID` wird akzeptiert. | `src/identities/` |
+| A11 | Von einer App per Installation-Token erstellte Issue-Kommentare tragen `performed_via_github_app.id = <App-ID>` und `user.type = "Bot"`. Sonst findet `findCommentByMarker` eigene Kommentare nicht (Folge: Duplikat statt Unterdrückung). | `authorPredicate` |
 | A10 | Transferierte Issues leiten per 301 auf das neue Repo um; `repository_url` passt dann nicht → `getItem` liefert `null`. | `fetchIssue` |
 
 ## Vorbereitung
@@ -73,7 +74,8 @@ gegen die echte API. Ergebnis je Schritt (Datum, API-Version, Beobachtung) unten
    (`prio: high/urgent`) entfernen → funktioniert (URL-Encoding).
 7. **Kommentar + Marker:** `a.postComment(item, 'Hallo', 'orch:run-test:a1', 'test')` → Kommentar ohne sichtbaren
    Marker (HTML-Kommentar), Autor ist der App-Bot. `a.findCommentByMarker(item, 'orch:run-test:a1', 'test')` →
-   gleiche ID. Auf einem PR wiederholen: Kommentar landet in der Konversation, nicht als Review.
+   gleiche ID; Rohantwort von `GET …/comments` auf `performed_via_github_app` prüfen (A11). Denselben Marker als
+   normaler Nutzer posten → wird nicht gefunden. Auf einem PR wiederholen: Kommentar landet in der Konversation, nicht als Review.
 8. **Rate-Limit-Header:** `curl -sI -H "Authorization: Bearer <token>" https://api.github.com/rate_limit`
    → Header `x-ratelimit-*` prüfen (A8).
 9. **Redaction:** Gesamte Konsolenausgabe nach `ghs_`, `eyJ` und `PRIVATE KEY` durchsuchen → keine Treffer.

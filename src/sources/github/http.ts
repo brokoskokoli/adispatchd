@@ -235,7 +235,13 @@ export class GitHubHttpClient {
         try {
           data = JSON.parse(text);
         } catch {
-          throw new SourceError('invalid', `${label} returned invalid JSON`, { status: res.status, retryable: false });
+          // For a mutating request the change may have been applied although the body is unusable.
+          throw idempotent
+            ? new SourceError('invalid', `${label} returned invalid JSON`, { status: res.status, retryable: false })
+            : new SourceError('transient', `${label} returned invalid JSON; outcome unknown`, {
+                status: res.status,
+                outcomeUnknown: true,
+              });
         }
       }
       return { status: res.status, data: data as T, headers: res.headers };

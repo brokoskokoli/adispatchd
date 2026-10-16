@@ -134,6 +134,13 @@ describe('GitHubHttpClient', () => {
     expect(err.cause).toBeUndefined();
   });
 
+  it('flags unusable 2xx bodies of mutating requests as outcomeUnknown', async () => {
+    const fetch = stubFetch(() => new Response('not json', { status: 201 }));
+    const client = new GitHubHttpClient({ clock: new FakeClock(), fetch, maxRetries: 0 });
+    await expect(client.request('POST', '/x', { body: {} })).rejects.toMatchObject({ kind: 'transient', outcomeUnknown: true });
+    await expect(client.request('GET', '/x')).rejects.toMatchObject({ kind: 'invalid', outcomeUnknown: false });
+  });
+
   it('maps status codes to error kinds without echoing tokens', async () => {
     const cases: Array<[number, string]> = [
       [401, 'auth'],

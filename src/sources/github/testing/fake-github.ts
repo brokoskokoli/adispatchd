@@ -54,7 +54,18 @@ export interface FakeComment {
   id: number;
   body: string;
   author: string;
+  /** GitHub `user.type`. */
+  authorType: 'User' | 'Bot';
+  /** App ID if the comment was written through a GitHub App (`performed_via_github_app`). */
+  viaAppId?: string;
   createdAt: string;
+}
+
+/** Author details for {@link FakeGitHub.addComment}. */
+export interface FakeCommentAuthor {
+  type?: 'User' | 'Bot';
+  /** Simulate a comment written through this GitHub App. */
+  viaAppId?: string | number;
 }
 
 /** A recorded request (no token values, only whether one was sent). */
@@ -73,6 +84,8 @@ export interface FakeRequestMatcher {
   method?: string;
   /** Exact path or regex tested against the path (without base URL / query). */
   path?: string | RegExp;
+  /** Query parameters that must all match (e.g. `{ page: '2' }`). */
+  query?: Record<string, string>;
 }
 
 /** Injected failure. */
@@ -134,6 +147,8 @@ export class FakeGitHub {
   readonly requests: FakeRequestRecord[] = [];
   /** Injectable fetch implementation. */
   readonly fetch: FetchLike;
+  /** Include `issue_dependencies_summary` in issue JSON (set false to simulate its absence). */
+  includeDependencySummary = true;
 
   private readonly clock: Clock;
   private readonly tokenTtlMs: number;
@@ -229,10 +244,17 @@ export class FakeGitHub {
     return [...(this.commentsByIssue.get(this.issue(repo, number).id) ?? [])];
   }
 
-  /** Add a comment directly (e.g. a human comment). */
-  addComment(repo: string, number: number, body: string, author = 'octocat'): FakeComment {
+  /** Add a comment directly (default: a human `User` comment). */
+  addComment(repo: string, number: number, body: string, author = 'octocat', as: FakeCommentAuthor = {}): FakeComment {
     const issue = this.touch(this.issue(repo, number));
-    const comment: FakeComment = { id: this.nextCommentId++, body, author, createdAt: this.nowIso() };
+    const comment: FakeComment = {
+      id: this.nextCommentId++,
+      body,
+      author,
+      authorType: as.type ?? (as.viaAppId !== undefined ? 'Bot' : 'User'),
+      ...(as.viaAppId !== undefined ? { viaAppId: String(as.viaAppId) } : {}),
+      createdAt: this.nowIso(),
+    };
     const list = this.commentsByIssue.get(issue.id) ?? [];
     list.push(comment);
     this.commentsByIssue.set(issue.id, list);
@@ -322,7 +344,7 @@ export class FakeGitHub {
       throw new TypeError('fetch failed');
     }
 
-    const fault = this.takeFault(method, record.path);
+    const fault = this.takeFault(method, record.path, record.query);
     if (fault && 'network' in fault) {
       if (fault.afterApply) this.route(method, record.path, url, headers, rawBody);
       record.status = 'network_error';
@@ -338,11 +360,12 @@ export class FakeGitHub {
     return res;
   }
 
-  private takeFault(method: string, path: string): FakeFault | undefined {
+  private takeFault(method: string, path: string, query: Record<string, string>): FakeFault | undefined {
     const idx = this.faults.findIndex(
       (f) =>
         (f.matcher.method === undefined || f.matcher.method.toUpperCase() === method) &&
-        (f.matcher.path === undefined || (typeof f.matcher.path === 'string' ? f.matcher.path === path : f.matcher.path.test(path))),
+        (f.matcher.path === undefined || (typeof f.matcher.path === 'string' ? f.matcher.path === path : f.matcher.path.test(path))) &&
+        Object.entries(f.matcher.query ?? {}).every(([k, v]) => query[k] === v),
     );
     if (idx < 0) return undefined;
     const f = this.faults[idx] as Fault;
@@ -424,7 +447,9 @@ export class FakeGitHub {
       if (method === 'POST') {
         const text = (body as { body?: unknown }).body;
         if (typeof text !== 'string' || text === '') return json(422, { message: 'Validation Failed' });
-        const comment = this.addComment(repo, number, text, auth?.app.login ?? 'test-bot[bot]');
+        const comment = auth
+          ? this.addComment(repo, number, text, auth.app.login, { type: 'Bot', viaAppId: auth.app.appId })
+          : this.addComment(repo, number, text, 'test-bot[bot]', { type: 'Bot' });
         return json(201, this.commentJson(repo, issue, comment));
       }
     }
@@ -517,12 +542,16 @@ export class FakeGitHub {
       created_at: issue.createdAt,
       updated_at: issue.updatedAt,
       ...(issue.isPullRequest ? { pull_request: { html_url: htmlUrl } } : {}),
-      issue_dependencies_summary: {
-        blocked_by: blockers.filter((b) => b.state === 'open').length,
-        total_blocked_by: blockers.length,
-        blocking: 0,
-        total_blocking: 0,
-      },
+      ...(this.includeDependencySummary
+        ? {
+            issue_dependencies_summary: {
+              blocked_by: blockers.filter((b) => b.state === 'open').length,
+              total_blocked_by: blockers.length,
+              blocking: 0,
+              total_blocking: 0,
+            },
+          }
+        : {}),
       ...(withRepository ? { repository: { full_name: issue.repo, owner: { login: owner }, name } } : {}),
     };
   }
@@ -531,7 +560,8 @@ export class FakeGitHub {
     return {
       id: comment.id,
       body: comment.body,
-      user: { login: comment.author },
+      user: { login: comment.author, type: comment.authorType },
+      performed_via_github_app: comment.viaAppId !== undefined ? { id: Number(comment.viaAppId), slug: comment.author.replace(/\[bot\]$/, '') } : null,
       created_at: comment.createdAt,
       html_url: `${this.webBaseUrl}/${repo}/${issue.isPullRequest ? 'pull' : 'issues'}/${issue.number}#issuecomment-${comment.id}`,
     };

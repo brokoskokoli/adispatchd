@@ -348,10 +348,27 @@ export interface AccessToken {
  * register issued tokens with the secret redactor.
  */
 export interface CredentialProvider {
-  /** Return a valid token for `identity` (throws `SourceError` kind `auth` on failure). */
+  /**
+   * Return a valid token for `identity`. Throws `SourceError`: kind `auth`
+   * for configuration/credential problems (not retryable), but also
+   * `transient` / `rate_limited` for temporary failures of the token
+   * exchange — consumers decide on retries via `SourceError.retryable`.
+   */
   getToken(identity: IdentityRef, options?: { signal?: AbortSignal }): Promise<AccessToken>;
   /** Drop a cached token (e.g. after a 401) so the next call fetches a fresh one. */
   invalidate?(identity: IdentityRef): void;
+  /**
+   * Non-secret public facts about an identity (e.g. the GitHub App ID), used
+   * by adapters to recognise their own writes (comment authorship for
+   * idempotency markers). `undefined` for unknown identities.
+   */
+  describe?(identity: IdentityRef): IdentityDescription | undefined;
+}
+
+/** Public, non-secret description of an identity (see {@link CredentialProvider.describe}). */
+export interface IdentityDescription {
+  /** GitHub App ID for `github_app` identities. */
+  appId?: string;
 }
 
 /** Declarative change to an item (`source.update`, Spec §10). */
