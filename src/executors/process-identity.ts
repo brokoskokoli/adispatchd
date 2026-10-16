@@ -13,7 +13,7 @@
  */
 import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
-import type { ProcessStartIdentity } from '../core/index.js';
+import { systemTimers, type ProcessStartIdentity, type Timers } from '../core/index.js';
 
 /** Raw identity data of a live process. */
 export interface ProcessProbe {
@@ -267,6 +267,94 @@ export async function processGroupAlive(
   } catch {
     return true;
   }
+}
+
+/** Outcome of {@link terminateProcessGroupIfSame}. */
+export type TerminateResult =
+  /** Identity verified, group signalled and confirmed gone. */
+  | 'terminated'
+  /** Identity verified and signalled, but the group is still alive after SIGKILL. */
+  | 'kill_failed'
+  /** A different process uses the leader PID now; nothing signalled. */
+  | 'not_same'
+  /** Leader and group are gone; nothing to do. */
+  | 'gone'
+  /** Identity could not be determined (or pgid mismatch); nothing signalled. */
+  | 'unknown'
+  /**
+   * The leader is gone but members of the group are still alive. They cannot
+   * be verified, so nothing is signalled — caller should set `recovery_pending`.
+   */
+  | 'group_alive_unverifiable';
+
+/** Options of {@link terminateProcessGroupIfSame}. */
+export interface TerminateOptions {
+  inspector?: ProcessInspector;
+  kill?: KillFn;
+  timers?: Timers;
+  /** Wait after SIGKILL before reporting `kill_failed`. Default 5 s. */
+  killConfirmMs?: number;
+  /** Poll interval while waiting for the group to vanish. Default 25 ms. */
+  pollIntervalMs?: number;
+}
+
+/**
+ * Recovery helper (Spec §13, §14 variant A): verify the start identity of the
+ * group leader, then SIGTERM the group, SIGKILL after `graceMs` and confirm
+ * that no live member remains. Never signals on doubt.
+ */
+export async function terminateProcessGroupIfSame(
+  identity: ProcessStartIdentity,
+  graceMs: number,
+  options: TerminateOptions = {},
+): Promise<TerminateResult> {
+  const inspector = options.inspector ?? defaultProcessInspector();
+  const kill = options.kill ?? defaultKill;
+  const timers = options.timers ?? systemTimers;
+  const pgid = identity.pgid;
+  if (!isValidPid(pgid) || !isValidPid(identity.pid)) return 'unknown';
+
+  const check = await checkProcessIdentity(identity, inspector);
+  switch (check) {
+    case 'different':
+      return 'not_same';
+    case 'unknown':
+      return 'unknown';
+    case 'gone':
+      return (await processGroupAlive(pgid, inspector)) ? 'group_alive_unverifiable' : 'gone';
+    case 'same':
+      break;
+  }
+
+  const send = (signal: NodeJS.Signals): void => {
+    try {
+      kill(-pgid, signal);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ESRCH') throw err;
+    }
+  };
+  const waitGone = async (ms: number): Promise<boolean> => {
+    const step = Math.max(1, options.pollIntervalMs ?? 25);
+    for (let waited = 0; ; waited += step) {
+      if (!(await processGroupAlive(pgid, inspector))) return true;
+      if (waited >= ms) return false;
+      await new Promise<void>((resolve) => timers.setTimeout(resolve, Math.min(step, ms - waited)));
+    }
+  };
+
+  try {
+    send('SIGTERM');
+  } catch {
+    return 'kill_failed';
+  }
+  if (await waitGone(graceMs)) return 'terminated';
+  // The group existed continuously since verification, so its PGID cannot have been reused.
+  try {
+    send('SIGKILL');
+  } catch {
+    return 'kill_failed';
+  }
+  return (await waitGone(options.killConfirmMs ?? 5000)) ? 'terminated' : 'kill_failed';
 }
 
 function isValidPid(pid: number): boolean {

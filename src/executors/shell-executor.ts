@@ -8,7 +8,6 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import {
-  assertRealPathWithin,
   MAX_RESULT_FILE_BYTES,
   OrchestratorError,
   SecretRedactor,
@@ -16,7 +15,6 @@ import {
   noopLogger,
   parseWorkerResult,
   redactValue,
-  resolveWithin,
   systemClock,
   systemTimers,
   type Clock,
@@ -37,7 +35,7 @@ import {
 } from '../core/index.js';
 import { Channel, Dispatcher } from './dispatcher.js';
 import { buildOrchEnv, buildWorkerEnv } from './env.js';
-import { StreamCapture } from './log-capture.js';
+import { LogBudget, StreamCapture } from './log-capture.js';
 import {
   defaultProcessInspector,
   getStartIdentity,
@@ -47,6 +45,7 @@ import {
   type ProcessInspector,
 } from './process-identity.js';
 import { StreamRedactor } from './stream-redactor.js';
+import { ensureWorkspaceWithin } from './workspace.js';
 
 /** Dependencies and tuning of the {@link ShellExecutor}. */
 export interface ShellExecutorOptions {
@@ -67,9 +66,10 @@ export interface ShellExecutorOptions {
   /** Poll interval while waiting for a process group to vanish. Default 25 ms. */
   pollIntervalMs?: number;
   /**
-   * `workspace.base_dir`: if set, the working directory must lie within it
-   * (checked lexically with `resolveWithin` and, after creation, following
-   * symlinks); otherwise the run ends with `start_error`.
+   * `workspace.base_dir`: if set, the working directory must lie strictly
+   * below it (never the base itself); it is created segment by segment with a
+   * real-path check per segment (see `ensureWorkspaceWithin`), so symlinks
+   * cannot redirect creation outside. Violations end the run with `start_error`.
    */
   workspaceBaseDir?: string;
 }
@@ -210,6 +210,7 @@ class ShellProcess implements RunningProcess {
       env: spec.env,
       secrets: spec.secrets,
       orch: buildOrchEnv({
+        runId: spec.runId,
         context: spec.context,
         workflowId: spec.workflowId,
         contextFile: spec.files.contextFile,
@@ -252,7 +253,9 @@ class ShellProcess implements RunningProcess {
     child.once('exit', (code, signal) => this.onLeaderExit(code, signal));
     this.startTimers();
 
-    this._identity = child.pid !== undefined ? await getStartIdentity(child.pid, this.deps.inspector) : undefined;
+    const identity = child.pid !== undefined ? await getStartIdentity(child.pid, this.deps.inspector) : undefined;
+    // If the leader exited meanwhile, its PID may already be reused: never expose that identity.
+    this._identity = this.leaderExited ? undefined : identity;
     if (!this._identity && !this.leaderExited) {
       this.log.warn('could not determine process start identity', { pid: child.pid });
     }
@@ -264,9 +267,9 @@ class ShellProcess implements RunningProcess {
       if (!path.isAbsolute(p)) throw new OrchestratorError('invalid_path', `path must be absolute: ${p}`);
     }
     const baseDir = this.deps.workspaceBaseDir;
-    if (baseDir !== undefined) resolveWithin(baseDir, workingDirectory);
-    if (createDirectory) {
-      if (baseDir !== undefined) await mkdir(baseDir, { recursive: true });
+    if (baseDir !== undefined) {
+      await ensureWorkspaceWithin(baseDir, workingDirectory, createDirectory);
+    } else if (createDirectory) {
       await mkdir(workingDirectory, { recursive: true });
     } else {
       const st = await stat(workingDirectory);
@@ -274,7 +277,6 @@ class ShellProcess implements RunningProcess {
         throw new OrchestratorError('ENOTDIR', `working directory is not a directory: ${workingDirectory}`);
       }
     }
-    if (baseDir !== undefined) await assertRealPathWithin(baseDir, workingDirectory);
     await mkdir(path.dirname(files.contextFile), { recursive: true });
     await mkdir(path.dirname(files.resultFile), { recursive: true });
     // A stale result file must never be attributed to this execution.
@@ -293,6 +295,7 @@ class ShellProcess implements RunningProcess {
         this.events.emit({ type, data, stream, at: this.deps.clock.now() }),
       diagnostic: (d: ExecutorDiagnostic) => this.emitDiagnostic(d),
     };
+    const budget = new LogBudget(this.spec.maxLogBytes);
     const result: StreamCapture[] = [];
     for (const [stream, filePath] of [
       ['stdout', this.spec.files.stdoutLog],
@@ -309,7 +312,7 @@ class ShellProcess implements RunningProcess {
           stream,
           filePath,
           openError,
-          maxBytes: this.spec.maxLogBytes,
+          budget,
           redactor: new StreamRedactor(redactorSecrets),
           clock: this.deps.clock,
           sinks,

@@ -12,6 +12,7 @@ import {
   parseProcStat,
   parsePsOutput,
   processGroupExists,
+  terminateProcessGroupIfSame,
   type ProcessInspector,
 } from './process-identity.js';
 
@@ -191,6 +192,84 @@ describe.runIf(supported)('real processes', () => {
     expect(await checkProcessIdentity(real)).toBe('gone');
     expect(await killProcessGroupIfSame(child.pid, real, 'SIGKILL')).toEqual({ signalled: false, reason: 'gone' });
     expect(processGroupExists(child.pid)).toBe(false);
+  });
+
+  async function startShell(script: string): Promise<ChildProcess & { pid: number }> {
+    const child = spawn('/bin/sh', ['-c', script], { detached: true, stdio: ['pipe', 'pipe', 'ignore'] });
+    children.push(child);
+    await new Promise<void>((resolve, reject) => {
+      child.once('spawn', resolve);
+      child.once('error', reject);
+    });
+    return child as ChildProcess & { pid: number };
+  }
+
+  function firstLine(child: ChildProcess): Promise<string> {
+    return new Promise((resolve) => {
+      let buf = '';
+      child.stdout?.on('data', (d: Buffer) => {
+        buf += d.toString();
+        if (buf.includes('\n')) resolve(buf.split('\n')[0] as string);
+      });
+    });
+  }
+
+  describe('terminateProcessGroupIfSame (recovery)', () => {
+    it('terminates a verified group including background members', async () => {
+      const child = await startShell('sleep 30 & echo $!; wait');
+      const bg = Number(await firstLine(child));
+      const identity = (await getStartIdentity(child.pid)) as ProcessStartIdentity;
+      expect(await terminateProcessGroupIfSame(identity, 500)).toBe('terminated');
+      expect(processGroupExists(child.pid)).toBe(false);
+      expect(() => process.kill(bg, 0)).toThrow();
+    });
+
+    it('escalates to SIGKILL when SIGTERM is ignored', async () => {
+      const child = await startShell("trap '' TERM; sleep 30 & echo ready; wait; wait");
+      await firstLine(child);
+      const identity = (await getStartIdentity(child.pid)) as ProcessStartIdentity;
+      const before = Date.now();
+      expect(await terminateProcessGroupIfSame(identity, 150)).toBe('terminated');
+      expect(Date.now() - before).toBeGreaterThanOrEqual(100);
+      expect(processGroupExists(child.pid)).toBe(false);
+    });
+
+    it('does not touch a process with the same PID but another identity', async () => {
+      const child = await startSleeper();
+      const real = (await getStartIdentity(child.pid)) as ProcessStartIdentity;
+      expect(await terminateProcessGroupIfSame({ ...real, token: 'linux:other:1' }, 100)).toBe('not_same');
+      expect(processGroupExists(child.pid)).toBe(true);
+      const failing: ProcessInspector = { platform: 'test', probe: () => Promise.reject(new Error('boom')) };
+      expect(await terminateProcessGroupIfSame(real, 100, { inspector: failing })).toBe('unknown');
+      expect(processGroupExists(child.pid)).toBe(true);
+    });
+
+    it('reports a live group whose leader is gone as unverifiable and does not signal it', async () => {
+      // Leader waits for stdin, then exits and leaves its background member behind.
+      const child = await startShell('sleep 30 & echo $!; read x; exit 0');
+      const bg = Number(await firstLine(child));
+      const identity = (await getStartIdentity(child.pid)) as ProcessStartIdentity;
+      const exit = exited(child);
+      child.stdin?.end('go\n');
+      await exit;
+      expect(await terminateProcessGroupIfSame(identity, 100)).toBe('group_alive_unverifiable');
+      expect(() => process.kill(bg, 0)).not.toThrow();
+    });
+
+    it('reports gone groups and kill failures', async () => {
+      const gone = await startSleeper();
+      const goneIdentity = (await getStartIdentity(gone.pid)) as ProcessStartIdentity;
+      const exit = exited(gone);
+      process.kill(-gone.pid, 'SIGKILL');
+      await exit;
+      expect(await terminateProcessGroupIfSame(goneIdentity, 100)).toBe('gone');
+
+      const stuck = await startSleeper();
+      const identity = (await getStartIdentity(stuck.pid)) as ProcessStartIdentity;
+      const result = await terminateProcessGroupIfSame(identity, 30, { kill: () => undefined, killConfirmMs: 60 });
+      expect(result).toBe('kill_failed');
+      expect(processGroupExists(stuck.pid)).toBe(true);
+    });
   });
 
   it('rejects dangerous pids', async () => {

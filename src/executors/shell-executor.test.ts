@@ -180,8 +180,15 @@ describe.runIf(supported)('ShellExecutor – result contract (Spec §8.2 table)'
     const wrongSchema = await run(writeResult('{"schema_version":2,"result":"success"}'));
     expect(wrongSchema.classification).toMatchObject({ status: 'crashed', businessResult: null });
 
+    const tooBig = await run(
+      `printf '{"schema_version":1,"result":"success","message":"' > "$ORCH_RESULT_FILE"\n` +
+        `head -c 1100000 /dev/zero | tr '\\0' 'a' >> "$ORCH_RESULT_FILE"\nprintf '"}' >> "$ORCH_RESULT_FILE"`,
+    );
+    expect(tooBig.outcome.resultFile).toMatchObject({ state: 'invalid', error: expect.stringContaining('exceeds') });
+    expect(tooBig.classification.status).toBe('crashed');
+
     const notAFile = await run(`mkdir "$ORCH_RESULT_FILE"`);
-    expect(notAFile.outcome.resultFile.state).toBe('invalid');
+    expect(notAFile.outcome.resultFile).toMatchObject({ state: 'invalid', error: 'result file is not a regular file' });
     expect(notAFile.classification.status).toBe('crashed');
   });
 
@@ -321,6 +328,22 @@ describe.runIf(supported)('ShellExecutor – process group supervision (Spec §1
     await h.proc.cancel(200);
   });
 
+  it('discards the start identity if the leader exited while it was captured', async () => {
+    // Probe that only answers after the process is gone (reaped) — its PID could be reused by then.
+    const inspector = {
+      platform: 'test',
+      async probe(pid: number) {
+        while (isAlive(pid)) await new Promise((r) => setTimeout(r, 5));
+        await new Promise((r) => setImmediate(r));
+        return { pgid: pid, token: 'test:stale' };
+      },
+    };
+    const h = await launch(await makeSpec('exit 0'), { inspector });
+    expect(h.proc.pid).toBeGreaterThan(1);
+    expect(h.proc.startIdentity).toBeUndefined();
+    expect(classifyOutcome(await h.wait()).status).toBe('completed');
+  });
+
   it('cancel after the process ended is a no-op', async () => {
     const h = await launch(await makeSpec('exit 0'));
     const outcome = await h.wait();
@@ -426,6 +449,26 @@ describe.runIf(supported)('ShellExecutor – environment and context (Spec §9.1
     expect(classifyOutcome(viaLink.outcome).status).toBe('start_error');
   });
 
+  it('never creates directories outside base_dir through a symlink', async () => {
+    const base = path.join(root, 'workspaces');
+    const outsideTarget = path.join(root, 'outside');
+    await mkdir(base, { recursive: true });
+    await mkdir(outsideTarget, { recursive: true });
+    const { readdir, symlink } = await import('node:fs/promises');
+    await symlink(outsideTarget, path.join(base, 'wf'));
+    const res = await run('exit 0', { workingDirectory: path.join(base, 'wf', 'run-x', 'deep') }, { workspaceBaseDir: base });
+    expect(res.outcome.spawnError?.code).toBe('path_traversal');
+    expect(classifyOutcome(res.outcome).status).toBe('start_error');
+    expect(await readdir(outsideTarget)).toEqual([]);
+  });
+
+  it('rejects base_dir itself as workspace', async () => {
+    const base = path.join(root, 'workspaces');
+    const res = await run('exit 0', { workingDirectory: base }, { workspaceBaseDir: base });
+    expect(res.outcome.spawnError?.code).toBe('path_traversal');
+    expect(classifyOutcome(res.outcome).status).toBe('start_error');
+  });
+
   it('removes a stale result file before starting', async () => {
     const spec = await makeSpec('exit 0');
     await mkdir(path.dirname(spec.files.resultFile), { recursive: true });
@@ -474,21 +517,44 @@ echo '@@ORCH_EVENT {"value":1}'`);
     expect(await readFile(spec.files.stdoutLog, 'utf8')).toContain('@@ORCH_EVENT {not json\n');
   });
 
-  it('stops writing at the log limit and reports truncation instead of overwriting', async () => {
+  it('stops writing at the per-run log limit and reports truncation instead of overwriting', async () => {
     const { outcome, diagnostics, spec, outputs } = await run(
-      `i=0\nwhile [ $i -lt 50 ]; do printf '%0100d' 0; i=$((i + 1)); done\necho done >&2`,
+      `i=0\nwhile [ $i -lt 50 ]; do printf '%0100d' 0; i=$((i + 1)); done`,
       { maxLogBytes: 1000 },
     );
     expect((await stat(spec.files.stdoutLog)).size).toBe(1000);
     expect(await readFile(spec.files.stdoutLog, 'utf8')).toBe('0'.repeat(1000));
-    expect(await readFile(spec.files.stderrLog, 'utf8')).toBe('done\n');
     const truncations = diagnostics.filter((d) => d.type === 'log_truncated');
     expect(truncations).toHaveLength(1);
-    expect(truncations[0]).toMatchObject({ stream: 'stdout', details: { limitBytes: 1000 } });
-    expect(outcome.logs).toEqual({ stdoutBytes: 1000, stderrBytes: 5, truncated: true });
+    expect(truncations[0]).toMatchObject({ stream: 'stdout', details: { limitBytes: 1000, stream: 'stdout' } });
+    expect(truncations[0]?.message).toContain('stdout');
+    expect(outcome.logs).toEqual({ stdoutBytes: 1000, stderrBytes: 0, truncated: true });
     // Live output is still delivered in full.
     expect(outputs.filter((o) => o.stream === 'stdout').map((o) => o.data).join('')).toHaveLength(5000);
     expect(classifyOutcome(outcome).status).toBe('completed');
+  });
+
+  it('shares the log limit between stdout and stderr', async () => {
+    const { outcome, diagnostics, spec } = await run(
+      `i=0\nwhile [ $i -lt 8 ]; do printf '%0100d' 0; printf '%0100d' 1 >&2; i=$((i + 1)); done`,
+      { maxLogBytes: 1000 },
+    );
+    const out = await readFile(spec.files.stdoutLog, 'utf8');
+    const err = await readFile(spec.files.stderrLog, 'utf8');
+    // 1600 bytes produced in total, only 1000 persisted across both streams.
+    expect(out.length + err.length).toBe(1000);
+    expect(out).toBe('0'.repeat(out.length));
+    expect(err).toBe(`${'0'.repeat(99)}1`.repeat(8).slice(0, err.length));
+    expect(outcome.logs.stdoutBytes + outcome.logs.stderrBytes).toBe(1000);
+    expect(outcome.logs.truncated).toBe(true);
+    const truncations = diagnostics.filter((d) => d.type === 'log_truncated');
+    // Every stream that lost output reports it once, naming itself.
+    expect(truncations.length).toBeGreaterThanOrEqual(1);
+    expect(new Set(truncations.map((t) => t.stream)).size).toBe(truncations.length);
+    for (const t of truncations) {
+      expect(t.details?.stream).toBe(t.stream);
+      expect(t.stream === 'stdout' ? out.length : err.length).toBeLessThan(800);
+    }
   });
 
   it('reports log write errors instead of claiming a complete log', async () => {
@@ -517,6 +583,54 @@ echo '@@ORCH_EVENT {"value":1}'`);
     expect(outputs.map((o) => o.data).join('')).not.toContain(secret);
     expect(events[0]?.data.message).toBe(REDACTION_MARKER);
     expect(outcome.resultFile.state === 'valid' && outcome.resultFile.result.message).toBe(REDACTION_MARKER);
+  });
+
+  it('a slow listener does not block log capture', async () => {
+    const spec = await makeSpec(`i=0\nwhile [ $i -lt 200 ]; do printf '%01023d\\n' $i; i=$((i + 1)); done`);
+    const proc = await new ShellExecutor().start(spec);
+    let calls = 0;
+    let received = 0;
+    proc.onOutput((c) => {
+      calls++;
+      received += c.data.length;
+      const until = Date.now() + 2; // deliberately slow consumer
+      while (Date.now() < until) {
+        /* busy */
+      }
+    });
+    const outcome = await proc.wait();
+    expect(outcome.logs.stdoutBytes).toBe(200 * 1024);
+    expect((await stat(spec.files.stdoutLog)).size).toBe(200 * 1024);
+    // All output reached the slow listener as well, before wait() resolved.
+    expect(received).toBe(200 * 1024);
+    expect(calls).toBeGreaterThan(0);
+  });
+
+  it('closes inherited pipes held by a detached grandchild outside the group', async () => {
+    // A grandchild in its own session (setsid) keeps stdout open after the worker exits.
+    const spawnDetached =
+      "const c=require('child_process').spawn('sleep',['30'],{detached:true,stdio:['ignore','inherit','inherit']});" +
+      "require('fs').writeFileSync(process.argv[1], String(c.pid));c.unref();";
+    const spec = await makeSpec(`"$NODE_BIN" -e "${spawnDetached}" "$ORCH_WORKSPACE/gc.pid"\necho done`, {
+      env: { NODE_BIN: process.execPath },
+    });
+    const before = Date.now();
+    const h = await launch(spec, { stdioDrainMs: 300 });
+    const outcome = await h.wait();
+    const gc = Number((await readFile(path.join(spec.workingDirectory, 'gc.pid'), 'utf8')).trim());
+    try {
+      expect(classifyOutcome(outcome)).toMatchObject({ status: 'completed', businessResult: 'success' });
+      expect(Date.now() - before).toBeLessThan(10_000);
+      expect(await readFile(spec.files.stdoutLog, 'utf8')).toBe('done\n');
+      // Outside the group: not ours to kill (Spec §13), still running.
+      expect(isAlive(gc)).toBe(true);
+    } finally {
+      try {
+        process.kill(gc, 'SIGKILL');
+      } catch {
+        /* gone */
+      }
+    }
   });
 
   it('delivers early output to listeners registered right after start; throwing listeners do not break capture', async () => {

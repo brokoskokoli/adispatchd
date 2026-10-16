@@ -4,8 +4,10 @@
  * listeners + event line parser.
  *
  * - The log file receives the bytes unchanged except for redacted secrets.
- * - When the size limit is reached, the file is not written any further and
- *   a single `log_truncated` diagnostic is emitted (no silent overwrite).
+ * - The size limit is a per-run budget shared by stdout and stderr
+ *   ({@link LogBudget}, Spec §5.1 `max_log_size_per_run`). When a stream hits
+ *   it, that stream's file is not written any further and a single
+ *   `log_truncated` diagnostic naming the stream is emitted (no silent overwrite).
  * - Write errors produce a `log_write_error` diagnostic; the log is then
  *   reported as incomplete (`truncated`), never as complete.
  * - Backpressure only comes from the file: {@link StreamCapture.push}
@@ -17,6 +19,21 @@ import { StringDecoder } from 'node:string_decoder';
 import type { Clock, ExecutorDiagnostic, OutputChunk } from '../core/index.js';
 import { EventLineParser } from './event-parser.js';
 import type { StreamRedactor } from './stream-redactor.js';
+
+/** Byte budget shared by all log streams of one run. */
+export class LogBudget {
+  private used = 0;
+
+  constructor(readonly limit: number | undefined) {}
+
+  /** Reserve up to `bytes`; returns how many bytes may be written. */
+  take(bytes: number): number {
+    if (this.limit === undefined) return bytes;
+    const granted = Math.max(0, Math.min(bytes, this.limit - this.used));
+    this.used += granted;
+    return granted;
+  }
+}
 
 /** Sinks for everything a capture produces. */
 export interface CaptureSinks {
@@ -31,7 +48,8 @@ export interface StreamCaptureOptions {
   filePath: string | undefined;
   /** Error that prevented opening the file, reported as `log_write_error`. */
   openError?: Error;
-  maxBytes?: number;
+  /** Shared per-run budget (default: unlimited). */
+  budget?: LogBudget;
   redactor: StreamRedactor;
   clock: Clock;
   sinks: CaptureSinks;
@@ -115,16 +133,17 @@ export class StreamCapture {
   private writeFile(data: Buffer, onDrain: () => void): boolean {
     if (!this.file || this.writeFailed || this.limitReached) return true;
     let chunk = data;
-    const max = this.opts.maxBytes;
-    if (max !== undefined && this.accepted + chunk.length > max) {
-      chunk = chunk.subarray(0, Math.max(0, max - this.accepted));
+    const budget = this.opts.budget;
+    const granted = budget ? budget.take(chunk.length) : chunk.length;
+    if (granted < chunk.length) {
+      chunk = chunk.subarray(0, granted);
       this.limitReached = true;
       this.opts.sinks.diagnostic({
         type: 'log_truncated',
         at: this.opts.clock.now(),
         stream: this.stream,
-        message: `${this.stream} log reached the limit of ${max} bytes; further output is not persisted`,
-        details: { limitBytes: max },
+        message: `run log limit of ${budget?.limit} bytes reached while writing ${this.stream}; further ${this.stream} output is not persisted`,
+        details: { limitBytes: budget?.limit, stream: this.stream },
       });
     }
     if (chunk.length === 0) return true;

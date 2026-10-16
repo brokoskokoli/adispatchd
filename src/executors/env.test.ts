@@ -22,7 +22,7 @@ describe('worker env', () => {
   });
 
   it('sets ORCH_* incl. source variables only for source-bound runs', () => {
-    const orch = buildOrchEnv({ context, workflowId: 'wf', contextFile: '/c', resultFile: '/r', workspace: '/ws' });
+    const orch = buildOrchEnv({ runId: 'run-1', context, workflowId: 'wf', contextFile: '/c', resultFile: '/r', workspace: '/ws' });
     expect(orch).toEqual({
       ORCH_RUN_ID: 'run-1',
       ORCH_WORKFLOW_ID: 'wf',
@@ -35,8 +35,16 @@ describe('worker env', () => {
       ORCH_SOURCE_URL: 'https://x/123',
     });
     const { source: _s, ...noSource } = context;
-    const orch2 = buildOrchEnv({ context: noSource, workflowId: 'wf', contextFile: '/c', resultFile: '/r', workspace: '/ws' });
+    const orch2 = buildOrchEnv({ runId: 'run-1', context: noSource, workflowId: 'wf', contextFile: '/c', resultFile: '/r', workspace: '/ws' });
     expect(Object.keys(orch2).some((k) => k.startsWith('ORCH_SOURCE'))).toBe(false);
+  });
+
+  it('accepts custom (shell action) contexts without a cast', () => {
+    const actionContext = { run: { id: 'run-1' }, result: { status: 'completed', message: 'ok' }, source: context.source };
+    const orch = buildOrchEnv({ runId: 'run-1', context: actionContext, workflowId: 'wf', contextFile: '/c', resultFile: '/r', workspace: '/ws' });
+    expect(orch.ORCH_SOURCE_ITEM_ID).toBe('123');
+    const bad = buildOrchEnv({ runId: 'run-1', context: { source: { id: 1 } }, workflowId: 'wf', contextFile: '/c', resultFile: '/r', workspace: '/ws' });
+    expect(bad.ORCH_SOURCE_ID).toBeUndefined();
   });
 
   it('applies precedence minimal < env < secrets < ORCH_*', () => {

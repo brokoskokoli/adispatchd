@@ -22,22 +22,45 @@ export function buildMinimalEnv(base: NodeJS.ProcessEnv = process.env): Record<s
   return env;
 }
 
+/** Source block of a context as used for `ORCH_SOURCE_*` (shape of `WorkerContext.source`). */
+export interface OrchSourceInfo {
+  id: string;
+  type: string;
+  item_id: string;
+  url: string;
+}
+
+/**
+ * Extract a `source` block from any context object (main-worker context or a
+ * custom shell-action context). Returns `undefined` unless all fields are strings.
+ */
+export function contextSource(context: WorkerContext | Readonly<Record<string, unknown>>): OrchSourceInfo | undefined {
+  const source = (context as { source?: unknown }).source;
+  if (typeof source !== 'object' || source === null) return undefined;
+  const { id, type, item_id, url } = source as Record<string, unknown>;
+  if (typeof id !== 'string' || typeof type !== 'string' || typeof item_id !== 'string' || typeof url !== 'string') {
+    return undefined;
+  }
+  return { id, type, item_id, url };
+}
+
 /** `ORCH_*` variables for a worker (Spec §9.1). */
 export function buildOrchEnv(input: {
-  context: WorkerContext;
+  runId: string;
   workflowId: string;
+  context: WorkerContext | Readonly<Record<string, unknown>>;
   contextFile: string;
   resultFile: string;
   workspace: string;
 }): Record<string, string> {
   const env: Record<string, string> = {
-    [ORCH_ENV.RUN_ID]: input.context.run.id,
+    [ORCH_ENV.RUN_ID]: input.runId,
     [ORCH_ENV.WORKFLOW_ID]: input.workflowId,
     [ORCH_ENV.CONTEXT_FILE]: input.contextFile,
     [ORCH_ENV.RESULT_FILE]: input.resultFile,
     [ORCH_ENV.WORKSPACE]: input.workspace,
   };
-  const source = input.context.source;
+  const source = contextSource(input.context);
   if (source) {
     env[ORCH_ENV.SOURCE_TYPE] = source.type;
     env[ORCH_ENV.SOURCE_ID] = source.id;

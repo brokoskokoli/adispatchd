@@ -531,8 +531,14 @@ export interface ExecutionSpec {
   env: Readonly<Record<string, string>>;
   /** Resolved secret values by env var name; never persisted, redacted from logs. */
   secrets: Readonly<Record<string, string>>;
-  /** Worker context written to `files.contextFile` (contains no secrets). */
-  context: WorkerContext;
+  /**
+   * Context written to `files.contextFile` (contains no secrets). The main
+   * worker gets a {@link WorkerContext}; other executions (e.g. lifecycle
+   * `shell` actions, WI-07) may pass their own JSON object (e.g. run + result).
+   * `ORCH_SOURCE_*` variables are derived from a `source` block shaped like
+   * {@link WorkerContext.source} if present.
+   */
+  context: WorkerContext | Readonly<Record<string, unknown>>;
   files: ExecutionFiles;
   timeouts: {
     /** Total runtime limit; `undefined` = off. */
@@ -542,7 +548,10 @@ export interface ExecutionSpec {
   };
   /** Grace period between SIGTERM and SIGKILL. */
   cancelGraceMs: number;
-  /** Max bytes persisted per log stream; beyond that a truncation diagnostic is emitted. */
+  /**
+   * Max bytes persisted per run, shared by stdout and stderr (Spec §5.1
+   * `max_log_size_per_run`); beyond that a truncation diagnostic naming the stream is emitted.
+   */
   maxLogBytes?: number;
 }
 
