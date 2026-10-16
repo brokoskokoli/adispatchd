@@ -1,0 +1,13 @@
+# sources.yaml (Spec §5.2)
+sources:
+  project_a:
+    type: github
+    owner: example
+    repository: project-a
+    identity: maintainer
+
+  project_b:
+    type: github
+    owner: example
+    repository: project-b
+    identity: maintainer
