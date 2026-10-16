@@ -1,0 +1,398 @@
+/**
+ * Workflows (Spec §16): status, priority, limits, usage; detail with runtime
+ * overrides, manual start (source item + parameter form from the schema) and
+ * dry-run (`unknown / not evaluated` for unexecuted checks).
+ */
+import { ApiError, api, qs, seg } from '../api.js';
+import { h, replaceChildren, rerender } from '../dom.js';
+import { createRefresher } from '../../shared/throttle.js';
+import { buildRuntimeBody, buildStartBody } from '../../shared/params.js';
+import { checkValueLabel, decisionTone, formatDuration } from '../../shared/format.js';
+import { buildHash } from '../../shared/route.js';
+import { isStateChange, type Page, type PageContext } from '../page.js';
+import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, Workflow } from '../types.js';
+import { act, badge, button, errorBox, externalLink, isEditing, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, toast } from '../ui.js';
+
+function timeoutText(t: unknown): string {
+  const o = (t ?? {}) as { maxDurationMs?: unknown; idleTimeoutMs?: unknown };
+  const fmt = (v: unknown): string => (typeof v === 'number' ? formatDuration(v) : 'none');
+  return `max ${fmt(o.maxDurationMs)}, idle ${fmt(o.idleTimeoutMs)}`;
+}
+
+function triggerText(wf: Workflow): string {
+  const t = wf.trigger;
+  if (t.type === 'source') return `source: ${t.source ?? '?'}`;
+  if (t.type === 'schedule') return `schedule: ${t.cron ?? '?'} (${t.timezone ?? 'UTC'})`;
+  return t.type;
+}
+
+function overridden(wf: Workflow, key: 'enabled' | 'priority' | 'maxConcurrent'): HTMLElement | null {
+  if (wf.overrides[key] === undefined) return null;
+  return badge('override', 'info', `YAML value: ${String(wf.configured[key])} (runtime overrides are lost on restart/reload)`);
+}
+
+function enabledBadge(wf: Workflow): HTMLElement {
+  return h('span', null, wf.enabled ? badge('active', 'ok') : badge('inactive', 'muted'), overridden(wf, 'enabled'));
+}
+
+export const workflowsPage = (ctx: PageContext): Page => {
+  ctx.setTitle('Workflows');
+  const body = h('div', null, loading());
+  const el = h('div', { class: 'page' }, h('h1', null, 'Workflows'), body);
+  const load = async (): Promise<void> => {
+    try {
+      const res = await api.get<{ workflows: Workflow[] }>('/api/v1/workflows');
+      rerender(
+        body,
+        table(
+          ['Workflow', 'Trigger', 'Status', 'Priority', 'Active / max', 'Blocks', 'Last planning / next slot'],
+          res.workflows.map((wf) => [
+            h('span', null, routeLink(['workflows', wf.id], wf.name), h('br'), h('small', { class: 'muted' }, wf.id)),
+            triggerText(wf),
+            enabledBadge(wf),
+            h('span', null, String(wf.priority), overridden(wf, 'priority')),
+            h('span', null, `${wf.activeRuns} / ${wf.maxConcurrent}`, overridden(wf, 'maxConcurrent')),
+            wf.activeBlocks > 0 ? routeLink(['blocked'], badge(String(wf.activeBlocks), 'warn')) : '0',
+            wf.cron
+              ? h('span', null, 'next ', time(wf.cron.nextSlot))
+              : wf.lastPlanning
+                ? h('span', null, time(wf.lastPlanning.at), ` ${wf.lastPlanning.status}`, wf.lastPlanning.error ? h('div', { class: 'error-text' }, wf.lastPlanning.error) : ` · ${wf.lastPlanning.polled} polled, ${wf.lastPlanning.started} started`)
+                : text(null),
+          ]),
+          { empty: 'No workflows configured.' },
+        ),
+      );
+    } catch (err) {
+      replaceChildren(body, errorBox(err));
+    }
+  };
+  const refresher = createRefresher(load, 2000);
+  void load();
+  return {
+    el,
+    onLive: (msg) => {
+      if (isStateChange(msg) && (msg.type !== 'run.event' || msg.payload.type === 'run.status')) refresher.trigger();
+    },
+    onResync: () => void refresher.now(),
+    dispose: () => refresher.dispose(),
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Dry-run rendering
+
+function checkRow(c: CheckDiagnosis): HTMLElement {
+  const v = checkValueLabel(c.value);
+  const what = c.kind === 'shell_filter' ? 'shell filter' : `${c.kind.replace('_', ' ')} #${c.index + 1}`;
+  return h('li', null, badge(v.label, v.tone), ' ', what, ': ', h('code', null, c.command), c.error ? h('span', { class: 'error-text' }, ` – ${c.error}`) : null);
+}
+
+export function traceNode(t: FilterTrace): HTMLElement {
+  const v = checkValueLabel(t.value);
+  switch (t.kind) {
+    case 'all':
+    case 'any':
+      return h('li', null, badge(v.label, v.tone), ` ${t.kind}`, h('ul', { class: 'trace' }, t.children.map(traceNode)));
+    case 'not':
+      return h('li', null, badge(v.label, v.tone), ' not', h('ul', { class: 'trace' }, traceNode(t.child)));
+    case 'predicate':
+      return h(
+        'li',
+        null,
+        badge(v.label, v.tone),
+        ' ',
+        h('code', null, `${t.field} ${t.operator} ${JSON.stringify(t.expected)}`),
+        t.actual !== undefined ? h('span', { class: 'muted' }, ` (actual ${JSON.stringify(t.actual)})`) : null,
+        t.reason ? h('span', { class: 'muted' }, ` – ${t.reason}`) : null,
+      );
+    case 'invalid':
+      return h('li', null, badge(v.label, v.tone), ` invalid rule – ${t.reason}`);
+  }
+}
+
+export function renderDryRun(r: DryRunResult): HTMLElement {
+  const parts: HTMLElement[] = [];
+  parts.push(
+    kv([
+      ['Generated', time(r.generatedAt)],
+      ['Enabled', r.enabled ? badge('yes', 'ok') : badge('no', 'muted')],
+      ['Workflow priority', String(r.workflowPriority)],
+      ['Capacity', `workflow ${r.capacity.workflow.active}/${r.capacity.workflow.max} · global ${r.capacity.global.active}/${r.capacity.global.max}`],
+      ['Automatic starts', r.gate ? (r.gate.canStartAutomatically ? badge('possible', 'ok') : badge(`not possible (${r.gate.reason ?? 'unknown'})`, 'warn')) : text(null)],
+    ]),
+  );
+  parts.push(
+    h(
+      'p',
+      { class: 'hint' },
+      'Dry-run: no workers, no lifecycle actions, no shell filters/conditions. Checks that were not executed are shown as "unknown / not evaluated", never as pass.',
+    ),
+  );
+  if (r.conditions.length) parts.push(h('h3', null, 'Workflow conditions'), h('ul', { class: 'checks' }, r.conditions.map(checkRow)));
+  if (r.source) {
+    parts.push(h('h3', null, `Source ${r.source.sourceId}: ${r.source.polled} item(s) polled`));
+    if (r.source.error) parts.push(h('div', { class: 'alert alert-error' }, `Source error: ${r.source.error}`));
+    parts.push(
+      h('p', null, `${r.summary.candidates} candidate(s): ${r.summary.wouldStart} would start, ${r.summary.pendingChecks} pending checks, ${r.summary.notStartable} not startable`),
+      table(
+        ['Item', 'Priority', 'Decision', 'Details'],
+        r.candidates.map((c) => [
+          h('span', null, externalLink(c.url, c.itemKey), c.title ? h('div', null, c.title) : null),
+          `${c.workflowPriority} / ${c.itemPriority}${c.matchedPriorityRule !== null ? ` (rule ${c.matchedPriorityRule + 1})` : ''}`,
+          h('span', null, badge(c.decision, decisionTone(c.decision)), c.reason ? h('div', { class: 'muted' }, c.reason) : null, c.runId ? h('div', null, runLink(c.runId)) : null),
+          c.filter || c.shellFilter || c.itemConditions.length
+            ? h(
+                'details',
+                null,
+                h('summary', null, 'checks'),
+                c.filter ? h('ul', { class: 'trace' }, traceNode(c.filter)) : null,
+                c.shellFilter || c.itemConditions.length ? h('ul', { class: 'checks' }, c.shellFilter ? checkRow(c.shellFilter) : null, c.itemConditions.map(checkRow)) : null,
+              )
+            : text(null),
+        ]),
+        { empty: 'No candidates.' },
+      ),
+    );
+  }
+  if (r.cron) {
+    parts.push(
+      h('h3', null, `Schedule ${r.cron.cron} (${r.cron.timezone})`),
+      kv([
+        ['Next slot', h('span', null, badge(r.cron.nextSlotForecast, decisionTone(r.cron.nextSlotForecast)), r.cron.forecastReason ? ` – ${r.cron.forecastReason}` : '')],
+        ['Next slots', r.cron.nextSlots.length ? h('ul', { class: 'plain' }, r.cron.nextSlots.map((s) => h('li', null, time(s)))) : text(null)],
+      ]),
+      r.cron.recentFirings.length
+        ? table(
+            ['Slot', 'Decision', 'Run', 'Reason'],
+            r.cron.recentFirings.map((f) => [time(f.scheduledFor), badge(f.decision, decisionTone(f.decision)), f.runId ? runLink(f.runId) : text(null), text(f.reason)]),
+          )
+        : h('p', { class: 'muted' }, 'No recent slots.'),
+    );
+  }
+  if (r.notes.length) parts.push(h('h3', null, 'Notes'), h('ul', null, r.notes.map((n) => h('li', null, n))));
+  return h('div', { class: 'dry-run' }, parts);
+}
+
+// ---------------------------------------------------------------------------
+// Detail
+
+export const workflowPage = (ctx: PageContext, id: string): Page => {
+  ctx.setTitle(`Workflow ${id}`);
+  const header = h('div', null, loading());
+  const info = h('div', { class: 'grid' });
+  const overridesBox = h('section', { class: 'card' }, h('h2', null, 'Runtime overrides'));
+  const startBox = h('section', { class: 'card' }, h('h2', null, 'Manual start'));
+  const dryRunOut = h('div');
+  const dryBtn: HTMLButtonElement = button('Run dry-run', () => void dryRun(), { kind: 'primary' });
+  const dryBox = h('section', { class: 'card span-all' }, h('h2', null, 'Dry-run'), h('div', { class: 'actions' }, dryBtn), dryRunOut);
+  const runsBox = h('section', { class: 'card span-all' }, h('h2', null, 'Recent runs'), loading());
+  const configBox = h('section', { class: 'card span-all' });
+  const el = h(
+    'div',
+    { class: 'page' },
+    h('p', { class: 'crumbs' }, routeLink(['workflows'], '← Workflows')),
+    header,
+    h('div', { class: 'grid' }, info, overridesBox, startBox, dryBox, runsBox, configBox),
+  );
+  let formsBuilt = false;
+
+  const dryRun = async (): Promise<void> => {
+    replaceChildren(dryRunOut, loading());
+    const res = await act(dryBtn, () => api.post<DryRunResult>(`/api/v1/workflows/${seg(id)}/dry-run`));
+    replaceChildren(dryRunOut, res ? renderDryRun(res) : h('p', { class: 'muted' }, 'Dry-run failed.'));
+  };
+
+  const buildOverrides = (wf: Workflow): void => {
+    const enabled = h(
+      'select',
+      { class: 'input', id: 'ov-enabled' },
+      h('option', { value: '', selected: wf.overrides.enabled === undefined }, `YAML (${wf.configured.enabled ? 'active' : 'inactive'})`),
+      h('option', { value: 'true', selected: wf.overrides.enabled === true }, 'active'),
+      h('option', { value: 'false', selected: wf.overrides.enabled === false }, 'inactive'),
+    ) as HTMLSelectElement;
+    const priority = h('input', { class: 'input input-narrow', id: 'ov-priority', type: 'number', step: 'any', value: wf.overrides.priority ?? '', placeholder: String(wf.configured.priority) }) as HTMLInputElement;
+    const maxC = h('input', { class: 'input input-narrow', id: 'ov-max', type: 'number', min: 1, step: 1, value: wf.overrides.maxConcurrent ?? '', placeholder: String(wf.configured.maxConcurrent) }) as HTMLInputElement;
+    const errors = h('div');
+    const save: HTMLButtonElement = button(
+      'Apply',
+      () => {
+        const res = buildRuntimeBody({ enabled: enabled.value, priority: priority.value, maxConcurrent: maxC.value });
+        if (!res.ok) {
+          replaceChildren(errors, h('div', { class: 'alert alert-error' }, res.errors.map((e) => h('div', null, `${e.field}: ${e.message}`))));
+          return;
+        }
+        errors.replaceChildren();
+        void act(save, () => api.patch(`/api/v1/workflows/${seg(id)}/runtime`, res.body), 'Overrides applied').then(() => refresher.now());
+      },
+      { kind: 'primary' },
+    );
+    const reset: HTMLButtonElement = button('Reset all to YAML', () => {
+      enabled.value = '';
+      priority.value = '';
+      maxC.value = '';
+      void act(reset, () => api.patch(`/api/v1/workflows/${seg(id)}/runtime`, { enabled: null, priority: null, maxConcurrent: null }), 'Overrides removed').then(() => refresher.now());
+    });
+    overridesBox.append(
+      h('div', { class: 'form' }, h('label', { class: 'field', for: 'ov-enabled' }, h('span', null, 'Enabled'), enabled), h('label', { class: 'field' }, h('span', null, 'Priority'), priority), h('label', { class: 'field' }, h('span', null, 'Max parallel'), maxC)),
+      errors,
+      h('div', { class: 'actions' }, save, reset),
+      h('p', { class: 'hint' }, 'Empty = YAML value. Overrides are not persistent: they are lost on restart, and a configuration reload resets affected overrides to the YAML values.'),
+    );
+  };
+
+  const buildStart = (wf: Workflow): void => {
+    const fields: Record<string, HTMLInputElement | HTMLSelectElement> = {};
+    const item = h('input', { class: 'input', type: 'text', id: 'start-item', placeholder: 'https://github.com/owner/repo/issues/7 or #7', maxlength: 2000 }) as HTMLInputElement;
+    const rows: HTMLElement[] = [];
+    if (wf.trigger.type === 'source') rows.push(h('label', { class: 'field' }, h('span', null, 'Source item (required)'), item));
+    for (const [name, def] of Object.entries(wf.parameters)) {
+      let input: HTMLInputElement | HTMLSelectElement;
+      const dflt = def.default === null || def.default === undefined ? null : String(def.default);
+      if (def.type === 'enum' || def.type === 'boolean') {
+        const values = def.type === 'enum' ? (def.values ?? []) : ['true', 'false'];
+        input = h(
+          'select',
+          { class: 'input' },
+          h('option', { value: '' }, dflt !== null ? `default (${dflt})` : def.required ? '— choose —' : '(none)'),
+          values.map((v) => h('option', { value: v }, v)),
+        ) as HTMLSelectElement;
+      } else {
+        input = h('input', { class: 'input', type: def.type === 'number' ? 'number' : 'text', step: def.type === 'number' ? 'any' : null, placeholder: dflt ?? '' }) as HTMLInputElement;
+      }
+      fields[name] = input;
+      rows.push(
+        h(
+          'label',
+          { class: 'field' },
+          h('span', null, name, def.required ? ' *' : '', h('small', { class: 'muted' }, ` ${def.type}`)),
+          input,
+          def.description ? h('small', { class: 'muted' }, def.description) : null,
+        ),
+      );
+    }
+    const errors = h('div');
+    const startBtn: HTMLButtonElement = button(
+      'Start run',
+      () => {
+        const values: Record<string, string> = {};
+        for (const [k, f] of Object.entries(fields)) values[k] = f.value;
+        const res = buildStartBody(wf.trigger.type, item.value, wf.parameters, values);
+        if (!res.ok) {
+          replaceChildren(errors, h('div', { class: 'alert alert-error' }, res.errors.map((e) => h('div', null, `${e.field}: ${e.message}`))));
+          return;
+        }
+        errors.replaceChildren();
+        void (async () => {
+          startBtn.disabled = true;
+          try {
+            const r = await api.post<{ run: RunSummary }>(`/api/v1/workflows/${seg(id)}/start`, res.body);
+            toast(`Run ${r.run.id} started`, 'ok');
+            ctx.navigate(buildHash(['runs', r.run.id], { tab: 'logs' }));
+          } catch (err) {
+            const parts: HTMLElement[] = [errorBox(err)];
+            if (err instanceof ApiError && err.code === 'lock_conflict') {
+              const holder = (err.details as { holderRunId?: unknown } | null)?.holderRunId;
+              if (typeof holder === 'string') parts.push(h('p', null, 'Active run: ', runLink(holder)));
+            }
+            replaceChildren(errors, parts);
+          } finally {
+            startBtn.disabled = false;
+          }
+        })();
+      },
+      { kind: 'primary' },
+    );
+    startBox.append(
+      h('p', { class: 'hint' }, 'A manual start bypasses filters, conditions, limits, blocks and pause – but not the active lock of an item.'),
+      rows.length ? h('div', { class: 'form' }, rows) : h('p', { class: 'muted' }, 'No parameters.'),
+      errors,
+      h('div', { class: 'actions' }, startBtn),
+    );
+  };
+
+  const load = async (): Promise<void> => {
+    if (isEditing(el)) {
+      setTimeout(() => refresher.trigger(), 2000);
+      return;
+    }
+    try {
+      const [wf, runs] = await Promise.all([
+        api.get<Workflow>(`/api/v1/workflows/${seg(id)}`),
+        api.get<{ runs: RunSummary[]; total: number }>(`/api/v1/runs${qs({ workflow: id, limit: 10 })}`),
+      ]);
+      replaceChildren(header, h('h1', null, wf.name, ' ', h('small', { class: 'muted' }, wf.id)));
+      rerender(
+        info,
+        section(
+          'Status',
+          kv([
+            ['Status', enabledBadge(wf)],
+            ['Trigger', triggerText(wf)],
+            ['Priority', h('span', null, String(wf.priority), overridden(wf, 'priority'))],
+            ['Max parallel', h('span', null, String(wf.maxConcurrent), overridden(wf, 'maxConcurrent'))],
+            ['Current usage', `${wf.activeRuns} active`],
+            ['Active blocks', wf.activeBlocks > 0 ? routeLink(['blocked'], badge(String(wf.activeBlocks), 'warn')) : '0'],
+            ['Identity', text(wf.identity)],
+            ['Command', h('code', { class: 'wrap' }, [wf.execute.command, ...wf.execute.args.map(String)].join(' '))],
+            ['Timeout', timeoutText(wf.execute.timeout)],
+            ['Secrets', wf.execute.secrets.length ? wf.execute.secrets.join(', ') : text(null)],
+            ['Filter', `${wf.hasFilter ? 'declarative' : 'none'}${wf.hasShellFilter ? ' + shell filter' : ''}; conditions: ${wf.conditions.workflow} workflow, ${wf.conditions.item} item`],
+            ['Max technical failures', String(wf.maxTechnicalFailures)],
+            ['File', h('code', null, wf.file)],
+            ...(wf.cron
+              ? ([
+                  ['Next slot', time(wf.cron.nextSlot)],
+                  ['Last slot', wf.cron.lastFiring ? h('span', null, time(wf.cron.lastFiring.scheduledFor), ' ', badge(wf.cron.lastFiring.decision, decisionTone(wf.cron.lastFiring.decision))) : text(null)],
+                ] as Array<[string, HTMLElement]>)
+              : []),
+            ...(wf.lastPlanning
+              ? ([['Last planning', h('span', null, time(wf.lastPlanning.at), ` ${wf.lastPlanning.status} · ${wf.lastPlanning.polled} polled · ${wf.lastPlanning.candidates} candidates · ${wf.lastPlanning.started} started`, wf.lastPlanning.error ? h('div', { class: 'error-text' }, wf.lastPlanning.error) : null)]] as Array<[string, HTMLElement]>)
+              : []),
+          ]),
+        ),
+      );
+      if (!formsBuilt) {
+        formsBuilt = true;
+        buildOverrides(wf);
+        buildStart(wf);
+        replaceChildren(
+          configBox,
+          h('h2', null, 'Configuration'),
+          h('details', null, h('summary', null, 'Declarative filter'), jsonBlock(wf.filter ?? null)),
+          h('details', null, h('summary', null, 'Lifecycle hooks'), jsonBlock(wf.hooks ?? null)),
+          h('details', null, h('summary', null, 'Last planning diagnosis'), jsonBlock(wf.diagnosis ?? null)),
+        );
+      }
+      rerender(
+        runsBox,
+        h('h2', null, `Recent runs (${runs.total})`),
+        table(
+          ['Run', 'Trigger', 'Outcome', 'Started', 'Duration', 'Message'],
+          runs.runs.map((r) => [runLink(r.id), r.triggerType, runOutcomeBadges(r), time(r.startedAt ?? r.createdAt), formatDuration(r.durationMs), text(r.active ? r.statusMessage : (r.resultMessage ?? r.finalReason))]),
+          { empty: 'No runs yet.' },
+        ),
+        runs.total > runs.runs.length ? h('p', null, routeLink(['runs'], 'All runs of this workflow →', { workflow: id })) : null,
+      );
+    } catch (err) {
+      replaceChildren(header, errorBox(err));
+    }
+  };
+  const refresher = createRefresher(load, 1500);
+  void load();
+  return {
+    el,
+    onLive: (msg) => {
+      if (msg.type === 'config.reloaded') {
+        // Parameter schema/overrides may have changed: rebuild the forms.
+        formsBuilt = false;
+        overridesBox.replaceChildren(h('h2', null, 'Runtime overrides'));
+        startBox.replaceChildren(h('h2', null, 'Manual start'));
+        refresher.trigger();
+        return;
+      }
+      if (isStateChange(msg) && (msg.type !== 'run.event' || msg.payload.type === 'run.status')) refresher.trigger();
+    },
+    onResync: () => void refresher.now(),
+    dispose: () => refresher.dispose(),
+  };
+};

@@ -7,9 +7,7 @@
  * and exits with 0 after an orderly shutdown (also after an API drain /
  * cancel-all), 1 on startup errors or a fatal error, 2 on usage errors.
  */
-import { existsSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { errorMessage, formatDuration, isOrchestratorError, parseDuration } from '../core/index.js';
 import { ConfigLoadError, formatConfigIssue } from '../config/index.js';
 import {
@@ -22,16 +20,8 @@ import {
   type AppOptions,
   type SignalTarget,
 } from '../app.js';
+import { resolveUiDir } from '../ui/index.js';
 import type { CliIo, StartCliOptions } from './program.js';
-
-/**
- * Static web UI directory of this installation (WI-11 copies the assets to
- * `<package>/dist/ui/public`; in development `src/ui/public`), if present.
- */
-export function defaultUiDir(): string | undefined {
-  const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'ui', 'public');
-  return existsSync(dir) ? dir : undefined;
-}
 
 function durationFlag(name: string, value: string | undefined): number | undefined {
   if (value === undefined) return undefined;
@@ -86,13 +76,14 @@ export function createStartHandler(io: Pick<CliIo, 'stdout' | 'stderr'>, deps: S
     }
     const configDir = path.resolve(opts.configDir);
     const dataDir = path.resolve(opts.dataDir ?? 'data');
-    const uiDir = deps.appOptions?.uiDir ?? defaultUiDir();
+    // Static web UI (WI-11): built assets from `dist/ui/public`; the API also runs without them.
+    const uiDir = deps.appOptions && 'uiDir' in deps.appOptions ? deps.appOptions.uiDir : (resolveUiDir() ?? undefined);
     const appOptions: AppOptions = {
       configDir,
       dataDir,
-      ...(uiDir ? { uiDir } : {}),
       ...flags,
       ...(deps.appOptions ?? {}),
+      ...(uiDir ? { uiDir } : {}),
     };
     let app: App;
     try {
@@ -122,6 +113,7 @@ export function createStartHandler(io: Pick<CliIo, 'stdout' | 'stderr'>, deps: S
       `SIGTERM/Ctrl-C: drain up to ${formatDuration(appOptions.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS)}, ` +
         `then cancel all runs (${formatDuration(appOptions.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS)}); a second signal cancels immediately\n`,
     );
+    if (!uiDir) io.stderr('Note: web UI assets not found (run `npm run build`); serving the API only.\n');
     const host = new URL(url).hostname;
     if (!isLoopback(host)) {
       io.stderr(

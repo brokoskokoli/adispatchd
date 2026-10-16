@@ -16,7 +16,7 @@ export type {
 export { processIo } from './program.js';
 export { createConfigValidateHandler, EXIT_CONFIG_INVALID, EXIT_CONFIG_VALID } from './config-validate.js';
 export { createWorkflowDryRunHandler, type WorkflowDryRunDeps } from './workflow-dry-run.js';
-export { createStartHandler, defaultUiDir, parseStartFlags, type StartDeps } from './start.js';
+export { createStartHandler, parseStartFlags, type StartDeps } from './start.js';
 export { createInitHandler, initDirectories, type InitResult } from './init.js';
 export { initTemplates, DATA_DIR_LAYOUT, type TemplateFile } from './init-templates.js';
 export {

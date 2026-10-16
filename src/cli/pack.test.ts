@@ -81,10 +81,11 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     const info = JSON.parse(pack.stdout.slice(pack.stdout.indexOf('['))) as Array<{ filename: string; files: Array<{ path: string; mode: number }> }>;
     const tarball = path.join(root, info[0]?.filename ?? '');
     const files = (info[0]?.files ?? []).map((f) => f.path);
-    for (const f of ['dist/cli/main.js', 'dist/app.js', 'dist/persistence/schema.js', 'dist/service/unit.js', 'examples/config/config.yaml', 'README.md', 'docs/operations.md', 'docs/worker-protocol.md', 'package.json']) {
+    for (const f of ['dist/cli/main.js', 'dist/app.js', 'dist/persistence/schema.js', 'dist/service/unit.js', 'dist/ui/public/index.html', 'dist/ui/public/app.css', 'examples/config/config.yaml', 'README.md', 'docs/operations.md', 'docs/worker-protocol.md', 'package.json']) {
       expect(files, f).toContain(f);
     }
     expect(files.filter((f) => /\.test\.|\/testing\/|^src\//.test(f))).toEqual([]);
+    expect(files.some((f) => /^dist\/ui\/public\/js\/.+\.js$/.test(f))).toBe(true); // compiled browser code
     expect(info[0]?.files.find((f) => f.path === 'dist/cli/main.js')?.mode ?? 0).toBeGreaterThan(0);
 
     // 2. Install into a temp prefix (production dependencies only).
@@ -117,6 +118,13 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     const first = startInstance(bin1, configDir, dataDir);
     await waitFor('ready', async () => ((await fetch(`${base}/ready`)).status === 200 ? true : undefined));
     expect(first.out.stdout).toContain(`listening on ${base}`);
+    expect(first.out.stderr).not.toContain('web UI assets not found');
+    // Web UI (WI-11) is served from the installed package.
+    const index = await fetch(`${base}/`);
+    expect(index.status).toBe(200);
+    expect(index.headers.get('content-type') ?? '').toContain('text/html');
+    expect(await index.text()).toMatch(/<html/i);
+    expect((await fetch(`${base}/js/client/app.js`)).status).toBe(200);
     const started = await fetch(`${base}/api/v1/workflows/hello/start`, {
       method: 'POST',
       headers: { 'x-orchestrator-request': '1', 'content-type': 'application/json' },

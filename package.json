@@ -24,11 +24,12 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-ui.mjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.ui.json --noEmit",
     "test": "vitest run",
-    "check": "tsc --noEmit && vitest run",
+    "check": "tsc --noEmit && tsc -p tsconfig.ui.json --noEmit && vitest run",
     "dev": "tsx src/cli/main.ts",
+    "build:ui": "node scripts/build-ui.mjs",
     "prepack": "rm -rf dist && npm run build",
     "test:pack": "ORCH_PACK_TEST=1 vitest run src/cli/pack.test.ts"
   },
