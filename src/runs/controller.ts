@@ -171,6 +171,8 @@ export interface RunControllerOptions {
   /** Recovery: process inspector / signal sender (tests). */
   processInspector?: ProcessInspector;
   kill?: KillFn;
+  /** Recovery: "does a process group with this ID exist?" (default `processGroupExists`; tests). */
+  groupExists?: (pgid: number) => boolean;
   /** Recovery: wait after SIGKILL before giving up (default 5 s). */
   recoveryKillConfirmMs?: number;
   /** Recovery: SIGTERM→SIGKILL grace; default the run snapshot's `execute.cancel_grace`. */
@@ -183,12 +185,24 @@ export interface RunControllerOptions {
 
 interface ActiveRun {
   runId: string;
+  /** `run`: supervised execution; `recovery`: recovery / retryRecovery in progress (not cancellable). */
+  kind: 'run' | 'recovery';
   /** Aborted on cancel (on_start chain, item re-read, secret resolution). */
   cancel: AbortController;
   cancelRequested: boolean;
   cancelReason: string;
   proc: RunningProcess | undefined;
   done: Promise<RunRecord>;
+}
+
+interface ShutdownState {
+  mode: ShutdownMode;
+  /** Absolute end of the drain phase (epoch ms), `undefined` = unlimited. */
+  drainDeadline: number | undefined;
+  /** Cancel-phase timeout (ms) and its absolute deadline once the phase started. */
+  cancelTimeoutMs: number | undefined;
+  cancelDeadline: number | undefined;
+  reason: string | undefined;
 }
 
 type ProcessCheck = { gone: true; detail: string } | { gone: false; reason: string };
@@ -201,6 +215,7 @@ interface FinalizeOptions {
 }
 
 const CANCELLABLE_TO_CANCELLING: readonly TechnicalStatus[] = ['reserved', 'starting', 'running'];
+const CAN_BECOME_RECOVERY_PENDING: readonly TechnicalStatus[] = ['reserved', 'starting', 'running', 'cancelling'];
 
 /** See module docs. One instance per process. */
 export class RunController {
@@ -216,6 +231,9 @@ export class RunController {
   private readonly logger: Logger;
   private readonly active = new Map<string, ActiveRun>();
   private readonly idleWaiters = new Set<() => void>();
+  /** Woken when a running shutdown is escalated (cancel mode / stricter timeouts). */
+  private readonly shutdownWakeups = new Set<() => void>();
+  private shutdownState: ShutdownState | undefined;
   /** Aborted on a forced stop: interrupts completion hooks (resumed by recovery). */
   private readonly hookAbort = new AbortController();
 
@@ -337,6 +355,7 @@ export class RunController {
     }
     const entry: ActiveRun = {
       runId,
+      kind: 'run',
       cancel: new AbortController(),
       cancelRequested: false,
       cancelReason: 'cancelled',
@@ -344,7 +363,7 @@ export class RunController {
       done: Promise.resolve(current),
     };
     this.active.set(runId, entry);
-    entry.done = this.track(runId, this.execute(entry, options).catch((err: unknown) => this.onUnexpected(runId, err)));
+    entry.done = this.track(runId, this.execute(entry, options).catch((err: unknown) => this.onUnexpected(entry, err)));
     this.publishStatus();
     return { runId, done: entry.done };
   }
@@ -360,23 +379,47 @@ export class RunController {
    * (calling again retries).
    */
   async cancelRun(runId: string, options: { reason?: string } = {}): Promise<RunRecord> {
+    const entry = this.beginCancel(runId, options.reason ?? 'cancelled by user');
+    if (!entry) return this.repos.runs.require(runId);
+    if (entry.proc) await this.cancelProcess(entry);
+    return entry.done;
+  }
+
+  /**
+   * Synchronous variant for the API (HTTP 202/409): validates and persists the
+   * cancel request (`cancelling`) and stops the process in the background.
+   * Throws the same errors as {@link cancelRun}; a later kill failure is only
+   * visible on the run (`run.cancel_failed`, `error.code = kill_failed`).
+   */
+  requestCancel(runId: string, options: { reason?: string } = {}): { runId: string; status: TechnicalStatus } {
+    const entry = this.beginCancel(runId, options.reason ?? 'cancelled by user');
+    if (entry?.proc) {
+      this.cancelProcess(entry).catch(() => {
+        /* persisted as run.cancel_failed */
+      });
+    }
+    return { runId, status: this.repos.runs.require(runId).status };
+  }
+
+  /** Validate + persist a cancel request; `null` if the run was finalized directly (never started). */
+  private beginCancel(runId: string, reason: string): ActiveRun | null {
     const run = this.repos.runs.require(runId);
     if (isTerminalStatus(run.status)) {
       throw new RunControllerError('run_not_active', `Run ${runId} already finished (${run.status})`, { runId, status: run.status });
     }
-    if (run.status === 'finalizing' || run.status === 'recovery_pending') {
-      throw new RunControllerError('run_not_cancellable', `Run ${runId} is '${run.status}' and cannot be cancelled`, {
+    const entry = this.active.get(runId);
+    if (run.status === 'finalizing' || run.status === 'recovery_pending' || entry?.kind === 'recovery') {
+      const what = entry?.kind === 'recovery' ? `'${run.status}' (being recovered)` : `'${run.status}'`;
+      throw new RunControllerError('run_not_cancellable', `Run ${runId} is ${what} and cannot be cancelled`, {
         runId,
         status: run.status,
       });
     }
-    const reason = options.reason ?? 'cancelled by user';
-    const entry = this.active.get(runId);
     if (!entry) {
       if (run.status === 'reserved') {
         // Reserved but never handed to startRun: nothing ran, nothing to undo.
         this.finalizeUnstarted(runId, reason);
-        return this.repos.runs.require(runId);
+        return null;
       }
       throw new RunControllerError('run_not_controlled', `Run ${runId} is '${run.status}' but not supervised by this controller`, {
         runId,
@@ -394,8 +437,7 @@ export class RunController {
       this.publisher.flush();
       entry.cancel.abort(new Error(reason));
     }
-    if (entry.proc) await this.cancelProcess(entry);
-    return entry.done;
+    return entry;
   }
 
   // ---------------------------------------------------------------------------
@@ -412,44 +454,85 @@ export class RunController {
   }
 
   /**
-   * Shutdown (idempotent; later calls return the first promise).
+   * Shutdown. The first call starts it; later calls return the same promise
+   * but ESCALATE a running shutdown: `mode: 'cancel'` turns a drain into
+   * cancel-all, and stricter `drainTimeoutMs` / `cancelTimeoutMs` (counted
+   * from the later call) replace looser ones – e.g. API drain followed by
+   * SIGTERM with timeouts, or a second SIGTERM → `mode: 'cancel'`.
+   *
    * SIGTERM recommendation (WI-10): `shutdown({mode: 'drain', drainTimeoutMs, cancelTimeoutMs})`
    * – drain with timeout, then cancel-all, then interrupt remaining hooks.
+   * A running recovery is awaited before anything stops.
    */
   shutdown(options: ShutdownOptions = {}): Promise<ShutdownResult> {
-    this.shuttingDown ??= this.doShutdown(options);
+    const now = this.clock.now().getTime();
+    const st = this.shutdownState;
+    if (!st || !this.shuttingDown) {
+      const state: ShutdownState = {
+        mode: options.mode ?? 'drain',
+        drainDeadline: options.drainTimeoutMs !== undefined ? now + options.drainTimeoutMs : undefined,
+        cancelTimeoutMs: options.cancelTimeoutMs,
+        cancelDeadline: undefined,
+        reason: options.reason,
+      };
+      this.shutdownState = state;
+      this.shuttingDown = this.doShutdown(state);
+      return this.shuttingDown;
+    }
+    if (options.mode === 'cancel' && st.mode === 'drain') {
+      st.mode = 'cancel';
+      if (options.reason !== undefined) st.reason = options.reason;
+    }
+    if (options.drainTimeoutMs !== undefined) st.drainDeadline = minDefined(st.drainDeadline, now + options.drainTimeoutMs);
+    if (options.cancelTimeoutMs !== undefined) {
+      st.cancelTimeoutMs = minDefined(st.cancelTimeoutMs, options.cancelTimeoutMs);
+      if (st.cancelDeadline !== undefined) st.cancelDeadline = Math.min(st.cancelDeadline, now + options.cancelTimeoutMs);
+    }
+    for (const wake of [...this.shutdownWakeups]) wake();
     return this.shuttingDown;
   }
 
-  private async doShutdown(options: ShutdownOptions): Promise<ShutdownResult> {
+  private async doShutdown(st: ShutdownState): Promise<ShutdownResult> {
     this.draining = true;
     this.publishStatus();
+    if (this.recovering) {
+      // Recovery finalizes runs and runs their hooks: never stop underneath it.
+      await this.recovering.catch(() => undefined);
+    }
     let outcome: ShutdownResult['outcome'] = 'drained';
-    let mode = options.mode ?? 'drain';
-    if (mode === 'drain') {
+    while (st.mode === 'drain') {
       this.logger.info('draining: waiting for active runs', { activeRuns: this.active.size });
-      if (!(await this.waitIdle(options.drainTimeoutMs))) {
+      const r = await this.waitIdle(this.remaining(st.drainDeadline), true);
+      if (r === 'idle') break;
+      if (r === 'timeout') {
         this.logger.warn('drain timeout exceeded, cancelling remaining runs', { activeRuns: this.active.size });
-        mode = 'cancel';
+        st.mode = 'cancel';
       }
     }
-    if (mode === 'cancel') {
+    if (st.mode === 'cancel') {
       outcome = 'cancelled';
       this.stopping = true;
       this.publishStatus();
-      const reason = options.reason ?? 'cancelled by shutdown';
-      for (const runId of [...this.active.keys()]) {
-        this.cancelRun(runId, { reason }).catch((err: unknown) => {
+      if (st.cancelTimeoutMs !== undefined) st.cancelDeadline = this.clock.now().getTime() + st.cancelTimeoutMs;
+      const reason = st.reason ?? 'cancelled by shutdown';
+      for (const entry of [...this.active.values()]) {
+        if (entry.kind !== 'run') continue;
+        this.cancelRun(entry.runId, { reason }).catch((err: unknown) => {
           // finalizing runs just finish their hook; kill failures are persisted on the run.
           if (!isOrchestratorError(err, 'run_not_cancellable')) {
-            this.logger.warn('cancel during shutdown failed', { runId, error: err });
+            this.logger.warn('cancel during shutdown failed', { runId: entry.runId, error: err });
           }
         });
       }
-      if (!(await this.waitIdle(options.cancelTimeoutMs))) {
-        this.logger.warn('cancel timeout exceeded, interrupting hooks (recovery resumes them)', { activeRuns: this.active.size });
-        this.hookAbort.abort(new Error('controller stopping'));
-        await this.waitIdle(this.options.abortSettleMs ?? 10_000);
+      for (;;) {
+        const r = await this.waitIdle(this.remaining(st.cancelDeadline), true);
+        if (r === 'idle') break;
+        if (r === 'timeout') {
+          this.logger.warn('cancel timeout exceeded, interrupting hooks (recovery resumes them)', { activeRuns: this.active.size });
+          this.hookAbort.abort(new Error('controller stopping'));
+          await this.waitIdle(this.options.abortSettleMs ?? 10_000);
+          break;
+        }
       }
     }
     this.stopping = true;
@@ -461,6 +544,10 @@ export class RunController {
       this.logger.error('stop callback failed', { error: err });
     }
     return result;
+  }
+
+  private remaining(deadline: number | undefined): number | undefined {
+    return deadline === undefined ? undefined : Math.max(0, deadline - this.clock.now().getTime());
   }
 
   // ---------------------------------------------------------------------------
@@ -480,34 +567,54 @@ export class RunController {
    * operator stopped the process). With `assumeGone: true` the operator
    * confirms the process is gone; nothing is signalled and the run is
    * finalized (`crashed`, or `cancelled` if it was being cancelled).
+   * An unsupervised `finalizing` run (e.g. after an internal error) resumes
+   * its completion hook and finishes.
+   *
+   * @throws RunControllerError `run_controller_not_ready` during recovery,
+   *   `run_controller_not_accepting` while draining/stopping,
+   *   `run_already_started` if the run is supervised, `run_not_recovery_pending`
    */
   async retryRecovery(runId: string, options: { assumeGone?: boolean } = {}): Promise<RunRecord> {
+    if (!this.ready) {
+      throw new RunControllerError('run_controller_not_ready', 'Recovery is still running', { runId });
+    }
+    if (this.draining || this.stopping) {
+      throw new RunControllerError('run_controller_not_accepting', 'Controller is draining / shutting down', { runId });
+    }
     const run = this.repos.runs.require(runId);
-    if (run.status !== 'recovery_pending') {
+    if (this.active.has(runId)) {
+      throw new RunControllerError('run_already_started', `Run ${runId} is already supervised or being recovered`, { runId });
+    }
+    if (run.status !== 'recovery_pending' && run.status !== 'finalizing') {
       throw new RunControllerError('run_not_recovery_pending', `Run ${runId} is '${run.status}', not 'recovery_pending'`, {
         runId,
         status: run.status,
       });
     }
-    if (this.active.has(runId)) {
-      throw new RunControllerError('run_already_started', `Recovery of run ${runId} is already in progress`, { runId });
-    }
+    return this.trackRecovery(run, async () => {
+      if (run.status === 'finalizing') await this.resumeFinalizing(run);
+      else {
+        await this.recoverProcessRun(run, options.assumeGone ? { gone: true, detail: 'operator confirmed the worker is gone' } : undefined);
+      }
+    });
+  }
+
+  /** Register a recovery job in `active`: drain waits for it, cancel refuses it, no double processing. */
+  private trackRecovery(run: RunRecord, job: () => Promise<void>): Promise<RunRecord> {
     const entry: ActiveRun = {
-      runId,
+      runId: run.id,
+      kind: 'recovery',
       cancel: new AbortController(),
       cancelRequested: false,
       cancelReason: '',
       proc: undefined,
       done: Promise.resolve(run),
     };
-    this.active.set(runId, entry);
+    this.active.set(run.id, entry);
     this.publishStatus();
     entry.done = this.track(
-      runId,
-      (async () => {
-        await this.recoverProcessRun(run, options.assumeGone ? { gone: true, detail: 'operator confirmed the worker is gone' } : undefined);
-        return this.repos.runs.require(runId);
-      })().catch((err: unknown) => this.onUnexpected(runId, err)),
+      run.id,
+      job().then(() => this.repos.runs.require(run.id)),
     );
     return entry.done;
   }
@@ -519,7 +626,7 @@ export class RunController {
     await Promise.all(
       activeRuns.map(async (run) => {
         try {
-          await this.recoverRun(run);
+          await this.trackRecovery(run, () => this.recoverRun(run));
           const after = this.repos.runs.require(run.id);
           if (after.status === 'recovery_pending') {
             report.pending.push({ runId: run.id, reason: recoveryReason(after) });
@@ -619,7 +726,7 @@ export class RunController {
         case 'not_same':
           // The PID belongs to another process now. If a group with the old PGID still
           // exists we cannot tell whose it is: never signal, never assume it is gone.
-          return processGroupExists(identity.pgid)
+          return this.groupExists(identity.pgid)
             ? { gone: false, reason: `pid ${identity.pid} now belongs to a different process and process group ${identity.pgid} exists; identity cannot be verified` }
             : { gone: true, detail: `worker (pid ${identity.pid}) gone, pid reused by another process` };
         case 'group_alive_unverifiable':
@@ -631,7 +738,7 @@ export class RunController {
       }
     }
     if (run.pid !== null) {
-      return processGroupExists(run.pid)
+      return this.groupExists(run.pid)
         ? { gone: false, reason: `no start identity was persisted for pid ${run.pid} and its process group exists` }
         : { gone: true, detail: `worker (pid ${run.pid}) no longer running` };
     }
@@ -947,6 +1054,7 @@ export class RunController {
           affectedRunIds: this.repos.blocks.affectedRunIds(block.id),
         };
         this.repos.afterCommit(() => {
+          this.publisher.flush(); // the run's `→ finalizing` status event (with blockId) first
           this.bus.publish({ type: 'block.created', block });
           this.notify('retry_block_created', payload);
         });
@@ -1017,26 +1125,48 @@ export class RunController {
     });
   }
 
-  /** Resolve `true` once no run is supervised, `false` after `timeoutMs`. */
-  private waitIdle(timeoutMs?: number): Promise<boolean> {
-    if (this.active.size === 0) return Promise.resolve(true);
+  /**
+   * `idle` once no run is supervised, `timeout` after `timeoutMs`, `woken`
+   * (only with `wakeable`) when a running shutdown was escalated.
+   */
+  private waitIdle(timeoutMs?: number, wakeable = false): Promise<'idle' | 'timeout' | 'woken'> {
+    if (this.active.size === 0) return Promise.resolve('idle');
     return new Promise((resolve) => {
       let timer: ReturnType<Timers['setTimeout']> | undefined;
-      const done = (value: boolean): void => {
+      const finish = (value: 'idle' | 'timeout' | 'woken'): void => {
         this.idleWaiters.delete(onIdle);
+        this.shutdownWakeups.delete(onWake);
         if (timer) this.timers.clearTimeout(timer);
         resolve(value);
       };
-      const onIdle = (): void => done(true);
+      const onIdle = (): void => finish('idle');
+      const onWake = (): void => finish('woken');
       this.idleWaiters.add(onIdle);
-      if (timeoutMs !== undefined) timer = this.timers.setTimeout(() => done(this.active.size === 0), timeoutMs);
+      if (wakeable) this.shutdownWakeups.add(onWake);
+      if (timeoutMs !== undefined) timer = this.timers.setTimeout(() => finish(this.active.size === 0 ? 'idle' : 'timeout'), timeoutMs);
     });
   }
 
-  private onUnexpected(runId: string, err: unknown): RunRecord {
-    // The run is left in its current (active) state with its lock; recovery handles it at next start.
+  /**
+   * Unexpected internal error while supervising a run: never finalize blindly
+   * (the worker may still run). Where the state machine allows it the run
+   * becomes `recovery_pending` (lock kept, error, `recovery_failed`
+   * notification); a `finalizing` run stays as is. The entry stays supervised
+   * until a started worker process ended; then `retryRecovery` resolves the run.
+   */
+  private async onUnexpected(entry: ActiveRun, err: unknown): Promise<RunRecord> {
+    const runId = entry.runId;
     this.logger.error('unexpected error while supervising run', { runId, error: err });
     this.appendEvent(runId, RUN_EVENTS.controllerError, { message: errorMessage(err) });
+    try {
+      const run = this.repos.runs.require(runId);
+      if (CAN_BECOME_RECOVERY_PENDING.includes(run.status)) {
+        this.markRecoveryPending(run, run.status, `internal error while supervising the run: ${errorMessage(err)}`);
+      }
+    } catch (inner) {
+      this.logger.error('could not mark run as recovery_pending', { runId, error: inner });
+    }
+    if (entry.proc) await entry.proc.wait().catch(() => undefined);
     return this.repos.runs.require(runId);
   }
 
@@ -1063,6 +1193,10 @@ export class RunController {
     return this.repos.events.listForRun(runId).some((e) => e.type === RUN_EVENTS.spawn);
   }
 
+  private groupExists(pgid: number): boolean {
+    return (this.options.groupExists ?? processGroupExists)(pgid);
+  }
+
   private maxLogBytes(): number | undefined {
     const v = this.options.maxLogBytesPerRun;
     return typeof v === 'function' ? v() : v;
@@ -1083,6 +1217,10 @@ export class RunController {
 
 // ---------------------------------------------------------------------------
 // Pure helpers
+
+function minDefined(a: number | undefined, b: number): number {
+  return a === undefined ? b : Math.min(a, b);
+}
 
 function hasActions(snapshot: WorkflowSnapshot, hook: HookName): boolean {
   return (snapshot.workflow.hooks[hook] ?? []).length > 0;

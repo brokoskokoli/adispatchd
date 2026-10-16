@@ -121,7 +121,14 @@ echo hello`,
     expect(env.notifications.filter((n) => n.type === 'retry_block_created')).toEqual([
       { type: 'retry_block_created', payload: expect.objectContaining({ blockId: block!.id, workflowId: 'wf', itemKey: ITEM_KEY, runId: ids[2] }) },
     ]);
-    expect(h.events.some((e) => e.type === 'block.created' && e.block.id === block!.id)).toBe(true);
+    // block.created is published after the run's `→ finalizing` status event that carries the blockId.
+    const blockAt = h.events.findIndex((e) => e.type === 'block.created' && e.block.id === block!.id);
+    const finalizingAt = h.events.findIndex(
+      (e) => e.type === 'run.event' && e.event.runId === ids[2] && e.event.payload.to === 'finalizing',
+    );
+    expect(finalizingAt).toBeGreaterThanOrEqual(0);
+    expect(blockAt).toBeGreaterThan(finalizingAt);
+    expect(h.events[finalizingAt]).toMatchObject({ event: { payload: { blockId: block!.id } } });
     // Scheduler-style reservation is refused atomically; a manual start (no failIfBlocked) is not.
     expect(() => env.reserve(snapshot, { failIfBlocked: true })).toThrow(BlockedError);
 
@@ -429,8 +436,147 @@ echo hello`,
     expect(final.finalReason).toBe('cancelled by shutdown');
     expect(env.p.actions.listForHook(run.id, 'on_cancel').map((a) => a.status)).toEqual(['succeeded']);
     expect(processGroupExists(final.pid as number)).toBe(false);
-    // Idempotent.
+    // After completion, further shutdown calls return the finished result.
     expect(await h.controller.cancelAllAndShutdown()).toBe(result);
+  });
+
+  it('escalates a running drain: drain() then cancelAllAndShutdown() cancels the active runs', async () => {
+    const waiter = env.script('wait.sh', `while [ ! -f "${env.marks}/never" ]; do sleep 0.02; done`);
+    const snapshot = await env.snapshot(workflowYaml(waiter));
+    const stops: unknown[] = [];
+    const h = await readyHarness({ onStop: (r) => void stops.push(r) });
+    const run = env.reserve(snapshot);
+    const handle = h.controller.startRun(run.id);
+    await waitForStatus(h, env.p, run.id, 'running');
+
+    const drain = h.controller.drain();
+    await waitForSystemStatus(h, (s) => s.draining);
+    const cancelAll = h.controller.cancelAllAndShutdown('second SIGTERM');
+    expect(cancelAll).toBe(drain);
+    const result = await drain;
+    expect(result).toEqual({ outcome: 'cancelled', leftActive: [] });
+    const final = await handle.done;
+    expect(final).toMatchObject({ status: 'cancelled', finalReason: 'second SIGTERM' });
+    expect(env.p.actions.listForHook(run.id, 'on_cancel').map((a) => a.status)).toEqual(['succeeded']);
+    expect(stops).toEqual([result]);
+  });
+
+  it('escalates a running unlimited drain with a stricter drain timeout (API drain, then SIGTERM)', async () => {
+    const waiter = env.script('wait.sh', `while [ ! -f "${env.marks}/never" ]; do sleep 0.02; done`);
+    const snapshot = await env.snapshot(workflowYaml(waiter));
+    const h = await readyHarness();
+    const run = env.reserve(snapshot);
+    const handle = h.controller.startRun(run.id);
+    await waitForStatus(h, env.p, run.id, 'running');
+    const drain = h.controller.drain();
+    await waitForSystemStatus(h, (s) => s.draining);
+    void h.controller.shutdown({ mode: 'drain', drainTimeoutMs: 50, cancelTimeoutMs: 10_000 });
+    expect(await drain).toEqual({ outcome: 'cancelled', leftActive: [] });
+    expect((await handle.done).status).toBe('cancelled');
+  });
+
+  it('forced stop: cancel timeout interrupts on_cancel, the run stays finalizing and recovery completes it', async () => {
+    const sleeper = env.script('sleep.sh', 'exec sleep 30');
+    const once = path.join(env.marks, 'hook-ran-once');
+    const slowHook = env.script('slow-hook.sh', `if [ -f "${once}" ]; then exit 0; fi\ntouch "${once}"\nexec sleep 30`);
+    const snapshot = await env.snapshot(
+      workflowYaml(sleeper).replace('on_timeout:', `  - type: shell\n    command: ${slowHook}\n    timeout: 1m\non_timeout:`),
+    );
+    const h = await readyHarness({ abortSettleMs: 5_000 });
+    const run = env.reserve(snapshot);
+    const handle = h.controller.startRun(run.id);
+    await waitForStatus(h, env.p, run.id, 'running');
+
+    const result = await h.controller.shutdown({ mode: 'cancel', cancelTimeoutMs: 300 });
+    expect(result).toEqual({ outcome: 'cancelled', leftActive: [] });
+    const left = await handle.done;
+    expect(left.status).toBe('finalizing');
+    expect(left.finalStatus).toBe('cancelled');
+    expect(env.p.actions.listForHook(run.id, 'on_cancel').map((a) => a.status)).toEqual(['succeeded', 'pending']);
+    expect(env.p.runs.activeLock('wf', `item:${ITEM_KEY}`)?.runId).toBe(run.id);
+
+    // Next start: recovery resumes the interrupted hook and finishes the run.
+    const next = env.harness();
+    await next.controller.recover();
+    const final = env.p.runs.require(run.id);
+    expect(final.status).toBe('cancelled');
+    expect(env.p.actions.listForHook(run.id, 'on_cancel').map((a) => a.status)).toEqual(['succeeded', 'succeeded']);
+  });
+
+  it('rejects cancel while finalizing; a double cancel while running cancels once', async () => {
+    const release = path.join(env.marks, 'release');
+    const hookWait = env.script('hook-wait.sh', `while [ ! -f "${release}" ]; do sleep 0.02; done`);
+    const ok = env.script('ok.sh', 'exit 0');
+    const snapshot = await env.snapshot(
+      workflowYaml(ok).replace('on_failure:', `  - type: shell\n    command: ${hookWait}\n    timeout: 1m\non_failure:`),
+    );
+    const h = await readyHarness();
+    const run = env.reserve(snapshot);
+    const handle = h.controller.startRun(run.id);
+    await waitForStatus(h, env.p, run.id, 'finalizing');
+    await expect(h.controller.cancelRun(run.id)).rejects.toMatchObject({ code: 'run_not_cancellable' });
+    expect(() => h.controller.requestCancel(run.id)).toThrow(expect.objectContaining({ code: 'run_not_cancellable' }));
+    writeFileSync(release, '');
+    expect((await handle.done).status).toBe('completed');
+
+    const sleeper = await env.snapshot(workflowYaml(env.script('sleep.sh', 'exec sleep 30')));
+    const second = env.reserve(sleeper);
+    const done = h.controller.startRun(second.id).done;
+    await waitForStatus(h, env.p, second.id, 'running');
+    expect(h.controller.requestCancel(second.id)).toEqual({ runId: second.id, status: 'cancelling' });
+    const [a, b] = await Promise.all([h.controller.cancelRun(second.id), h.controller.cancelRun(second.id, { reason: 'again' })]);
+    expect(a.status).toBe('cancelled');
+    expect(b.status).toBe('cancelled');
+    expect((await done).finalReason).toBe('cancelled by user');
+    expect(env.p.events.listForRun(second.id).filter((e) => e.type === RUN_EVENTS.cancelRequested)).toHaveLength(1);
+    expect(env.p.actions.listForHook(second.id, 'on_cancel').map((x) => x.status)).toEqual(['succeeded']);
+  });
+
+  it('internal error while running: run → recovery_pending (lock kept) until the worker ended; retryRecovery resolves it', async () => {
+    const release = path.join(env.marks, 'release');
+    const waiter = env.script('wait.sh', `while [ ! -f "${release}" ]; do sleep 0.02; done`);
+    const snapshot = await env.snapshot(workflowYaml(waiter));
+    const runs = Object.create(env.p.runs) as typeof env.p.runs;
+    runs.transition = (id, to, opts) => {
+      if (to === 'running') throw new Error('disk I/O error');
+      return env.p.runs.transition(id, to, opts);
+    };
+    const h = await readyHarness({ repositories: { ...env.p, runs } });
+    const run = env.reserve(snapshot);
+    const handle = h.controller.startRun(run.id);
+    await waitForStatus(h, env.p, run.id, 'recovery_pending');
+    // The worker is still alive: the entry stays supervised (drain would wait for it).
+    expect(h.controller.activeRunIds()).toEqual([run.id]);
+    const pending = env.p.runs.require(run.id);
+    expect(pending.error).toMatchObject({ code: 'recovery_failed', message: expect.stringContaining('disk I/O error') });
+    expect(env.notifications.map((n) => n.type)).toContain('recovery_failed');
+    expect(env.p.runs.activeLock('wf', `item:${ITEM_KEY}`)?.runId).toBe(run.id);
+
+    writeFileSync(release, '');
+    expect((await handle.done).status).toBe('recovery_pending');
+    expect(h.controller.activeRunIds()).toEqual([]);
+    const final = await h.controller.retryRecovery(run.id, { assumeGone: true });
+    expect(final.status).toBe('crashed');
+    expect(env.p.actions.listForHook(run.id, 'on_crash').map((a) => a.status)).toEqual(['succeeded']);
+  });
+
+  it('internal error while finishing: run stays finalizing; retryRecovery resumes and finishes it', async () => {
+    const snapshot = await env.snapshot(workflowYaml(env.script('ok.sh', 'exit 0')));
+    const runs = Object.create(env.p.runs) as typeof env.p.runs;
+    let failures = 1;
+    runs.finish = (id, opts) => {
+      if (failures-- > 0) throw new Error('database is locked');
+      return env.p.runs.finish(id, opts);
+    };
+    const h = await readyHarness({ repositories: { ...env.p, runs } });
+    const run = env.reserve(snapshot);
+    const left = await h.controller.startRun(run.id).done;
+    expect(left.status).toBe('finalizing');
+    expect(env.p.events.listForRun(run.id).some((e) => e.type === RUN_EVENTS.controllerError)).toBe(true);
+    const final = await h.controller.retryRecovery(run.id);
+    expect(final.status).toBe('completed');
+    expect(env.p.actions.listForHook(run.id, 'on_success').map((a) => a.status)).toEqual(['succeeded']);
+    expect(env.p.runs.activeLock('wf', `item:${ITEM_KEY}`)).toBeNull();
   });
 
   it('rejects starts before recovery finished and protects the lock', async () => {

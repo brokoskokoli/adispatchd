@@ -1,4 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ProcessStartIdentity } from '../core/index.js';
 import { getStartIdentity, processGroupExists } from '../executors/index.js';
@@ -130,6 +132,63 @@ describe.runIf(supported)('RunController recovery (Spec §14, variant A)', () =>
     expect(final.finalReason).toMatch(/operator confirmed/);
     expect(processGroupExists(orphan.child.pid)).toBe(true);
     await expect(h.controller.retryRecovery(run.id)).rejects.toMatchObject({ code: 'run_not_recovery_pending' });
+  });
+
+  it('pid reused by another process: crashed if no group with the old pgid exists, else recovery_pending (injected probes)', async () => {
+    const signals: number[] = [];
+    const overrides = {
+      processInspector: { platform: 'test', probe: async (pid: number) => ({ pgid: pid, token: 'test:another-process' }) },
+      kill: (pid: number) => void signals.push(pid),
+    };
+    const gone = await crashedWhileRunning(424_242, { pid: 424_242, pgid: 424_242, token: 'test:original' });
+    const h = env.harness({ ...overrides, groupExists: () => false });
+    await h.controller.recover();
+    expect(env.p.runs.require(gone.id)).toMatchObject({ status: 'crashed', finalReason: expect.stringContaining('pid reused') });
+    expect(signals).toEqual([]);
+
+    env.github.createIssue(REPO, { number: 9, labels: ['coding'] });
+    const snapshot = await env.snapshot(workflowYaml('/bin/true'));
+    const other = env.reserve(snapshot, { sourceItemKey: 'repo_a:9', sourceUrl: null });
+    env.p.runs.transition(other.id, 'starting');
+    env.p.runs.transition(other.id, 'running', { update: { pid: 424_243, processStartIdentity: { pid: 424_243, pgid: 424_243, token: 'test:original' } } });
+    const h2 = env.harness({ ...overrides, groupExists: () => true });
+    await h2.controller.recover();
+    expect(env.p.runs.require(other.id).status).toBe('recovery_pending');
+    expect(signals).toEqual([]);
+  });
+
+  it('shutdown during recovery waits for it; retryRecovery and cancel are refused meanwhile', async () => {
+    const release = path.join(env.marks, 'release');
+    const hookWait = env.script('hook-wait.sh', `while [ ! -f "${release}" ]; do sleep 0.02; done`);
+    const snapshot = await env.snapshot(
+      workflowYaml('/bin/true').replace('on_failure:', `  - type: shell\n    command: ${hookWait}\n    timeout: 1m\non_failure:`),
+    );
+    const run = env.reserve(snapshot);
+    env.p.runs.transition(run.id, 'starting');
+    env.p.runs.transition(run.id, 'running', { update: { pid: 999_999 } });
+    env.p.runs.beginFinalization(run.id, { status: 'completed', businessResult: 'success', reason: 'exit code 0' });
+
+    const stops: unknown[] = [];
+    const h = env.harness({ onStop: (r) => void stops.push(r) });
+    const hookRunning = new Promise<void>((resolve) => {
+      h.bus.subscribe((e) => {
+        if (e.type === 'run.action' && e.action.type === 'shell' && e.action.status === 'running') resolve();
+      });
+    });
+    const recovering = h.controller.recover();
+    await hookRunning;
+    expect(h.controller.activeRunIds()).toEqual([run.id]);
+    const stopping = h.controller.shutdown();
+    for (let i = 0; i < 20; i++) await new Promise((r) => setImmediate(r));
+    expect(stops).toEqual([]);
+    await expect(h.controller.retryRecovery(run.id)).rejects.toMatchObject({ code: 'run_controller_not_ready' });
+    await expect(h.controller.cancelRun(run.id)).rejects.toMatchObject({ code: 'run_not_cancellable' });
+
+    writeFileSync(release, '');
+    await recovering;
+    expect(await stopping).toEqual({ outcome: 'drained', leftActive: [] });
+    expect(stops).toHaveLength(1);
+    expect(env.p.runs.require(run.id).status).toBe('completed');
   });
 
   it('a vanished worker (pid without identity, group gone) is treated as crashed', async () => {
