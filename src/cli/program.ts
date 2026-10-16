@@ -10,6 +10,12 @@ export interface GlobalOptions {
   dataDir?: string;
 }
 
+/** Options of `workflow dry-run`. */
+export interface DryRunCliOptions extends GlobalOptions {
+  /** Print the structured result as JSON instead of text. */
+  json?: boolean;
+}
+
 /** Exit code used by commands that are not implemented yet. */
 export const EXIT_NOT_IMPLEMENTED = 70;
 
@@ -19,7 +25,7 @@ export interface CliHandlers {
   start?: (opts: GlobalOptions) => Promise<number>;
   configValidate?: (opts: GlobalOptions) => Promise<number>;
   configReload?: (opts: GlobalOptions) => Promise<number>;
-  workflowDryRun?: (workflowId: string, opts: GlobalOptions) => Promise<number>;
+  workflowDryRun?: (workflowId: string, opts: DryRunCliOptions) => Promise<number>;
   serviceInstall?: (opts: GlobalOptions) => Promise<number>;
   serviceStatus?: (opts: GlobalOptions) => Promise<number>;
   serviceUninstall?: (opts: GlobalOptions) => Promise<number>;
@@ -103,13 +109,14 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
     .command('dry-run')
     .description('show candidate selection for a workflow without starting anything')
     .argument('<workflow-id>', 'workflow ID')
+    .option('--json', 'print the structured result as JSON')
     .action(async (workflowId: string, _opts: unknown, cmd: Command) => {
       if (!handlers.workflowDryRun) {
         io.stderr('agent-orchestrator: "workflow dry-run" is not implemented yet\n');
         io.setExitCode(EXIT_NOT_IMPLEMENTED);
         return;
       }
-      io.setExitCode(await handlers.workflowDryRun(workflowId, cmd.optsWithGlobals<GlobalOptions>()));
+      io.setExitCode(await handlers.workflowDryRun(workflowId, cmd.optsWithGlobals<DryRunCliOptions>()));
     });
 
   const service = program.command('service').description('systemd service management (Linux)');
