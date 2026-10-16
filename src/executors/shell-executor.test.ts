@@ -246,8 +246,14 @@ describe.runIf(supported)('ShellExecutor – result contract (Spec §8.2 table)'
     await h.nextEvent('ready');
     await h.proc.cancel(200);
     const outcome = await h.wait();
-    expect(outcome).toMatchObject({ cancelled: true, timedOut: false, signal: 'SIGTERM' });
+    expect(outcome).toMatchObject({ cancelled: true, timedOut: false });
+    // SIGTERM hits the whole group. Depending on scheduling, `sh` either dies from the
+    // signal itself or first reaps its killed foreground child and exits with 128+15.
+    // Both are a controlled cancel; the classification must not depend on which one won.
+    expect(outcome.signal === 'SIGTERM' || (outcome.signal === null && outcome.exitCode === 143)).toBe(true);
     expect(classifyOutcome(outcome)).toMatchObject({ status: 'cancelled', businessResult: null });
+    expect(classifyOutcome({ ...outcome, signal: null, exitCode: 143 })).toMatchObject({ status: 'cancelled' });
+    expect(classifyOutcome({ ...outcome, signal: 'SIGTERM', exitCode: null })).toMatchObject({ status: 'cancelled' });
   });
 });
 
