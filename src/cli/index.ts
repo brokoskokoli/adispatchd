@@ -3,3 +3,5 @@
  */
 export { createProgram, EXIT_NOT_IMPLEMENTED } from './program.js';
 export type { CliHandlers, CliIo, GlobalOptions } from './program.js';
+export { processIo } from './program.js';
+export { createConfigValidateHandler, EXIT_CONFIG_INVALID, EXIT_CONFIG_VALID } from './config-validate.js';

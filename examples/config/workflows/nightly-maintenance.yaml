@@ -1,0 +1,13 @@
+# workflows/nightly-maintenance.yaml (Spec §5.5)
+id: nightly-maintenance
+name: Nightly Maintenance
+priority: 20
+max_concurrent: 1
+trigger:
+  type: schedule
+  cron: '0 3 * * *'
+  timezone: Europe/Berlin
+execute:
+  type: shell
+  command: /etc/agent-orchestrator/scripts/maintenance.sh
+  working_directory: '{workspace.base_dir}/{workflow.id}/{run.id}'

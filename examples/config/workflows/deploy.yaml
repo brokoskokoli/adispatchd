@@ -1,0 +1,15 @@
+# workflows/deploy.yaml (Spec §5.5)
+id: deploy
+name: Deploy
+trigger: { type: manual }
+parameters:
+  environment:
+    type: enum
+    values: [staging, production]
+    required: true
+  version:
+    type: string
+    required: true
+execute:
+  type: shell
+  command: /etc/agent-orchestrator/scripts/deploy.sh

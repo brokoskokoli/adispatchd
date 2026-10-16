@@ -1,0 +1,15 @@
+# views/needs-maintainer.yaml (Spec §17)
+id: needs-maintainer
+title: Needs Maintainer
+sources: [project_a, project_b]
+filter:
+  all:
+    - { field: labels, operator: contains, value: needs-maintainer }
+fields:
+  - { field: repository, label: Repository }
+  - { field: number, label: Issue }
+  - { field: title, label: Titel, link: url }
+  - { field: run.last_workflow, label: Letzter Agent }
+  - { field: run.last_result.message, label: Ergebnis }
+  - { field: updated_at, label: Aktualisiert }
+sort: { field: updated_at, direction: desc }
