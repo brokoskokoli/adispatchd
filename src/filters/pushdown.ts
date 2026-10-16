@@ -9,6 +9,7 @@
  * adapter's result — but because adapters may ignore pushed parts, the safe
  * default (and the `SourceAdapter` contract) is to re-evaluate the full filter.
  */
+import { isValidNode } from './evaluate.js';
 import { isFilterAll, isFilterPredicate, type FieldDefinition, type FilterNode, type FilterPredicate } from '../core/index.js';
 
 /** Result of {@link splitForPushdown}. `null` = nothing in that part. */
@@ -20,7 +21,8 @@ export interface PushdownSplit {
 }
 
 function flattenConjunction(node: FilterNode, out: FilterNode[]): void {
-  if (isFilterAll(node)) for (const c of node.all) flattenConjunction(c, out);
+  // Malformed nodes stay local (where they evaluate to unknown).
+  if (isValidNode(node) && isFilterAll(node)) for (const c of node.all) flattenConjunction(c, out);
   else out.push(node);
 }
 
@@ -48,7 +50,7 @@ export function splitForPushdown(
   const pushed: FilterNode[] = [];
   const local: FilterNode[] = [];
   for (const part of parts) {
-    if (isFilterPredicate(part) && canPushDown(part, definitions)) pushed.push(part);
+    if (isValidNode(part) && isFilterPredicate(part) && canPushDown(part, definitions)) pushed.push(part);
     else local.push(part);
   }
   return { pushdown: conjunction(pushed), local: conjunction(local) };

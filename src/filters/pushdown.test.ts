@@ -40,6 +40,14 @@ describe('splitForPushdown', () => {
     expect(splitForPushdown(anyNode, defs)).toEqual({ pushdown: null, local: anyNode });
   });
 
+  it('keeps malformed nodes local instead of throwing', () => {
+    const bad = { all: [labels, null, { all: 'x' }, { not: null }] } as unknown as FilterNode;
+    const r = splitForPushdown(bad, defs);
+    expect(r.pushdown).toEqual(labels);
+    expect(r.local).toEqual({ all: [null, { all: 'x' }, { not: null }] });
+    expect(splitForPushdown(5 as unknown as FilterNode, defs)).toEqual({ pushdown: null, local: 5 });
+  });
+
   it('handles single predicates and missing filters', () => {
     expect(splitForPushdown(labels, defs)).toEqual({ pushdown: labels, local: null });
     expect(splitForPushdown(undefined, defs)).toEqual({ pushdown: null, local: null });

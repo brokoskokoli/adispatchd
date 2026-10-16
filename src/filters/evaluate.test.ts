@@ -64,6 +64,24 @@ describe('evaluateFilter – Kleene truth tables', () => {
     expect(r.trace.kind).toBe('invalid');
   });
 
+  it('malformed nested nodes never throw, also with an isExpensive source', async () => {
+    const src: FieldSource = { ...triSource, isExpensive: (f) => f === 'f_true' };
+    const bad = [
+      { all: [{ not: null }] },
+      { any: [{ all: 'x' }] },
+      { all: [null, lit(true)] },
+      { any: [lit('unknown'), { not: { all: 5 } }] },
+    ] as unknown as FilterNode[];
+    for (const f of bad) {
+      const r = await evaluateFilter(f, src);
+      expect(r.value, JSON.stringify(f)).toBe('unknown');
+      expect(() => collectFields(f)).not.toThrow();
+    }
+    expect(collectFields({ all: [null, lit(true), { not: null }] } as unknown as FilterNode)).toEqual(['f_true']);
+    // A malformed sibling does not hide a definitive false.
+    expect((await evaluateFilter({ all: [{ not: null }, lit(false)] } as unknown as FilterNode, src)).value).toBe(false);
+  });
+
   it('resolver exceptions become unknown', async () => {
     const r = await evaluateFilter(
       { field: 'x', operator: 'equals', value: 1 },

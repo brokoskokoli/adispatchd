@@ -53,6 +53,18 @@ describe('ShellCheckRunner', () => {
     await expect(readFile(marker)).rejects.toThrow();
   });
 
+  it('invalid timeout fails immediately without running the command', async () => {
+    const marker = join(dir, 'invalid-timeout-marker');
+    const cmd = await script('marker.sh', `touch "${marker}"`);
+    for (const timeoutMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, undefined as unknown as number]) {
+      const res = await runner().run({ command: cmd, timeoutMs }, {});
+      expect(res.value).toBe('unknown');
+      expect(res.error).toMatch(/^invalid timeout/);
+      expect(res.timedOut).toBe(false);
+    }
+    await expect(readFile(marker)).rejects.toThrow();
+  });
+
   it('non-existent command → unknown with spawn error', async () => {
     const res = await runner().run({ command: join(dir, 'does-not-exist'), timeoutMs: 1000 }, {});
     expect(res.value).toBe('unknown');

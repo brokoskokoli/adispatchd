@@ -5,6 +5,7 @@
  * malformed operands yield `unknown` (with a reason) instead of guessing.
  */
 import type { FieldType, FieldValue, FilterOperator, FilterValue, TriValue } from '../core/index.js';
+import { parseIsoDate } from './iso-date.js';
 
 /** Outcome of applying one operator to a known field value. */
 export interface PredicateOutcome {
@@ -32,11 +33,8 @@ function typeName(v: unknown): string {
   return typeof v;
 }
 
-function parseDate(v: unknown): number | undefined {
-  if (typeof v !== 'string') return undefined;
-  const ms = Date.parse(v);
-  return Number.isNaN(ms) ? undefined : ms;
-}
+/** Strict ISO-8601 (no offset = UTC); anything else is not a date. */
+const parseDate = parseIsoDate;
 
 /**
  * Equality of two scalars. Dates (field type `date`) compare as instants.
@@ -46,7 +44,7 @@ function scalarEquals(actual: Scalar, expected: Scalar, fieldType: FieldType | u
   if (fieldType === 'date') {
     const a = parseDate(actual);
     const b = parseDate(expected);
-    if (a === undefined || b === undefined) return unknown('date value not parsable');
+    if (a === undefined || b === undefined) return unknown('date value is not ISO-8601');
     return a === b ? TRUE : FALSE;
   }
   if (typeof actual !== typeof expected) {
@@ -89,7 +87,7 @@ function compareOrder(
   if (fieldType === 'date') {
     const a = parseDate(actual);
     const b = parseDate(expected);
-    if (a === undefined || b === undefined) return unknown('date value not parsable');
+    if (a === undefined || b === undefined) return unknown('date value is not ISO-8601');
     return { cmp: Math.sign(a - b) };
   }
   if (typeof actual === 'number' && typeof expected === 'number') {

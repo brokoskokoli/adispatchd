@@ -107,6 +107,13 @@ describe('sortCandidates', () => {
     ]);
   });
 
+  it('non-ISO creation times sort like missing ones (not via Date.parse)', () => {
+    const iso = c('w', 1, 1, 'k:2', '2026-01-02T00:00:00Z');
+    const noOffset = c('w', 1, 1, 'k:3', '2026-01-01T00:00:00');
+    const junk = c('w', 1, 1, 'k:1', 'Jan 1, 2020');
+    expect(sortCandidates([junk, iso, noOffset])).toEqual([noOffset, iso, junk]);
+  });
+
   it('does not mutate the input', () => {
     const list = [c('a', 1, 0), c('b', 2, 0)];
     sortCandidates(list);

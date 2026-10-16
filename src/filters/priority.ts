@@ -2,6 +2,7 @@
  * Item priority (`item_priority.rules`) and deterministic candidate ordering (Spec §7).
  */
 import type { FilterNode } from '../core/index.js';
+import { parseIsoDate } from './iso-date.js';
 import { evaluateFilter, notEvaluatedTrace, type FieldSource, type FilterTrace } from './evaluate.js';
 
 /** One `item_priority` rule: first rule whose `when` is true wins. */
@@ -94,15 +95,14 @@ export function naturalCompare(a: string, b: string): number {
   return Math.sign(ta.length - tb.length) || codeUnitCompare(a, b);
 }
 
+/** Strict ISO-8601 (no offset = UTC); missing or invalid values sort last. */
 function createdAtMs(v: string | undefined): number | undefined {
-  if (v === undefined) return undefined;
-  const ms = Date.parse(v);
-  return Number.isNaN(ms) ? undefined : ms;
+  return parseIsoDate(v);
 }
 
 /**
  * Total order for candidates (Spec §7): workflow priority desc → item priority
- * desc → creation time asc (missing last) → item key asc (natural) → workflow ID asc.
+ * desc → creation time asc (missing/non-ISO last) → item key asc (natural) → workflow ID asc.
  */
 export function compareCandidates(a: PrioritizedCandidate, b: PrioritizedCandidate): number {
   if (a.workflowPriority !== b.workflowPriority) return b.workflowPriority > a.workflowPriority ? 1 : -1;

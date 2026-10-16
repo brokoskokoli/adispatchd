@@ -203,6 +203,10 @@ export class ShellCheckRunner {
   /** Run a check without caching. Never throws. */
   async run(spec: ShellCheckSpec, context: unknown, options: { signal?: AbortSignal } = {}): Promise<ShellCheckResult> {
     const startedAt = this.clock.now();
+    const t = spec.timeoutMs as unknown;
+    if (typeof t !== 'number' || !Number.isFinite(t) || t <= 0) {
+      return this.failure(startedAt, `invalid timeout: ${String(t)}`);
+    }
     let dir: string | undefined;
     try {
       dir = await mkdtemp(join(this.tempDir, 'orch-check-'));

@@ -83,6 +83,7 @@ function childPath(parent: string, kind: string, index?: number): string {
 export function collectFields(node: FilterNode | undefined | null): string[] {
   const out = new Set<string>();
   const walk = (n: FilterNode): void => {
+    if (!isValidNode(n)) return; // malformed subtrees are skipped (they evaluate to unknown)
     if (isFilterAll(n)) n.all.forEach(walk);
     else if (isFilterAny(n)) n.any.forEach(walk);
     else if (isFilterNot(n)) walk(n.not);
@@ -92,7 +93,8 @@ export function collectFields(node: FilterNode | undefined | null): string[] {
   return [...out];
 }
 
-function isValidNode(node: unknown): node is FilterNode {
+/** True if `node` is structurally a filter node (children are not checked). */
+export function isValidNode(node: unknown): node is FilterNode {
   if (node === null || typeof node !== 'object') return false;
   const n = node as Record<string, unknown>;
   if ('all' in n) return Array.isArray(n.all);
@@ -129,6 +131,7 @@ export function notEvaluatedTrace(node: FilterNode, path: string = ROOT_PATH): F
 
 class Evaluation {
   private readonly cache = new Map<string, Promise<FieldResolution>>();
+  private readonly costs = new WeakMap<object, number>();
 
   constructor(private readonly source: FieldSource) {}
 
@@ -146,11 +149,18 @@ class Evaluation {
     return p;
   }
 
-  /** 0 = only cheap fields, 1 = needs at least one expensive field. */
+  /** 0 = only cheap fields, 1 = needs at least one expensive field. Memoized per subtree. */
   private cost(node: FilterNode): number {
-    const isExpensive = this.source.isExpensive;
-    if (!isExpensive) return 0;
-    return collectFields(node).some((f) => isExpensive.call(this.source, f)) ? 1 : 0;
+    if (!this.source.isExpensive || !isValidNode(node)) return 0;
+    const known = this.costs.get(node);
+    if (known !== undefined) return known;
+    let cost: number;
+    if (isFilterAll(node)) cost = node.all.some((c) => this.cost(c) > 0) ? 1 : 0;
+    else if (isFilterAny(node)) cost = node.any.some((c) => this.cost(c) > 0) ? 1 : 0;
+    else if (isFilterNot(node)) cost = this.cost(node.not);
+    else cost = this.source.isExpensive((node as { field: string }).field) ? 1 : 0;
+    this.costs.set(node, cost);
+    return cost;
   }
 
   async node(node: FilterNode, path: string): Promise<FilterTrace> {

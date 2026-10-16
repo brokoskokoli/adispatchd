@@ -57,6 +57,19 @@ describe('applyOperator', () => {
     expect(v(applyOperator('in', ['a'], ['b']))).toBe(false);
   });
 
+  it('dates must be strict ISO-8601; no offset means UTC', () => {
+    // Non-ISO formats that Date.parse would accept are unknown.
+    expect(v(applyOperator('greater_than', 'Oct 1, 2026', '2026-01-01', 'date'))).toBe('unknown');
+    expect(v(applyOperator('equals', '2026/10/01', '2026-10-01', 'date'))).toBe('unknown');
+    expect(v(applyOperator('equals', '2026-02-30', '2026-03-02', 'date'))).toBe('unknown');
+    expect(v(applyOperator('equals', '2026-10-01T25:00:00Z', '2026-10-01', 'date'))).toBe('unknown');
+    // Without offset: UTC, independent of the host time zone.
+    expect(v(applyOperator('equals', '2026-10-01T10:00:00', '2026-10-01T10:00:00Z', 'date'))).toBe(true);
+    expect(v(applyOperator('equals', '2026-10-01', '2026-10-01T00:00:00.000Z', 'date'))).toBe(true);
+    expect(v(applyOperator('equals', '2026-10-01T10:00:00.5Z', '2026-10-01T10:00:00.500Z', 'date'))).toBe(true);
+    expect(v(applyOperator('less_than', '2026-10-01T10:00:00-01:00', '2026-10-01T10:30:00Z', 'date'))).toBe(false);
+  });
+
   it('greater_than / less_than on numbers, strings and dates', () => {
     expect(v(applyOperator('greater_than', 3, 2))).toBe(true);
     expect(v(applyOperator('greater_than', 2, 2))).toBe(false);
