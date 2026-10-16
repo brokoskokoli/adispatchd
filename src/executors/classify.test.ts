@@ -93,7 +93,14 @@ describe('classifyOutcome (Spec §8.2 table)', () => {
 
   it('controlled cancel + any exit/signal/result file → cancelled', () => {
     for (const resultFile of ALL_FILES) {
-      for (const end of [{ exitCode: null, signal: 'SIGKILL' as const }, { exitCode: 0, signal: null }, { exitCode: 1, signal: null }]) {
+      for (const end of [
+        { exitCode: null, signal: 'SIGKILL' as const },
+        { exitCode: null, signal: 'SIGTERM' as const },
+        { exitCode: 0, signal: null },
+        { exitCode: 1, signal: null },
+        // Shell that reaped its SIGTERM-killed child and exited with 128+15.
+        { exitCode: 143, signal: null },
+      ]) {
         expect(classifyOutcome(outcome({ ...end, cancelled: true, resultFile }))).toEqual({
           status: 'cancelled',
           businessResult: null,
