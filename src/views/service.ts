@@ -13,6 +13,7 @@
 import {
   errorMessage,
   noopLogger,
+  OrchestratorError,
   systemClock,
   type Clock,
   type FieldDefinition,
@@ -113,10 +114,9 @@ export interface ViewServiceOptions {
 }
 
 /** Error for unknown views. */
-export class UnknownViewError extends Error {
-  readonly code = 'view_not_found';
+export class UnknownViewError extends OrchestratorError {
   constructor(readonly viewId: string) {
-    super(`Unknown view "${viewId}"`);
+    super('view_not_found', `Unknown view "${viewId}"`, { details: { viewId } });
   }
 }
 
