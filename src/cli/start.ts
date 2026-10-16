@@ -10,6 +10,7 @@ import path from 'node:path';
 import { errorMessage, isOrchestratorError } from '../core/index.js';
 import { ConfigLoadError, formatConfigIssue } from '../config/index.js';
 import { createApp, installSignalHandlers, isLoopback, type App, type AppOptions, type SignalTarget } from '../app.js';
+import { resolveUiDir } from '../ui/index.js';
 import type { CliIo, GlobalOptions } from './program.js';
 
 /** Injectable dependencies (tests). */
@@ -33,9 +34,11 @@ export function createStartHandler(io: Pick<CliIo, 'stdout' | 'stderr'>, deps: S
     }
     const configDir = path.resolve(opts.configDir);
     const dataDir = path.resolve(opts.dataDir ?? 'data');
+    // Static web UI (WI-11): built assets from `dist/ui/public`; the API also runs without them.
+    const uiDir = deps.appOptions && 'uiDir' in deps.appOptions ? deps.appOptions.uiDir : (resolveUiDir() ?? undefined);
     let app: App;
     try {
-      app = await createApp({ configDir, dataDir, ...(deps.appOptions ?? {}) });
+      app = await createApp({ configDir, dataDir, ...(deps.appOptions ?? {}), ...(uiDir ? { uiDir } : {}) });
     } catch (err) {
       if (err instanceof ConfigLoadError) {
         io.stderr(`Configuration in ${configDir} is invalid:\n${err.errors.map((i) => `  ${formatConfigIssue(i)}\n`).join('')}`);
@@ -57,6 +60,7 @@ export function createStartHandler(io: Pick<CliIo, 'stdout' | 'stderr'>, deps: S
       return 1;
     }
     io.stdout(`agent-orchestrator listening on ${url} (config ${configDir}, data ${dataDir})\n`);
+    if (!uiDir) io.stderr('Note: web UI assets not found (run `npm run build`); serving the API only.\n');
     const host = new URL(url).hostname;
     if (!isLoopback(host)) {
       io.stderr(

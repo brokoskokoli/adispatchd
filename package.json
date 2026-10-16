@@ -12,11 +12,12 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json && node scripts/build-ui.mjs",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.ui.json --noEmit",
     "test": "vitest run",
-    "check": "tsc --noEmit && vitest run",
-    "dev": "tsx src/cli/main.ts"
+    "check": "tsc --noEmit && tsc -p tsconfig.ui.json --noEmit && vitest run",
+    "dev": "tsx src/cli/main.ts",
+    "build:ui": "node scripts/build-ui.mjs"
   },
   "dependencies": {
     "@fastify/static": "^10.1.6",
