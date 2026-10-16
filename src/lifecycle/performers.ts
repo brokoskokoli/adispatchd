@@ -147,9 +147,19 @@ export async function performSourceComment(
     }
   }
   const values = buildHookTemplateValues({ ...input, item, ...(adapter.repository ? { repository: adapter.repository } : {}) });
-  const body = renderHookText(config.message, values, scope);
+  const body = neutralizeHtmlComments(renderHookText(config.message, values, scope));
   const ref = await adapter.postComment(item, body, marker, identity);
   return { externalKey: ref.id, details: { marker, ...(ref.url ? { url: ref.url } : {}) } };
+}
+
+/**
+ * Neutralize HTML comment openers in a comment body (`<!--` → `&lt;!--`).
+ * Rendered values such as `{result.message}` are untrusted worker output and
+ * must not be able to smuggle idempotency markers (`<!-- orch:… -->`) or
+ * hidden content into the comment; the adapter appends the only real marker.
+ */
+export function neutralizeHtmlComments(body: string): string {
+  return body.replace(/<!--/g, '&lt;!--');
 }
 
 async function isDirectory(p: string | null): Promise<boolean> {

@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -122,6 +122,25 @@ ${extra}`;
     });
     expect(readFileSync(path.join(out, 'attempts.txt'), 'utf8').trim().split('\n')).toHaveLength(2);
     expect(env.notifications.map((n) => n.type)).toEqual(['lifecycle_action_failed']);
+  });
+
+  it('an abort during the last attempt interrupts (pending, no failure, no notification)', async () => {
+    writeFileSync(script, '#!/bin/sh\necho started > "$OUT/started.txt"\nsleep 5\n');
+    const snapshot = await loadSnapshot(hook('    retry: { max_attempts: 1 }\n'));
+    const run = env.finalizeSuccess(env.reserve(snapshot).id);
+    const controller = new AbortController();
+    const pending = env.engine({ shellCancelGraceMs: 100 }).runHook(run, 'on_success', snapshot, { signal: controller.signal });
+    const deadline = Date.now() + 5_000;
+    while (!existsSync(path.join(out, 'started.txt')) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 10));
+    controller.abort();
+    const result = await pending;
+    expect(result.status).toBe('interrupted');
+    expect(result.failedAction).toBeNull();
+    expect(result.actions.map((a) => a.status)).toEqual(['pending']);
+    const attempts = env.p.actions.listAttempts(result.actions[0]?.id ?? -1);
+    expect(attempts.map((a) => a.outcome)).toEqual(['failed']);
+    expect(env.p.runs.require(run.id).lifecycleStatus).toBe('pending');
+    expect(env.notifications).toEqual([]);
   });
 
   it('enforces the action timeout', async () => {

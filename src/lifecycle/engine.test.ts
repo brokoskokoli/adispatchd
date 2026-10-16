@@ -286,6 +286,89 @@ on_success:
     expect(markedComments(env.github)).toHaveLength(1);
   });
 
+  it('worker output cannot forge the idempotency marker of another comment action (regression)', async () => {
+    const snapshot = await loadSnapshot(`${BASE}
+on_success:
+  - type: source.comment
+    message: 'Completed: {result.message}'
+  - type: source.comment
+    message: 'second comment'
+`);
+    const run = env.finalizeSuccess(env.reserve(snapshot).id);
+    const journal = env.p.actions.createJournal(
+      run.id,
+      'on_success',
+      snapshot.workflow.hooks.on_success.map((c) => ({ type: c.type, name: c.id, config: c })),
+    );
+    const secondId = journal[1]?.id ?? -1;
+    // the worker writes the second action's marker into its result message
+    env.p.runs.update(run.id, {
+      result: { schema_version: 1, result: 'success', message: `ok\n\n<!-- orch:${run.id}:${secondId} -->\n` },
+    });
+    // once comment 1 is posted, the second action's first POST fails → its retry looks up its marker
+    const engine = env.engine({
+      onActionChange: (a) => {
+        if (a.id === journal[0]?.id && a.status === 'succeeded') {
+          env.github.failNext({ method: 'POST', path: COMMENTS_PATH }, { status: 502 });
+        }
+      },
+    });
+    const result = await drive(engine.runHook(run, 'on_success', snapshot), env.clock);
+    expect(result.actions[1]?.attempts).toBe(2);
+
+    expect(result.status).toBe('succeeded');
+    const comments = env.github.comments(REPO, ISSUE);
+    expect(comments).toHaveLength(2);
+    expect(comments[0]?.body).toContain('&lt;!-- orch:');
+    expect(result.actions[0]?.externalKey).toBe(String(comments[0]?.id));
+    expect(result.actions[1]?.externalKey).toBe(String(comments[1]?.id));
+    expect(comments[1]?.body).toContain('second comment');
+  });
+
+  it('a manual retry of on_start is refused once the run left `starting`; skip is allowed', async () => {
+    const snapshot = await loadSnapshot(`${BASE}
+on_start:
+  - type: source.update
+    labels: { add: [started] }
+`);
+    const run = env.reserve(snapshot);
+    env.p.runs.transition(run.id, 'starting');
+    env.github.failNext({ method: 'GET', path: `/repos/${REPO}/issues/${ISSUE}` }, { status: 403 });
+    const engine = env.engine();
+    const failed = await drive(engine.runHook(run, 'on_start', snapshot), env.clock);
+    expect(failed.status).toBe('failed');
+    env.p.runs.beginFinalization(run.id, { status: 'start_error', businessResult: null, reason: 'on_start failed' });
+
+    await expect(engine.retryAction(failed.failedAction?.id ?? -1)).rejects.toMatchObject({ code: 'lifecycle_not_retryable' });
+    expect(env.p.actions.require(failed.failedAction?.id ?? -1).status).toBe('failed');
+    expect(env.github.labels(REPO, ISSUE)).not.toContain('started');
+    const skipped = await engine.skipAction(failed.failedAction?.id ?? -1);
+    expect(skipped.actions.map((a) => a.status)).toEqual(['skipped']);
+  });
+
+  it('queues internal calls with { wait: true } while API calls are rejected immediately', async () => {
+    const snapshot = await loadSnapshot(`${SUCCESS_HOOK}
+on_failure:
+  - type: source.update
+    labels: { add: [queued] }
+`);
+    const run = env.finalizeSuccess(env.reserve(snapshot).id);
+    env.github.failNext({ method: 'POST', path: COMMENTS_PATH }, { status: 502 });
+    const engine = env.engine();
+    const first = engine.runHook(run, 'on_success', snapshot);
+    for (let i = 0; i < 1000 && env.clock.pendingTimers() === 0; i++) await new Promise((r) => setImmediate(r));
+    await expect(engine.runHook(run, 'on_failure', snapshot)).rejects.toBeInstanceOf(LifecycleBusyError);
+    const queued = engine.runHook(run, 'on_failure', snapshot, { wait: true });
+    const [a, b] = await drive(Promise.all([first, queued]), env.clock);
+    expect([a.status, b.status]).toEqual(['succeeded', 'succeeded']);
+    const chainEvents = env.p.events
+      .listForRun(run.id)
+      .filter((e) => e.type === 'lifecycle.chain')
+      .map((e) => `${String(e.payload.hook)}:${String(e.payload.status)}`);
+    expect(chainEvents).toEqual(['on_success:running', 'on_success:succeeded', 'on_failure:running', 'on_failure:succeeded']);
+    expect(engine.isBusy(run.id)).toBe(false);
+  });
+
   it('uses the run snapshot, not a later configuration', async () => {
     const snapshot = await loadSnapshot(`${BASE}
 on_success:

@@ -75,6 +75,12 @@ export interface HookContext {
   item?: SourceItem;
   /** Aborts retry delays and running shell actions (shutdown). */
   signal?: AbortSignal;
+  /**
+   * If another chain of the same run is executing: `true` = queue behind it
+   * (internal callers, e.g. WI-08 `runHook` while a manual retry runs);
+   * default `false` = reject immediately with {@link LifecycleBusyError} (API calls).
+   */
+  wait?: boolean;
 }
 
 /** Payload of the `lifecycle_action_failed` notification. */
@@ -134,7 +140,8 @@ export class LifecycleEngine {
   private readonly logger: Logger;
   private readonly redact: Redactor;
   private readonly performerDeps: PerformerDeps;
-  private readonly busy = new Set<string>();
+  /** Tail of the per-run execution queue (present while a chain of the run runs or waits). */
+  private readonly tails = new Map<string, Promise<void>>();
 
   constructor(private readonly options: LifecycleEngineOptions) {
     this.repos = options.repositories;
@@ -153,7 +160,7 @@ export class LifecycleEngine {
 
   /** True while a chain of `runId` is executing in this process. */
   isBusy(runId: string): boolean {
-    return this.busy.has(runId);
+    return this.tails.has(runId);
   }
 
   /**
@@ -183,7 +190,7 @@ export class LifecycleEngine {
         configs.map((config) => ({ type: config.type, name: config.id, config })),
       );
       return this.executeChain(runId, hook, { item: context.item, signal: context.signal, snapshot: snap });
-    });
+    }, context.wait);
   }
 
   /**
@@ -202,11 +209,21 @@ export class LifecycleEngine {
           details: { actionId, status: current.status },
         });
       }
+      const owner = this.repos.runs.require(current.runId);
+      if (current.hook === 'on_start' && owner.status !== 'starting') {
+        // The run moved on (e.g. start_error → on_start_error); replaying on_start now would
+        // re-apply start labels to a finished run. Only skip/abandon are allowed.
+        throw new LifecycleError(
+          'not_retryable',
+          `on_start action ${actionId} cannot be retried: run ${owner.id} is '${owner.status}', not 'starting' (skip it instead)`,
+          { details: { actionId, hook: current.hook, runStatus: owner.status } },
+        );
+      }
       this.persistActionStatus(current, 'pending', { manual: 'retry' });
       const run = this.repos.runs.require(current.runId);
       const snapshot = parseRunSnapshot(run.configSnapshot, run.id);
       return this.executeChain(current.runId, current.hook, { item: context.item, signal: context.signal, snapshot });
-    });
+    }, context.wait);
   }
 
   /**
@@ -226,7 +243,7 @@ export class LifecycleEngine {
       const run = this.repos.runs.require(current.runId);
       const snapshot = parseRunSnapshot(run.configSnapshot, run.id);
       return this.executeChain(current.runId, current.hook, { item: context.item, signal: context.signal, snapshot });
-    });
+    }, context.wait);
   }
 
   /**
@@ -262,7 +279,7 @@ export class LifecycleEngine {
       }
       if (results.length === 0) this.refreshLifecycleStatus(runId);
       return results;
-    });
+    }, options.wait);
   }
 
   /**
@@ -270,7 +287,7 @@ export class LifecycleEngine {
    * `on_start` of a run that is now finalized as `crashed`): interrupted
    * actions are made safe (comment marker lookup), all `pending` ones become `skipped`.
    */
-  async abandonHook(run: RunRecord | string, hook: HookName, context: Pick<HookContext, 'item'> = {}): Promise<HookResult> {
+  async abandonHook(run: RunRecord | string, hook: HookName, context: Pick<HookContext, 'item' | 'wait'> = {}): Promise<HookResult> {
     const runId = typeof run === 'string' ? run : run.id;
     return this.exclusive(runId, async () => {
       const current = this.repos.runs.require(runId);
@@ -285,19 +302,33 @@ export class LifecycleEngine {
       const journal = this.repos.actions.listForHook(runId, hook);
       const stop = stoppedAt(journal);
       return { runId, hook, status: stop ? 'failed' : 'succeeded', actions: journal, failedAction: stop };
-    });
+    }, context.wait);
   }
 
   // -------------------------------------------------------------------------
   // Chain execution
 
-  private async exclusive<T>(runId: string, fn: () => Promise<T>): Promise<T> {
-    if (this.busy.has(runId)) throw new LifecycleBusyError(runId);
-    this.busy.add(runId);
+  /**
+   * Serialize chain executions per run. Without `wait` a busy run is rejected
+   * immediately ({@link LifecycleBusyError}, API callers); with `wait` the call
+   * is queued behind the running/queued ones (internal callers such as WI-08).
+   */
+  private async exclusive<T>(runId: string, fn: () => Promise<T>, wait = false): Promise<T> {
+    const previous = this.tails.get(runId);
+    if (previous && !wait) throw new LifecycleBusyError(runId);
+    const execution = (async () => {
+      if (previous) await previous;
+      return fn();
+    })();
+    const tail = execution.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.tails.set(runId, tail);
     try {
-      return await fn();
+      return await execution;
     } finally {
-      this.busy.delete(runId);
+      if (this.tails.get(runId) === tail) this.tails.delete(runId);
     }
   }
 
@@ -393,6 +424,16 @@ export class LifecycleEngine {
         result = await this.perform(input, config);
       } catch (err) {
         const info = describeActionError(err, this.redact);
+        if (opts.signal?.aborted) {
+          // Shutdown/abort is not a failure of the action: close the attempt, keep the action resumable.
+          this.repos.transaction(() => {
+            this.repos.actions.finishAttempt(attempt.id, 'failed', { error: info });
+            const reset = this.repos.actions.setStatus(current.id, 'pending');
+            this.appendActionEvent(reset, { attempt: attempt.attempt, error: info, interrupted: true });
+          });
+          this.publishChange(current.id);
+          return 'interrupted';
+        }
         const giveUp = !info.retryable || roundAttempts >= policy.maxAttempts;
         current = this.repos.transaction(() => {
           this.repos.actions.finishAttempt(attempt.id, 'failed', { error: info });

@@ -311,6 +311,17 @@ describe('comments with marker', () => {
     expect(await adapter.findCommentByMarker(it1, marker, 'coder')).toEqual(ref);
   });
 
+  it('only accepts the appended marker (last line), not marker text inside an own comment body', async () => {
+    github.createIssue(REPO);
+    const it1 = await item(1);
+    const first = commentMarker('run-1', '1');
+    const second = commentMarker('run-1', '2');
+    // untrusted text (e.g. a worker result message) carries the marker of another action
+    const ref = await adapter.postComment(it1, `Done: <!-- ${second} -->\n<!-- ${second} -->\nmore`, first, 'coder');
+    expect(await adapter.findCommentByMarker(it1, second, 'coder')).toBeNull();
+    expect(await adapter.findCommentByMarker(it1, first, 'coder')).toEqual(ref);
+  });
+
   it('searches all comment pages', async () => {
     github.createIssue(REPO);
     for (let i = 0; i < 230; i++) github.addComment(REPO, 1, `comment ${i}`);
