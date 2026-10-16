@@ -12,10 +12,12 @@ import type { DatabaseSync } from 'node:sqlite';
 import { all, get, iso, run, str, transaction, type Params, type Row } from './sqlite.js';
 
 /**
- * Run retention categories (Spec §21): `successful` = `completed` + `success`;
- * `failed` = every other terminal run (business failure, technical failure, cancelled).
+ * Run retention categories (Spec §5.1, §21): `successful` = `completed` + `success`;
+ * `blocked` = technical failures counted into a retry block (the block's
+ * counting period, `retention.blocked_runs`); `failed` = every other terminal
+ * run (business failure, technical failure, cancelled).
  */
-export type RunRetentionCategory = 'successful' | 'failed';
+export type RunRetentionCategory = 'successful' | 'failed' | 'blocked';
 
 /** A run eligible for deletion. */
 export interface RunRetentionCandidate {
@@ -34,9 +36,14 @@ const PROTECTION_SQL = `
                     AND COALESCE(b.source_item_key, '') = COALESCE(r.source_item_key, ''))
   AND NOT EXISTS (SELECT 1 FROM locks l WHERE l.run_id = r.id)`;
 
+/** Run belongs to the counting period of a (cleared or active) retry block. */
+const BLOCKED_SQL = `(r.counted_technical_failure = 1 AND EXISTS (SELECT 1 FROM blocks b2 WHERE b2.workflow_id = r.workflow_id
+    AND COALESCE(b2.source_item_key, '') = COALESCE(r.source_item_key, '') AND b2.generation = r.block_generation))`;
+
 const CATEGORY_SQL: Record<RunRetentionCategory, string> = {
   successful: `(r.status = 'completed' AND r.business_result = 'success')`,
-  failed: `NOT (r.status = 'completed' AND r.business_result = 'success')`,
+  failed: `(NOT (r.status = 'completed' AND r.business_result = 'success') AND NOT ${BLOCKED_SQL})`,
+  blocked: BLOCKED_SQL,
 };
 
 /** Retention queries and deletions. */
