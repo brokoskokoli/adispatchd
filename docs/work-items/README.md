@@ -16,6 +16,7 @@ Zerlegung der Spec v0.1 in umsetzbare Pakete. **Status: alle Work-Items umgesetz
 | [10](WI-10-api-views-notifications.md) | HTTP-API, SSE, Views, Notifications, Retention | §15, §17, §18, §21 | 09 | 6 |
 | [11](WI-11-web-ui.md) | Weboberfläche | §16 | 10 | 7 |
 | [12](WI-12-cli-service.md) | CLI komplett, `init`, systemd-Service, Paketierung, Doku | §4, §14, §19 | 10 | 7 |
+| [13](WI-13-config-fixes.md) | Korrekturen aus der Konfigurationsreferenz | §5, §6, §15, §17 | Referenz | 8 |
 
 Ablauf je Work-Item: Coder-Agent (eigener Branch/Worktree) → Reviewer-Agent (prüft gegen Acceptance Criteria + Spec) → ggf. Fix-Runde → Merge nach `main`.
 
