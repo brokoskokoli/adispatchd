@@ -75,7 +75,11 @@ on_start:
     configSnapshot: snapshotWorkflow(loaded.config, 'coder'),
   });
   p.close();
-  const deps = { fetch: github.fetch, env: { TEST_DRY_RUN_KEY: app.privateKeyPem } };
+  // No orchestrator instance is "running": the API client gets connection refused → local fallback.
+  const refused = async (): Promise<Response> => {
+    throw new TypeError('fetch failed', { cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) });
+  };
+  const deps = { fetch: github.fetch, apiFetch: refused, env: { TEST_DRY_RUN_KEY: app.privateKeyPem } };
   return { github, tmp, marker, holder, deps };
 }
 
@@ -98,6 +102,7 @@ describe('cli workflow dry-run (local)', () => {
     expect(io.out).toContain('workflow condition 0');
     expect(io.out).toContain('unknown / not evaluated');
     expect(io.out).toContain('capacity: workflow 1/2 active, global 1/4 active');
+    expect(io.out).toContain('no running instance at http://127.0.0.1:8787: evaluated locally');
     expect(existsSync(marker)).toBe(false);
     expect(github.requests.filter((r) => r.method !== 'GET' && !r.path.includes('access_tokens'))).toEqual([]);
     expect(github.labels('example/a', 1)).toEqual(['ready-for-coding']);
@@ -127,6 +132,20 @@ describe('cli workflow dry-run (local)', () => {
     expect(io.err).toContain("unknown workflow 'nope'");
     io = await run(['workflow', 'dry-run', 'coder'], deps);
     expect(io.code).toBe(2);
+    expect(io.err).toContain('no running instance');
+    io = await run(['workflow', 'dry-run', 'coder', '--local'], deps);
+    expect(io.code).toBe(2);
+    // --local never asks the API.
+    let asked = false;
+    io = await run(['workflow', 'dry-run', 'coder', '--local', '--config-dir', tmp.dir], {
+      ...deps,
+      apiFetch: async () => {
+        asked = true;
+        throw new Error('must not be called');
+      },
+    });
+    expect(io.code).toBe(0);
+    expect(asked).toBe(false);
     // Missing private key → source error, reported in the output.
     io = await run(['workflow', 'dry-run', 'coder', '--config-dir', tmp.dir], { ...deps, env: {} });
     expect(io.code).toBe(1);

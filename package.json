@@ -8,6 +8,18 @@
   "bin": {
     "agent-orchestrator": "dist/cli/main.js"
   },
+  "files": [
+    "dist/",
+    "!dist/**/*.test.*",
+    "!dist/**/testing/",
+    "examples/",
+    "docs/api.md",
+    "docs/operations.md",
+    "docs/worker-protocol.md",
+    "docs/cron-semantics.md",
+    "docs/manual-tests/",
+    "README.md"
+  ],
   "engines": {
     "node": ">=22.13"
   },
@@ -17,7 +29,9 @@
     "test": "vitest run",
     "check": "tsc --noEmit && tsc -p tsconfig.ui.json --noEmit && vitest run",
     "dev": "tsx src/cli/main.ts",
-    "build:ui": "node scripts/build-ui.mjs"
+    "build:ui": "node scripts/build-ui.mjs",
+    "prepack": "rm -rf dist && npm run build",
+    "test:pack": "ORCH_PACK_TEST=1 vitest run src/cli/pack.test.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.6",
