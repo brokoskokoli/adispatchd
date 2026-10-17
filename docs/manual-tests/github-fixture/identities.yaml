@@ -1,0 +1,18 @@
+# Drei GitHub Apps (eine pro Rolle). Die Zahlen sind Platzhalter und werden beim Kopieren durch die echten
+# App-IDs und Installation-IDs ersetzt (siehe github.md, Abschnitt 2). Private Keys NUR als Env-Variablen.
+identities:
+  maintainer:
+    type: github_app
+    app_id: 9000001
+    installation_id: 9100001
+    private_key_env: ORCH_TEST_MAINTAINER_KEY
+  coder:
+    type: github_app
+    app_id: 9000002
+    installation_id: 9100002
+    private_key_env: ORCH_TEST_CODER_KEY
+  reviewer:
+    type: github_app
+    app_id: 9000003
+    installation_id: 9100003
+    private_key_env: ORCH_TEST_REVIEWER_KEY

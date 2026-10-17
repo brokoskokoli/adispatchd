@@ -1,0 +1,17 @@
+# views/dependencies.yaml – Beobachtungswerkzeug für die Dependency-Fälle (github.md: T11–T14), ohne Runs zu starten.
+# Zeigt für alle offenen Items mit Label deps-test, wie der Adapter "blocked by" auflöst.
+id: dependencies
+title: Dependencies (Test)
+sources: [test_a, test_b]
+filter:
+  all:
+    - { field: labels, operator: contains, value: deps-test }
+fields:
+  - { field: repository, label: Repository }
+  - { field: number, label: Nr. }
+  - { field: title, label: Titel, link: url }
+  - { field: dependencies.status, label: Status }
+  - { field: dependencies.blocked_by_total, label: Blocker gesamt }
+  - { field: dependencies.blocked_by_open, label: Blocker offen }
+  - { field: dependencies.blocked, label: Blockiert }
+sort: { field: number, direction: asc }

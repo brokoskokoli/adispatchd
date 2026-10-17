@@ -1,0 +1,67 @@
+# workflows/coder-test.yaml – Coder-Rolle gegen orch-test-a (github.md: T3–T9, T13–T17, T20).
+# Startet Issues/PRs mit Label ready-for-coding, deren native "blocked by"-Abhängigkeiten alle geschlossen sind.
+# Das Verhalten des Test-Workers steuern die Labels test:* (siehe scripts/test-worker.sh).
+id: coder-test
+name: Coder-Test (orch-test-a)
+enabled: true
+priority: 50
+max_concurrent: 2           # Szenario 1: zwei parallel, der dritte wartet (workflow_limit)
+identity: coder             # schreibende Aktionen (Labels, Kommentare) als Coder-App
+
+trigger:
+  type: source
+  source: test_a
+
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-coding }      # Pushdown: ?labels=ready-for-coding
+    - { field: dependencies.blocked_by_open, operator: equals, value: 0 } # teuer, unknown → kein Start
+
+item_priority:
+  rules:
+    - when: { field: labels, operator: contains, value: 'priority:high' }
+      value: 50
+  default: 0
+
+execute:
+  type: shell
+  command: scripts/test-worker.sh       # relativ zum config-dir
+  args: ['{item.number}', '{source.repository}']
+  env:
+    TEST_SLOW_SECONDS: '90'             # Dauer bei Label test:slow
+  secrets:
+    GH_TOKEN: { identity: coder }       # nur für Label test:token (Token-Prüfung im Worker)
+  timeout:
+    max_duration: 10m
+    idle_timeout: 5m
+  cancel_grace: 10s
+
+retry:
+  max_technical_failures: 3             # Szenario 5: dritter Crash → Retry-Block
+
+on_start:
+  - type: source.update
+    labels: { add: [coding], remove: [ready-for-coding] }
+on_success:
+  - type: source.update
+    labels: { add: [ready-for-review], remove: [coding] }
+  - type: source.comment
+    message: 'Coder-Test erfolgreich: {result.message}'
+    continue_on_error: true
+on_failure:                             # fachliches failure (Ergebnisdatei) → Needs Maintainer, kein Retry-Zähler
+  - type: source.update
+    labels: { add: [needs-maintainer], remove: [coding] }
+  - type: source.comment
+    message: 'Needs maintainer: {result.message}'
+on_crash:                               # technischer Fehler → zurück in die Warteschlange (Block stoppt nach 3×)
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [coding] }
+on_start_error:
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [coding] }
+on_timeout:
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [coding] }
+on_cancel:
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [coding] }
