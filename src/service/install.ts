@@ -65,9 +65,60 @@ export function environmentFileTemplate(unitName: string): string {
   ].join('\n');
 }
 
+/**
+ * System directories that must never be config-dir or data-dir (`install`
+ * runs `chown -R` / `chmod -R` on both).
+ */
+export const PROTECTED_PATHS: readonly string[] = [
+  '/', '/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib32', '/lib64', '/libx32', '/media', '/mnt', '/opt', '/proc',
+  '/root', '/run', '/sbin', '/snap', '/srv', '/sys', '/tmp', '/usr', '/usr/bin', '/usr/lib', '/usr/lib64', '/usr/libexec',
+  '/usr/local', '/usr/local/bin', '/usr/local/lib', '/usr/sbin', '/usr/share', '/var', '/var/cache', '/var/lib', '/var/log',
+  '/var/opt', '/var/run', '/var/spool', '/var/tmp', '/Users', '/Library', '/System', '/Applications', '/private', '/private/var',
+  '/private/tmp', '/private/etc', '/etc/systemd', '/etc/systemd/system', '/etc/default',
+];
+
+/** Directories whose direct children are user homes (a home itself must not be chowned either). */
+const HOME_ROOTS = ['/home', '/Users'];
+
+function depth(p: string): number {
+  return p.split('/').filter(Boolean).length;
+}
+
+function isInside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * Reject config-dir/data-dir values on which a recursive `chown`/`chmod`
+ * would be harmful: system directories, top-level directories (depth < 2),
+ * user home directories, and config-dir/data-dir that are equal or nested.
+ * Throws {@link ServiceError} (`service_unsafe_path`).
+ */
+export function assertSafeServicePaths(dirs: { configDir: string; dataDir: string }): void {
+  const fail = (msg: string): never => {
+    throw new ServiceError('service_unsafe_path', msg);
+  };
+  for (const [label, raw] of [
+    ['config dir', dirs.configDir],
+    ['data dir', dirs.dataDir],
+  ] as const) {
+    const p = path.resolve(raw);
+    if (PROTECTED_PATHS.includes(p)) fail(`${label} ${p} is a system directory – use a dedicated directory such as /etc/agent-orchestrator or /var/lib/agent-orchestrator`);
+    if (depth(p) < 2) fail(`${label} ${p} is too close to the file system root (at least two levels, e.g. /srv/agent-orchestrator)`);
+    for (const home of HOME_ROOTS) {
+      if (path.dirname(p) === home) fail(`${label} ${p} is a user home directory – use a dedicated subdirectory`);
+    }
+  }
+  const c = path.resolve(dirs.configDir);
+  const d = path.resolve(dirs.dataDir);
+  if (isInside(c, d) || isInside(d, c)) fail(`config dir ${c} and data dir ${d} must be separate, non-nested directories (different owners/permissions)`);
+}
+
 /** Plan `service install`. Throws {@link ServiceError} if the user is missing and `createUser` is false (not in dry runs). */
 export function planInstall(input: InstallPlanInput): ServicePlan {
   const { unit } = input;
+  assertSafeServicePaths(unit);
   const content = renderSystemdUnit(unit);
   const steps: ServiceStep[] = [];
   const notes: string[] = [];

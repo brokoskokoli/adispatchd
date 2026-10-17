@@ -32,6 +32,7 @@ describe('systemd unit generation', () => {
     expect(lines).toContain('User=agent-orchestrator');
     expect(lines).toContain('Group=agent-orchestrator');
     expect(lines).toContain('Restart=on-failure');
+    expect(lines).toContain('RestartPreventExitStatus=78');
     expect(lines).toContain('KillMode=mixed');
     expect(lines).toContain('KillSignal=SIGTERM');
     expect(lines).toContain('WorkingDirectory=/var/lib/agent-orchestrator');
@@ -75,6 +76,7 @@ describe('systemd unit generation', () => {
     expect(() => renderSystemdUnit({ ...BASE, entryPath: '/src/cli/main.ts' })).toThrow(/TypeScript/);
     expect(() => renderSystemdUnit({ ...BASE, dataDir: '/var/lib/x\nExecStartPre=/bin/evil' })).toThrow(/line breaks/);
     expect(() => renderSystemdUnit({ ...BASE, unitName: 'bad name' })).toThrow(/unit name/);
+    expect(() => renderSystemdUnit({ ...BASE, unitName: 'orch@1' })).toThrow(/unit name/);
   });
 
   it('formats durations in CLI syntax', () => {

@@ -20,13 +20,17 @@ Dokumentation: [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-p
 Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 22.13** (empfohlen 24 LTS; SQLite kommt aus
 `node:sqlite`, kein natives Addon). Windows wird nicht unterstützt.
 
-```bash
-npm install -g agent-orchestrator@0.1.0        # feste Version (für Dienste Pflicht)
-# oder aus einem Paket-Tarball: npm install -g ./agent-orchestrator-0.1.0.tgz
-# Schnelltest ohne Installation: npx agent-orchestrator@0.1.0 init … (npx nie als Dienst-ExecStart)
-```
+> **Paketname noch nicht festgelegt (Spec §24.6) – nicht aus der npm-Registry installieren.** Der Name
+> `agent-orchestrator` gehört in der Registry einem fremden Paket; `npm install -g agent-orchestrator` bzw.
+> `npx agent-orchestrator` würde fremden Code installieren. Installation nur aus dem Repository-Checkout bzw. als Tarball.
 
-Aus dem Quellcode: `npm install && npm run build && npm pack` erzeugt `agent-orchestrator-<version>.tgz`.
+```bash
+git clone <repo-url> agent-orchestrator && cd agent-orchestrator
+npm install
+npm pack                                        # baut (prepack) und erzeugt agent-orchestrator-0.1.0.tgz
+npm install -g ./agent-orchestrator-0.1.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
+# lokal ohne globale Installation: npm run build && node dist/cli/main.js <kommando> …
+```
 
 ## Quickstart (lokal)
 
@@ -150,7 +154,7 @@ Kurzfassung – Details in [docs/operations.md](docs/operations.md):
 - **systemd:** `sudo agent-orchestrator service install --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator --create-user`
   (vorher `--dry-run`). Unit mit absolutem Node-/Paketpfad, dediziertem Benutzer, `Restart=on-failure`, `KillMode=mixed`,
   `TimeoutStopSec` > Drain + Cancel + Grace. Secrets in `/etc/default/agent-orchestrator`.
-- **Geplante Stopps/Updates:** `agent-orchestrator drain --wait`, dann `npm install -g agent-orchestrator@<neu>`, starten.
+- **Geplante Stopps/Updates:** `agent-orchestrator drain --wait`, dann neuen Tarball installieren (`npm install -g ./agent-orchestrator-<neu>.tgz`), starten.
   Migrationen laufen automatisch mit Backup in `data-dir/backups/`; config-dir und data-dir bleiben erhalten.
 - **Backups:** config-dir (git), Env-Datei, `orchestrator.sqlite` per `sqlite3 … ".backup …"`, `logs/`, `runs/`.
   `orchestrator.lock*` nie kopieren oder öffnen. data-dir nur auf lokalem Dateisystem (kein NFS).

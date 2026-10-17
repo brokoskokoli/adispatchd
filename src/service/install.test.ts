@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { executePlan, formatPlan, planInstall, planUninstall, type ExecResult, type ServicePlan, type SystemRunner } from './install.js';
+import { assertSafeServicePaths, executePlan, formatPlan, planInstall, planUninstall, type ExecResult, type ServicePlan, type SystemRunner } from './install.js';
 import type { UnitOptions } from './unit.js';
 
 const UNIT: UnitOptions = {
@@ -114,5 +114,23 @@ describe('service install plan', () => {
     const r2 = memoryRunner((argv) => argv[1] === 'disable');
     expect((await executePlan(planUninstall({ unitName: 'x', unitDir: '/u' }), r2, () => undefined)).ok).toBe(true);
     expect(r2.log).toEqual(['exec systemctl disable --now x.service', 'remove /u/x.service', 'exec systemctl daemon-reload']);
+  });
+
+  it('rejects system directories, shallow paths, homes and nested config/data dirs', () => {
+    const ok = { configDir: '/etc/agent-orchestrator', dataDir: '/var/lib/agent-orchestrator' };
+    expect(() => assertSafeServicePaths(ok)).not.toThrow();
+    expect(() => assertSafeServicePaths({ configDir: '/srv/orch/config', dataDir: '/srv/orch/data' })).not.toThrow();
+    for (const bad of ['/', '/etc', '/var', '/var/lib', '/usr', '/usr/local', '/home', '/opt', '/root', '/tmp', '/etc/systemd/system']) {
+      expect(() => assertSafeServicePaths({ ...ok, configDir: bad }), bad).toThrow(/system directory|too close/);
+      expect(() => assertSafeServicePaths({ ...ok, dataDir: bad }), bad).toThrow(/system directory|too close/);
+    }
+    expect(() => assertSafeServicePaths({ ...ok, dataDir: '/data' })).toThrow(/too close/);
+    expect(() => assertSafeServicePaths({ ...ok, dataDir: '/var/lib/../lib' })).toThrow(/system directory/);
+    expect(() => assertSafeServicePaths({ ...ok, dataDir: '/home/alice' })).toThrow(/home directory/);
+    expect(() => assertSafeServicePaths({ configDir: '/srv/orch', dataDir: '/srv/orch' })).toThrow(/non-nested/);
+    expect(() => assertSafeServicePaths({ configDir: '/srv/orch', dataDir: '/srv/orch/data' })).toThrow(/non-nested/);
+    expect(() => assertSafeServicePaths({ configDir: '/srv/orch/config', dataDir: '/srv/orch' })).toThrow(/non-nested/);
+    // planInstall enforces it as well (also in dry runs).
+    expect(() => planInstall(input({ dryRun: true, unit: { ...UNIT, dataDir: '/var/lib' } }))).toThrow(/system directory/);
   });
 });

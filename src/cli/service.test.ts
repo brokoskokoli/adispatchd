@@ -1,8 +1,9 @@
 /**
- * `service` CLI: only `--dry-run` and refusals are exercised here – the tests
- * never run systemctl/useradd/chown or write unit files.
+ * `service` CLI: `--dry-run`, refusals and the real install path against an
+ * in-memory runner – the tests never run systemctl/useradd/chown or write
+ * unit files.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -69,9 +70,10 @@ async function service(args: string[], deps: ServiceDeps) {
 }
 
 function configWithGrace(grace: string): string {
-  const root = mkdtempSync(path.join(os.tmpdir(), 'orch-svc-'));
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'orch-svc-')));
   roots.push(root);
   mkdirSync(path.join(root, 'workflows'));
+  writeFileSync(path.join(root, 'config.yaml'), 'server: { host: 127.0.0.1, port: 8787 }\n');
   writeFileSync(
     path.join(root, 'workflows', 'w.yaml'),
     `id: w\ntrigger: { type: manual }\nexecute: { type: shell, command: /bin/true, cancel_grace: ${grace} }\n`,
@@ -112,6 +114,7 @@ describe('cli service (dry-run only)', () => {
     expect(io.out).not.toContain('EnvironmentFile');
     expect(io.out).toContain('only usable on Linux');
     expect(io.err).toContain('TimeoutStopSec assumes a cancel grace of 30s');
+    expect(io.err).toContain('/etc/o/config.yaml does not exist');
   });
 
   it('refuses npx / TypeScript entry points and missing directories', async () => {
@@ -143,5 +146,106 @@ describe('cli service (dry-run only)', () => {
       expect(io.code).toBe(2);
       expect(io.err).toContain('only supported on Linux');
     }
+  });
+
+  it('rejects unsafe directories (also in dry runs) and warns about an ineffective cancel grace', async () => {
+    const deps = { platform: 'linux' as const, runner: guardRunner(), execPath: '/usr/bin/node', entryPath: ENTRY };
+    for (const [configDir, dataDir] of [
+      ['/etc', '/var/lib/o'],
+      ['/etc/o', '/var/lib'],
+      ['/etc/o', '/etc/o/data'],
+      ['/srv', '/var/lib/o'],
+    ]) {
+      const io = await service(['install', '--dry-run', '--config-dir', configDir ?? '', '--data-dir', dataDir ?? ''], deps);
+      expect(io.code, `${configDir} ${dataDir}`).toBe(2);
+      expect(io.out).toBe('');
+    }
+    const configDir = configWithGrace('5m');
+    const io = await service(['install', '--dry-run', '--config-dir', configDir, '--data-dir', '/var/lib/o'], deps);
+    expect(io.code).toBe(0);
+    expect(io.out).toContain('is not smaller than the cancel timeout');
+  });
+});
+
+/** In-memory runner for the real (non-dry-run) Linux path. */
+function memoryRunner(failAt?: string): SystemRunner & { log: string[] } {
+  const log: string[] = [];
+  return {
+    log,
+    async exec(argv) {
+      const cmd = argv.join(' ');
+      log.push(`exec ${cmd}`);
+      if (failAt && cmd.startsWith(failAt)) return { code: 1, stdout: '', stderr: 'simulated failure' };
+      return { code: 0, stdout: '', stderr: '' };
+    },
+    async writeFile(file, _content, mode) {
+      log.push(`write ${file} ${mode.toString(8)}`);
+    },
+    async remove(file) {
+      log.push(`remove ${file}`);
+    },
+    exists: () => false,
+  };
+}
+
+describe('cli service install (Linux path, in-memory runner)', () => {
+  const linux = (runner: SystemRunner, euid = 0): ServiceDeps => ({ platform: 'linux', euid: () => euid, runner, execPath: '/usr/bin/node', entryPath: ENTRY });
+
+  it('runs the plan in order as root', async () => {
+    const configDir = configWithGrace('30s');
+    const runner = memoryRunner();
+    const io = await service(['install', '--config-dir', configDir, '--data-dir', '/var/lib/orch-test', '--name', 'orch-test', '--unit-dir', '/u'], linux(runner));
+    expect(io.code, io.err).toBe(0);
+    expect(runner.log).toEqual([
+      'exec id -u agent-orchestrator',
+      'exec systemctl --version',
+      'exec install -d -m 0750 -o agent-orchestrator -g agent-orchestrator /var/lib/orch-test',
+      'exec chown -R agent-orchestrator:agent-orchestrator /var/lib/orch-test',
+      `exec chown -R root:agent-orchestrator ${configDir}`,
+      `exec chmod -R u=rwX,g=rX,o= ${configDir}`,
+      'write /etc/default/orch-test 640',
+      'exec chown root:agent-orchestrator /etc/default/orch-test',
+      'exec chmod 0640 /etc/default/orch-test',
+      'write /u/orch-test.service 644',
+      'exec systemctl daemon-reload',
+      'exec systemctl enable orch-test.service',
+    ]);
+    expect(io.out).toContain('service orch-test installed');
+  });
+
+  it('stops at the first failing step and reports it', async () => {
+    const configDir = configWithGrace('30s');
+    const runner = memoryRunner('systemctl daemon-reload');
+    const io = await service(['install', '--config-dir', configDir, '--data-dir', '/var/lib/orch-test', '--unit-dir', '/u'], linux(runner));
+    expect(io.code).toBe(1);
+    expect(io.err).toContain('failed at "reload systemd units"');
+    expect(io.err).toContain('simulated failure');
+    expect(runner.log.at(-1)).toBe('exec systemctl daemon-reload');
+    expect(runner.log.some((l) => l.includes('enable'))).toBe(false);
+  });
+
+  it('refuses without root, without a valid configuration and without the user', async () => {
+    const configDir = configWithGrace('30s');
+    let runner = memoryRunner();
+    let io = await service(['install', '--config-dir', configDir, '--data-dir', '/var/lib/orch-test'], linux(runner, 1000));
+    expect(io.code).toBe(1);
+    expect(io.err).toContain('must run as root');
+    expect(runner.log.filter((l) => !l.startsWith('exec id -u'))).toEqual([]);
+
+    // Missing config.yaml (e.g. a typo in --config-dir) → nothing is chowned.
+    const empty = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'orch-svc-empty-')));
+    roots.push(empty);
+    runner = memoryRunner();
+    io = await service(['install', '--config-dir', empty, '--data-dir', '/var/lib/orch-test'], linux(runner));
+    expect(io.code).toBe(2);
+    expect(io.err).toContain('config.yaml does not exist');
+    expect(runner.log).toEqual([]);
+
+    // Unknown user without --create-user.
+    runner = memoryRunner('id -u');
+    io = await service(['install', '--config-dir', configDir, '--data-dir', '/var/lib/orch-test'], linux(runner));
+    expect(io.code).toBe(1);
+    expect(io.err).toContain('--create-user');
+    expect(runner.log).toEqual(['exec id -u agent-orchestrator']);
   });
 });

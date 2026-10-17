@@ -7,6 +7,7 @@ export {
   DEFAULT_STOP_BUFFER_MS,
   DEFAULT_UNIT_DIR,
   DEFAULT_UNIT_NAME,
+  EXIT_CONFIG,
   computeTimeoutStopSec,
   formatCliDuration,
   quoteSystemdArg,
@@ -15,7 +16,9 @@ export {
   type UnitOptions,
 } from './unit.js';
 export {
+  PROTECTED_PATHS,
   ServiceError,
+  assertSafeServicePaths,
   environmentFileTemplate,
   executePlan,
   formatPlan,

@@ -10,6 +10,7 @@
  * - Mutating requests carry the CSRF header `X-Orchestrator-Request: 1` and a
  *   JSON body (never form data); no `Origin` is sent.
  */
+import { accessSync, constants } from 'node:fs';
 import path from 'node:path';
 import { errorMessage, type FetchLike } from '../core/index.js';
 import { loadConfig } from '../config/index.js';
@@ -65,19 +66,42 @@ export async function resolveBaseUrl(opts: { url?: string; configDir?: string; d
     try {
       parsed = new URL(opts.url);
     } catch {
-      throw new Error(`invalid --url "${opts.url}"`);
+      // The raw value may contain credentials – never echo it.
+      throw new Error('invalid --url (expected http(s)://host:port)');
     }
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error(`invalid --url "${opts.url}" (http/https only)`);
+    if (parsed.username || parsed.password) {
+      throw new Error(
+        'invalid --url: credentials in the URL (user:password@) are not supported – proxy authentication is not implemented; ' +
+          'use the local URL (e.g. http://127.0.0.1:8787) on the host itself',
+      );
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error(`invalid --url "${parsed.origin}" (http/https only)`);
     return { url: opts.url.replace(/\/+$/, '') };
   }
   if (opts.configDir) {
     const configDir = path.resolve(opts.configDir);
+    const configFile = path.join(configDir, 'config.yaml');
+    try {
+      accessSync(configFile, constants.R_OK);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EACCES' || code === 'EPERM') {
+        return { url: DEFAULT_API_URL, note: `${configFile} is not readable (permission denied); using ${DEFAULT_API_URL} – pass --url instead of --config-dir` };
+      }
+      // Missing config.yaml: defaults apply (server 127.0.0.1:8787) – fall through to the loader.
+    }
     const loaded = await loadConfig(configDir, { dataDir: path.resolve(opts.dataDir ?? 'data') });
     if (loaded.ok) {
       const { host, port } = loaded.config.global.server;
       return { url: urlForBind(host, port) };
     }
-    return { url: DEFAULT_API_URL, note: `configuration in ${configDir} is invalid; using ${DEFAULT_API_URL}` };
+    const unreadable = loaded.errors.some((e) => /EACCES|EPERM|permission denied/i.test(e.message));
+    return {
+      url: DEFAULT_API_URL,
+      note: unreadable
+        ? `configuration in ${configDir} is not readable (permission denied); using ${DEFAULT_API_URL} – pass --url instead of --config-dir`
+        : `configuration in ${configDir} is invalid; using ${DEFAULT_API_URL}`,
+    };
   }
   return { url: DEFAULT_API_URL };
 }

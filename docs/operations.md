@@ -27,8 +27,10 @@ Voraussetzungen: Linux mit systemd, Node.js ≥ 22.13 (empfohlen 24 LTS) **syste
 aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Dienstbenutzer nicht lesen kann).
 
 ```bash
-# 1. Feste Version global installieren (kein npx im Dienst!)
-sudo npm install -g agent-orchestrator@0.1.0          # bzw. sudo npm install -g ./agent-orchestrator-0.1.0.tgz
+# 1. Feste Version aus dem Tarball global installieren (kein npx im Dienst!).
+#    Paketname noch nicht festgelegt: NICHT aus der npm-Registry installieren (fremdes Paket gleichen Namens).
+#    Tarball im Repository-Checkout bauen: npm install && npm pack
+sudo npm install -g ./agent-orchestrator-0.1.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo agent-orchestrator init --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator
@@ -54,7 +56,10 @@ Optionen von `service install`: `--user`/`--group` (Default `agent-orchestrator`
 `--node`/`--entry` (absolute Pfade, Default: das laufende Node und diese Installation), `--env-file <pfad|none>`,
 `--drain-timeout` (Default 10m), `--cancel-timeout` (Default 2m), `--unit-dir`, `--now` (sofort starten).
 `service install` verweigert `npx`-Cache-Pfade, relative Pfade, TypeScript-Quellen und `root` als Dienstbenutzer.
-Ohne `--create-user` muss der Benutzer existieren (Hinweis mit passendem `useradd`-Kommando). Eine bestehende Env-Datei wird
+Außerhalb von `--dry-run` bricht `service install` ab, wenn `config.yaml` fehlt oder die Konfiguration ungültig ist
+(Schutz vor Tippfehlern, da `chown -R`/`chmod -R` auf config-dir und data-dir laufen). Systemverzeichnisse (`/`, `/etc`,
+`/var`, `/var/lib`, `/usr`, `/home`, `/opt`, `/root`, `/tmp`, …), Pfade direkt unter `/`, Home-Verzeichnisse sowie gleiche
+oder ineinander verschachtelte config-/data-dirs werden abgelehnt (auch über Symlinks). Ohne `--create-user` muss der Benutzer existieren (Hinweis mit passendem `useradd`-Kommando). Eine bestehende Env-Datei wird
 nie überschrieben. `service status` zeigt `systemctl status`; `service uninstall` stoppt (Drain), deaktiviert und entfernt nur
 die Unit-Datei – config-dir, data-dir und Benutzer bleiben. Auf macOS lehnen die Kommandos mit Erklärung ab
 (`--dry-run` funktioniert überall).
@@ -72,6 +77,7 @@ EnvironmentFile=-/etc/default/agent-orchestrator
 Environment=NODE_ENV=production
 Restart=on-failure
 RestartSec=5s
+RestartPreventExitStatus=78
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=810
@@ -94,13 +100,17 @@ das nächste `service install`.
 | drittes Signal | sofortiger Exit (Recovery räumt beim nächsten Start auf) | 1 | – |
 | `agent-orchestrator drain` / UI „Drain“ | keine neuen Runs, aktive laufen zu Ende, dann Ende | 0 | inactive, **kein** Neustart |
 | `agent-orchestrator cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel`, dann Ende | 0 | inactive, **kein** Neustart |
+| Konfigurations-/Startfehler (ungültige YAML, Instanz-Lock belegt, DB-Schema neuer als der Code) | Start abgebrochen | 78 (EX_CONFIG) | **kein** Neustart (`RestartPreventExitStatus=78`) – Fehler beheben, dann `systemctl start` |
 | Absturz / Exit ≠ 0 | – | ≠ 0 | Neustart nach 5 s → Recovery |
 | `TimeoutStopSec` abgelaufen | systemd SIGKILLt die ganze cgroup inkl. Worker | – | gestoppt; nächster Start: Runs `crashed` + `on_crash` |
 
 - **`KillMode=mixed`**: SIGTERM geht nur an den Orchestrator, Worker laufen während des Drains weiter. Mit dem Default
   `control-group` bekämen alle Worker sofort SIGTERM (gleiche cgroup trotz eigener Prozessgruppe) → kein Drain möglich.
 - **`TimeoutStopSec`** = Drain-Timeout + Cancel-Timeout + größtes `execute.cancel_grace` der Konfiguration + 60 s Puffer
-  (wird bei `service install` aus der Konfiguration berechnet; nach Änderungen an `cancel_grace` neu installieren).
+  (wird bei `service install` aus der Konfiguration berechnet). Die Grace-Zeit (SIGTERM → SIGKILL der Worker-Gruppe) läuft
+  **innerhalb** des Cancel-Timeouts – danach werden Hooks unterbrochen und der Orchestrator beendet sich; der Grace-Term ist
+  nur Sicherheitsmarge. `cancel_grace` muss daher **kleiner als `--cancel-timeout`** sein, sonst beendet sich der Orchestrator
+  ggf. vor dem SIGKILL (dann räumt erst systemd per cgroup ab) – `service install` und `start` warnen.
 - **`Restart=on-failure`**: Ein absichtlicher Shutdown über UI/CLI endet mit Exit 0 und wird **nicht** als Crash neu gestartet.
 - **Lange Runs:** Ein Agent-Run dauert oft länger als der Drain-Timeout. `systemctl stop` kann einen vollständigen Drain daher
   nicht garantieren – für geplante Stopps vorher `agent-orchestrator drain --wait` ausführen (beliebig lange, ohne Timeout)
@@ -124,7 +134,11 @@ agent-orchestrator workflow dry-run coder --config-dir /etc/agent-orchestrator  
 ```
 
 Die Kommandos sprechen per HTTP mit der laufenden Instanz: `--url http://127.0.0.1:8787` oder – mit `--config-dir` – Host/Port
-aus `config.yaml` (Wildcard-Binds `0.0.0.0`/`::` werden über Loopback angesprochen). Sie senden den CSRF-Header
+aus `config.yaml` (Wildcard-Binds `0.0.0.0`/`::` werden über Loopback angesprochen). **Als normaler Benutzer (nicht root)
+`--url` verwenden:** das config-dir ist nach `service install` nur für root und die Dienstgruppe lesbar; mit `--config-dir`
+meldet das Kommando dann „not readable (permission denied)“ und fällt auf `http://127.0.0.1:8787` zurück. URLs mit
+Zugangsdaten (`user:pass@`) werden abgelehnt (Exit 2) – Proxy-Authentifizierung unterstützt die CLI nicht; auf dem Host
+selbst die lokale URL nutzen. Sie senden den CSRF-Header
 `X-Orchestrator-Request: 1`. Exit-Codes: 0 ok, 1 API-Fehler (z. B. Reload abgelehnt), 2 Aufruffehler, 3 Instanz nicht
 erreichbar, 4 `--wait`-Timeout (der Shutdown läuft im Hintergrund weiter). `workflow dry-run` fällt ohne erreichbare Instanz
 auf die lokale Auswertung zurück (`--local` erzwingt sie; mit explizitem `--url` kein Fallback).
@@ -137,7 +151,7 @@ Updates ersetzen nur den Code; config-dir, data-dir und Env-Datei bleiben unver�
 agent-orchestrator drain --config-dir /etc/agent-orchestrator --wait    # aktive Runs sauber beenden (ohne Zeitlimit)
 sudo systemctl stop agent-orchestrator                                  # falls noch aktiv (nach Drain bereits beendet)
 sudo cp -a /etc/agent-orchestrator /root/agent-orchestrator-config-$(date +%F)   # optional, config-dir sichern
-sudo npm install -g agent-orchestrator@<neue-version>
+sudo npm install -g ./agent-orchestrator-<neue-version>.tgz   # Tarball aus dem Repository-Checkout (npm pack)
 sudo agent-orchestrator config validate --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator
 sudo agent-orchestrator service install --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator   # nur wenn sich Pfade/Optionen ändern
 sudo systemctl start agent-orchestrator

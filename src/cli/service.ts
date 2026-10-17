@@ -23,6 +23,8 @@ import {
   DEFAULT_UNIT_DIR,
   DEFAULT_UNIT_NAME,
   ServiceError,
+  assertSafeServicePaths,
+  formatCliDuration,
   executePlan,
   formatPlan,
   planInstall,
@@ -81,28 +83,60 @@ function duration(name: string, value: string | undefined, fallback: string): nu
   }
 }
 
-/** Largest `execute.cancel_grace` of the configuration (default 30 s if it cannot be loaded). */
-async function maxCancelGrace(configDir: string, dataDir: string, io: Io): Promise<number> {
-  const loaded = await loadConfig(configDir, { dataDir });
-  if (!loaded.ok) {
-    io.stderr(
-      `warning: configuration in ${configDir} is invalid or missing (${loaded.errors.length} error(s)); ` +
-        'TimeoutStopSec assumes a cancel grace of 30s – run "config validate" before starting the service\n',
-    );
+/**
+ * Largest `execute.cancel_grace` of the configuration. Outside dry runs the
+ * configuration must exist (`config.yaml`) and be valid – `install` changes
+ * ownership of the directory recursively, so a typo'd path must not pass.
+ * In dry runs a missing/invalid configuration only warns (default 30 s).
+ */
+async function maxCancelGrace(configDir: string, dataDir: string, io: Io, dryRun: boolean): Promise<number> {
+  const configFile = path.join(configDir, 'config.yaml');
+  const exists = existsSync(configFile);
+  const loaded = exists ? await loadConfig(configDir, { dataDir }) : null;
+  if (!loaded || !loaded.ok) {
+    const why = !exists
+      ? `${configFile} does not exist (create the configuration with "agent-orchestrator init" first)`
+      : `configuration in ${configDir} is invalid (${loaded?.ok === false ? loaded.errors.length : 0} error(s); see "config validate")`;
+    if (!dryRun) throw new ServiceError('service_config_invalid', why);
+    io.stderr(`warning: ${why}; TimeoutStopSec assumes a cancel grace of 30s\n`);
     return DEFAULT_APP_CANCEL_GRACE_MS;
   }
   return Math.max(DEFAULT_APP_CANCEL_GRACE_MS, ...Object.values(loaded.config.workflows).map((w) => w.execute.cancelGraceMs));
 }
 
+/** Resolve symlinks of existing paths (so `/srv/x -> /etc` cannot bypass the system-path check). */
+function realOrResolved(p: string): string {
+  const abs = path.resolve(p);
+  try {
+    return realpathSync(abs);
+  } catch {
+    return abs;
+  }
+}
+
+/** Warning if a worker's cancel grace cannot take effect within the cancel timeout. */
+export function cancelGraceWarning(maxCancelGraceMs: number, cancelTimeoutMs: number): string | null {
+  if (maxCancelGraceMs < cancelTimeoutMs) return null;
+  return (
+    `the largest execute.cancel_grace (${formatCliDuration(maxCancelGraceMs)}) is not smaller than the cancel timeout ` +
+    `(${formatCliDuration(cancelTimeoutMs)}): on shutdown the orchestrator may stop before workers are SIGKILLed; ` +
+    'raise --cancel-timeout or lower cancel_grace'
+  );
+}
+
 /** Collect and validate the unit options from the CLI flags. */
 export async function unitOptionsFromCli(opts: ServiceCliOptions, deps: ServiceDeps, io: Io): Promise<UnitOptions> {
+  const dryRun = opts.dryRun === true;
   if (!opts.configDir || !opts.dataDir) {
     throw new ServiceError('service_invalid_option', 'service install: --config-dir and --data-dir are required (absolute paths recommended, e.g. /etc/agent-orchestrator and /var/lib/agent-orchestrator)');
   }
   const unitName = opts.name ?? DEFAULT_UNIT_NAME;
   const user = opts.user ?? DEFAULT_SERVICE_USER;
-  const configDir = path.resolve(opts.configDir);
-  const dataDir = path.resolve(opts.dataDir);
+  // Check the paths as given and with symlinks resolved (e.g. /srv/x -> /etc, or /var -> /private/var on macOS).
+  assertSafeServicePaths({ configDir: path.resolve(opts.configDir), dataDir: path.resolve(opts.dataDir) });
+  const configDir = realOrResolved(opts.configDir);
+  const dataDir = realOrResolved(opts.dataDir);
+  assertSafeServicePaths({ configDir, dataDir });
   const envFile = opts.envFile === 'none' ? null : path.resolve(opts.envFile ?? `/etc/default/${unitName}`);
   return {
     unitName,
@@ -115,7 +149,7 @@ export async function unitOptionsFromCli(opts: ServiceCliOptions, deps: ServiceD
     envFile,
     drainTimeoutMs: duration('drain-timeout', opts.drainTimeout, '10m'),
     cancelTimeoutMs: duration('cancel-timeout', opts.cancelTimeout, '2m'),
-    maxCancelGraceMs: await maxCancelGrace(configDir, dataDir, io),
+    maxCancelGraceMs: await maxCancelGrace(configDir, dataDir, io, dryRun),
   };
 }
 
@@ -128,7 +162,7 @@ function pathWarnings(unit: UnitOptions): string[] {
     if (/^\/(root|home|Users)\//.test(p)) {
       warnings.push(
         `${label} path ${p} lies in a home directory (nvm/user install?) – the service user "${unit.user}" may not be able to read it; ` +
-          'prefer a system-wide node and "npm install -g" (or pass --node/--entry)',
+          'prefer a system-wide node and a global install of the package tarball (npm install -g ./agent-orchestrator-<version>.tgz) or pass --node/--entry',
       );
     }
   }
@@ -156,6 +190,8 @@ export function createServiceInstallHandler(io: Io, deps: ServiceDeps = {}) {
       return 2;
     }
     const warnings = pathWarnings(unit);
+    const graceWarning = cancelGraceWarning(unit.maxCancelGraceMs, unit.cancelTimeoutMs);
+    if (graceWarning) warnings.push(graceWarning);
     const unitDir = path.resolve(opts.unitDir ?? DEFAULT_UNIT_DIR);
     // Probing the user is read-only (`id -u`); on non-Linux dry runs it is skipped.
     const exists = linux ? await userExists(runner, unit.user) : true;

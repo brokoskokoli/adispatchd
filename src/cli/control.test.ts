@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -150,6 +150,14 @@ describe('cli control commands over HTTP', () => {
     expect(io.code).toBe(2);
     io = await cli(['status', '--url', 'ftp://x'], allHandlers);
     expect(io.code).toBe(2);
+    io = await cli(['status', '--url', 'http://admin:s3cret@proxy.example.com'], allHandlers);
+    expect(io.code).toBe(2);
+    expect(io.err).toContain('credentials in the URL');
+    expect(io.err).not.toContain('s3cret');
+    expect(io.err).not.toContain('admin');
+    io = await cli(['status', '--url', 'http://admin:s3cret@[bad'], allHandlers);
+    expect(io.code).toBe(2);
+    expect(io.err).not.toContain('s3cret');
   });
 });
 
@@ -168,6 +176,14 @@ describe('cli http client', () => {
     const bad = await resolveBaseUrl({ configDir: root });
     expect(bad.url).toBe('http://127.0.0.1:8787');
     expect(bad.note).toContain('invalid');
+    if (process.getuid?.() !== 0) {
+      writeFileSync(path.join(root, 'config.yaml'), 'server: { port: 18124 }\n', { mode: 0o000 });
+      chmodSync(path.join(root, 'config.yaml'), 0o000);
+      const unreadable = await resolveBaseUrl({ configDir: root });
+      expect(unreadable.url).toBe('http://127.0.0.1:8787');
+      expect(unreadable.note).toContain('not readable');
+      expect(unreadable.note).toContain('--url');
+    }
   });
 
   it('sends the CSRF header and JSON only on mutating requests', async () => {

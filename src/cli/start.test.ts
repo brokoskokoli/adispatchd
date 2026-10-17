@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
+import { acquireInstanceLock } from '../persistence/index.js';
 import { createStartHandler, parseStartFlags } from './start.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -87,8 +88,22 @@ describe('start command', () => {
     expect(await createStartHandler(io)({})).toBe(2);
     const { configDir, dataDir } = tempConfig(1);
     writeFileSync(path.join(configDir, 'workflows', 'bad.yaml'), 'id: bad\n');
-    expect(await createStartHandler(io)({ configDir, dataDir })).toBe(1);
+    expect(await createStartHandler(io)({ configDir, dataDir })).toBe(78); // EX_CONFIG → RestartPreventExitStatus
     expect(out.join('')).toContain('is invalid');
+  });
+
+  it('exits with 78 when another instance holds the data dir lock', async () => {
+    const out: string[] = [];
+    const io = { stdout: (t: string) => out.push(t), stderr: (t: string) => out.push(t) };
+    const { configDir, dataDir } = tempConfig(1);
+    mkdirSync(dataDir, { recursive: true });
+    const lock = acquireInstanceLock(dataDir);
+    try {
+      expect(await createStartHandler(io)({ configDir, dataDir })).toBe(78);
+      expect(out.join('')).toContain('Another orchestrator instance');
+    } finally {
+      lock.release();
+    }
   });
 
   it('parses timeout, host and port flags', async () => {
