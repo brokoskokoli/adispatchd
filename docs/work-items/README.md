@@ -1,6 +1,6 @@
 # Work-Items – Übersicht
 
-Zerlegung der Spec v0.1 in umsetzbare Pakete. Abhängigkeiten bestimmen die Wellen; innerhalb einer Welle wird parallel gearbeitet.
+Zerlegung der Spec v0.1 in umsetzbare Pakete. **Status: alle Work-Items umgesetzt, reviewed und gemergt – siehe `../status.md`.** Abhängigkeiten bestimmen die Wellen; innerhalb einer Welle wird parallel gearbeitet.
 
 | WI | Titel | Spec | Abhängig von | Welle |
 |---|---|---|---|---|
