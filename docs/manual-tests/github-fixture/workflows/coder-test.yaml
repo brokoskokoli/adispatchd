@@ -40,28 +40,37 @@ retry:
   max_technical_failures: 3             # Szenario 5: dritter Crash → Retry-Block
 
 on_start:
-  - type: source.update
+  - id: on_start-labels
+    type: source.update
     labels: { add: [coding], remove: [ready-for-coding] }
 on_success:
-  - type: source.update
+  - id: on_success-labels
+    type: source.update
     labels: { add: [ready-for-review], remove: [coding] }
-  - type: source.comment
+  - id: on_success-comment
+    type: source.comment
     message: 'Coder-Test erfolgreich: {result.message}'
     continue_on_error: true
 on_failure:                             # fachliches failure (Ergebnisdatei) → Needs Maintainer, kein Retry-Zähler
-  - type: source.update
+  - id: on_failure-labels
+    type: source.update
     labels: { add: [needs-maintainer], remove: [coding] }
-  - type: source.comment
+  - id: on_failure-comment
+    type: source.comment
     message: 'Needs maintainer: {result.message}'
 on_crash:                               # technischer Fehler → zurück in die Warteschlange (Block stoppt nach 3×)
-  - type: source.update
+  - id: on_crash-labels
+    type: source.update
     labels: { add: [ready-for-coding], remove: [coding] }
 on_start_error:
-  - type: source.update
+  - id: on_start_error-labels
+    type: source.update
     labels: { add: [ready-for-coding], remove: [coding] }
 on_timeout:
-  - type: source.update
+  - id: on_timeout-labels
+    type: source.update
     labels: { add: [ready-for-coding], remove: [coding] }
 on_cancel:
-  - type: source.update
+  - id: on_cancel-labels
+    type: source.update
     labels: { add: [ready-for-coding], remove: [coding] }

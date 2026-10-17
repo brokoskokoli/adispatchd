@@ -28,25 +28,33 @@ execute:
     max_duration: 10m
 
 on_start:
-  - type: source.update
+  - id: on_start-labels
+    type: source.update
     labels: { add: [reviewing], remove: [ready-for-review] }
 on_success:
-  - type: source.update
+  - id: on_success-labels
+    type: source.update
     labels: { add: [reviewed], remove: [reviewing] }
-  - type: source.comment
+  - id: on_success-comment
+    type: source.comment
     message: 'Reviewer-Test ok: {result.message}'
 on_failure:
-  - type: source.update
+  - id: on_failure-labels
+    type: source.update
     labels: { add: [needs-maintainer], remove: [reviewing] }
 on_crash:
-  - type: source.update
+  - id: on_crash-labels
+    type: source.update
     labels: { add: [ready-for-review], remove: [reviewing] }
 on_start_error:
-  - type: source.update
+  - id: on_start_error-labels
+    type: source.update
     labels: { add: [ready-for-review], remove: [reviewing] }
 on_timeout:
-  - type: source.update
+  - id: on_timeout-labels
+    type: source.update
     labels: { add: [ready-for-review], remove: [reviewing] }
 on_cancel:
-  - type: source.update
+  - id: on_cancel-labels
+    type: source.update
     labels: { add: [ready-for-review], remove: [reviewing] }

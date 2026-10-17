@@ -36,6 +36,16 @@ describe('manual GitHub test fixture (docs/manual-tests/github-fixture)', () => 
     expect(c.workflows['coder-test']?.maxConcurrent).toBe(2);
     expect(c.workflows['coder-test']?.retry.maxTechnicalFailures).toBe(3);
     expect(c.views['needs-maintainer']?.sources).toEqual(['test_a', 'test_b']);
+    // The guide refers to actions by explicit IDs (generated `<hook>.<index>` IDs are 0-based and easy to get wrong).
+    for (const wf of Object.values(c.workflows)) {
+      for (const actions of Object.values(wf.hooks)) {
+        for (const action of actions) expect(action.id, `${wf.id}: ${action.id}`).not.toMatch(/^on_[a-z_]+\.\d+$/);
+      }
+    }
+    const coderIds = Object.values(c.workflows['coder-test']?.hooks ?? {}).flat().map((a) => a.id);
+    expect(coderIds).toEqual(expect.arrayContaining(['on_start-labels', 'on_success-labels', 'on_success-comment', 'on_start_error-labels']));
+    const commenterIds = Object.values(c.workflows['commenter-test']?.hooks ?? {}).flat().map((a) => a.id);
+    expect(commenterIds).toEqual(expect.arrayContaining(['on_start-labels', 'start-comment', 'done-comment', 'on_success-labels']));
   });
 
   it('ships an executable test worker that pins the same API version as the client', () => {

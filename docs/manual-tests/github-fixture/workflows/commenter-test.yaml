@@ -26,7 +26,8 @@ execute:
     max_duration: 10m
 
 on_start:
-  - type: source.update
+  - id: on_start-labels
+    type: source.update
     labels: { add: [commenting], remove: [ready-for-comment] }
   - id: start-comment
     type: source.comment
@@ -37,20 +38,26 @@ on_success:
     type: source.comment
     message: 'Kommentar-Test fertig: {result.message}'
     retry: { max_attempts: 6, delay: 20s }   # ~100 s Fenster für einen Netzwerkausfall
-  - type: source.update
+  - id: on_success-labels
+    type: source.update
     labels: { add: [commented], remove: [commenting] }
 on_failure:
-  - type: source.update
+  - id: on_failure-labels
+    type: source.update
     labels: { add: [needs-maintainer], remove: [commenting] }
 on_crash:
-  - type: source.update
+  - id: on_crash-labels
+    type: source.update
     labels: { add: [ready-for-comment], remove: [commenting] }
 on_start_error:
-  - type: source.update
+  - id: on_start_error-labels
+    type: source.update
     labels: { add: [ready-for-comment], remove: [commenting] }
 on_timeout:
-  - type: source.update
+  - id: on_timeout-labels
+    type: source.update
     labels: { add: [ready-for-comment], remove: [commenting] }
 on_cancel:
-  - type: source.update
+  - id: on_cancel-labels
+    type: source.update
     labels: { add: [ready-for-comment], remove: [commenting] }

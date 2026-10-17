@@ -189,9 +189,12 @@ Empfohlen sind **drei** GitHub Apps, eine je Rolle wie in Spec §5.3. Nur so lä
 
 | App (Vorschlag Name) | Identity | Repository permissions (minimal) | Wofür |
 |---|---|---|---|
-| `orch-test-maintainer-<owner>` | `maintainer` | **Issues: Read-only**, Metadata: Read-only (automatisch) | Source-Identity: Polling, Dependencies, Views, Neu-Lesen vor Updates |
-| `orch-test-coder-<owner>` | `coder` | **Issues: Read and write**, **Pull requests: Read and write**, Metadata: Read-only | Labels und Kommentare in `coder-test` und `commenter-test`, `GH_TOKEN` des Workers |
-| `orch-test-reviewer-<owner>` | `reviewer` | **Issues: Read and write**, **Pull requests: Read and write**, Metadata: Read-only | Labels/Kommentare an PRs (`reviewer-test`), Start-Kommentar in `commenter-test` |
+| `orch-test-maintainer-<owner>` | `maintainer` | **Issues: Read-only**, Metadata: Read-only (automatisch) | Source-Identity: Polling, Dependencies, Views, Item-Lesen für Hooks und manuelle Starts |
+| `orch-test-coder-<owner>` | `coder` | **Issues: Read and write**, **Pull requests: Read and write**, Metadata: Read-only | Labels und Kommentare in `coder-test` und `commenter-test`, `GH_TOKEN` des Workers. Liest selbst: Neu-Lesen des Items vor jedem Label-Update und die Marker-Suche nutzen die **schreibende** Identity (`applyUpdate`, `findCommentByMarker`) |
+| `orch-test-reviewer-<owner>` | `reviewer` | **Issues: Read and write**, **Pull requests: Read and write**, Metadata: Read-only | Labels/Kommentare an PRs (`reviewer-test`), Start-Kommentar in `commenter-test`; liest wie coder selbst (Neu-Lesen, Marker-Suche) |
+
+Schreibende Apps brauchen also immer auch Lesezugriff auf Issues (in „Read and write“ enthalten). *Issues* darf bei
+coder/reviewer nie auf „No access“ stehen, sonst scheitert schon das Neu-Lesen vor dem Update.
 
 Alles andere bleibt auf „No access“: Contents, Workflows, Administration, Account permissions, Organization
 permissions. Ein echter Coder bräuchte zusätzlich *Contents: write* für Push und PR. Das ist hier nicht nötig, weil der
@@ -597,15 +600,17 @@ post /scheduler/pause >/dev/null
 N_OK=$(mkissue orch-test-a "T3 mit Label" ready-for-coding manual-keep); echo "N_OK=$N_OK" >> tmp/testdata.env
 N_NO=$(mkissue orch-test-a "T3 ohne Label")
 N_CL=$(mkissue orch-test-a "T3 geschlossen mit Label" ready-for-coding); gh issue close $N_CL -R $(repo orch-test-a)
-orch workflow dry-run coder-test --config-dir "$ORCH_CFG"
-post /scheduler/resume >/dev/null; sleep 25; diag coder-test
+orch workflow dry-run coder-test --config-dir "$ORCH_CFG" --local --data-dir "$ORCH_DATA"   # lokal: Gate egal
+post /scheduler/resume >/dev/null; sleep 25; runs coder-test 5 | grep "test_a:$N_OK"
 ```
 
 **Erwartet:**
 - Der Dry-Run zeigt `pushdown {"field":"labels","operator":"contains","value":"ready-for-coding"}`.
 - `polled` entspricht der Zahl **offener** Items mit `ready-for-coding`.
 - `test_a:$N_OK` ist `would_start`; `$N_NO` und `$N_CL` fehlen ganz.
-- Nach `resume` zeigt `diag` für `test_a:$N_OK` `started`.
+- Nach `resume` gibt es einen Run für `test_a:$N_OK` (`runs`). `diag` zeigt nur den **letzten** Planungsschritt, in dem
+  das gestartete Item meist schon `locked` ist oder fehlt; Starts deshalb immer über `runs`/`run_of` prüfen.
+- Über HTTP (`dry-run` ohne `--local`) wäre das Item bei pausiertem Scheduler `gate_closed` statt `would_start`.
 
 **Ist:** ☐ OK ☐ Abweichung: ……
 
@@ -623,8 +628,8 @@ gh api repos/$(repo orch-test-a)/issues/$N_OK/events --jq '.[] | select(.event|t
 ```
 
 **Erwartet:**
-- Der Run ist `completed`, `outcome: success`, mit `resultMessage: "Simulierter Erfolg für …"` und `identity: coder`.
-- `on_start.1`, `on_success.1` und `on_success.2` sind `succeeded`.
+- Der Run ist `completed`, `outcome: success`, mit `resultMessage: "Simulierter Erfolg fuer …"` und `identity: coder`.
+- `on_start-labels`, `on_success-labels` und `on_success-comment` sind `succeeded` (explizite Action-IDs im Fixture).
 - Labels: `manual-keep,ready-for-review`.
 - Die Label-Events stammen vom Coder-Bot (`<coder-slug>[bot]`): erst `labeled coding` / `unlabeled ready-for-coding`,
   dann `labeled ready-for-review` / `unlabeled coding`.
@@ -635,7 +640,7 @@ gh api repos/$(repo orch-test-a)/issues/$N_OK/events --jq '.[] | select(.event|t
 
 **Schritte:**
 ```bash
-N=$(mkissue orch-test-a "T5 labels" manual-keep 'prio: high/urgent')
+N=$(mkissue orch-test-a "T5 labels" manual-keep 'prio: high/urgent'); echo "N_T5=$N" >> tmp/testdata.env
 probe labels test_a $N coder +coding -'prio: high/urgent'        # 1. Aufruf
 probe labels test_a $N coder +coding -'prio: high/urgent'        # 2. Aufruf
 probe labels test_a $N coder +CODING                             # Groß/Klein
@@ -659,7 +664,7 @@ entsprechen A11. `findCommentByMarker` findet nur Kommentare der **eigenen** App
 
 **Schritte:**
 ```bash
-comments orch-test-a $N_OK                                 # Kommentar aus T4 (on_success.2)
+comments orch-test-a $N_OK                                 # Kommentar aus T4 (on_success-comment)
 MARK=$(comments orch-test-a $N_OK | tail -1 | grep -o 'orch:[^ ]*')
 probe find test_a $N_OK coder "$MARK"                      # a) eigene App
 probe find test_a $N_OK reviewer "$MARK"                   # c) fremde App, gleicher Marker
@@ -716,18 +721,18 @@ gepostet, Antwort ging verloren“. Zusätzlich wird der Identitätswechsel gepr
    ```
 
 **Erwartet:**
-- Nach Schritt 1 ist `on_start.1` `succeeded` und `start-comment` `succeeded`. Der erste Kommentar stammt von
+- Nach Schritt 1 ist `on_start-labels` `succeeded` und `start-comment` `succeeded`. Der erste Kommentar stammt von
   `<reviewer-slug>[bot]` mit App-ID `$REVIEWER_APP_ID` (Action-Identity überschreibt die Workflow-Identity).
 - Schritt 3:
   - Der Run ist `completed`, `outcome: success`, mit `lifecycleStatus: failed` und `lifecycleFailed: true`.
   - `done-comment` ist `failed` nach **1** Versuch, mit HTTP 404 bzw. 403. Das ist nicht wiederholbar, bewusst nach
     WI-07.
-  - Das folgende `on_success.2` (Labels) bleibt `pending`.
+  - Das folgende `on_success-labels` bleibt `pending`.
   - Es gibt eine Notification `lifecycle_action_failed`.
 - Schritt 4:
   - Der Retry endet mit `done-comment` `succeeded` und `externalKey` = ID des Vorab-Kommentars. Das Event
     `lifecycle.action` hat `reconciled: true`.
-  - Danach läuft `on_success.2`: Labels `commented,test:slow`.
+  - Danach läuft `on_success-labels`: Labels `commented,test:slow`.
   - `comments` zeigt **genau einen** Kommentar mit diesem Marker. Der Worker wurde **nicht** neu gestartet (nur ein
     `run.spawn` in `events`).
 
@@ -760,7 +765,7 @@ Kurz **vor** dem Worker-Ende (bei `working 50/60s`) das Netz kappen und nach etw
 
 ```bash
 sleep 120; actions $RUN
-api /runs/$RUN | jq '.actions[] | select(.name=="done-comment") | .attemptsDetail[] | {attempt, status, error: .error.message}'
+api /runs/$RUN | jq '.actions[] | select(.name=="done-comment") | .attemptsDetail[] | {attempt, outcome, error: .error.message}'
 events $RUN | grep -c run.spawn
 comments orch-test-b $N | grep -c 'orch:'
 ```
@@ -793,7 +798,8 @@ sleep 25; diag coder-test | grep "test_a:$N_FAIL"; api /blocks | jq '.blocks | l
 - `completed` / `outcome: failure` / `businessResult: failure`, mit `countedTechnicalFailure: false` und `block: null`.
 - Labels: `needs-maintainer,test:failure` (`coding` weg, `ready-for-coding` weg).
 - Der Kommentar lautet `Needs maintainer: Simulierter fachlicher Fehler fuer …`.
-- Kein neuer Start, weil `ready-for-coding` fehlt. Es entsteht kein Block.
+- Kein neuer Start, weil `ready-for-coding` fehlt; `diag` zeigt das Item deshalb gar nicht mehr (Ausgabe leer).
+  Es entsteht kein Block.
 
 **Ist:** ☐ OK ☐ Abweichung: ……
 
@@ -811,8 +817,8 @@ gh pr edit $A_PR -R $(repo orch-test-a) --add-label ready-for-review
 probe list test_a ready-for-review | jq '.[] | {key, type}'
 probe deps test_a $A_PR
 ghraw maintainer "/repos/$(repo orch-test-a)/issues/$A_PR/dependencies/blocked_by" -w '\nHTTP %{http_code}\n'
-sleep 25; diag reviewer-test
-sleep 70; RUN=$(run_of test_a $A_PR); api /runs/$RUN | jq '{status, outcome, identity}'
+sleep 25; diag reviewer-test | grep "test_a:$N_OK"          # Issue: dauerhaft filtered
+sleep 70; RUN=$(run_of test_a $A_PR); echo "PR-Run: ${RUN:-keiner}"; api /runs/$RUN | jq '{status, outcome, identity}'
 gh pr view $A_PR -R $(repo orch-test-a) --json labels,comments --jq '{labels: [.labels[].name], last: .comments[-1].author.login}'
 ```
 
@@ -824,8 +830,10 @@ gh pr view $A_PR -R $(repo orch-test-a) --json labels,comments --jq '{labels: [.
 
   **Ergebnis notieren.** Bei (b) startet `reviewer-test` den PR nie (`filter_unknown`). Dann muss der Dependency-Filter
   für PR-Workflows dokumentiert entfallen, siehe [5.2](#52-bei-abweichungen).
-- `diag reviewer-test`: `test_a:$A_PR` ist `started` (bei a). Das Issue `test_a:$N_OK` ist `filtered`
-  (`is_pull_request` = false).
+- `diag reviewer-test`: Das Issue `test_a:$N_OK` ist `filtered` (`is_pull_request` = false), in jedem Planungsschritt.
+- Bei (a) gibt `run_of` einen Run für den PR. `diag` eignet sich dafür nicht: Es zeigt nur den letzten Schritt, und
+  nach dem Start fehlt der PR dort (Label `ready-for-review` entfernt). Bei (b) gibt es keinen Run, `diag` zeigt
+  `filter_unknown`.
 - Der Run ist `completed` mit `identity: reviewer`.
 - PR-Labels: `reviewed`. Der letzte Kommentar stammt von `<reviewer-slug>[bot]`.
 
@@ -854,7 +862,7 @@ diag coder-test | grep "test_a:$N_SAME"
 - `coder-test`: `filtered` (Trace `dependencies.blocked_by_open` = 1, erwartet 0).
 - Gegenprobe A5: `gh issue close $A_BLOCKER -R $(repo orch-test-a)`. Danach ist die Summary `blocked_by: 0`,
   `total_blocked_by: 1`, und der nächste Poll startet `$N_SAME`. Den Blocker **wieder öffnen**
-  (`gh issue reopen …`), er wird später nicht mehr gebraucht.
+  (`gh issue reopen $A_BLOCKER -R $(repo orch-test-a)`), er wird später nicht mehr gebraucht.
 
 **Ist:** ☐ OK ☐ Abweichung: ……
 
@@ -873,7 +881,8 @@ diag coder-test | grep "test_a:$N_CROSS"
 ```
 
 **Erwartet:**
-- `blockedby_api` gibt 201 aus (`blocked_by added: …`). Laut Doku ist die Antwort ein Issue-Objekt, notieren, welches.
+- `blockedby_api` gibt `blocked_by added: #<nr>` aus (HTTP 201; `gh api` zeigt den Status nicht). Laut Doku ist die
+  Antwort ein Issue-Objekt: notieren, ob `<nr>` das blockierte Issue (`$N_CROSS`) oder der Blocker (`$B_BLOCKER`) ist.
 - View: `ok / 1 / 1 / true`.
 - Die Rohliste enthält den Blocker aus `orch-test-b` (`repository_url …/orch-test-b`).
 - `coder-test`: `filtered`.
@@ -922,13 +931,13 @@ gh issue reopen $H_BLOCKER -R $(repo orch-test-hidden)
 ```bash
 diag coder-test | grep "test_a:$N_CROSS"                     # filtered
 gh issue close $B_BLOCKER -R $(repo orch-test-b); date -u +%T
-for i in 1 2 3 4; do sleep 10; date -u +%T; diag coder-test | grep "test_a:$N_CROSS"; done
+for i in 1 2 3 4; do sleep 10; date -u +%T; echo "run: $(run_of test_a $N_CROSS)"; done   # leer, bis gestartet
 ghraw maintainer "/repos/$(repo orch-test-a)/issues/$N_CROSS" | jq .issue_dependencies_summary
 ```
 
 **Erwartet:**
-- Bis zum nächsten Planungsschritt bleibt das Issue `filtered`, ein früherer Start ist nicht möglich. Danach ist es
-  `started` (≤ 20 s + Schrittdauer).
+- Bis zum nächsten Planungsschritt gibt es keinen Run (das Issue bleibt `filtered`); ein früherer Start ist nicht
+  möglich. Danach liefert `run_of` eine Run-ID (≤ 20 s + Schrittdauer nach dem Schließen; Zeitstempel vergleichen).
 - Der Run ist `completed` / `success`.
 - Summary: `blocked_by: 0`, `total_blocked_by: 1` (A5).
 
@@ -944,17 +953,19 @@ P2=$(mkissue orch-test-a "T15 parallel 2" ready-for-coding test:slow)
 P3=$(mkissue orch-test-a "T15 parallel 3" ready-for-coding test:slow)
 post /scheduler/resume >/dev/null; sleep 15
 api /status | jq '.usage.byWorkflow["coder-test"]'
-diag coder-test | grep -E "T15|test_a:($P1|$P2|$P3)"
+for n in $P1 $P2 $P3; do echo "#$n run: $(run_of test_a $n)"; done
+diag coder-test | grep "test_a:$P3"                         # solange 2 aktiv: workflow_limit
 for n in $P1 $P2; do api /runs/$(run_of test_a $n) | jq -c '{id, identity, workspacePath, status}'; done
-sleep 100; diag coder-test | grep "test_a:$P3"
+sleep 100; echo "#$P3 run: $(run_of test_a $P3)"
 ```
 
 **Erwartet:**
-- `byWorkflow` ist `{"active": 2, "max": 2}`. `$P1` und `$P2` sind `started` (älteste zuerst), `$P3` ist
-  `workflow_limit` (`workflow limit reached (2/2 active)`).
+- `byWorkflow` ist `{"active": 2, "max": 2}`. `$P1` und `$P2` haben einen Run (älteste zuerst), `$P3` keinen.
+  `diag` zeigt `$P3` als `workflow_limit` (`workflow limit reached (2/2 active)`); die beiden gestarteten Items
+  fehlen dort ab dem nächsten Schritt (Label `coding`), deshalb Starts über `run_of` prüfen.
 - Beide Runs haben `identity: coder` und **verschiedene** `workspacePath`.
 - Im Log gibt es **keine** zusätzliche `Obtained … coder`-Zeile für den zweiten Run (gemeinsamer Token-Cache).
-- Nach Ende eines Runs startet `$P3` beim nächsten Poll.
+- Nach Ende eines Runs startet `$P3` beim nächsten Poll (`run_of` liefert dann eine ID).
 
 **Ist:** ☐ OK ☐ Abweichung: ……
 
@@ -1061,9 +1072,12 @@ post /scheduler/pause >/dev/null; labels orch-test-a $W
 ```
 
 Erwartet:
-- Der Run ist `start_error` mit `finalReason` `on_start failed: … HTTP 404 …` bzw. `403`. Der Worker wurde **nicht**
+- Der Run ist `start_error` mit `finalReason` `on_start action 'on_start-labels' failed`. Der Fehler der Action
+  (`actions $RUN`, letzte Spalte) lautet `Item <owner>/orch-test-a#<nr> not found`: Das Neu-Lesen in `applyUpdate`
+  mit der Coder-Identity bekommt 404 und wertet es als „nicht gefunden“ (`fetchIssue` → `null`). Bei 403 stünde dort
+  `… HTTP 403 …`. Der Worker wurde **nicht**
   gestartet.
-- `on_start.1` ist `failed`, und `on_start_error.1` ist ebenfalls `failed` (gleiche Ursache).
+- `on_start-labels` ist `failed`, und `on_start_error-labels` ist ebenfalls `failed` (gleiche Ursache).
 - `lifecycleFailed: true`, und eine Notification `lifecycle_action_failed` entsteht.
 - Die Labels bleiben unverändert (`ready-for-coding`). Ohne Pause würde der nächste Poll erneut starten, bis nach 3
   `start_error` ein Block entsteht. Das ist korrekt (Spec §11), aber zu beobachten.
@@ -1116,6 +1130,10 @@ Ein ✘ zeigt sich als `forbidden`, HTTP 403 `Resource not accessible by integra
 ```bash
 post /scheduler/pause >/dev/null
 D=$(mkissue orch-test-a "T20 dry-run" ready-for-coding 'priority:high')
+# frische blockierte Kandidaten (die aus T11–T13 sind inzwischen gestartet/umgelabelt); Blocker A/H sind offen
+D_SAME=$(mkissue orch-test-a "T20 blocked same repo"); blockedby orch-test-a $D_SAME orch-test-a $A_BLOCKER
+D_HID=$(mkissue orch-test-a "T20 blocked hidden");     blockedby orch-test-a $D_HID orch-test-hidden $H_BLOCKER
+for n in $D_SAME $D_HID; do gh issue edit $n -R "$(repo orch-test-a)" --add-label ready-for-coding; done
 before_labels=$(labels orch-test-a $D); before_runs=$(api /runs | jq .total)
 orch workflow dry-run coder-test --config-dir "$ORCH_CFG"                    # über die laufende Instanz (HTTP)
 orch workflow dry-run coder-test --config-dir "$ORCH_CFG" --local --data-dir "$ORCH_DATA" --json | jq '.candidates[] | {itemKey, decision, itemPriority, reason}'
@@ -1127,7 +1145,8 @@ post /scheduler/resume >/dev/null
 **Erwartet:**
 - Über HTTP: Gate `paused`, geeignete Kandidaten `gate_closed`. Lokal: `test_a:$D` ist `would_start` mit
   `itemPriority: 50` und steht vor anderen Kandidaten.
-- `$N_HID` ist `filter_unknown`. `$N_SAME`/`$N_CROSS` sind `filtered`, sofern ihre Blocker noch offen sind.
+- `$D_HID` ist `filter_unknown`, `$D_SAME` ist `filtered` (Trace `dependencies.blocked_by_open` = 1).
+  Nach `resume` bleiben beide ohne Run; zum Aufräumen `ready-for-coding` wieder entfernen.
 - Blockierte Items erscheinen als `blocked`, aktive als `locked`.
 - Labels, Kommentare und Runs bleiben unverändert (`unverändert`).
 - Die Notes nennen „shell filters and conditions are never executed“.
@@ -1148,6 +1167,9 @@ Zusätzlich im Browser *Views → Needs Maintainer* öffnen.
 **Erwartet:**
 - Es gibt Zeilen aus **beiden** Repos: `test_a:$N_FAIL` (T9) und `test_b:$F`. Die Spalten „Letzter Agent“ zeigen
   `coder-test` bzw. `commenter-test`, „Ergebnis“ die `failure`-Nachricht, „Status“ `completed`.
+- Außerdem erscheint `test_a:$N_T5` (T5): Das Label `needs-maintainer` wurde dort manuell gesetzt, das Issue hat
+  **keinen** Run. Die Run-Spalten sind leer (`null`, nicht `?`), sortiert nach „Aktualisiert“. Weitere Zeilen nur für
+  Items, die in anderen Fällen ebenfalls `needs-maintainer` bekamen.
 - Der Titel ist ein klickbarer Link auf das GitHub-Issue.
 - `errors: []`.
 - Ein zweiter Aufruf ohne `refresh` innerhalb von 30 s liefert `cached: true`.
@@ -1184,7 +1206,7 @@ zufällig auf, Header und Logzeile festhalten.
 **Schritte:**
 ```bash
 X=$(mkissue orch-test-a "T23 transfer")
-gh issue transfer $X $(repo orch-test-b)
+gh issue transfer "$(issue_url orch-test-a $X)" "$(repo orch-test-b)"   # URL statt Nummer: nie das Repo im cwd
 ghraw maintainer "/repos/$(repo orch-test-a)/issues/$X" -o /dev/null -w 'HTTP %{http_code} → %{redirect_url}\n'
 probe item test_a $X; echo "exit=$?"
 ```
@@ -1198,11 +1220,13 @@ weil `getItem` = `null` (fetch folgt dem Redirect, `repository_url` passt nicht)
 
 **Schritte:** nach allen anderen Fällen.
 ```bash
-grep -rIl -E 'ghs_[A-Za-z0-9_]{10,}|BEGIN RSA PRIVATE KEY|BEGIN PRIVATE KEY|eyJhbGciOi' tmp/orch.log "$ORCH_DATA" && echo "TREFFER!" || echo "sauber"
+PAT='ghs_[A-Za-z0-9_]{10,}|BEGIN RSA PRIVATE KEY|BEGIN PRIVATE KEY|eyJhbGciOi'
+grep -rlaE "$PAT" tmp/orch.log "$ORCH_DATA" && echo "TREFFER!" || echo "sauber"      # -a: auch SQLite/WAL (binär)
+command -v sqlite3 >/dev/null && sqlite3 -readonly "$ORCH_DATA/orchestrator.sqlite" .dump | grep -cE "$PAT"
 api /config/files | grep -c 'PRIVATE KEY'
 ```
 
-**Erwartet:** `sauber` und `0`. Ein Treffer ist ein Fehler: die Datei notieren, **nicht** einchecken, den Key rotieren.
+**Erwartet:** `sauber`, der `sqlite3`-Dump ergibt `0` (falls `sqlite3` installiert) und `/config/files` ebenfalls `0`. Ein Treffer ist ein Fehler: die Datei notieren, **nicht** einchecken, den Key rotieren.
 
 **Ist:** ☐ OK ☐ Abweichung: ……
 
@@ -1268,7 +1292,8 @@ rm -rf tmp/orch-cfg tmp/orch-data tmp/orch.log tmp/testdata.env tmp/orch-test.en
 unset ORCH_TEST_MAINTAINER_KEY ORCH_TEST_CODER_KEY ORCH_TEST_REVIEWER_KEY
 # 3. Repos löschen (braucht Scope delete_repo)
 gh auth refresh -s delete_repo
-for r in orch-test-a orch-test-b orch-test-hidden; do gh repo delete "$(repo $r)" --yes; done
+: "${ORCH_TEST_OWNER:?ORCH_TEST_OWNER setzen}"; type repo >/dev/null || { echo "helpers.sh nicht geladen"; false; } &&
+for r in orch-test-a orch-test-b orch-test-hidden; do gh repo delete "$(repo $r)"; done   # fragt je Repo nach (Namen prüfen)
 # 4. Private Keys lokal löschen
 rm -P ~/orch-test-keys/*.pem 2>/dev/null || shred -u ~/orch-test-keys/*.pem; rmdir ~/orch-test-keys
 ```
