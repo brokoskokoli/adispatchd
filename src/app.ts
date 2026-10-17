@@ -188,7 +188,11 @@ export interface AppOptions {
   fetch?: FetchLike;
   /** HTTP client for notification webhooks (default global `fetch`). */
   notificationFetch?: FetchLike;
-  /** SIGTERM drain timeout before cancel-all (default 10 min). */
+  /**
+   * Drain timeout before cancel-all. Used for API/GUI drain only when set
+   * (unbounded otherwise); the signal handlers get it from the CLI and
+   * default to 10 min there.
+   */
   drainTimeoutMs?: number;
   /** Time for cancelled runs before hooks are interrupted (default 2 min). */
   cancelTimeoutMs?: number;
@@ -457,7 +461,15 @@ export async function createApp(options: AppOptions): Promise<App> {
     redact: redactor.asRedactor,
     readiness,
     shutdown: (mode, reason) => {
-      void shutdown({ mode, ...(reason ? { reason } : {}) });
+      // API/GUI drain waits for active runs without a deadline unless one was
+      // configured; the cancel phase is always bounded so a kill_failed run or
+      // a hanging on_cancel hook cannot block the service forever.
+      void shutdown({
+        mode,
+        ...(mode === 'drain' && options.drainTimeoutMs !== undefined ? { drainTimeoutMs: options.drainTimeoutMs } : {}),
+        cancelTimeoutMs: options.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS,
+        ...(reason ? { reason } : {}),
+      });
     },
     reloadConfig,
     background,
