@@ -1,0 +1,60 @@
+# workflows/reviewer-test.yaml – Reviewer-Rolle gegen orch-test-a (github.md: T10).
+# Nur Pull Requests mit Label ready-for-review und ohne offene Blocker. Ein Issue mit demselben Label
+# (z. B. nach coder-test-Erfolg) wird über is_pull_request herausgefiltert.
+id: reviewer-test
+name: Reviewer-Test (orch-test-a, nur PRs)
+enabled: true
+priority: 40
+max_concurrent: 1
+identity: reviewer
+
+trigger:
+  type: source
+  source: test_a
+
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-review }
+    - { field: is_pull_request, operator: equals, value: true }
+    - { field: dependencies.blocked_by_open, operator: equals, value: 0 }
+
+execute:
+  type: shell
+  command: scripts/test-worker.sh
+  args: ['{item.number}', '{source.repository}']
+  env:
+    TEST_SLOW_SECONDS: '60'
+  timeout:
+    max_duration: 10m
+
+on_start:
+  - id: on_start-labels
+    type: source.update
+    labels: { add: [reviewing], remove: [ready-for-review] }
+on_success:
+  - id: on_success-labels
+    type: source.update
+    labels: { add: [reviewed], remove: [reviewing] }
+  - id: on_success-comment
+    type: source.comment
+    message: 'Reviewer-Test ok: {result.message}'
+on_failure:
+  - id: on_failure-labels
+    type: source.update
+    labels: { add: [needs-maintainer], remove: [reviewing] }
+on_crash:
+  - id: on_crash-labels
+    type: source.update
+    labels: { add: [ready-for-review], remove: [reviewing] }
+on_start_error:
+  - id: on_start_error-labels
+    type: source.update
+    labels: { add: [ready-for-review], remove: [reviewing] }
+on_timeout:
+  - id: on_timeout-labels
+    type: source.update
+    labels: { add: [ready-for-review], remove: [reviewing] }
+on_cancel:
+  - id: on_cancel-labels
+    type: source.update
+    labels: { add: [ready-for-review], remove: [reviewing] }

@@ -1,0 +1,63 @@
+# workflows/commenter-test.yaml – Kommentar-Actions gegen orch-test-b (github.md: T6, T7, T18, T19).
+# on_start kommentiert als REVIEWER (Action-Identity überschreibt die Workflow-Identity),
+# on_success als CODER mit großzügigem Retry, damit ein kurzer Netzwerkausfall überbrückt wird (Szenario 6).
+id: commenter-test
+name: Kommentar-Test (orch-test-b)
+enabled: true
+priority: 30
+max_concurrent: 1
+identity: coder
+
+trigger:
+  type: source
+  source: test_b
+
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-comment }
+
+execute:
+  type: shell
+  command: scripts/test-worker.sh
+  args: ['{item.number}', '{source.repository}']
+  env:
+    TEST_SLOW_SECONDS: '60'
+  timeout:
+    max_duration: 10m
+
+on_start:
+  - id: on_start-labels
+    type: source.update
+    labels: { add: [commenting], remove: [ready-for-comment] }
+  - id: start-comment
+    type: source.comment
+    identity: reviewer
+    message: 'Kommentar-Test gestartet (Run {run.id}, Item {item.key}).'
+on_success:
+  - id: done-comment
+    type: source.comment
+    message: 'Kommentar-Test fertig: {result.message}'
+    retry: { max_attempts: 6, delay: 20s }   # ~100 s Fenster für einen Netzwerkausfall
+  - id: on_success-labels
+    type: source.update
+    labels: { add: [commented], remove: [commenting] }
+on_failure:
+  - id: on_failure-labels
+    type: source.update
+    labels: { add: [needs-maintainer], remove: [commenting] }
+on_crash:
+  - id: on_crash-labels
+    type: source.update
+    labels: { add: [ready-for-comment], remove: [commenting] }
+on_start_error:
+  - id: on_start_error-labels
+    type: source.update
+    labels: { add: [ready-for-comment], remove: [commenting] }
+on_timeout:
+  - id: on_timeout-labels
+    type: source.update
+    labels: { add: [ready-for-comment], remove: [commenting] }
+on_cancel:
+  - id: on_cancel-labels
+    type: source.update
+    labels: { add: [ready-for-comment], remove: [commenting] }

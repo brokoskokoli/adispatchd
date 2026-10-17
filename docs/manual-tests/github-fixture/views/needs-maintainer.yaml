@@ -1,0 +1,17 @@
+# views/needs-maintainer.yaml – Szenario 10: kombiniert beide Test-Repos (github.md: T21).
+id: needs-maintainer
+title: Needs Maintainer (Test)
+sources: [test_a, test_b]
+filter:
+  all:
+    - { field: labels, operator: contains, value: needs-maintainer }
+fields:
+  - { field: repository, label: Repository }
+  - { field: number, label: Nr. }
+  - { field: title, label: Titel, link: url }
+  - { field: is_pull_request, label: PR }
+  - { field: run.last_workflow, label: Letzter Agent }
+  - { field: run.last_status, label: Status }
+  - { field: run.last_result.message, label: Ergebnis }
+  - { field: updated_at, label: Aktualisiert }
+sort: { field: updated_at, direction: desc }

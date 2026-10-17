@@ -1,0 +1,30 @@
+# Test-Konfiguration für docs/manual-tests/github.md (manuelle Tests gegen echtes GitHub).
+# NICHT produktiv verwenden: kurze Intervalle und Retry-Pausen, damit die Testfälle schnell beobachtbar sind.
+# Wird von src/sources/github/manual-fixture.test.ts mit dem echten Loader validiert.
+
+server:
+  host: 127.0.0.1
+  port: 8791               # eigener Port, kollidiert nicht mit einer produktiven Instanz (8787)
+  allowed_hosts: []
+
+scheduler:
+  polling_interval: 20s    # kurz, damit „nächster Poll“ (Szenario 3) schnell sichtbar ist
+  max_concurrent: 4        # global; Workflow-Limit von coder-test (2) greift zuerst (Szenario 1)
+
+workspace:
+  cleanup: never           # Workspaces zur Analyse behalten (liegen unter <data-dir>/workspaces)
+
+lifecycle:
+  action_retry:
+    max_attempts: 3
+    delay: 20s             # Default 30 s; kürzer für Szenario 6
+
+retention:
+  completed_runs: 7d
+  failed_runs: 7d
+  blocked_runs: 7d
+  cleanup_interval: 24h
+
+notifications:
+  on: [retry_block_created, lifecycle_action_failed, recovery_failed]
+  channels: []             # optional: Webhook (z. B. https://webhook.site) für Block-/Action-Fehler eintragen
