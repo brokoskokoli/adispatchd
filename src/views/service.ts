@@ -15,6 +15,7 @@ import {
   noopLogger,
   OrchestratorError,
   systemClock,
+  VIEW_RUN_FIELDS,
   type Clock,
   type FieldDefinition,
   type FieldResolution,
@@ -34,17 +35,8 @@ export const DEFAULT_VIEW_CACHE_TTL_MS = 30_000;
 /** Max rows returned per view (more are cut off, `truncated: true`). */
 export const MAX_VIEW_ROWS = 2_000;
 
-/** Internal run fields available to views (per global item key, latest run by creation). */
-export const VIEW_RUN_FIELDS: readonly FieldDefinition[] = Object.freeze([
-  { name: 'run.last_id', type: 'string', description: 'ID of the latest run', operators: ['equals', 'not_equals', 'in'] },
-  { name: 'run.last_workflow', type: 'string', description: 'Workflow of the latest run', operators: ['equals', 'not_equals', 'in'] },
-  { name: 'run.last_status', type: 'string', description: 'Technical status of the latest run', operators: ['equals', 'not_equals', 'in'] },
-  { name: 'run.last_result', type: 'string', description: 'Business result (success/failure) of the latest run', operators: ['equals', 'not_equals', 'in'] },
-  { name: 'run.last_result.message', type: 'string', description: 'Result message of the latest run', operators: ['equals', 'not_equals', 'contains'] },
-  { name: 'run.last_status_message', type: 'string', description: 'Last worker status message', operators: ['equals', 'not_equals', 'contains'] },
-  { name: 'run.last_started_at', type: 'date', description: 'Start of the latest run', operators: ['equals', 'greater_than', 'less_than'] },
-  { name: 'run.last_finished_at', type: 'date', description: 'End of the latest run', operators: ['equals', 'greater_than', 'less_than'] },
-] satisfies FieldDefinition[]);
+/** Internal run fields available to views (defined in core so config validation can use them). */
+export { VIEW_RUN_FIELDS };
 
 /** A view column. */
 export interface ViewColumn {
@@ -263,7 +255,8 @@ export class ViewService {
         seen.add(item.key);
         const run = lastRuns.get(item.key) ?? null;
         const fields = createItemFieldSource(item, {
-          definitions: adapter.fieldDefinitions(),
+          // Run fields are declared too, so that their types apply (dates compare as instants).
+          definitions: [...adapter.fieldDefinitions(), ...VIEW_RUN_FIELDS],
           resolveFields: (i, f) => adapter.resolveFields(i, f),
           wantedFields: wanted,
           extraFields: runFields(run),

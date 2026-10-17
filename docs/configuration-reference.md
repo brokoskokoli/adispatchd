@@ -18,7 +18,8 @@
 1. [Überblick](#1-überblick)
 2. [Gemeinsame Datentypen](#2-gemeinsame-datentypen)
 3. [Die Dateien](#3-die-dateien) – [config.yaml](#31-configyaml), [sources.yaml](#32-sourcesyaml),
-   [identities.yaml](#33-identitiesyaml), [workflows/*.yaml](#34-workflowsyaml), [views/*.yaml](#35-viewsyaml)
+   [identities.yaml](#33-identitiesyaml), [workflows/*.yaml](#34-workflowsyaml), [views/*.yaml](#35-viewsyaml),
+   [Grenzen](#36-bekannte-grenzen-v1)
 4. [Filter-Sprache](#4-filter-sprache)
 5. [Platzhalter-Referenz](#5-platzhalter-referenz)
 6. [Auswertungsablauf](#6-auswertungsablauf)
@@ -83,7 +84,8 @@ Konfiguration und wird hier nur erwähnt, wo es Defaults bestimmt.
 3. Jede Datei wird gegen ihr Schema geprüft (`src/config/schemas.ts`: Struktur, Typen, Dauern, Größen, Defaults).
    Ist `config.yaml` ungültig, werden Workflows trotzdem gegen die **Default**-Globalwerte weitergeprüft.
 4. Semantische Prüfung über alle Dateien (`src/config/validate.ts`): Referenzen, eindeutige IDs, Platzhalter je
-   Kontext, Widersprüche, Cron/Zeitzone, Parameter-Defaults.
+   Kontext, Widersprüche, Cron/Zeitzone, Parameter-Defaults, Feldnamen/Operatoren/Werttypen in Filtern und Views
+   gegen den statischen Feldkatalog des Adaptertyps (`src/config/field-catalog.ts`, §4.3).
 5. **Alle** Probleme aller Dateien werden gesammelt (nicht beim ersten abgebrochen), sortiert nach Datei, Zeile,
    Pfad, und als `datei:zeile: pfad: meldung` ausgegeben. Warnungen (`warning:`) verhindern das Laden nicht.
 
@@ -91,8 +93,9 @@ Folgefehler sind möglich: Ist z. B. `identities.yaml` ungültig, meldet `source
 `Unknown identity "…"`. Den ersten Fehler zuerst beheben.
 
 Der Loader liest **keine** Umgebungsvariablen. `config validate` prüft also nicht, ob `private_key_env`,
-`url_env` oder `headers_env` gesetzt sind, und es prüft weder Skriptpfade auf Existenz noch Filter-Feldnamen
-gegen den Adapter (siehe §4.3). Exit-Code: 0 = gültig (ggf. mit Warnungen), 1 = ungültig.
+`url_env` oder `headers_env` gesetzt sind, und es prüft weder Skriptpfade auf Existenz noch App-Rechte oder die
+Erreichbarkeit von GitHub. Feldnamen werden offline gegen den statischen Feldkatalog geprüft (§4.3).
+Exit-Code: 0 = gültig (ggf. mit Warnungen), 1 = ungültig.
 
 ### 1.5 Wann Änderungen wirken
 
@@ -149,8 +152,10 @@ Syntax: `<zahl><einheit>` – genau **eine** Zahl und **eine** Einheit, optional
 - Dezimalzahlen sind erlaubt, wenn das Ergebnis ganze Millisekunden ergibt: `1.5h`, `0.5s` ✓, `0.0001s` ✗.
 - Nicht erlaubt: zusammengesetzte Formen (`1h30m` → `90m`), Leerzeichen zwischen Zahl und Einheit (`6 h`),
   negative Werte, fehlende Einheit, Großbuchstaben (`30S`), unquotierte Zahlen (`timeout: 30`).
-- `0s` ist syntaktisch gültig. Nur `execute.timeout.max_duration` und `execute.timeout.idle_timeout` verlangen
-  ausdrücklich > 0.
+- `0s` ist syntaktisch gültig, aber nur dort erlaubt, wo 0 einen Sinn hat (Retry-`delay`, `cancel_grace`,
+  `cache`, `retention.*_runs`). **> 0** verlangen: `execute.timeout.max_duration`, `execute.timeout.idle_timeout`,
+  `timeout` von Conditions, `shell_filter` und `shell`-Actions. **≥ 1 s** verlangen: `scheduler.polling_interval`
+  und `retention.cleanup_interval` (ein Null-Intervall würde die Schleife ohne Pause laufen lassen).
 - Wo `never` erlaubt ist (`retention.*_runs`), bedeutet es „nie löschen“.
 
 ### 2.2 Größe
@@ -231,18 +236,18 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 |---|---|---|---|---|
 | `server.host` | String | `127.0.0.1` | nicht leer | Bind-Adresse von API/UI. Keine Authentifizierung – nur Loopback oder hinter authentifizierendem Proxy/VPN. |
 | `server.port` | Integer | `8787` | 1–65535 | TCP-Port. |
-| `server.allowed_hosts` | Liste String | `[]` | je `name` oder `name:port`; IPv6 in Klammern (`[::1]:8787`) | zusätzliche Namen, die im `Host`-Header akzeptiert werden (DNS-Rebinding-Schutz), z. B. der öffentliche Name des Reverse-Proxys. Vergleich ohne Groß-/Kleinschreibung; `name` = jeder Port, `name:port` = nur dieser Port (ein `Host` **ohne** Port gilt dabei als Port 80). Immer erlaubt: `localhost`, `127.0.0.1`, `[::1]` und – wenn nicht Loopback/Wildcard – `server.host` selbst. |
-| `scheduler.polling_interval` | Dauer | `30s` | | Pause zwischen zwei Planungsschritten (gemessen ab Ende des vorherigen). |
+| `server.allowed_hosts` | Liste String | `[]` | je `name` oder `name:port`; IPv6 in Klammern (`[::1]:8787`) | zusätzliche Namen, die im `Host`-Header akzeptiert werden (DNS-Rebinding-Schutz), z. B. der öffentliche Name des Reverse-Proxys. Vergleich ohne Groß-/Kleinschreibung; `name` = jeder Port, `name:port` = nur dieser Port. Ein `Host` **ohne** Port (Standardport des Schemas, z. B. hinter einem HTTPS-Proxy) passt auf `name`, `name:80` und `name:443`. Immer erlaubt: `localhost`, `127.0.0.1`, `[::1]` und – wenn nicht Loopback/Wildcard – `server.host` selbst. |
+| `scheduler.polling_interval` | Dauer | `30s` | ≥ 1 s | Pause zwischen zwei Planungsschritten (gemessen ab Ende des vorherigen). |
 | `scheduler.max_concurrent` | Integer | `5` | ≥ 1 | Globales Limit für **automatische** Starts. Gezählt werden alle aktiven Runs (inkl. manueller und `recovery_pending`). |
 | `workspace.base_dir` | String | `<data-dir>/workspaces` | relativ → zum config-dir | Wurzel der Run-Workspaces; nur Verzeichnisse **strikt darunter** werden symlink-sicher angelegt und automatisch gelöscht. |
 | `workspace.cleanup` | Enum | `on_success` | `always`, `on_success`, `never` | Wann der Workspace nach Run-Ende gelöscht wird (§6.12). |
 | `lifecycle.action_retry.max_attempts` | Integer | `3` | ≥ 1 | Standard-Anzahl **Versuche insgesamt** pro Lifecycle-Action. |
-| `lifecycle.action_retry.delay` | Dauer | `30s` | | Pause zwischen Versuchen (mind. ein `Retry-After` der API). |
+| `lifecycle.action_retry.delay` | Dauer | `30s` | ≥ 0 | Pause zwischen Versuchen (mind. ein `Retry-After` der API). |
 | `retention.completed_runs` | Dauer \| `never` | `30d` | | Aufbewahrung erfolgreicher Runs (`completed` + `success`). |
 | `retention.failed_runs` | Dauer \| `never` | `90d` | | alle anderen beendeten Runs (fachlich `failure`, technisch gescheitert, `cancelled`), soweit nicht „blocked“. |
 | `retention.blocked_runs` | Dauer \| `never` | `never` | | Runs, deren technischer Fehler in einen Retry-Block gezählt wurde. |
 | `retention.max_log_size_per_run` | Größe | `100MB` | | Log-Limit des Haupt-Workers pro Run (stdout+stderr); Überlauf wird markiert. |
-| `retention.cleanup_interval` | Dauer | `24h` | | Abstand der Retention-Durchläufe (erster Lauf 60 s nach Bereitschaft). |
+| `retention.cleanup_interval` | Dauer | `24h` | ≥ 1 s | Abstand der Retention-Durchläufe (erster Lauf 60 s nach Bereitschaft). |
 | `notifications.on` | Liste Enum | alle drei | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. |
 | `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
 
@@ -517,7 +522,7 @@ Source (beachte §4.5: standardmäßig nur offene Issues/PRs).
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
 | `command` | String | ja | | Programm (§2.4). **Keine `args`** – das Item kommt über `ORCH_CHECK_CONTEXT_FILE`. |
-| `timeout` | Dauer | nein | `30s` | danach `unknown` |
+| `timeout` | Dauer | nein | `30s` | > 0; danach `unknown` |
 
 Exit `0` = passt, `1` = passt nicht, `≥ 2`/Signal/Timeout/Startfehler = `unknown` (kein Start). Nie gecacht, nie im
 Dry-Run ausgeführt, nicht in Views. Umgebung und Kontextdatei: §6.11.
@@ -540,7 +545,7 @@ Ohne `item_priority` ist die Item-Priorität 0. Regeln dürfen teure Felder verw
 | `type` | `shell` | ja | | | |
 | `command` | String | ja | | §2.4 | Prüfprogramm |
 | `args` | Liste String | nein | `[]` | Templates (§5) | |
-| `timeout` | Dauer | nein | `30s` | | danach `unknown` |
+| `timeout` | Dauer | nein | `30s` | > 0 | danach `unknown` |
 | `cache` | Dauer | nein | kein Cache | **nur** `conditions.workflow` | Ergebnis `true`/`false` so lange wiederverwenden; `unknown` wird nie gecacht |
 
 - `workflow`: werden – falls Kandidaten vorhanden – einmal pro Planungsschritt bzw. einmal pro Cron-Slot geprüft,
@@ -570,10 +575,9 @@ Regeln der Konfigurationsprüfung:
 - `required: true` **ohne** `default` in einem `source`- oder `schedule`-Workflow ist ein Fehler (automatische
   Runs könnten ihn nie liefern).
 - Im `working_directory` nur Parameter mit `required: true` oder `default`.
-- **Achtung (aktuelles Verhalten):** Automatisch gestartete Runs (Source, Cron) erhalten **keine**
-  Parameterwerte – auch keine Defaults. `{parameters.x}` wird dort in `args`/`env`/Hooks zu einem leeren String;
-  im `working_directory` führt es zu `start_error`. Parameter daher nur in `manual`-Workflows bzw. nur für manuelle
-  Starts verwenden.
+- Automatisch gestartete Runs (Source, Cron) erhalten die **`default`-Werte** aller Parameter, die einen haben
+  (gespeichert am Run, sichtbar in API/UI und Kontextdatei). Parameter ohne Default bleiben dort leer
+  (`{parameters.x}` = leerer String).
 
 #### 3.4.8 `execute`
 
@@ -626,7 +630,7 @@ Gemeinsame Schlüssel aller Actions:
 | `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`) | stabiler Name im Journal; **workflowweit** eindeutig |
 | `continue_on_error` | Boolean | nein | `false` | nach endgültigem Scheitern trotzdem mit der nächsten Action weitermachen |
 | `retry.max_attempts` | Integer ≥ 1 | nein | `lifecycle.action_retry.max_attempts` | Versuche insgesamt |
-| `retry.delay` | Dauer | nein | `lifecycle.action_retry.delay` | Pause zwischen Versuchen |
+| `retry.delay` | Dauer | nein | `lifecycle.action_retry.delay` | Pause zwischen Versuchen (`0s` erlaubt) |
 
 `source.update` – Labels des Items ändern (nur Source-Workflows):
 
@@ -652,7 +656,7 @@ entfernt (Vergleich ohne Groß-/Kleinschreibung) → idempotent. Schreib-Identit
 | `command` | String | ja | | §2.4 |
 | `args` | Liste String | nein | `[]` | Templates |
 | `env` | Map | nein | `{}` | Templates, kein `ORCH_`-Präfix |
-| `timeout` | Dauer | nein | `5m` | Laufzeitlimit pro Versuch |
+| `timeout` | Dauer | nein | `5m` | Laufzeitlimit pro Versuch (> 0) |
 
 Erfolg = Exit 0; alles andere (Exit ≠ 0, Signal, Timeout, Startfehler) = gescheiterter, wiederholbarer Versuch.
 Keine Secrets. Arbeitsverzeichnis: der Run-Workspace, falls er existiert, sonst ein eigenes Verzeichnis pro Versuch
@@ -690,14 +694,25 @@ sort: { field: updated_at, direction: desc }
 | `filter` | Filter-AST | nein | alles | §4; inkl. `run.last_*` | nur Items mit Ergebnis `true` werden gezeigt |
 | `shell_filter` | – | – | | **verboten** (Fehler) | Views führen nie Skripte aus |
 | `fields` | Liste | ja | | ≥ 1 | Spalten in Reihenfolge |
-| `fields[].field` | String | ja | | nicht leer; nicht gegen den Katalog geprüft | Feldname (§4.7, §4.8) |
+| `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen | Feldname (§4.7, §4.8) |
 | `fields[].label` | String | nein | Feldname | | Spaltenüberschrift |
-| `fields[].link` | String | nein | `link` der Felddefinition (`number`, `title` → `url`) | | Feld, dessen Wert (nur absolute `http(s)`-URL) als Link dient |
-| `sort.field` | String | ja (wenn `sort`) | | | Sortierfeld |
+| `fields[].link` | String (Feldname, geprüft wie `field`) | nein | `link` der Felddefinition (`number`, `title` → `url`) | | Feld, dessen Wert (nur absolute `http(s)`-URL) als Link dient |
+| `sort.field` | String | ja (wenn `sort`) | | geprüft wie `fields[].field` | Sortierfeld |
 | `sort.direction` | Enum | nein | `asc` | `asc`, `desc` | leere Werte immer zuletzt; Gleichstand nach Item-Schlüssel (natürlich) |
 
 Laden: beim Öffnen/Refresh aus allen Sources (parallel; eine fehlerhafte Source erscheint als Fehlerzeile, die
 anderen liefern trotzdem), Cache 30 s, max. 2 000 Zeilen. Unbekannte/nicht auflösbare Felder bleiben erkennbar leer.
+
+### 3.6 Bekannte Grenzen (V1)
+
+- `shell_filter` hat nur `command` und `timeout`: **keine `args`**, kein `env`. Das Item kommt ausschließlich über
+  `ORCH_CHECK_CONTEXT_FILE`; Parameter für das Skript über einen Wrapper bzw. die Kontextdatei.
+- Conditions (`conditions.workflow`, `conditions.item`) haben `args`, aber **kein `env`**; die Umgebung ist die
+  Minimalumgebung plus `ORCH_CHECK_CONTEXT_FILE` (§6.11).
+- `shell`-Actions: Frist zwischen `SIGTERM` und `SIGKILL` fest **5 s**, Log-Limit fest **10 MiB** pro Versuch –
+  nicht konfigurierbar (`execute.cancel_grace` und `retention.max_log_size_per_run` gelten nur für den Haupt-Worker).
+- Prüfskripte (Conditions, `shell_filter`): Ausgabe wird bis 16 KiB je Stream erfasst, SIGTERM→SIGKILL nach 2 s.
+- Nur Adapter `github` (github.com), nur Identity-Typ `github_app`, nur Kanaltyp `webhook`, nur Executor `shell`.
 
 ---
 
@@ -724,36 +739,49 @@ Wert       := String | Zahl | Boolean | null            # equals, not_equals, co
 
 ### 4.2 Operatoren – exakte Semantik
 
-`a` = Feldwert, `v` = `value`. Ergebnis `true`/`false`/`unknown`; „unknown (Typ)“ heißt: inkompatible Typen.
+`a` = Feldwert, `v` = `value`. Ergebnis `true`/`false`/`unknown`; „unknown (Typ)“ heißt: inkompatible Typen (bei
+katalogisierten Feldern verhindert die Werttyp-Prüfung beim Laden diesen Fall, Tabelle unten).
 
 | Operator | Skalares Feld (string/number/boolean) | Datumsfeld (`date`) | Listenfeld (`string[]`) |
 |---|---|---|---|
-| `equals` | gleicher JS-Typ und gleicher Wert; anderer Typ → unknown (Typ). `'1'` vs `1`, `'true'` vs `true` → unknown | beide als ISO-8601 geparst, Vergleich als Zeitpunkt; nicht parsebar → unknown | nur mit Listen-`value`: Mengenvergleich (Reihenfolge/Duplikate egal); mit Skalar → unknown (Typ) |
-| `not_equals` | Negation von `equals`; unknown bleibt unknown | dito | dito |
-| `contains` | nur String-Feld + String-Wert: Teilstring (Groß-/Kleinschreibung beachtet); sonst unknown | wie String (kein Datumsvergleich) | `true`, wenn ein Element `=== v`; leere Liste → `false`; kein Element vom Typ von `v` → unknown |
-| `in` | `true`, wenn `equals` mit einem Listenelement `true` ist; sonst `false`, wenn mindestens ein Element typgleich war, sonst unknown | wie skalar, aber Datumsvergleich je Element | `true` bei nichtleerer Schnittmenge; leere Feldliste → `false`; keinerlei Typgleichheit → unknown |
-| `greater_than` / `less_than` | Zahl vs Zahl numerisch; String vs String nach Code-Units (nicht locale); sonst unknown | ISO-8601-Zeitpunkte; nicht parsebar → unknown | immer unknown |
+| `equals` | gleicher JS-Typ und gleicher Wert; anderer Typ → unknown (Typ). `'1'` vs `1`, `'true'` vs `true` → unknown | beide als ISO-8601 geparst, Vergleich als Zeitpunkt; nicht parsebar → unknown | nicht erlaubt (Validierungsfehler) |
+| `not_equals` | Negation von `equals`; unknown bleibt unknown | dito | nicht erlaubt |
+| `contains` | nur String-Feld: Teilstring (Groß-/Kleinschreibung beachtet) | nicht erlaubt | `true`, wenn ein Element `=== v`; leere Liste → `false`; kein Element vom Typ von `v` → unknown |
+| `in` | `true`, wenn `equals` mit einem Listenelement `true` ist, sonst `false` (string/number) | nicht erlaubt | `true` bei nichtleerer Schnittmenge; leere Feldliste → `false`; keinerlei Typgleichheit → unknown |
+| `greater_than` / `less_than` | Zahl vs Zahl numerisch (String-Felder: nicht erlaubt) | ISO-8601-Zeitpunkte | nicht erlaubt |
 
 `null`-Regeln (ein Feldwert `null` bedeutet „bekannt leer“, z. B. kein Autor):
 
 - `equals null` ist genau dann `true`, wenn der Feldwert `null` ist; `equals x` auf `null`-Feld → `false`;
   `not_equals` entsprechend umgekehrt.
-- `contains`/`in` auf `null`-Feld → `false`; `contains null` → unknown.
+- `contains`/`in` auf `null`-Feld → `false`; `null` als Wert ist nur bei `equals`/`not_equals` erlaubt.
 - `greater_than`/`less_than` mit `null` auf einer Seite → unknown.
 
 Datumswerte: `YYYY-MM-DD` oder `YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]`; ohne Offset = UTC. Relative Angaben
 („vor 7 Tagen“) gibt es nicht. Datumssemantik gilt nur für Felder, die der Adapter als `date` deklariert.
 
-Die Operatorlisten im Feldkatalog (§4.7) beschreiben, was sinnvoll ist; der Evaluator erzwingt sie **nicht**
-(z. B. ist `labels equals [a, b]` ein Mengenvergleich und funktioniert). Pushdown nutzt sie (§4.5).
+**Erlaubte Operatoren je Feldtyp** (beim Laden geprüft, Spalte „Operatoren“ in §4.7/§4.8):
+
+| Feldtyp | Operatoren | Erlaubte `value`-Typen |
+|---|---|---|
+| `string` | equals, not_equals, contains, in | String (`in`: Liste von Strings); `null` bei equals/not_equals |
+| `number` | equals, not_equals, in, greater_than, less_than | Zahl (`in`: Liste von Zahlen); `null` bei equals/not_equals |
+| `boolean` | equals, not_equals | Boolean (nicht `'true'`); `null` bei equals/not_equals |
+| `date` | equals, not_equals, greater_than, less_than | ISO-8601-String (s. o.); `null` bei equals/not_equals |
+| `string[]` | contains, in | String bzw. Liste von Strings |
+
+**Groß-/Kleinschreibung:** `labels` (GitHub) vergleicht ohne Beachtung der Groß-/Kleinschreibung – wie GitHub
+und `source.update` (`Ready` passt auf `ready`). Alle anderen String-Vergleiche beachten sie.
 
 ### 4.3 Fehlende und unbekannte Felder
 
-- Ein Feld, das der Adapter nicht kennt (Tippfehler!) oder nicht liefern kann, ist **unknown** – nie 0, leer oder
-  `false`. Feldnamen werden beim Laden **nicht** geprüft: Ein Tippfehler macht den Filter dauerhaft unknown, der
-  Workflow startet nie. Kontrolle: `workflow dry-run` zeigt pro Regel den Wert und den Grund.
-- Fehlender API-Zugriff (z. B. Cross-Repo-Blocker ohne Rechte) → unknown („fail closed“).
-- `run.last_*` existiert nur in Views; in Workflow-Filtern ist es ein unbekanntes Feld (→ unknown).
+- **Beim Laden geprüft** gegen den statischen Feldkatalog des Adaptertyps der Source (Workflows: `filter`,
+  `item_priority.rules[].when`; Views: `filter`, `fields[].field`, `fields[].link`, `sort.field`): unbekannte
+  Feldnamen (mit Vorschlag „did you mean …“), nicht erlaubte Operatoren, falsche Werttypen, ungültige Datumswerte.
+- `run.last_*` ist nur in Views erlaubt; in Workflows ist es ein Fehler („only available in views“).
+- Kann ein bekanntes Feld zur Laufzeit nicht ermittelt werden (fehlender API-Zugriff, z. B. Cross-Repo-Blocker
+  ohne Rechte), ist es **unknown** – nie 0, leer oder `false` („fail closed“). `workflow dry-run` zeigt pro Regel
+  den Wert und den Grund.
 
 ### 4.4 Dreiwertige Logik (Kleene)
 
@@ -783,8 +811,12 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
   `any`/`not` werden nie gepusht. Der vollständige Filter wird **immer** zusätzlich lokal ausgewertet.
 - **GitHub-Abfrage:** `state` = `open` (Default!), `closed` oder `all`, abgeleitet aus `state equals open|closed`
   bzw. `state in [...]` auf oberster Ebene; `labels contains "x"` (ohne Komma) → `labels=x` (alle müssen
-  vorhanden sein). **Ohne ein solches `state`-Prädikat werden nur offene Issues/PRs gelesen** – ein Filter
-  `any: [{state equals closed}, …]` oder `not: {state equals open}` sieht daher nie geschlossene Items.
+  vorhanden sein). **Ohne ein solches `state`-Prädikat werden nur offene Issues/PRs gelesen.**
+- **Regel für `state`** (Workflow- und View-`filter`, geprüft beim Laden): `state` darf nur auf oberster Ebene
+  stehen (direkt oder in oberster `all`), nur mit `equals` oder `in` und nur mit den Werten `open`/`closed`.
+  Unter `any`/`not`, mit `not_equals`/`contains` oder mit anderen Werten wäre es stillschweigend wirkungslos
+  (es würden trotzdem nur offene Items gelesen) und ist daher ein Fehler. In `item_priority` ist `state` frei
+  verwendbar (beeinflusst die Abfrage nicht).
 
 ### 4.6 Workflow-Filter vs. View-Filter
 
@@ -801,9 +833,9 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 |---|---|---|---|---|---|
 | `number` | number | equals, not_equals, in, greater_than, less_than | | | Issue-/PR-Nummer (Link → `url`) |
 | `title` | string | equals, not_equals, contains, in | | | Titel (Link → `url`) |
-| `state` | string | equals, not_equals, contains, in | equals, in | | `open` \| `closed` |
-| `labels` | string[] | contains | contains | | Label-Namen (exakte Schreibweise) |
-| `assignees` | string[] | contains | | | Logins der Assignees |
+| `state` | string | equals, in (nur oberste Ebene, §4.5) | equals, in | | `open` \| `closed` |
+| `labels` | string[] | contains, in | contains | | Label-Namen; Vergleich **ohne** Groß-/Kleinschreibung |
+| `assignees` | string[] | contains, in | | | Logins der Assignees |
 | `author` | string | equals, not_equals, contains, in | | | Login des Autors (`null` falls unbekannt) |
 | `is_pull_request` | boolean | equals, not_equals | | | `true` für Pull Requests |
 | `created_at` | date | equals, not_equals, greater_than, less_than | | | Erstellungszeit |
@@ -813,7 +845,7 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 | `dependencies.blocked_by_total` | number | equals, not_equals, in, greater_than, less_than | | ja | Anzahl blockierender Issues (native „blocked by“, inkl. Cross-Repo) |
 | `dependencies.blocked_by_open` | number | equals, not_equals, in, greater_than, less_than | | ja | davon offen; unknown ohne Zugriff |
 | `dependencies.blocked` | boolean | equals, not_equals | | ja | mindestens ein Blocker offen; unknown ohne Zugriff |
-| `dependencies.status` | string | equals, not_equals, in | | ja | `ok` = vollständig aufgelöst, sonst `unknown` (dieses Feld selbst ist dann bekannt) |
+| `dependencies.status` | string | equals, not_equals, contains, in | | ja | `ok` = vollständig aufgelöst, sonst `unknown` (dieses Feld selbst ist dann bekannt) |
 
 Abhängigkeiten sind unknown, wenn die API-Zusammenfassung fehlt, ein Blocker einen unerwarteten Status hat oder die
 Identity weniger Blocker sieht, als GitHub meldet. „Offen ⇒ kein Start“ gilt nur, wenn der Filter das ausdrücklich
@@ -824,6 +856,9 @@ verlangt (z. B. `dependencies.blocked_by_open equals 0`).
 Pro Item der **zuletzt erzeugte** Run (über alle Workflows, globaler Item-Schlüssel). Ohne Run: alle `null`
 (bekannt leer, also z. B. `run.last_status equals null` = „noch nie bearbeitet“).
 
+Operatoren je Typ wie in §4.2 (`string`: equals, not_equals, contains, in; `date`: equals, not_equals,
+greater_than, less_than – als Zeitpunkt verglichen).
+
 | Feld | Typ | Bedeutung |
 |---|---|---|
 | `run.last_id` | string | Run-ID |
@@ -832,7 +867,7 @@ Pro Item der **zuletzt erzeugte** Run (über alle Workflows, globaler Item-Schl�
 | `run.last_result` | string | fachliches Ergebnis `success`/`failure` (sonst `null`) |
 | `run.last_result.message` | string | `message` der Ergebnisdatei |
 | `run.last_status_message` | string | letzte Status-Meldung des Workers (`@@ORCH_EVENT` `status`) |
-| `run.last_started_at` | date | Start (im Filter als String verglichen, nicht als Datum – ISO-Format verwenden) |
+| `run.last_started_at` | date | Start |
 | `run.last_finished_at` | date | Ende |
 
 ---
@@ -862,7 +897,7 @@ Pro Item der **zuletzt erzeugte** Run (über alle Workflows, globaler Item-Schl�
 | `{result.status}` | technischer Endstatus (`completed`, `crashed`, `start_error`, `timed_out`, `cancelled`) | – |
 | `{result.result}` | `success` \| `failure` | bei technischem Fehler/Cancel |
 | `{result.message}` | `message` der Ergebnisdatei | keine/ungültige Ergebnisdatei oder ohne `message` |
-| `{parameters.<name>}` | Parameterwert (`true`, `5`, Text) | optionaler Parameter ohne Wert/Default; **alle** Parameter bei automatischen Runs (§3.4.7) |
+| `{parameters.<name>}` | Parameterwert (`true`, `5`, Text) | optionaler Parameter ohne Wert und ohne Default |
 
 Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_error`).
 
@@ -1602,6 +1637,83 @@ trigger: { type: cron }
 execute: { type: shell, command: scripts/hello.sh }
 ```
 
+**Unbekannte Felder, unpassende Operatoren und Werttypen** – Prüfung gegen den Feldkatalog (§4.7, §4.8).
+
+```yaml
+# example: err-fields
+# extends: github
+# invalid
+# expect: workflows/coder.yaml: filter.all[0].field: Unknown field "labls" for source type github (did you mean "labels"?)
+# expect: workflows/coder.yaml: filter.all[1].operator: Operator "greater_than" is not supported for field "labels" (type string[]); allowed: contains, in
+# expect: workflows/coder.yaml: filter.all[2].value: Value for field "is_pull_request" (type boolean) must be a boolean, got string "false"
+# expect: workflows/coder.yaml: filter.all[3].value: Value "last week" for date field "updated_at" is not an ISO-8601 date
+# expect: workflows/coder.yaml: filter.all[4].field: Field "run.last_status" is only available in views, not in workflows
+# file: workflows/coder.yaml
+id: coder
+trigger: { type: source, source: project_a }
+filter:
+  all:
+    - { field: labls, operator: contains, value: ready-for-coding }
+    - { field: labels, operator: greater_than, value: 2 }
+    - { field: is_pull_request, operator: equals, value: 'false' }
+    - { field: updated_at, operator: greater_than, value: last week }
+    - { field: run.last_status, operator: equals, value: completed }
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+Lösung: Feldnamen aus §4.7 (Views zusätzlich §4.8), Operatoren laut §4.2, Booleans unquotiert, Datumswerte ISO.
+In Views werden auch `fields[].field`, `fields[].link` und `sort.field` so geprüft.
+
+**`state` an wirkungsloser Stelle** – die Source liest ohne `state`-Selektor auf oberster Ebene nur offene Items.
+
+```yaml
+# example: err-state
+# extends: github
+# invalid
+# expect: workflows/coder.yaml: filter.any[0].field: "state" only works at the top level of the filter (directly or inside top-level "all"): the source lists only open issues/PRs unless the top-level filter selects others (state equals/in open|closed), so under "any"/"not" it would silently never see them
+# expect: views/needs-maintainer.yaml: filter.all[0].operator: "state" must use "equals" or "in": only these select which items are listed (otherwise only open issues/PRs are seen)
+# file: workflows/coder.yaml
+id: coder
+trigger: { type: source, source: project_a }
+filter:
+  any:
+    - { field: state, operator: equals, value: closed }
+    - { field: labels, operator: contains, value: reopen }
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+```yaml
+# example: err-state
+# file: views/needs-maintainer.yaml
+id: needs-maintainer
+sources: [project_a, project_b]
+filter:
+  all:
+    - { field: state, operator: not_equals, value: open }
+fields: [ { field: title } ]
+```
+
+Lösung: `state` als oberstes Prädikat, z. B. `all: [{ field: state, operator: in, value: [open, closed] }, { any: [...] }]`.
+
+**Null-Intervalle und -Timeouts**
+
+```yaml
+# example: err-zero-durations
+# extends: minimal
+# invalid
+# expect: config.yaml: scheduler.polling_interval: Duration must be at least 1s
+# expect: config.yaml: retention.cleanup_interval: Duration must be at least 1s
+# file: config.yaml
+scheduler:
+  polling_interval: 0s
+retention:
+  cleanup_interval: 500ms
+lifecycle:
+  action_retry: { delay: 0s }      # erlaubt: sofort wiederholen
+```
+
+`timeout: 0s` bei Conditions, `shell_filter` oder `shell`-Actions meldet `Duration must be greater than 0`.
+
 **Warnungen** (blockieren nicht):
 
 ```yaml
@@ -1639,8 +1751,7 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `config.yaml not found, using defaults` (Warnung) | `config.yaml` fehlt |
 
 Laufzeitfehler, die `config validate` **nicht** findet: fehlende Umgebungsvariablen (Keys, Webhooks),
-nicht existierende/nicht ausführbare Skripte, Tippfehler in Filter-Feldnamen (→ dauerhaft unknown), fehlende
-App-Rechte. Dafür: `workflow dry-run` und die Run-Details.
+nicht existierende/nicht ausführbare Skripte, fehlende App-Rechte (→ Felder unknown bzw. Actions scheitern). Dafür: `workflow dry-run` und die Run-Details.
 
 ---
 

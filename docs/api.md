@@ -17,7 +17,8 @@ sonst `421 host_not_allowed`:
 
 - immer: `localhost`, `127.0.0.1`, `[::1]` (beliebiger Port),
 - bei Bind auf eine konkrete Nicht-Loopback-Adresse zusätzlich diese Adresse,
-- alle Einträge aus `server.allowed_hosts` in `config.yaml` (`name` = beliebiger Port, `name:port` = nur dieser Port), z. B.
+- alle Einträge aus `server.allowed_hosts` in `config.yaml` (`name` = beliebiger Port, `name:port` = nur dieser Port;
+  ein `Host` ohne Port passt auch auf `name:80` und `name:443`), z. B.
   den öffentlichen Namen eines authentifizierenden Reverse Proxys:
 
 ```yaml

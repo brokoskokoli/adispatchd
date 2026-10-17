@@ -1,13 +1,13 @@
 /**
  * Field catalogue of the GitHub source adapter (Spec §6, §17).
  */
-import type { FieldDefinition, FilterOperator } from '../../core/index.js';
+import { OPERATORS_BY_TYPE, type FieldDefinition } from '../../core/index.js';
 
-const STRING_OPS: readonly FilterOperator[] = ['equals', 'not_equals', 'contains', 'in'];
-const NUMBER_OPS: readonly FilterOperator[] = ['equals', 'not_equals', 'in', 'greater_than', 'less_than'];
-const BOOLEAN_OPS: readonly FilterOperator[] = ['equals', 'not_equals'];
-const DATE_OPS: readonly FilterOperator[] = ['equals', 'not_equals', 'greater_than', 'less_than'];
-const LIST_OPS: readonly FilterOperator[] = ['contains'];
+const STRING_OPS = OPERATORS_BY_TYPE.string;
+const NUMBER_OPS = OPERATORS_BY_TYPE.number;
+const BOOLEAN_OPS = OPERATORS_BY_TYPE.boolean;
+const DATE_OPS = OPERATORS_BY_TYPE.date;
+const LIST_OPS = OPERATORS_BY_TYPE['string[]'];
 
 /** Names of the expensive dependency fields (resolved lazily via one API round trip). */
 export const DEPENDENCY_FIELDS = [
@@ -31,9 +31,10 @@ export const GITHUB_FIELD_DEFINITIONS: readonly FieldDefinition[] = Object.freez
   {
     name: 'labels',
     type: 'string[]',
-    description: 'Label names',
+    description: 'Label names (compared case-insensitively, like GitHub)',
     operators: LIST_OPS,
     pushdown: ['contains'],
+    caseInsensitive: true,
   },
   { name: 'assignees', type: 'string[]', description: 'Assignee logins', operators: LIST_OPS },
   { name: 'author', type: 'string', description: 'Login of the author', operators: STRING_OPS },
@@ -67,7 +68,7 @@ export const GITHUB_FIELD_DEFINITIONS: readonly FieldDefinition[] = Object.freez
     name: 'dependencies.status',
     type: 'string',
     description: '"ok" if dependencies were fully resolved, otherwise "unknown"',
-    operators: ['equals', 'not_equals', 'in'],
+    operators: STRING_OPS,
     expensive: true,
   },
 ] satisfies FieldDefinition[]);

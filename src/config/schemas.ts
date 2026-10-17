@@ -69,6 +69,12 @@ export const durationSchema = z.string('Expected a duration such as 30s, 45m, 6h
 /** Duration that must be greater than zero. */
 const positiveDuration = durationSchema.refine((ms) => ms > 0, 'Duration must be greater than 0');
 
+/** Lower bound of loop intervals (polling, retention cleanup): a zero interval would spin. */
+export const MIN_LOOP_INTERVAL_MS = 1_000;
+
+/** Interval of a periodic loop: at least {@link MIN_LOOP_INTERVAL_MS}. */
+const loopInterval = durationSchema.refine((ms) => ms >= MIN_LOOP_INTERVAL_MS, 'Duration must be at least 1s');
+
 /** Duration or `never` (→ `null`). */
 const durationOrNever = z.string('Expected a duration such as 30d or "never"').transform((value, ctx) => {
   if (value.trim() === 'never') return null;
@@ -138,7 +144,7 @@ export const globalConfigSchema = z.strictObject({
     .default({ host: DEFAULTS.serverHost, port: DEFAULTS.serverPort, allowed_hosts: [] }),
   scheduler: z
     .strictObject({
-      polling_interval: durationSchema.default(parseDuration(DEFAULTS.pollingInterval)),
+      polling_interval: loopInterval.default(parseDuration(DEFAULTS.pollingInterval)),
       max_concurrent: positiveInt.default(DEFAULTS.globalMaxConcurrent),
     })
     .prefault({}),
@@ -155,7 +161,7 @@ export const globalConfigSchema = z.strictObject({
       failed_runs: durationOrNever.default(parseDuration(DEFAULTS.failedRuns)),
       blocked_runs: durationOrNever.default(null),
       max_log_size_per_run: sizeSchema.default(parseSize(DEFAULTS.maxLogSizePerRun)),
-      cleanup_interval: durationSchema.default(parseDuration(DEFAULTS.cleanupInterval)),
+      cleanup_interval: loopInterval.default(parseDuration(DEFAULTS.cleanupInterval)),
     })
     .prefault({}),
   notifications: z
@@ -221,13 +227,13 @@ const shellCheckSchema = z.strictObject({
   type: z.literal('shell'),
   command: nonEmpty,
   args: stringList,
-  timeout: durationSchema.default(parseDuration(DEFAULTS.checkTimeout)),
+  timeout: positiveDuration.default(parseDuration(DEFAULTS.checkTimeout)),
   cache: durationSchema.optional(),
 });
 
 const shellFilterSchema = z.strictObject({
   command: nonEmpty,
-  timeout: durationSchema.default(parseDuration(DEFAULTS.checkTimeout)),
+  timeout: positiveDuration.default(parseDuration(DEFAULTS.checkTimeout)),
 });
 
 const itemPrioritySchema = z.strictObject({
@@ -306,7 +312,7 @@ const actionSchema = z.discriminatedUnion('type', [
     ...actionCommon,
     command: nonEmpty,
     args: stringList,
-    timeout: durationSchema.default(parseDuration(DEFAULTS.shellActionTimeout)),
+    timeout: positiveDuration.default(parseDuration(DEFAULTS.shellActionTimeout)),
     env: envMap,
   }),
 ]);

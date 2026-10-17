@@ -38,6 +38,7 @@ export {
   type WorkflowSnapshot,
 } from './snapshot.js';
 export {
+  automaticParameterValues,
   validateParameters,
   validateWorkflowParameters,
   type ParameterIssue,

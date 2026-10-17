@@ -14,7 +14,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { FILTER_OPERATORS, HOOK_NAMES, NOTIFICATION_EVENT_TYPES, PLACEHOLDERS } from '../core/index.js';
+import { FILTER_OPERATORS, HOOK_NAMES, NOTIFICATION_EVENT_TYPES, OPERATORS_BY_TYPE, PLACEHOLDERS } from '../core/index.js';
 import { GITHUB_FIELD_DEFINITIONS } from '../sources/github/index.js';
 import { VIEW_RUN_FIELDS } from '../views/index.js';
 import { DEFAULT_WORKING_DIRECTORY, loadConfig, type ConfigIssue } from './index.js';
@@ -155,6 +155,12 @@ describe('docs/configuration-reference.md', () => {
   it('documents the complete GitHub field catalogue and the view run fields with their types', () => {
     for (const f of [...GITHUB_FIELD_DEFINITIONS, ...VIEW_RUN_FIELDS]) {
       expect(markdown, f.name).toContain(`| \`${f.name}\` | ${f.type} |`);
+    }
+  });
+
+  it('documents the allowed operators per field type (validated since WI-13)', () => {
+    for (const [type, operators] of Object.entries(OPERATORS_BY_TYPE)) {
+      expect(markdown, type).toContain(`| \`${type}\` | ${operators.join(', ')} |`);
     }
   });
 

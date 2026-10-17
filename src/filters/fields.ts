@@ -90,6 +90,9 @@ export function createItemFieldSource(item: SourceItem, options: ItemFieldSource
     fieldType(field: string): FieldType | undefined {
       return defs.get(field)?.type;
     },
+    isCaseInsensitive(field: string): boolean {
+      return !Object.hasOwn(extra, field) && defs.get(field)?.caseInsensitive === true;
+    },
     resolve(field: string): Promise<FieldResolution> | FieldResolution {
       if (Object.hasOwn(extra, field)) {
         const v = extra[field] as FieldValue | FieldResolution;

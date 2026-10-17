@@ -16,7 +16,6 @@ fields:
   - { field: run.last_workflow, label: Letzter Agent }
   - { field: run.last_result.message, label: Ergebnis }
   - { field: run.last_status, label: Status }
-  - { field: does.not_exist, label: Missing }
 sort: { field: number, direction: desc }
 `;
 
@@ -67,7 +66,6 @@ describe('views (scenario 10)', () => {
     expect(a1.cells[col('run.last_status')].value).toBe('completed');
     expect(a1.lastRunId).toBeTruthy();
     expect(b3.cells[col('run.last_workflow')]).toEqual({ value: null, known: true, link: null });
-    expect(a1.cells[col('does.not_exist')]).toMatchObject({ value: null, known: false });
   });
 
   it('caches results briefly, refreshes on demand and reports failing sources', async () => {
