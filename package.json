@@ -14,6 +14,7 @@
     "!dist/**/testing/",
     "examples/",
     "docs/api.md",
+    "docs/configuration-reference.md",
     "docs/operations.md",
     "docs/worker-protocol.md",
     "docs/cron-semantics.md",
