@@ -94,6 +94,13 @@ describe('config validation (WI-13)', () => {
     expect(ok).toEqual([]);
   });
 
+  it('rejects a label that is added and removed in different case', async () => {
+    const found = await errors({
+      'workflows/w.yaml': workflow('on_start:\n  - type: source.update\n    labels: { add: [Coding], remove: [coding] }\n'),
+    });
+    expect(found).toEqual(['workflows/w.yaml: on_start[0].labels: Label "Coding" is both added and removed']);
+  });
+
   it('checks field names (with suggestion), operators, value types and view-only run fields', async () => {
     const found = await errors({
       'workflows/w.yaml': workflow(

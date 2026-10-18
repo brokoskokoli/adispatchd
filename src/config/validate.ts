@@ -339,8 +339,9 @@ function validateAction(
       if (action.labels.add.length === 0 && action.labels.remove.length === 0) {
         issues.error(file, [...at, 'labels'], '"source.update" must add or remove at least one label');
       }
+      // Labels compare case-insensitively (GitHub, adapter): `Ready` and `ready` are the same label.
       for (const label of action.labels.add) {
-        if (action.labels.remove.includes(label)) {
+        if (action.labels.remove.some((r) => r.toLowerCase() === label.toLowerCase())) {
           issues.error(file, [...at, 'labels'], `Label "${label}" is both added and removed`);
         }
       }

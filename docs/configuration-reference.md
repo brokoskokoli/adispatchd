@@ -556,8 +556,9 @@ Ohne `item_priority` ist die Item-Priorität 0. Regeln dürfen teure Felder verw
 
 #### 3.4.7 `parameters`
 
-Map Parametername → Definition. Parameter werden **nur bei manuellen Starts** übergeben (UI-Formular,
-`POST /api/v1/workflows/:id/start` mit `{"parameters": {…}}`) und vor dem Start validiert.
+Map Parametername → Definition. Werte **übergeben** werden nur bei manuellen Starts (UI-Formular,
+`POST /api/v1/workflows/:id/start` mit `{"parameters": {…}}`) und vor dem Start validiert; automatisch gestartete
+Runs (Source, Cron) erhalten die `default`-Werte (siehe unten).
 
 | Schlüssel | Typ | Pflicht | Default | Regeln |
 |---|---|---|---|---|
@@ -701,7 +702,8 @@ sort: { field: updated_at, direction: desc }
 | `sort.direction` | Enum | nein | `asc` | `asc`, `desc` | leere Werte immer zuletzt; Gleichstand nach Item-Schlüssel (natürlich) |
 
 Laden: beim Öffnen/Refresh aus allen Sources (parallel; eine fehlerhafte Source erscheint als Fehlerzeile, die
-anderen liefern trotzdem), Cache 30 s, max. 2 000 Zeilen. Unbekannte/nicht auflösbare Felder bleiben erkennbar leer.
+anderen liefern trotzdem), Cache 30 s, max. 2 000 Zeilen. Nicht auflösbare Felder (z. B. fehlende API-Rechte) bleiben erkennbar leer; unbekannte Feldnamen sind bereits
+ein Konfigurationsfehler (§4.3).
 
 ### 3.6 Bekannte Grenzen (V1)
 
@@ -735,7 +737,8 @@ Wert       := String | Zahl | Boolean | null            # equals, not_equals, co
 ```
 
 `value` ist immer Pflicht (`null` explizit schreiben). Strukturfehler werden exakt verortet
-(`filter.all[1].operator`). `contains` mit Liste und `equals` mit Liste sind syntaktisch erlaubt (siehe 4.2).
+(`filter.all[1].operator`). Eine Liste als `value` nimmt **nur** `in`; alle anderen Operatoren verlangen einen
+Skalar (`greater_than`/`less_than`: Zahl oder Datums-String) – sonst Fehler.
 
 ### 4.2 Operatoren – exakte Semantik
 
@@ -833,7 +836,7 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 |---|---|---|---|---|---|
 | `number` | number | equals, not_equals, in, greater_than, less_than | | | Issue-/PR-Nummer (Link → `url`) |
 | `title` | string | equals, not_equals, contains, in | | | Titel (Link → `url`) |
-| `state` | string | equals, in (nur oberste Ebene, §4.5) | equals, in | | `open` \| `closed` |
+| `state` | string | equals, not_equals, contains, in – im `filter` nur `equals`/`in` auf oberster Ebene (§4.5) | equals, in | | `open` \| `closed` |
 | `labels` | string[] | contains, in | contains | | Label-Namen; Vergleich **ohne** Groß-/Kleinschreibung |
 | `assignees` | string[] | contains, in | | | Logins der Assignees |
 | `author` | string | equals, not_equals, contains, in | | | Login des Autors (`null` falls unbekannt) |
@@ -1471,6 +1474,8 @@ Lösung: `filter`, `shell_filter`, `item_priority`, `conditions.item`, `source.u
 # expect: workflows/coder.yaml: filter.all[0].value: Operator "in" requires a non-empty list of strings, numbers or booleans
 # expect: workflows/coder.yaml: filter.all[1].operator: Predicate requires "operator", one of: equals, not_equals, contains, in, greater_than, less_than
 # expect: workflows/coder.yaml: filter.all[2].value: Predicate requires a "value" (use null explicitly if intended)
+# expect: workflows/coder.yaml: filter.all[3].value: Operator "contains" requires a scalar value (string, number, boolean or null)
+# expect: workflows/coder.yaml: filter.all[4].value: Operator "equals" requires a scalar value (string, number, boolean or null)
 # file: workflows/coder.yaml
 id: coder
 trigger: { type: source, source: project_a }
@@ -1479,6 +1484,8 @@ filter:
     - { field: state, operator: in, value: open }
     - { field: labels, operator: has, value: ready }
     - { field: author, operator: equals }
+    - { field: labels, operator: contains, value: [a, b] }     # Liste nur mit "in"
+    - { field: author, operator: equals, value: [alice, bob] }
 execute: { type: shell, command: scripts/coder.sh }
 ```
 
@@ -1747,7 +1754,8 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Duration must be greater than 0` | `max_duration`/`idle_timeout: 0s` |
 | `Invalid host name (expected "name" or "name:port")` | Schema/Pfad in `allowed_hosts` (`https://…`) |
 | `Invalid environment variable name` | z. B. `private_key_env: my-key` |
-| `Expected a size such as 100MB` | Größe ohne Einheit |
+| `Expected a size such as 100MB` | Größe als Zahl statt String (`max_log_size_per_run: 100`) |
+| `Invalid size "100" (expected e.g. 512KB, 100MB, 1GB)` | String ohne oder mit unbekannter Einheit (`'100'`, `'100MiBs'`) |
 | `config.yaml not found, using defaults` (Warnung) | `config.yaml` fehlt |
 
 Laufzeitfehler, die `config validate` **nicht** findet: fehlende Umgebungsvariablen (Keys, Webhooks),
