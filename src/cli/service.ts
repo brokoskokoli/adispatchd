@@ -162,7 +162,7 @@ function pathWarnings(unit: UnitOptions): string[] {
     if (/^\/(root|home|Users)\//.test(p)) {
       warnings.push(
         `${label} path ${p} lies in a home directory (nvm/user install?) – the service user "${unit.user}" may not be able to read it; ` +
-          'prefer a system-wide node and a global install of the package tarball (npm install -g ./adispatchd-<version>.tgz) or pass --node/--entry',
+          'prefer a system-wide node and a global install of a fixed version (npm install -g adispatchd@<version>) or pass --node/--entry',
       );
     }
   }

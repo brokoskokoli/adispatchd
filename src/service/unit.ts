@@ -119,7 +119,7 @@ export function validateUnitOptions(opts: UnitOptions): void {
   ] as const) {
     if (/(^|\/)(npx|_npx)(\/|$)/.test(p)) {
       throw new ValidationError(
-        `${label} "${p}" points into an npx cache – install the package permanently from its tarball (npm pack → npm install -g ./adispatchd-<version>.tgz) and run "service install" from there`,
+        `${label} "${p}" points into an npx cache – install a fixed version permanently (npm install -g adispatchd@<version>, or a tarball from npm pack) and run "service install" from there`,
       );
     }
   }

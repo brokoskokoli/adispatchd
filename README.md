@@ -20,10 +20,12 @@ Dokumentation: [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-p
 Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 22.13** (empfohlen 24 LTS; SQLite kommt aus
 `node:sqlite`, kein natives Addon). Windows wird nicht unterstützt.
 
-> **Paketname:** `adispatchd` (Befehl: `adispatch`). Das Paket ist noch **nicht** in der npm-Registry veröffentlicht
-> (`private: true`) – bis dahin nur aus dem Repository-Checkout bzw. als Tarball installieren.
+Paket `adispatchd` auf npm, Befehl `adispatch`. Für Dienste immer eine **feste Version** global installieren (kein `npx`):
 
 ```bash
+npm install -g adispatchd@0.1.0                 # aus der npm-Registry
+
+# alternativ aus dem Repository-Checkout:
 git clone https://github.com/brokoskokoli/adispatchd.git && cd adispatchd
 npm install
 npm pack                                        # baut (prepack) und erzeugt adispatchd-0.1.0.tgz
@@ -157,7 +159,7 @@ Kurzfassung – Details in [docs/operations.md](docs/operations.md):
 - **systemd:** `sudo adispatch service install --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd --create-user`
   (vorher `--dry-run`). Unit mit absolutem Node-/Paketpfad, dediziertem Benutzer, `Restart=on-failure`, `KillMode=mixed`,
   `TimeoutStopSec` > Drain + Cancel + Grace. Secrets in `/etc/default/adispatchd`.
-- **Geplante Stopps/Updates:** `adispatch drain --wait`, dann neuen Tarball installieren (`npm install -g ./adispatchd-<neu>.tgz`), starten.
+- **Geplante Stopps/Updates:** `adispatch drain --wait`, dann die neue Version installieren (`npm install -g adispatchd@<neu>` oder Tarball), starten.
   Migrationen laufen automatisch mit Backup in `data-dir/backups/`; config-dir und data-dir bleiben erhalten.
 - **Backups:** config-dir (git), Env-Datei, `adispatchd.sqlite` per `sqlite3 … ".backup …"`, `logs/`, `runs/`.
   `adispatchd.lock*` nie kopieren oder öffnen. data-dir nur auf lokalem Dateisystem (kein NFS).
@@ -188,3 +190,7 @@ src/
 
 Konventionen: [docs/conventions.md](docs/conventions.md) · Arbeitspakete: [docs/work-items/](docs/work-items/README.md) ·
 Übergaben: `docs/handoff/`.
+
+## Lizenz
+
+[MIT](LICENSE) © 2026 brokoskokoli

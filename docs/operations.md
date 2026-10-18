@@ -27,10 +27,9 @@ Voraussetzungen: Linux mit systemd, Node.js ≥ 22.13 (empfohlen 24 LTS) **syste
 aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Dienstbenutzer nicht lesen kann).
 
 ```bash
-# 1. Feste Version aus dem Tarball global installieren (kein npx im Dienst!).
-#    Paketname noch nicht festgelegt: NICHT aus der npm-Registry installieren (fremdes Paket gleichen Namens).
-#    Tarball im Repository-Checkout bauen: npm install && npm pack
-sudo npm install -g ./adispatchd-0.1.0.tgz
+# 1. Feste Version global installieren (kein npx im Dienst!).
+sudo npm install -g adispatchd@0.1.0
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.1.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -151,7 +150,7 @@ Updates ersetzen nur den Code; config-dir, data-dir und Env-Datei bleiben unver�
 adispatch drain --config-dir /etc/adispatchd --wait    # aktive Runs sauber beenden (ohne Zeitlimit)
 sudo systemctl stop adispatchd                                  # falls noch aktiv (nach Drain bereits beendet)
 sudo cp -a /etc/adispatchd /root/adispatchd-config-$(date +%F)   # optional, config-dir sichern
-sudo npm install -g ./adispatchd-<neue-version>.tgz   # Tarball aus dem Repository-Checkout (npm pack)
+sudo npm install -g adispatchd@<neue-version>          # oder Tarball aus dem Checkout (npm pack)
 sudo adispatch config validate --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
 sudo adispatch service install --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd   # nur wenn sich Pfade/Optionen ändern
 sudo systemctl start adispatchd
