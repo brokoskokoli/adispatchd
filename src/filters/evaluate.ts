@@ -70,6 +70,8 @@ export interface FieldSource {
   isExpensive?(field: string): boolean;
   /** Declared type of `field` (enables date semantics). */
   fieldType?(field: string): FieldType | undefined;
+  /** True if string values of `field` compare without regard to case (e.g. GitHub labels). */
+  isCaseInsensitive?(field: string): boolean;
 }
 
 /** Root path used in traces. */
@@ -209,7 +211,8 @@ class Evaluation {
     const resolution = await this.resolve(node.field);
     if (!resolution.known) return { ...base, value: 'unknown', reason: resolution.reason };
     const fieldType = this.source.fieldType?.(node.field);
-    const outcome = applyOperator(node.operator, resolution.value, node.value, fieldType);
+    const caseInsensitive = this.source.isCaseInsensitive?.(node.field) ?? false;
+    const outcome = applyOperator(node.operator, resolution.value, node.value, fieldType, { caseInsensitive });
     return {
       ...base,
       value: outcome.value,

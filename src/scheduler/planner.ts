@@ -65,6 +65,7 @@ export function cheapOnly(fields: FieldSource): FieldSource {
   return {
     isExpensive: (f) => fields.isExpensive?.(f) ?? false,
     fieldType: (f) => fields.fieldType?.(f),
+    isCaseInsensitive: (f) => fields.isCaseInsensitive?.(f) ?? false,
     resolve(field: string): Promise<FieldResolution> | FieldResolution {
       if (fields.isExpensive?.(field)) return { known: false, reason: 'expensive field, evaluated later' };
       return fields.resolve(field);

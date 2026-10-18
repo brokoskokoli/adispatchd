@@ -298,7 +298,40 @@ export interface FieldDefinition {
    * (`listCandidates({ filter })`). Must be a subset of `operators`.
    */
   pushdown?: readonly FilterOperator[];
+  /**
+   * String values compare without regard to case (e.g. GitHub label names,
+   * which GitHub itself treats case-insensitively).
+   */
+  caseInsensitive?: boolean;
 }
+
+/**
+ * Operators that are meaningful per field type; config validation accepts
+ * exactly these. (`equals` on lists is not expressible: list values are only
+ * allowed for `in`.)
+ */
+export const OPERATORS_BY_TYPE: Readonly<Record<FieldType, readonly FilterOperator[]>> = {
+  string: ['equals', 'not_equals', 'contains', 'in'],
+  number: ['equals', 'not_equals', 'in', 'greater_than', 'less_than'],
+  boolean: ['equals', 'not_equals'],
+  date: ['equals', 'not_equals', 'greater_than', 'less_than'],
+  'string[]': ['contains', 'in'],
+};
+
+/**
+ * Internal run fields available to views (per global item key, latest run by
+ * creation). Not available in workflow filters.
+ */
+export const VIEW_RUN_FIELDS: readonly FieldDefinition[] = Object.freeze([
+  { name: 'run.last_id', type: 'string', description: 'ID of the latest run', operators: OPERATORS_BY_TYPE.string },
+  { name: 'run.last_workflow', type: 'string', description: 'Workflow of the latest run', operators: OPERATORS_BY_TYPE.string },
+  { name: 'run.last_status', type: 'string', description: 'Technical status of the latest run', operators: OPERATORS_BY_TYPE.string },
+  { name: 'run.last_result', type: 'string', description: 'Business result (success/failure) of the latest run', operators: OPERATORS_BY_TYPE.string },
+  { name: 'run.last_result.message', type: 'string', description: 'Result message of the latest run', operators: OPERATORS_BY_TYPE.string },
+  { name: 'run.last_status_message', type: 'string', description: 'Last worker status message', operators: OPERATORS_BY_TYPE.string },
+  { name: 'run.last_started_at', type: 'date', description: 'Start of the latest run', operators: OPERATORS_BY_TYPE.date },
+  { name: 'run.last_finished_at', type: 'date', description: 'End of the latest run', operators: OPERATORS_BY_TYPE.date },
+] satisfies FieldDefinition[]);
 
 /**
  * Result of resolving a field. `known: false` means the value could not be

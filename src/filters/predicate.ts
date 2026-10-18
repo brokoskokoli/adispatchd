@@ -146,16 +146,32 @@ function inList(actual: FieldValue, expected: FilterValue, fieldType: FieldType 
   return sawUnknown ? unknown(`incompatible types: ${typeName(actual)} vs list`) : FALSE;
 }
 
+/** Per-field comparison options (from the adapter's field definition). */
+export interface OperatorOptions {
+  /** Compare string values without regard to case (e.g. GitHub labels). */
+  caseInsensitive?: boolean;
+}
+
+function lower<T>(value: T): T {
+  if (typeof value === 'string') return value.toLowerCase() as T;
+  if (Array.isArray(value)) return value.map((v: unknown) => (typeof v === 'string' ? v.toLowerCase() : v)) as T;
+  return value;
+}
+
 /**
  * Apply `operator` to a known field value and the literal `expected`.
- * `fieldType` (from the adapter's field definition) enables date semantics.
+ * `fieldType` (from the adapter's field definition) enables date semantics;
+ * `options.caseInsensitive` folds the case of all string values first.
  */
 export function applyOperator(
   operator: FilterOperator,
-  actual: FieldValue,
-  expected: FilterValue,
+  actualValue: FieldValue,
+  expectedValue: FilterValue,
   fieldType?: FieldType,
+  options: OperatorOptions = {},
 ): PredicateOutcome {
+  const actual = options.caseInsensitive ? lower(actualValue) : actualValue;
+  const expected = options.caseInsensitive ? lower(expectedValue) : expectedValue;
   switch (operator) {
     case 'equals':
       return equals(actual, expected, fieldType);

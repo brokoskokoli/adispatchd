@@ -72,6 +72,10 @@ HTTP-Kommandos finden die Instanz über `--url` oder Host/Port aus `config.yaml`
 
 ## Konfiguration
 
+**Verbindliche Referenz aller Dateien, Felder, Defaults, Filter, Platzhalter und des Auswertungsablaufs:
+[docs/configuration-reference.md](docs/configuration-reference.md)** (ersetzt die Formatvorschläge der Spec; die
+Beispiele darin werden per Test gegen den echten Loader geprüft).
+
 ```
 config-dir/                      data-dir/
   config.yaml   global (§5.1)      orchestrator.sqlite   Runs, Locks, Events, Blocks, Journale
@@ -82,7 +86,7 @@ config-dir/                      data-dir/
   scripts/*.sh                     backups/   DB-Backups vor Migrationen
 ```
 
-Ein Workflow (vollständiges Beispiel: `workflows/coder.yaml` nach `init`, Referenz: [Spec §5](docs/spec-v0.1.md)):
+Ein Workflow (vollständiges Beispiel: `workflows/coder.yaml` nach `init`, Referenz: [Konfigurationsreferenz](docs/configuration-reference.md)):
 
 ```yaml
 id: coder

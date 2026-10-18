@@ -27,7 +27,7 @@ import {
   type Timers,
   type Unsubscribe,
 } from '../core/index.js';
-import { UnknownWorkflowError, type ConfigManager, type LoadedConfig, type ParameterValue, type WorkflowConfig } from '../config/index.js';
+import { UnknownWorkflowError, automaticParameterValues, type ConfigManager, type LoadedConfig, type ParameterValue, type WorkflowConfig } from '../config/index.js';
 import { ShellCheckRunner, sortCandidates } from '../filters/index.js';
 import {
   BlockedError,
@@ -418,6 +418,7 @@ export class Scheduler {
         sourceItemKey: candidate.itemKey,
         sourceUrl: candidate.item.url,
         configSnapshot: this.config.snapshotWorkflow(candidate.workflowId),
+        parameters: automaticParameterValues(eff.config),
         failIfBlocked: true,
       });
     } catch (err) {
@@ -611,6 +612,7 @@ export class Scheduler {
           triggerType: 'schedule',
           scheduledFor: slot,
           configSnapshot: this.config.snapshotWorkflow(workflowId),
+          parameters: automaticParameterValues(eff.config),
           failIfBlocked: true,
         });
         this.repos.cronFirings.update(workflowId, slot, { runId: reserved.id });

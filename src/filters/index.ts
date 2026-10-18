@@ -2,7 +2,8 @@
  * Component `filters` – public API (WI-04, Spec §6, §7).
  * Other components import from this module only.
  */
-export { applyOperator, type PredicateOutcome } from './predicate.js';
+export { applyOperator, type OperatorOptions, type PredicateOutcome } from './predicate.js';
+export { parseIsoDate } from './iso-date.js';
 export {
   collectFields,
   evaluateFilter,

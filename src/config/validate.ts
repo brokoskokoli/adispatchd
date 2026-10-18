@@ -15,6 +15,7 @@ import {
   type TemplateMode,
   type TemplateScope,
 } from '../core/index.js';
+import { checkFieldName, checkFilterFields, type FieldIssue } from './field-catalog.js';
 import type { IssueCollector, IssuePath } from './issues.js';
 import type {
   GlobalConfig,
@@ -204,6 +205,16 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
     const err = cronError(wf.trigger.cron, tzOk ? wf.trigger.timezone : undefined);
     if (err) issues.error(file, ['trigger', 'cron'], err);
   }
+  if (wf.trigger.type === 'source') {
+    const source = input.sources[wf.trigger.source];
+    if (source) {
+      const ctx = { sourceType: source.type, view: false };
+      if (wf.filter) addFieldIssues(checkFilterFields(wf.filter, ctx, { listing: true }), issues, file, ['filter']);
+      wf.itemPriority?.rules.forEach((rule, i) =>
+        addFieldIssues(checkFilterFields(rule.when, ctx, { listing: false }), issues, file, ['item_priority', 'rules', i, 'when']),
+      );
+    }
+  }
   if (!isSource) {
     const why = `is only allowed for workflows with a source trigger (trigger is "${wf.trigger.type}")`;
     if (wf.filter) issues.error(file, ['filter'], `"filter" ${why}`);
@@ -328,8 +339,9 @@ function validateAction(
       if (action.labels.add.length === 0 && action.labels.remove.length === 0) {
         issues.error(file, [...at, 'labels'], '"source.update" must add or remove at least one label');
       }
+      // Labels compare case-insensitively (GitHub, adapter): `Ready` and `ready` are the same label.
       for (const label of action.labels.add) {
-        if (action.labels.remove.includes(label)) {
+        if (action.labels.remove.some((r) => r.toLowerCase() === label.toLowerCase())) {
           issues.error(file, [...at, 'labels'], `Label "${label}" is both added and removed`);
         }
       }
@@ -408,4 +420,21 @@ function validateView(entry: ViewEntry, input: SemanticInput, issues: IssueColle
   if (types.size > 1) {
     issues.error(file, ['sources'], `All sources of a view must have the same adapter type (found: ${[...types].join(', ')})`);
   }
+  if (types.size === 1) {
+    const ctx = { sourceType: [...types][0] as string, view: true };
+    if (view.filter) addFieldIssues(checkFilterFields(view.filter, ctx, { listing: true }), issues, file, ['filter']);
+    const checkName = (field: string, at: IssuePath): void => {
+      const message = checkFieldName(field, ctx);
+      if (message) issues.error(file, at, message);
+    };
+    view.fields.forEach((f, i) => {
+      checkName(f.field, ['fields', i, 'field']);
+      if (f.link) checkName(f.link, ['fields', i, 'link']);
+    });
+    if (view.sort) checkName(view.sort.field, ['sort', 'field']);
+  }
+}
+
+function addFieldIssues(found: readonly FieldIssue[], issues: IssueCollector, file: string, at: IssuePath): void {
+  for (const issue of found) issues.error(file, [...at, ...issue.path], issue.message);
 }

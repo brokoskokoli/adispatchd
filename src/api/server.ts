@@ -203,15 +203,18 @@ function splitHost(value: string): { name: string; port: string | null } | null 
 
 /**
  * True if the `Host` (or an `Origin`'s host) matches an allowed entry: `name`
- * matches any port, `name:port` only that port.
+ * matches any port, `name:port` only that port. A value without port (the
+ * client used the scheme's default port, e.g. behind an HTTPS reverse proxy)
+ * matches entries without port and entries with `:80` or `:443`.
  */
 export function isAllowedHost(value: string, allowed: readonly string[]): boolean {
   const h = splitHost(value);
   if (!h) return false;
   return allowed.some((entry) => {
     const e = splitHost(entry);
-    if (!e) return false;
-    return e.name === h.name && (e.port === null || e.port === (h.port ?? '80'));
+    if (!e || e.name !== h.name) return false;
+    if (e.port === null) return true;
+    return h.port === null ? e.port === '80' || e.port === '443' : e.port === h.port;
   });
 }
 

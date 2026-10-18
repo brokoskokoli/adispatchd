@@ -49,6 +49,20 @@ export function validateParameters(
   return errors.length > 0 ? { ok: false, errors } : { ok: true, values };
 }
 
+/**
+ * Parameter values of an automatically started run (source / cron trigger):
+ * the declared defaults. Parameters without default are omitted (validation
+ * guarantees that automatic workflows have no required parameter without one).
+ * `null` if there is nothing to set.
+ */
+export function automaticParameterValues(
+  workflow: Pick<WorkflowConfig, 'parameters'>,
+): Record<string, ParameterValue> | null {
+  const values: Record<string, ParameterValue> = {};
+  for (const [name, def] of Object.entries(workflow.parameters)) if (def.default !== null) values[name] = def.default;
+  return Object.keys(values).length > 0 ? values : null;
+}
+
 /** Shorthand for {@link validateParameters} with a workflow. */
 export function validateWorkflowParameters(
   workflow: Pick<WorkflowConfig, 'parameters'>,
