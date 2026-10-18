@@ -24,7 +24,7 @@ Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 2
 > (`private: true`) – bis dahin nur aus dem Repository-Checkout bzw. als Tarball installieren.
 
 ```bash
-git clone <repo-url> adispatchd && cd adispatchd
+git clone https://github.com/brokoskokoli/adispatchd.git && cd adispatchd
 npm install
 npm pack                                        # baut (prepack) und erzeugt adispatchd-0.1.0.tgz
 npm install -g ./adispatchd-0.1.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)

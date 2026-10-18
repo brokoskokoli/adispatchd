@@ -4,6 +4,14 @@
   "description": "Agent Dispatch Daemon – configuration-driven dispatcher and orchestrator for shell processes and AI agents",
   "type": "module",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brokoskokoli/adispatchd.git"
+  },
+  "homepage": "https://github.com/brokoskokoli/adispatchd#readme",
+  "bugs": {
+    "url": "https://github.com/brokoskokoli/adispatchd/issues"
+  },
   "private": true,
   "bin": {
     "adispatch": "dist/cli/main.js"
