@@ -8,7 +8,7 @@
  * the deleting transaction: active runs / lock holders, unfinished or failed
  * lifecycle chains and runs of an active retry block are never deleted.
  * Files are deleted only after their row was deleted; the instance lock files
- * (`orchestrator.lock*`) are never touched – only the `runs/`, `logs/`
+ * (`adispatchd.lock*`) are never touched – only the `runs/`, `logs/`
  * sub-directories and workspaces strictly below the base directory are.
  */
 import { readdir, rm, stat } from 'node:fs/promises';

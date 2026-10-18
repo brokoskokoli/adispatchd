@@ -1,4 +1,6 @@
-# Agent Orchestrator – Technische Spezifikation v0.1
+# Agent Dispatch Daemon (`adispatchd`) – Technische Spezifikation v0.1
+
+> **Name:** Agent Dispatch Daemon – npm-Paket, Repository, systemd-Unit und Standardpfade `adispatchd`, CLI-Befehl `adispatch`. Ursprünglicher Arbeitsname: „Agent Orchestrator“ (`agent-orchestrator`); alle Bezeichner wurden entsprechend umbenannt (z. B. Umgebungsvariablen `ADISPATCH_*` statt `ORCH_*`, Kommentar-Marker `adispatchd:` statt `orch:`).
 
 **Status:** Technischer Entwurf zur gemeinsamen Review, nicht implementiert  
 **Ziel:** Eigenständig installierbarer, konfigurationsgetriebener Orchestrator für Shell-Prozesse und KI-Agenten  
@@ -74,7 +76,7 @@ config-dir/
     check-credits.sh
 
 data-dir/
-  orchestrator.sqlite
+  adispatchd.sqlite
   logs/<run-id>/stdout.log
   logs/<run-id>/stderr.log
   runs/<run-id>/context.json
@@ -88,17 +90,17 @@ CLI-Parameter `--config-dir` und `--data-dir` MÜSSEN sowohl für lokalen Start 
 **Vorgeschlagene CLI:**
 
 ```bash
-npx <paketname> init --config-dir ./config --data-dir ./data
-npx <paketname> start --config-dir ./config --data-dir ./data
-<binary> config validate --config-dir ./config
-<binary> config reload
-<binary> workflow dry-run coder
-<binary> service install --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator
-<binary> service status
-<binary> service uninstall
+npx adispatchd init --config-dir ./config --data-dir ./data
+npx adispatchd start --config-dir ./config --data-dir ./data
+adispatch config validate --config-dir ./config
+adispatch config reload
+adispatch workflow dry-run coder
+adispatch service install --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
+adispatch service status
+adispatch service uninstall
 ```
 
-Paketname und Binary-Name sind vor Veröffentlichung zu wählen; `<paketname>` ist ein Platzhalter. `npx` ist für schnellen Start vorgesehen, **nicht als `ExecStart` eines dauerhaften Dienstes**. Für systemd wird eine fest installierte npm-Version direkt gestartet; die Unit verwendet absolute Pfade und einen dedizierten Dienstbenutzer. Updates aktualisieren Code, nicht `config-dir` oder `data-dir`; DB-Migrationen sind versioniert und werden vor Anwendung gesichert. Eine laufende Installation wird vor Updates per Drain beendet. Auf `SIGTERM` muss das Verhalten mit systemd eindeutig abgestimmt werden (siehe §14).
+Paketname ist `adispatchd`, der CLI-Befehl (Binary) heißt `adispatch`; systemd-Unit, Dienstbenutzer und Standardpfade heißen `adispatchd`. `npx` ist für schnellen Start vorgesehen, **nicht als `ExecStart` eines dauerhaften Dienstes**. Für systemd wird eine fest installierte npm-Version direkt gestartet; die Unit verwendet absolute Pfade und einen dedizierten Dienstbenutzer. Updates aktualisieren Code, nicht `config-dir` oder `data-dir`; DB-Migrationen sind versioniert und werden vor Anwendung gesichert. Eine laufende Installation wird vor Updates per Drain beendet. Auf `SIGTERM` muss das Verhalten mit systemd eindeutig abgestimmt werden (siehe §14).
 
 ## 5. Konfigurationsmodell (vorgeschlagenes YAML-Schema)
 
@@ -114,7 +116,7 @@ scheduler:
   max_concurrent: 5
 
 workspace:
-  base_dir: /var/lib/agent-orchestrator/workspaces
+  base_dir: /var/lib/adispatchd/workspaces
   cleanup: on_success  # always | on_success | never
 
 lifecycle:
@@ -211,14 +213,14 @@ item_priority:
 conditions:
   workflow:
     - type: shell
-      command: /etc/agent-orchestrator/scripts/check-credits.sh
+      command: /etc/adispatchd/scripts/check-credits.sh
       timeout: 15s
       cache: 60s
   item: []
 
 execute:
   type: shell
-  command: /etc/agent-orchestrator/scripts/coder.sh
+  command: /etc/adispatchd/scripts/coder.sh
   working_directory: '{workspace.base_dir}/{workflow.id}/{run.id}'
   create_directory: true
   env:
@@ -286,7 +288,7 @@ trigger:
   timezone: Europe/Berlin
 execute:
   type: shell
-  command: /etc/agent-orchestrator/scripts/maintenance.sh
+  command: /etc/adispatchd/scripts/maintenance.sh
   working_directory: '{workspace.base_dir}/{workflow.id}/{run.id}'
 ```
 
@@ -304,7 +306,7 @@ parameters:
     required: true
 execute:
   type: shell
-  command: /etc/agent-orchestrator/scripts/deploy.sh
+  command: /etc/adispatchd/scripts/deploy.sh
 ```
 
 Parametertypen: `string`, `number`, `boolean`, `enum`; dazu `required` und `default`. Validierung erfolgt vor dem Start. Schedule-/Manual-Workflows haben kein Source-Item und daher keine implizite Source-URL. Für Cron gilt zunächst: versäumte oder durch Conditions/Limits verhinderte Zeitpunkte werden **übersprungen**, nicht nachgeholt; gleiche Cron-Instanzen werden nicht aufgestaut. Zeitzonen und Sommerzeitfälle müssen getestet werden.
@@ -350,7 +352,7 @@ Eine gemeinsame deklarative Filter-AST unterstützt `all`, `any`, `not` sowie mi
 
 ### 8.2 Haupt-Worker-Ergebnisvertrag
 
-Der Exit-Code des Haupt-Workers beschreibt ausschließlich den **technischen Erfolg oder Misserfolg der Prozessausführung**. Das fachliche Ergebnis wird unabhängig davon über die optionale JSON-Ergebnisdatei (`ORCH_RESULT_FILE`) übermittelt.
+Der Exit-Code des Haupt-Workers beschreibt ausschließlich den **technischen Erfolg oder Misserfolg der Prozessausführung**. Das fachliche Ergebnis wird unabhängig davon über die optionale JSON-Ergebnisdatei (`ADISPATCH_RESULT_FILE`) übermittelt.
 
 Es gelten folgende verbindliche Regeln:
 
@@ -422,14 +424,14 @@ Jeder Run bekommt einen **eindeutigen Workspace** (Standard mit `{workflow.id}/{
 Umgebungsvariablen (Mindestmenge):
 
 ```text
-ORCH_RUN_ID=...
-ORCH_WORKFLOW_ID=...
-ORCH_SOURCE_TYPE=github          # nur wenn sourcegebunden
-ORCH_SOURCE_ITEM_ID=...
-ORCH_SOURCE_URL=...
-ORCH_CONTEXT_FILE=/.../context.json
-ORCH_RESULT_FILE=/.../result.json
-ORCH_WORKSPACE=/.../workspaces/coder/run-123
+ADISPATCH_RUN_ID=...
+ADISPATCH_WORKFLOW_ID=...
+ADISPATCH_SOURCE_TYPE=github          # nur wenn sourcegebunden
+ADISPATCH_SOURCE_ITEM_ID=...
+ADISPATCH_SOURCE_URL=...
+ADISPATCH_CONTEXT_FILE=/.../context.json
+ADISPATCH_RESULT_FILE=/.../result.json
+ADISPATCH_WORKSPACE=/.../workspaces/coder/run-123
 ```
 
 Zusätzlich steht eine JSON-Kontextdatei zur Verfügung:
@@ -447,7 +449,7 @@ Zusätzlich steht eine JSON-Kontextdatei zur Verfügung:
     "attributes": { "title": "Implement OAuth", "labels": ["coding"] }
   },
   "parameters": {},
-  "workspace": { "path": "/var/lib/agent-orchestrator/workspaces/coder-project-a/run-123" }
+  "workspace": { "path": "/var/lib/adispatchd/workspaces/coder-project-a/run-123" }
 }
 ```
 
@@ -455,7 +457,7 @@ Der Worker erhält ausschließlich eine Minimalumgebung und **ausdrücklich dekl
 
 ### 9.2 Output
 
-Optional schreibt der Worker atomar eine JSON-Ergebnisdatei an `ORCH_RESULT_FILE` (temporäre Datei und Rename empfohlen):
+Optional schreibt der Worker atomar eine JSON-Ergebnisdatei an `ADISPATCH_RESULT_FILE` (temporäre Datei und Rename empfohlen):
 
 ```json
 {
@@ -476,9 +478,9 @@ Vorgeschlagene Limits: Ergebnisgröße begrenzen, JSON-Schema validieren, String
 stdout und stderr werden als unveränderte Logs persistiert. Optional kann eine Zeile mit reserviertem Präfix ein Event transportieren:
 
 ```text
-@@ORCH_EVENT {"type":"status","message":"Tests laufen"}
-@@ORCH_EVENT {"type":"progress","value":60}
-@@ORCH_EVENT {"type":"question","message":"Welcher OAuth-Anbieter?"}
+@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}
+@@ADISPATCH_EVENT {"type":"progress","value":60}
+@@ADISPATCH_EVENT {"type":"question","message":"Welcher OAuth-Anbieter?"}
 ```
 
 Events werden separat mit Run-ID und Zeitstempel in SQLite gespeichert, zudem per SSE an die GUI gesendet. Sie sind **nur informativ**, lösen keine Workflow-Transitionen aus. Ein `question`-Event startet keine automatische Rückfragefunktion. Letzte Statusmeldung kann auf Run-Karten erscheinen. Ungültige Event-Zeilen bleiben in Rohlogs und erzeugen optional einen Parser-Warnhinweis.
@@ -630,7 +632,7 @@ Konfigurationsänderungen werden **nur manuell** per GUI/CLI übernommen. Reload
 
 1. Standard-Bind `127.0.0.1`; extern nur hinter authentifiziertem Proxy/VPN. `service install` richtet einen eigenen OS-Benutzer und eng begrenzte Dateirechte ein.
 2. Shell-Skripte gelten als **vertrauenswürdiger Konfigurationscode** mit den OS-Rechten des Dienstes; es gibt keine Sandbox-Garantie. Schreibzugriff auf YAML/Skripte bedeutet faktisch Codeausführungsrecht.
-3. Worker erben keine vollständige Controller-Umgebung. Nur minimale Standardvariablen, explizite Env-Werte, `ORCH_*` und explizit beantragte Secrets/Tokens.
+3. Worker erben keine vollständige Controller-Umgebung. Nur minimale Standardvariablen, explizite Env-Werte, `ADISPATCH_*` und explizit beantragte Secrets/Tokens.
 4. App-Schlüssel, Tokens und Secret-Dateien dürfen nicht in persistierten Kontexten, HTTP-Antworten, Debug-Logs oder strukturierten Events erscheinen; best-effort Redaction in Prozesslogs.
 5. Event-/Result-/Kommentar-Strings als untrusted text behandeln (XSS vermeiden); Template-Auswertung auf feste Platzhalter begrenzen.
 6. Shell-Kommandos mit Argumentlisten statt unsicherer Shell-Interpolation konstruieren, wo möglich. Bei expliziten Shell-Kommandos liegt die Verantwortung beim Konfigurationsautor.

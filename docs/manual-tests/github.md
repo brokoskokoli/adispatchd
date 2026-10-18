@@ -172,9 +172,9 @@ Was ein Token sieht, wenn ihm das Blocker-Repo fehlt, ist nicht dokumentiert. Da
 | `orch-test-hidden` | privat | **keine** | Cross-Repo-Blocker **ohne** App-Zugriff (A4) |
 
 ```bash
-export ORCH_TEST_OWNER=<dein-account-oder-org>
+export ADISPATCH_TEST_OWNER=<dein-account-oder-org>
 for r in orch-test-a orch-test-b orch-test-hidden; do
-  gh repo create "$ORCH_TEST_OWNER/$r" --private --add-readme --description "agent-orchestrator manual test (Wegwerf)"
+  gh repo create "$ADISPATCH_TEST_OWNER/$r" --private --add-readme --description "adispatchd manual test (Wegwerf)"
 done
 ```
 
@@ -239,12 +239,12 @@ werden getestet:
 
 ```bash
 # Form 1: echte Zeilenumbrüche (direkt in der Shell)
-export ORCH_TEST_MAINTAINER_KEY="$(cat ~/orch-test-keys/orch-test-maintainer-*.private-key.pem)"
-export ORCH_TEST_REVIEWER_KEY="$(cat ~/orch-test-keys/orch-test-reviewer-*.private-key.pem)"
+export ADISPATCH_TEST_MAINTAINER_KEY="$(cat ~/orch-test-keys/orch-test-maintainer-*.private-key.pem)"
+export ADISPATCH_TEST_REVIEWER_KEY="$(cat ~/orch-test-keys/orch-test-reviewer-*.private-key.pem)"
 
 # Form 2: einzeilig mit literalen \n (wie in einer systemd-EnvironmentFile oder .env)
-export ORCH_TEST_CODER_KEY="$(awk 'BEGIN{ORS="\\n"}1' ~/orch-test-keys/orch-test-coder-*.private-key.pem)"
-printf '%s' "$ORCH_TEST_CODER_KEY" | head -c 40; echo   # → -----BEGIN RSA PRIVATE KEY-----\nMIIE…
+export ADISPATCH_TEST_CODER_KEY="$(awk 'BEGIN{ORS="\\n"}1' ~/orch-test-keys/orch-test-coder-*.private-key.pem)"
+printf '%s' "$ADISPATCH_TEST_CODER_KEY" | head -c 40; echo   # → -----BEGIN RSA PRIVATE KEY-----\nMIIE…
 ```
 
 Variante als Datei, die nur gesourct und nie eingecheckt wird (`/tmp/` im Repo ist in `.gitignore`):
@@ -252,9 +252,9 @@ Variante als Datei, die nur gesourct und nie eingecheckt wird (`/tmp/` im Repo i
 ```bash
 mkdir -p tmp && umask 077
 {
-  printf 'ORCH_TEST_MAINTAINER_KEY="%s"\n' "$(awk 'BEGIN{ORS="\\n"}1' ~/orch-test-keys/orch-test-maintainer-*.pem)"
-  printf 'ORCH_TEST_CODER_KEY="%s"\n'      "$(awk 'BEGIN{ORS="\\n"}1' ~/orch-test-keys/orch-test-coder-*.pem)"
-  printf 'ORCH_TEST_REVIEWER_KEY="%s"\n'   "$(awk 'BEGIN{ORS="\\n"}1' ~/orch-test-keys/orch-test-reviewer-*.pem)"
+  printf 'ADISPATCH_TEST_MAINTAINER_KEY="%s"\n' "$(awk 'BEGIN{ORS="\\n"}1' ~/orch-test-keys/orch-test-maintainer-*.pem)"
+  printf 'ADISPATCH_TEST_CODER_KEY="%s"\n'      "$(awk 'BEGIN{ORS="\\n"}1' ~/orch-test-keys/orch-test-coder-*.pem)"
+  printf 'ADISPATCH_TEST_REVIEWER_KEY="%s"\n'   "$(awk 'BEGIN{ORS="\\n"}1' ~/orch-test-keys/orch-test-reviewer-*.pem)"
 } > tmp/orch-test.env
 set -a; . tmp/orch-test.env; set +a
 ```
@@ -297,8 +297,8 @@ Das komplette config-dir liegt unter [`github-fixture/`](github-fixture/). Der T
 | Datei | Inhalt |
 |---|---|
 | `config.yaml` | Port **8791**, Polling **20 s**, global `max_concurrent: 4`, Action-Retry 3 × **20 s**, Workspaces behalten |
-| `sources.yaml` | `test_a` → `orch-test-a`, `test_b` → `orch-test-b`, Lese-Identity `maintainer`; Owner-Platzhalter `ORCH_TEST_OWNER` |
-| `identities.yaml` | `maintainer`, `coder`, `reviewer`; Platzhalter-IDs `900000x` (App) / `910000x` (Installation); Keys aus `ORCH_TEST_{MAINTAINER,CODER,REVIEWER}_KEY` |
+| `sources.yaml` | `test_a` → `orch-test-a`, `test_b` → `orch-test-b`, Lese-Identity `maintainer`; Owner-Platzhalter `ADISPATCH_TEST_OWNER` |
+| `identities.yaml` | `maintainer`, `coder`, `reviewer`; Platzhalter-IDs `900000x` (App) / `910000x` (Installation); Keys aus `ADISPATCH_TEST_{MAINTAINER,CODER,REVIEWER}_KEY` |
 | `workflows/coder-test.yaml` | Source `test_a`, Identity `coder`, Filter `labels contains ready-for-coding` **und** `dependencies.blocked_by_open = 0`, `max_concurrent: 2`, `max_technical_failures: 3`, Label-Hooks (`coding` → `ready-for-review` / `needs-maintainer` / zurück zu `ready-for-coding`), Kommentar bei Erfolg und `failure`, `GH_TOKEN` für den Worker |
 | `workflows/reviewer-test.yaml` | Source `test_a`, Identity `reviewer`, nur **PRs** mit `ready-for-review` und ohne offene Blocker, Kommentar bei Erfolg |
 | `workflows/commenter-test.yaml` | Source `test_b`, Label `ready-for-comment`. `on_start` kommentiert als **reviewer** (Action-Identity), `on_success` als **coder** mit `retry: {max_attempts: 6, delay: 20s}` (Szenario 6) |
@@ -322,21 +322,21 @@ Labels für den Test-Worker (kombinierbar):
 ### 2.2 Fixture kopieren und IDs eintragen
 
 ```bash
-source docs/manual-tests/github-fixture/helpers.sh      # setzt ORCH_CFG=tmp/orch-cfg, ORCH_DATA=tmp/orch-data, API=…:8791
-rm -rf "$ORCH_CFG" && mkdir -p "$ORCH_CFG" "$ORCH_DATA"
-cp -Rp docs/manual-tests/github-fixture/. "$ORCH_CFG"/
-perl -pi -e "s/ORCH_TEST_OWNER/$ORCH_TEST_OWNER/g" "$ORCH_CFG/sources.yaml"
+source docs/manual-tests/github-fixture/helpers.sh      # setzt ADISPATCH_CFG=tmp/orch-cfg, ADISPATCH_DATA=tmp/orch-data, API=…:8791
+rm -rf "$ADISPATCH_CFG" && mkdir -p "$ADISPATCH_CFG" "$ADISPATCH_DATA"
+cp -Rp docs/manual-tests/github-fixture/. "$ADISPATCH_CFG"/
+perl -pi -e "s/ADISPATCH_TEST_OWNER/$ADISPATCH_TEST_OWNER/g" "$ADISPATCH_CFG/sources.yaml"
 perl -pi -e "s/9000001/$MAINTAINER_APP_ID/; s/9100001/$MAINTAINER_INSTALLATION_ID/;
              s/9000002/$CODER_APP_ID/;      s/9100002/$CODER_INSTALLATION_ID/;
-             s/9000003/$REVIEWER_APP_ID/;   s/9100003/$REVIEWER_INSTALLATION_ID/" "$ORCH_CFG/identities.yaml"
-grep -nE 'owner|app_id|installation_id' "$ORCH_CFG"/sources.yaml "$ORCH_CFG"/identities.yaml
-ls -l "$ORCH_CFG/scripts/test-worker.sh"              # muss ausführbar sein (rwx)
-orch config validate --config-dir "$ORCH_CFG"
+             s/9000003/$REVIEWER_APP_ID/;   s/9100003/$REVIEWER_INSTALLATION_ID/" "$ADISPATCH_CFG/identities.yaml"
+grep -nE 'owner|app_id|installation_id' "$ADISPATCH_CFG"/sources.yaml "$ADISPATCH_CFG"/identities.yaml
+ls -l "$ADISPATCH_CFG/scripts/test-worker.sh"              # muss ausführbar sein (rwx)
+orch config validate --config-dir "$ADISPATCH_CFG"
 # → Configuration in …/tmp/orch-cfg is valid: 3 workflow(s), 2 view(s), 2 source(s), 3 identities. Hash …
 ```
 
 Minimalvariante: In `identities.yaml` bei `reviewer` dieselben Werte wie bei `coder` eintragen und
-`private_key_env: ORCH_TEST_CODER_KEY` setzen.
+`private_key_env: ADISPATCH_TEST_CODER_KEY` setzen.
 
 ### 2.3 Helfer
 
@@ -370,14 +370,14 @@ Tokens und teilt keinen Cache mit der laufenden Instanz.
 
 ```ts
 // tmp/probe.ts – direkter Zugriff auf Adapter/Credentials mit der Test-Konfiguration (nicht einchecken; /tmp/ ist ignoriert).
-// Aufruf: npx tsx tmp/probe.ts <befehl> ...   (config-dir aus $ORCH_CFG, Logs auf stderr, Ergebnis als JSON auf stdout)
+// Aufruf: npx tsx tmp/probe.ts <befehl> ...   (config-dir aus $ADISPATCH_CFG, Logs auf stderr, Ergebnis als JSON auf stdout)
 import { loadConfig } from '../src/config/index.js';
 import { ConsoleLogger, SecretRedactor, systemClock } from '../src/core/index.js';
 import { SourceRegistry } from '../src/app.js';
 import { DEPENDENCY_FIELDS } from '../src/sources/index.js';
 
 const [cmd, ...args] = process.argv.slice(2);
-const loaded = await loadConfig(process.env.ORCH_CFG ?? 'tmp/orch-cfg', { dataDir: process.env.ORCH_DATA ?? 'tmp/orch-data' });
+const loaded = await loadConfig(process.env.ADISPATCH_CFG ?? 'tmp/orch-cfg', { dataDir: process.env.ADISPATCH_DATA ?? 'tmp/orch-data' });
 if (!loaded.ok) throw new Error(`config invalid: ${JSON.stringify(loaded.errors)}`);
 const redactor = new SecretRedactor();
 const logger = new ConsoleLogger({ level: 'debug', redact: redactor.asRedactor });
@@ -446,12 +446,12 @@ In einem **eigenen Terminal**, in dem die Key-Variablen gesetzt sind:
 
 ```bash
 source docs/manual-tests/github-fixture/helpers.sh
-orch start --config-dir "$ORCH_CFG" --data-dir "$ORCH_DATA" 2>&1 | tee -a tmp/orch.log
+orch start --config-dir "$ADISPATCH_CFG" --data-dir "$ADISPATCH_DATA" 2>&1 | tee -a tmp/orch.log
 # → URL http://127.0.0.1:8791, Stop-Timeouts; Logs (JSON-Zeilen) auf stderr → tmp/orch.log
 ```
 
 Weboberfläche: <http://127.0.0.1:8791>. Bei Bedarf stoppen und neu starten (`Ctrl-C` = Drain, zweimal = Cancel-All).
-Die Daten in `$ORCH_DATA` bleiben erhalten.
+Die Daten in `$ADISPATCH_DATA` bleiben erhalten.
 
 **Während des Testdaten-Setups** die automatischen Starts anhalten, damit kein Run startet, bevor alle Abhängigkeiten
 gesetzt sind:
@@ -465,7 +465,7 @@ post /scheduler/resume | jq .scheduler.state    # → "running"  (sofortiger Pla
 
 ## 3 Testdaten
 
-Alle Befehle setzen `source …/helpers.sh` und `ORCH_TEST_OWNER` voraus. Die Testfälle legen ihre Issues selbst an
+Alle Befehle setzen `source …/helpers.sh` und `ADISPATCH_TEST_OWNER` voraus. Die Testfälle legen ihre Issues selbst an
 (`mkissue`). Hier entstehen nur Labels, Blocker und der PR.
 
 ### 3.1 Labels (in beiden Repos)
@@ -600,7 +600,7 @@ post /scheduler/pause >/dev/null
 N_OK=$(mkissue orch-test-a "T3 mit Label" ready-for-coding manual-keep); echo "N_OK=$N_OK" >> tmp/testdata.env
 N_NO=$(mkissue orch-test-a "T3 ohne Label")
 N_CL=$(mkissue orch-test-a "T3 geschlossen mit Label" ready-for-coding); gh issue close $N_CL -R $(repo orch-test-a)
-orch workflow dry-run coder-test --config-dir "$ORCH_CFG" --local --data-dir "$ORCH_DATA"   # lokal: Gate egal
+orch workflow dry-run coder-test --config-dir "$ADISPATCH_CFG" --local --data-dir "$ADISPATCH_DATA"   # lokal: Gate egal
 post /scheduler/resume >/dev/null; sleep 25; runs coder-test 5 | grep "test_a:$N_OK"
 ```
 
@@ -665,22 +665,22 @@ entsprechen A11. `findCommentByMarker` findet nur Kommentare der **eigenen** App
 **Schritte:**
 ```bash
 comments orch-test-a $N_OK                                 # Kommentar aus T4 (on_success-comment)
-MARK=$(comments orch-test-a $N_OK | tail -1 | grep -o 'orch:[^ ]*')
+MARK=$(comments orch-test-a $N_OK | tail -1 | grep -o 'adispatchd:[^ ]*')
 probe find test_a $N_OK coder "$MARK"                      # a) eigene App
 probe find test_a $N_OK reviewer "$MARK"                   # c) fremde App, gleicher Marker
 N=$(mkissue orch-test-a "T6 marker")
-gh issue comment $N -R $(repo orch-test-a) --body $'Mensch\n\n<!-- orch:manual-human:1 -->'
-probe find test_a $N coder orch:manual-human:1             # b) Mensch, gleicher Marker
-probe comment test_a $N reviewer orch:manual-rev:1 'als reviewer'
-probe find test_a $N coder orch:manual-rev:1               # c) andere App
-probe find test_a $N reviewer orch:manual-rev:1            # a) eigene App
-probe comment test_a $A_PR coder orch:manual-pr:1 'Kommentar an PR'
+gh issue comment $N -R $(repo orch-test-a) --body $'Mensch\n\n<!-- adispatchd:manual-human:1 -->'
+probe find test_a $N coder adispatchd:manual-human:1             # b) Mensch, gleicher Marker
+probe comment test_a $N reviewer adispatchd:manual-rev:1 'als reviewer'
+probe find test_a $N coder adispatchd:manual-rev:1               # c) andere App
+probe find test_a $N reviewer adispatchd:manual-rev:1            # a) eigene App
+probe comment test_a $A_PR coder adispatchd:manual-pr:1 'Kommentar an PR'
 gh pr view $A_PR -R $(repo orch-test-a) --json comments,reviews --jq '{comments: (.comments|length), reviews: (.reviews|length)}'
 ```
 
 **Erwartet:**
 - `comments` zeigt Login `<coder-slug>[bot]`, Typ `Bot`, App-ID = `$CODER_APP_ID`. Die letzte Zeile ist
-  `<!-- orch:run-…:<action-id> -->`. Im Web-UI ist der Marker unsichtbar.
+  `<!-- adispatchd:run-…:<action-id> -->`. Im Web-UI ist der Marker unsichtbar.
 - a) gibt `{"id": "…", "url": "…#issuecomment-…"}`. b) und c) geben `null`.
 - Der PR-Kommentar landet in der Konversation (`comments` +1), nicht als Review (`reviews` unverändert).
 
@@ -714,7 +714,7 @@ gepostet, Antwort ging verloren“. Zusätzlich wird der Identitätswechsel gepr
    Marker** der gescheiterten Action als Coder posten. Das ist die Simulation „gepostet, Antwort verloren“:
    ```bash
    AID=$(api /runs/$RUN | jq -r '.actions[] | select(.name=="done-comment") | .id')
-   probe comment test_b $N coder "orch:$RUN:$AID" 'Kommentar-Test fertig (vorab, simuliert)'
+   probe comment test_b $N coder "adispatchd:$RUN:$AID" 'Kommentar-Test fertig (vorab, simuliert)'
    post /actions/$AID/retry | jq .accepted
    sleep 5; actions $RUN; events $RUN | grep -i reconciled
    comments orch-test-b $N
@@ -767,7 +767,7 @@ Kurz **vor** dem Worker-Ende (bei `working 50/60s`) das Netz kappen und nach etw
 sleep 120; actions $RUN
 api /runs/$RUN | jq '.actions[] | select(.name=="done-comment") | .attemptsDetail[] | {attempt, outcome, error: .error.message}'
 events $RUN | grep -c run.spawn
-comments orch-test-b $N | grep -c 'orch:'
+comments orch-test-b $N | grep -c 'adispatchd:'
 ```
 
 **Erwartet:**
@@ -977,7 +977,7 @@ M=$(mkissue orch-test-a "T16 manuell, ohne ready-Label" test:slow)
 post /workflows/coder-test/start "{\"item\":\"$(issue_url orch-test-a $M)\"}" | jq '{run: .run.id, trigger: .run.triggerType, status: .run.status}'
 post /workflows/coder-test/start "{\"item\":\"$(issue_url orch-test-a $M)\"}" | jq .
 post /workflows/coder-test/start "{\"item\":\"#$M\"}" | jq .error.code
-post /workflows/coder-test/start "{\"item\":\"https://github.com/$ORCH_TEST_OWNER/orch-test-b/issues/1\"}" | jq .error.code
+post /workflows/coder-test/start "{\"item\":\"https://github.com/$ADISPATCH_TEST_OWNER/orch-test-b/issues/1\"}" | jq .error.code
 post /workflows/coder-test/start "{\"item\":\"$(issue_url orch-test-a $N_HID)\"}" | jq '{run: .run.id, error: .error.code}'
 ```
 
@@ -1051,7 +1051,7 @@ entfernen, dann:
 ```bash
 sleep 25; diag commenter-test | head -1
 view needs-maintainer
-orch workflow dry-run commenter-test --config-dir "$ORCH_CFG" --local --data-dir "$ORCH_DATA"; echo "exit=$?"
+orch workflow dry-run commenter-test --config-dir "$ADISPATCH_CFG" --local --data-dir "$ADISPATCH_DATA"; echo "exit=$?"
 ```
 
 Erwartet:
@@ -1083,13 +1083,13 @@ Erwartet:
   `start_error` ein Block entsteht. Das ist korrekt (Spec §11), aber zu beobachten.
 - Danach den Zugriff wiederherstellen, `resume`, und ggf. den Block aufheben.
 
-**T19c – fehlender Key.** Instanz stoppen, `unset ORCH_TEST_MAINTAINER_KEY`, dann:
+**T19c – fehlender Key.** Instanz stoppen, `unset ADISPATCH_TEST_MAINTAINER_KEY`, dann:
 ```bash
-orch workflow dry-run coder-test --config-dir "$ORCH_CFG" --local --data-dir "$ORCH_DATA"
+orch workflow dry-run coder-test --config-dir "$ADISPATCH_CFG" --local --data-dir "$ADISPATCH_DATA"
 ```
 
-Erwartet: `SOURCE ERROR: … Private key for identity "maintainer" missing: environment variable ORCH_TEST_MAINTAINER_KEY is not set`.
-Mit einem kaputten Key (`export ORCH_TEST_MAINTAINER_KEY=kaputt`) lautet die Meldung `… is not a valid RSA PEM key`.
+Erwartet: `SOURCE ERROR: … Private key for identity "maintainer" missing: environment variable ADISPATCH_TEST_MAINTAINER_KEY is not set`.
+Mit einem kaputten Key (`export ADISPATCH_TEST_MAINTAINER_KEY=kaputt`) lautet die Meldung `… is not a valid RSA PEM key`.
 Keine der Ausgaben enthält Key-Material. Danach den Key wieder setzen.
 
 **T19d – Rechte-Granularität (A7, [R4](#r4)).**
@@ -1098,7 +1098,7 @@ Keine der Ausgaben enthält Key-Material. Danach den Key wieder setzen.
 2. Dann:
    ```bash
    probe labels test_a $A_PR coder +perm-test        # Label an PR nur mit Issues: write
-   probe comment test_a $A_PR coder orch:perm-pr:1 'PR-Kommentar nur mit Issues: write'
+   probe comment test_a $A_PR coder adispatchd:perm-pr:1 'PR-Kommentar nur mit Issues: write'
    ```
 3. *Pull requests* wieder auf **Read and write** und *Issues* auf **Read-only** setzen. Die Erhöhung muss in der
    Installation bestätigt werden (*Review request* bzw. *Configure → Accept new permissions*). Dann:
@@ -1135,9 +1135,9 @@ D_SAME=$(mkissue orch-test-a "T20 blocked same repo"); blockedby orch-test-a $D_
 D_HID=$(mkissue orch-test-a "T20 blocked hidden");     blockedby orch-test-a $D_HID orch-test-hidden $H_BLOCKER
 for n in $D_SAME $D_HID; do gh issue edit $n -R "$(repo orch-test-a)" --add-label ready-for-coding; done
 before_labels=$(labels orch-test-a $D); before_runs=$(api /runs | jq .total)
-orch workflow dry-run coder-test --config-dir "$ORCH_CFG"                    # über die laufende Instanz (HTTP)
-orch workflow dry-run coder-test --config-dir "$ORCH_CFG" --local --data-dir "$ORCH_DATA" --json | jq '.candidates[] | {itemKey, decision, itemPriority, reason}'
-orch workflow dry-run reviewer-test --config-dir "$ORCH_CFG"
+orch workflow dry-run coder-test --config-dir "$ADISPATCH_CFG"                    # über die laufende Instanz (HTTP)
+orch workflow dry-run coder-test --config-dir "$ADISPATCH_CFG" --local --data-dir "$ADISPATCH_DATA" --json | jq '.candidates[] | {itemKey, decision, itemPriority, reason}'
+orch workflow dry-run reviewer-test --config-dir "$ADISPATCH_CFG"
 [ "$(labels orch-test-a $D)" = "$before_labels" ] && [ "$(api /runs | jq .total)" = "$before_runs" ] && echo "unverändert"
 post /scheduler/resume >/dev/null
 ```
@@ -1221,8 +1221,8 @@ weil `getItem` = `null` (fetch folgt dem Redirect, `repository_url` passt nicht)
 **Schritte:** nach allen anderen Fällen.
 ```bash
 PAT='ghs_[A-Za-z0-9_]{10,}|BEGIN RSA PRIVATE KEY|BEGIN PRIVATE KEY|eyJhbGciOi'
-grep -rlaE "$PAT" tmp/orch.log "$ORCH_DATA" && echo "TREFFER!" || echo "sauber"      # -a: auch SQLite/WAL (binär)
-command -v sqlite3 >/dev/null && sqlite3 -readonly "$ORCH_DATA/orchestrator.sqlite" .dump | grep -cE "$PAT"
+grep -rlaE "$PAT" tmp/orch.log "$ADISPATCH_DATA" && echo "TREFFER!" || echo "sauber"      # -a: auch SQLite/WAL (binär)
+command -v sqlite3 >/dev/null && sqlite3 -readonly "$ADISPATCH_DATA/adispatchd.sqlite" .dump | grep -cE "$PAT"
 api /config/files | grep -c 'PRIVATE KEY'
 ```
 
@@ -1286,13 +1286,13 @@ Vorgehen nach `docs/conventions.md`:
 
 ```bash
 # 1. Instanz stoppen (im Start-Terminal Ctrl-C) bzw.:
-orch drain --config-dir "$ORCH_CFG" --wait
+orch drain --config-dir "$ADISPATCH_CFG" --wait
 # 2. Lokale Testdaten und Probe entfernen
 rm -rf tmp/orch-cfg tmp/orch-data tmp/orch.log tmp/testdata.env tmp/orch-test.env tmp/probe.ts
-unset ORCH_TEST_MAINTAINER_KEY ORCH_TEST_CODER_KEY ORCH_TEST_REVIEWER_KEY
+unset ADISPATCH_TEST_MAINTAINER_KEY ADISPATCH_TEST_CODER_KEY ADISPATCH_TEST_REVIEWER_KEY
 # 3. Repos löschen (braucht Scope delete_repo)
 gh auth refresh -s delete_repo
-: "${ORCH_TEST_OWNER:?ORCH_TEST_OWNER setzen}"; type repo >/dev/null || { echo "helpers.sh nicht geladen"; false; } &&
+: "${ADISPATCH_TEST_OWNER:?ADISPATCH_TEST_OWNER setzen}"; type repo >/dev/null || { echo "helpers.sh nicht geladen"; false; } &&
 for r in orch-test-a orch-test-b orch-test-hidden; do gh repo delete "$(repo $r)"; done   # fragt je Repo nach (Namen prüfen)
 # 4. Private Keys lokal löschen
 rm -P ~/orch-test-keys/*.pem 2>/dev/null || shred -u ~/orch-test-keys/*.pem; rmdir ~/orch-test-keys

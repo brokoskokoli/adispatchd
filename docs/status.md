@@ -1,6 +1,6 @@
 # Projektstand
 
-Stand: 17. Oktober 2026 · `main`
+Stand: 18. Oktober 2026 · `main`
 
 Alle Work-Items WI-01 bis WI-13 (siehe `docs/work-items/`) sind umgesetzt. Jedes wurde von einem Reviewer-Agent gegen seine Acceptance Criteria und die Spec geprüft, die Findings wurden behoben, dann wurde es gemergt. Details zu jedem Work-Item stehen in `docs/handoff/WI-NN.md`.
 
@@ -27,7 +27,7 @@ Alle Work-Items WI-01 bis WI-13 (siehe `docs/work-items/`) sind umgesetzt. Jedes
 1. Die systemd-Tests auf einer Linux-VM durchführen (`docs/manual-tests/systemd.md`).
 2. Den Prozess-Supervisor-Spike unter Linux durchführen (`docs/manual-tests/process-supervision.md`), auch das Zusammenspiel mit `KillMode=mixed`.
 3. Den GitHub-Integrationstest gegen echte Repos durchführen: Anleitung mit 24 Testfällen, Fixture und `gh`-Befehlen in `docs/manual-tests/github.md`. Dabei die Dependencies-API, die App-Rechte und den Kommentar-Marker über `performed_via_github_app` prüfen und API-Version `2026-03-10` bestätigen.
-4. Paketname und Binary-Name festlegen: `agent-orchestrator` ist in der npm-Registry vergeben. Bis dahin nur per Tarball installieren (`private: true`). Lizenz klären.
+4. Name ist festgelegt: **Agent Dispatch Daemon**, Paket `adispatchd`, Befehl `adispatch`. Noch offen: den Namen auf npm (Platzhalter-Version), als npm-Org und als GitHub-Org/Repository reservieren; bis zur Veröffentlichung nur per Tarball installieren (`private: true`). Lizenz klären.
 
 **P2 – vor Release**
 5. Versionen pinnen und die Sicherheitslage prüfen (Node 24 LTS, TypeScript 7, Vitest 5, zod 4, fastify).

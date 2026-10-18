@@ -113,7 +113,7 @@ export function createStartHandler(io: Pick<CliIo, 'stdout' | 'stderr'>, deps: S
       await app.shutdown({ mode: 'cancel', cancelTimeoutMs: 0 });
       return 1;
     }
-    io.stdout(`agent-orchestrator listening on ${url} (config ${configDir}, data ${dataDir})\n`);
+    io.stdout(`adispatchd listening on ${url} (config ${configDir}, data ${dataDir})\n`);
     io.stdout(
       `SIGTERM/Ctrl-C: drain up to ${formatDuration(appOptions.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS)}, ` +
         `then cancel all runs (${formatDuration(appOptions.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS)}); a second signal cancels immediately\n`,
@@ -140,8 +140,8 @@ export function createStartHandler(io: Pick<CliIo, 'stdout' | 'stderr'>, deps: S
     deps.onStarted?.(app);
     const result = await app.stopped;
     uninstall();
-    if (result.error) io.stderr(`agent-orchestrator stopped with error: ${result.error}\n`);
-    else io.stdout('agent-orchestrator stopped\n');
+    if (result.error) io.stderr(`adispatchd stopped with error: ${result.error}\n`);
+    else io.stdout('adispatchd stopped\n');
     // Safety net: if some handle keeps the event loop alive, exit anyway (does not keep the process alive itself).
     const exit = deps.exit ?? ((code: number) => process.exit(code));
     const t = setTimeout(() => exit(result.exitCode), 5_000);

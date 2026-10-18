@@ -11,7 +11,7 @@
    - Dependencies über die native API `GET /repos/{owner}/{repo}/issues/{n}/dependencies/blocked_by` (cross-repo Einträge auswerten, Zustand der Blocker). 403/404/Fehler → Felder `known: false` → Filter ergibt `unknown` (fail-closed, §20.7). Kein Zugriff ≠ 0 offene Abhängigkeiten.
    - `getItem`, `parseItemRef` (URL `https://github.com/o/r/issues/123`, `/pull/123`, oder `123`), `itemId` = Issue-/PR-Nummer, `key = sourceItemKey(sourceId, itemId)` aus `src/core/ids.ts` (Format `<sourceId>:<itemId>`, global eindeutig).
    - `applyUpdate({labels:{add,remove}})`: vorher Item neu lesen, nur fehlende Labels hinzufügen / vorhandene entfernen (idempotent, manuelle Änderungen erhalten), Label-Namen URL-encodieren.
-   - `postComment(item, body, marker)`: Marker als HTML-Kommentar `<!-- orch:<run-id>:<action-id> -->` anhängen; `findCommentByMarker` durchsucht Kommentare (für Idempotenz vor Retry, §10). Kommentare sind Issue-/PR-Konversationskommentare, keine Reviews.
+   - `postComment(item, body, marker)`: Marker als HTML-Kommentar `<!-- adispatchd:<run-id>:<action-id> -->` anhängen; `findCommentByMarker` durchsucht Kommentare (für Idempotenz vor Retry, §10). Kommentare sind Issue-/PR-Konversationskommentare, keine Reviews.
 4. **Fake-GitHub** für Tests (`src/sources/github/testing/`): In-Memory-Server/fetch-Stub mit Issues, Labels, Kommentaren, Dependencies inkl. Cross-Repo und 403 – wird auch von WI-07/08/09/10 für E2E-Tests genutzt.
 5. Doku `docs/manual-tests/github.md`: manuelle Integrationstests gegen echtes GitHub (§22.1, §24.1).
 

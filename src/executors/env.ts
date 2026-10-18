@@ -1,9 +1,9 @@
 /**
  * Worker environment (Spec §9.1, §20.3): workers never inherit the controller
  * environment. They get a minimal set of standard variables, the explicitly
- * declared `env`, resolved secrets and the `ORCH_*` protocol variables.
+ * declared `env`, resolved secrets and the `ADISPATCH_*` protocol variables.
  */
-import { ORCH_ENV, type WorkerContext } from '../core/index.js';
+import { ADISPATCH_ENV, type WorkerContext } from '../core/index.js';
 
 /** Variables copied from the controller environment (if set). */
 export const MINIMAL_ENV_KEYS = ['PATH', 'HOME', 'LANG', 'TZ', 'USER', 'LOGNAME', 'TMPDIR'] as const;
@@ -22,7 +22,7 @@ export function buildMinimalEnv(base: NodeJS.ProcessEnv = process.env): Record<s
   return env;
 }
 
-/** Source block of a context as used for `ORCH_SOURCE_*` (shape of `WorkerContext.source`). */
+/** Source block of a context as used for `ADISPATCH_SOURCE_*` (shape of `WorkerContext.source`). */
 export interface OrchSourceInfo {
   id: string;
   type: string;
@@ -44,7 +44,7 @@ export function contextSource(context: WorkerContext | Readonly<Record<string, u
   return { id, type, item_id, url };
 }
 
-/** `ORCH_*` variables for a worker (Spec §9.1). */
+/** `ADISPATCH_*` variables for a worker (Spec §9.1). */
 export function buildOrchEnv(input: {
   runId: string;
   workflowId: string;
@@ -54,25 +54,25 @@ export function buildOrchEnv(input: {
   workspace: string;
 }): Record<string, string> {
   const env: Record<string, string> = {
-    [ORCH_ENV.RUN_ID]: input.runId,
-    [ORCH_ENV.WORKFLOW_ID]: input.workflowId,
-    [ORCH_ENV.CONTEXT_FILE]: input.contextFile,
-    [ORCH_ENV.RESULT_FILE]: input.resultFile,
-    [ORCH_ENV.WORKSPACE]: input.workspace,
+    [ADISPATCH_ENV.RUN_ID]: input.runId,
+    [ADISPATCH_ENV.WORKFLOW_ID]: input.workflowId,
+    [ADISPATCH_ENV.CONTEXT_FILE]: input.contextFile,
+    [ADISPATCH_ENV.RESULT_FILE]: input.resultFile,
+    [ADISPATCH_ENV.WORKSPACE]: input.workspace,
   };
   const source = contextSource(input.context);
   if (source) {
-    env[ORCH_ENV.SOURCE_TYPE] = source.type;
-    env[ORCH_ENV.SOURCE_ID] = source.id;
-    env[ORCH_ENV.SOURCE_ITEM_ID] = source.item_id;
-    env[ORCH_ENV.SOURCE_URL] = source.url;
+    env[ADISPATCH_ENV.SOURCE_TYPE] = source.type;
+    env[ADISPATCH_ENV.SOURCE_ID] = source.id;
+    env[ADISPATCH_ENV.SOURCE_ITEM_ID] = source.item_id;
+    env[ADISPATCH_ENV.SOURCE_URL] = source.url;
   }
   return env;
 }
 
 /**
  * Compose the full worker environment. Precedence (later wins): minimal env
- * < declared `env` < `secrets` < `ORCH_*` (protocol variables cannot be overridden).
+ * < declared `env` < `secrets` < `ADISPATCH_*` (protocol variables cannot be overridden).
  */
 export function buildWorkerEnv(parts: {
   base?: NodeJS.ProcessEnv;

@@ -35,7 +35,7 @@ export interface WorkflowDryRunDeps {
   clock?: Clock;
 }
 
-/** Read-only scheduling state from `<dataDir>/orchestrator.sqlite`, if usable. */
+/** Read-only scheduling state from `<dataDir>/adispatchd.sqlite`, if usable. */
 function openState(dataDir: string | undefined, notes: string[]): { state: SchedulingState; close: () => void } {
   const none = { state: emptyState(), close: () => undefined };
   if (!dataDir) {

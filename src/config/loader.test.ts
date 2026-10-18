@@ -64,7 +64,7 @@ async function specYamlBlocks(): Promise<string[]> {
 
 describe('loadConfig – spec examples', () => {
   it('validates examples/config', async () => {
-    const result = await loadConfig(EXAMPLE_CONFIG_DIR, { dataDir: '/var/lib/agent-orchestrator' });
+    const result = await loadConfig(EXAMPLE_CONFIG_DIR, { dataDir: '/var/lib/adispatchd' });
     const config = expectOk(result);
     expect(result.warnings).toEqual([]);
     expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'nightly-maintenance']);
@@ -103,7 +103,7 @@ describe('loadConfig – spec examples', () => {
     expect(config.global).toMatchObject({
       server: { host: '127.0.0.1', port: 8787 },
       scheduler: { pollingIntervalMs: 30_000, maxConcurrent: 5 },
-      workspace: { baseDir: '/var/lib/agent-orchestrator/workspaces', cleanup: 'on_success' },
+      workspace: { baseDir: '/var/lib/adispatchd/workspaces', cleanup: 'on_success' },
       lifecycle: { actionRetry: { maxAttempts: 3, delayMs: 30_000 } },
       retention: {
         completedRunsMs: 30 * 86_400_000,
@@ -457,20 +457,20 @@ describe('loadConfig – errors with file and path', () => {
     expect(errorsOf(result)[0]?.message).toMatch(/does not exist/);
   });
 
-  it('reports env problems: reserved ORCH_ prefix, env/secret clash; warns about literal secrets', async () => {
+  it('reports env problems: reserved ADISPATCH_ prefix, env/secret clash; warns about literal secrets', async () => {
     const result = await load({
       'workflows/wf.yaml': SOURCE_WF(
         '',
         [
           '  env:',
-          '    ORCH_RUN_ID: x',
+          '    ADISPATCH_RUN_ID: x',
           '    GH_TOKEN: literal',
           '  secrets:',
           '    GH_TOKEN: { identity: coder }',
         ].join('\n'),
       ),
     });
-    expectError(result, 'workflows/wf.yaml', 'execute.env.ORCH_RUN_ID', /reserved/);
+    expectError(result, 'workflows/wf.yaml', 'execute.env.ADISPATCH_RUN_ID', /reserved/);
     expectError(result, 'workflows/wf.yaml', 'execute.secrets.GH_TOKEN', /both in "env" and "secrets"/);
     expect(result.warnings.some((w) => w.path === 'execute.env.GH_TOKEN' && /secret/.test(w.message))).toBe(true);
   });

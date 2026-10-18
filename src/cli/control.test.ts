@@ -196,8 +196,8 @@ describe('cli http client', () => {
     await api.get('/api/v1/status');
     await api.post('/api/v1/scheduler/pause');
     await api.post('/api/v1/shutdown/cancel-all', { reason: 'x' });
-    expect(seen[0]?.headers['x-orchestrator-request']).toBeUndefined();
-    expect(seen[1]?.headers['x-orchestrator-request']).toBe('1');
+    expect(seen[0]?.headers['x-adispatch-request']).toBeUndefined();
+    expect(seen[1]?.headers['x-adispatch-request']).toBe('1');
     expect(seen[1]?.headers['content-type']).toBeUndefined();
     expect(seen[2]?.headers['content-type']).toBe('application/json');
     expect(seen[2]?.body).toBe('{"reason":"x"}');

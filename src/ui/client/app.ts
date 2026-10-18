@@ -93,7 +93,7 @@ const ctxFor = (route: Route): PageContext => ({
   },
   refreshNav: () => navRefresher.trigger(),
   setTitle: (title) => {
-    document.title = `${title} · agent-orchestrator`;
+    document.title = `${title} · adispatchd`;
   },
 });
 

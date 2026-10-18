@@ -6,7 +6,7 @@
 Lauffähiges TypeScript-Projekt mit allen geplanten Dependencies, Verzeichnisstruktur und den **gemeinsamen Interfaces**, gegen die alle späteren Work-Items parallel entwickeln. Dieses WI legt die Verträge fest – Sorgfalt vor Umfang.
 
 ## Umfang
-1. `package.json` (ESM, `bin: agent-orchestrator`, Scripts `build`, `check`, `test`, `typecheck`), `tsconfig.json` (strict, NodeNext, outDir `dist`), `vitest.config.ts`, `.gitignore`, `.nvmrc`. Dependencies vorinstallieren: `yaml`, `zod`, `fastify`, `@fastify/static`, `croner`, `commander`; dev: `typescript`, `vitest`, `@types/node`, `tsx`.
+1. `package.json` (ESM, `bin: adispatch`, Scripts `build`, `check`, `test`, `typecheck`), `tsconfig.json` (strict, NodeNext, outDir `dist`), `vitest.config.ts`, `.gitignore`, `.nvmrc`. Dependencies vorinstallieren: `yaml`, `zod`, `fastify`, `@fastify/static`, `croner`, `commander`; dev: `typescript`, `vitest`, `@types/node`, `tsx`.
 2. Verzeichnisse mit `index.ts`-Stubs: `src/{core,config,persistence,filters,executors,sources,identities,lifecycle,runs,scheduler,views,notifications,api,ui,cli,service}`.
 3. `src/core/` – gemeinsame Verträge (nur Typen + kleine reine Funktionen):
    - `clock.ts`: `Clock { now(): Date }`, `systemClock`, `FakeClock` für Tests.

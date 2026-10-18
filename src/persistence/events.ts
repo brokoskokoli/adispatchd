@@ -15,7 +15,7 @@ import { NotFoundError } from './errors.js';
 import { all, get, iso, run, transaction, type Params, type Row } from './sqlite.js';
 
 /**
- * Who produced the event: `worker` = `@@ORCH_EVENT` line (untrusted, informative),
+ * Who produced the event: `worker` = `@@ADISPATCH_EVENT` line (untrusted, informative),
  * `orchestrator` = status transitions and executor diagnostics.
  */
 export type EventOrigin = 'worker' | 'orchestrator';

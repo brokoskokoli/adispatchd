@@ -54,7 +54,7 @@ function guardRunner(): SystemRunner & { calls: string[] } {
   };
 }
 
-const ENTRY = '/usr/lib/node_modules/agent-orchestrator/dist/cli/main.js';
+const ENTRY = '/usr/lib/node_modules/adispatchd/dist/cli/main.js';
 
 async function service(args: string[], deps: ServiceDeps) {
   const io = captureIo();
@@ -86,20 +86,20 @@ describe('cli service (dry-run only)', () => {
     const configDir = configWithGrace('2m');
     const runner = guardRunner();
     const io = await service(
-      ['install', '--dry-run', '--config-dir', configDir, '--data-dir', '/var/lib/agent-orchestrator', '--drain-timeout', '30m', '--create-user'],
+      ['install', '--dry-run', '--config-dir', configDir, '--data-dir', '/var/lib/adispatchd', '--drain-timeout', '30m', '--create-user'],
       { platform: 'linux', runner, execPath: '/usr/bin/node', entryPath: ENTRY },
     );
     expect(io.code, io.err).toBe(0);
-    expect(io.out).toContain('# /etc/systemd/system/agent-orchestrator.service');
-    expect(io.out).toContain(`ExecStart=/usr/bin/node ${ENTRY} start --config-dir ${configDir} --data-dir /var/lib/agent-orchestrator --drain-timeout 30m --cancel-timeout 2m`);
+    expect(io.out).toContain('# /etc/systemd/system/adispatchd.service');
+    expect(io.out).toContain(`ExecStart=/usr/bin/node ${ENTRY} start --config-dir ${configDir} --data-dir /var/lib/adispatchd --drain-timeout 30m --cancel-timeout 2m`);
     // 30m + 2m + 2m (largest cancel_grace of the config) + 1m buffer
     expect(io.out).toContain('TimeoutStopSec=2100');
     expect(io.out).toContain('$ useradd --system --user-group');
-    expect(io.out).toContain('$ systemctl enable agent-orchestrator.service');
+    expect(io.out).toContain('$ systemctl enable adispatchd.service');
     expect(io.out).toContain('nothing was changed');
     expect(io.out).not.toMatch(/\bnpx\b/);
     // Only the read-only user probe ran.
-    expect(runner.calls).toEqual(['id -u agent-orchestrator']);
+    expect(runner.calls).toEqual(['id -u adispatchd']);
   });
 
   it('install --dry-run works on macOS and notes a missing user instead of failing', async () => {
@@ -121,7 +121,7 @@ describe('cli service (dry-run only)', () => {
     const deps = { platform: 'linux' as const, runner: guardRunner(), execPath: '/usr/bin/node' };
     let io = await service(['install', '--dry-run', '--config-dir', '/etc/o', '--data-dir', '/var/lib/o'], {
       ...deps,
-      entryPath: '/home/u/.npm/_npx/abc/node_modules/agent-orchestrator/dist/cli/main.js',
+      entryPath: '/home/u/.npm/_npx/abc/node_modules/adispatchd/dist/cli/main.js',
     });
     expect(io.code).toBe(2);
     expect(io.err).toContain('npx cache');
@@ -197,14 +197,14 @@ describe('cli service install (Linux path, in-memory runner)', () => {
     const io = await service(['install', '--config-dir', configDir, '--data-dir', '/var/lib/orch-test', '--name', 'orch-test', '--unit-dir', '/u'], linux(runner));
     expect(io.code, io.err).toBe(0);
     expect(runner.log).toEqual([
-      'exec id -u agent-orchestrator',
+      'exec id -u adispatchd',
       'exec systemctl --version',
-      'exec install -d -m 0750 -o agent-orchestrator -g agent-orchestrator /var/lib/orch-test',
-      'exec chown -R agent-orchestrator:agent-orchestrator /var/lib/orch-test',
-      `exec chown -R root:agent-orchestrator ${configDir}`,
+      'exec install -d -m 0750 -o adispatchd -g adispatchd /var/lib/orch-test',
+      'exec chown -R adispatchd:adispatchd /var/lib/orch-test',
+      `exec chown -R root:adispatchd ${configDir}`,
       `exec chmod -R u=rwX,g=rX,o= ${configDir}`,
       'write /etc/default/orch-test 640',
-      'exec chown root:agent-orchestrator /etc/default/orch-test',
+      'exec chown root:adispatchd /etc/default/orch-test',
       'exec chmod 0640 /etc/default/orch-test',
       'write /u/orch-test.service 644',
       'exec systemctl daemon-reload',
@@ -246,6 +246,6 @@ describe('cli service install (Linux path, in-memory runner)', () => {
     io = await service(['install', '--config-dir', configDir, '--data-dir', '/var/lib/orch-test'], linux(runner));
     expect(io.code).toBe(1);
     expect(io.err).toContain('--create-user');
-    expect(runner.log).toEqual(['exec id -u agent-orchestrator']);
+    expect(runner.log).toEqual(['exec id -u adispatchd']);
   });
 });

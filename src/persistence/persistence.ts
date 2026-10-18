@@ -58,7 +58,7 @@ export interface Persistence extends Repositories {
 }
 
 /**
- * Open `<dataDir>/orchestrator.sqlite`, migrate and create all repositories.
+ * Open `<dataDir>/adispatchd.sqlite`, migrate and create all repositories.
  * Acquire the instance lock ({@link acquireInstanceLock}) before calling this.
  */
 export function openPersistence(dataDir: string, options: OpenDatabaseOptions = {}): Persistence {

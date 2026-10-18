@@ -60,7 +60,7 @@ describe('update keeps data and migrates with backup (scenario 12)', () => {
     // Backup of the v1 database was written before migrating and contains the old run.
     const backups = readdirSync(path.join(dataDir, 'backups'));
     expect(backups).toHaveLength(1);
-    expect(backups[0]).toMatch(/^orchestrator-1-\d{8}T\d{9}Z\.sqlite$/);
+    expect(backups[0]).toMatch(/^adispatchd-1-\d{8}T\d{9}Z\.sqlite$/);
     const backup = new DatabaseSync(path.join(dataDir, 'backups', backups[0] ?? ''), { readOnly: true });
     try {
       expect(schemaVersion(backup)).toBe(1);
@@ -83,7 +83,7 @@ describe('update keeps data and migrates with backup (scenario 12)', () => {
     const started = await app.http.inject({
       method: 'POST',
       url: '/api/v1/workflows/hello/start',
-      headers: { 'x-orchestrator-request': '1', 'content-type': 'application/json' },
+      headers: { 'x-adispatch-request': '1', 'content-type': 'application/json' },
       payload: JSON.stringify({ parameters: { name: 'update' } }),
     });
     expect(started.statusCode).toBe(202);

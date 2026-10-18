@@ -1,12 +1,12 @@
 {
-  "name": "agent-orchestrator",
+  "name": "adispatchd",
   "version": "0.1.0",
-  "description": "Configuration-driven orchestrator for shell processes and AI agents",
+  "description": "Agent Dispatch Daemon – configuration-driven dispatcher and orchestrator for shell processes and AI agents",
   "type": "module",
   "license": "UNLICENSED",
   "private": true,
   "bin": {
-    "agent-orchestrator": "dist/cli/main.js"
+    "adispatch": "dist/cli/main.js"
   },
   "files": [
     "dist/",
@@ -32,7 +32,7 @@
     "dev": "tsx src/cli/main.ts",
     "build:ui": "node scripts/build-ui.mjs",
     "prepack": "rm -rf dist && npm run build",
-    "test:pack": "ORCH_PACK_TEST=1 vitest run src/cli/pack.test.ts"
+    "test:pack": "ADISPATCH_PACK_TEST=1 vitest run src/cli/pack.test.ts"
   },
   "dependencies": {
     "@fastify/static": "^10.1.6",

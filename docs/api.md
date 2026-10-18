@@ -40,13 +40,13 @@ Für `POST`, `PATCH`, `PUT`, `DELETE` gilt:
 
 | Regel | Fehler |
 |---|---|
-| Header `X-Orchestrator-Request: 1` ist Pflicht | `403 csrf_header_missing` |
+| Header `X-Adispatch-Request: 1` ist Pflicht | `403 csrf_header_missing` |
 | `Sec-Fetch-Site: cross-site` wird abgelehnt | `403 cross_site_request` |
 | `Origin` muss auf einen erlaubten Host zeigen (s. o.; oder in `allowedOrigins` der App stehen) | `403 origin_not_allowed` |
 | Body nur als `application/json` (leerer Body erlaubt) | `415 unsupported_media_type` |
 | `OPTIONS` (CORS-Preflight) | `405 method_not_allowed` |
 
-Beispiel: `curl -X POST -H 'X-Orchestrator-Request: 1' http://127.0.0.1:8787/api/v1/scheduler/pause`
+Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1/scheduler/pause`
 
 ## Fehlerform
 
@@ -86,7 +86,7 @@ Beispiel: `curl -X POST -H 'X-Orchestrator-Request: 1' http://127.0.0.1:8787/api
   "limits": { "maxConcurrent": 5, "configuredMaxConcurrent": 5, "override": null },
   "usage": { "activeRuns": 2, "supervisedRuns": 2, "recoveryPending": 0, "byWorkflow": { "coder": { "active": 2, "max": 2 } } },
   "counts": { "activeBlocks": 1, "failedActions": 0, "notifications": { "pending": 0, "delivered": 3, "failed": 1 } },
-  "config": { "version": 2, "hash": "…", "loadedAt": "…", "configDir": "/etc/agent-orchestrator" },
+  "config": { "version": 2, "hash": "…", "loadedAt": "…", "configDir": "/etc/adispatchd" },
   "server": { "host": "127.0.0.1", "port": 8787, "loopback": true },
   "sse": { "clients": 1 },
   "retention": { "lastRunAt": "…", "deletedRuns": { "successful": 3, "failed": 0, "blocked": 0 }, "errors": 0 }
@@ -204,7 +204,7 @@ Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_res
 | POST | `/api/v1/notifications/:id/retry` | `202 {"notification","requeued"}` – fehlgeschlagene Zustellungen erneut einreihen |
 
 Webhook-Body (JSON-POST, Timeout 10 s, bis zu 6 Versuche mit Backoff 5 s/30 s/2 min/10 min/30 min, 4xx außer 408/429 nicht wiederholt):
-`{"source":"agent-orchestrator","id":1,"event":"retry_block_created","createdAt":"…","text":"[agent-orchestrator] …","payload":{…}}`
+`{"source":"adispatchd","id":1,"event":"retry_block_created","createdAt":"…","text":"[adispatchd] …","payload":{…}}`
 (`text` macht ihn Slack-kompatibel).
 
 ## SSE: `GET /api/v1/events[?run=<runId>][&lastEventId=<id>]`

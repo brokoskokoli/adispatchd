@@ -7,7 +7,7 @@
  *   `--config-dir`, else `http://127.0.0.1:8787`. Wildcard binds
  *   (`0.0.0.0`, `::`) are reached via loopback so the `Host` header is on the
  *   server's allowlist.
- * - Mutating requests carry the CSRF header `X-Orchestrator-Request: 1` and a
+ * - Mutating requests carry the CSRF header `X-Adispatch-Request: 1` and a
  *   JSON body (never form data); no `Origin` is sent.
  */
 import { accessSync, constants } from 'node:fs';
@@ -18,7 +18,7 @@ import { loadConfig } from '../config/index.js';
 /** Default base URL (Spec §5.1 defaults). */
 export const DEFAULT_API_URL = 'http://127.0.0.1:8787';
 /** CSRF header required by the API for mutating requests. */
-export const CSRF_HEADER_NAME = 'x-orchestrator-request';
+export const CSRF_HEADER_NAME = 'x-adispatch-request';
 
 /** Exit code when no instance is reachable. */
 export const EXIT_UNREACHABLE = 3;

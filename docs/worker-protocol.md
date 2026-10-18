@@ -22,16 +22,16 @@ Der Worker erbt **nicht** die Umgebung des Orchestrators. Er bekommt nur:
 | `PATH`, `HOME`, `LANG`, `TZ`, `USER`, `LOGNAME`, `TMPDIR` | aus der Controller-Umgebung (Fallback-`PATH` `/usr/local/bin:/usr/bin:/bin`) |
 | `execute.env` | explizite Werte aus der Workflow-YAML (keine Secrets!) |
 | `execute.secrets` | z. B. `GH_TOKEN: { identity: coder }` → kurzlebiges GitHub-App-Installation-Token, nur im Speicher |
-| `ORCH_RUN_ID` | stabile, eindeutige Run-ID (`run-YYYYMMDDTHHMMSSmmmZ-xxxxxxxx`) |
-| `ORCH_WORKFLOW_ID` | Workflow-ID |
-| `ORCH_SOURCE_TYPE`, `ORCH_SOURCE_ID`, `ORCH_SOURCE_ITEM_ID`, `ORCH_SOURCE_URL` | nur bei Runs mit Source-Item (z. B. `github`, `project_a`, `123`, Issue-URL) |
-| `ORCH_CONTEXT_FILE` | Pfad der Kontextdatei (JSON, s. u.) |
-| `ORCH_RESULT_FILE` | Pfad, an den der Worker optional sein Ergebnis schreibt |
-| `ORCH_WORKSPACE` | absoluter Workspace-Pfad |
+| `ADISPATCH_RUN_ID` | stabile, eindeutige Run-ID (`run-YYYYMMDDTHHMMSSmmmZ-xxxxxxxx`) |
+| `ADISPATCH_WORKFLOW_ID` | Workflow-ID |
+| `ADISPATCH_SOURCE_TYPE`, `ADISPATCH_SOURCE_ID`, `ADISPATCH_SOURCE_ITEM_ID`, `ADISPATCH_SOURCE_URL` | nur bei Runs mit Source-Item (z. B. `github`, `project_a`, `123`, Issue-URL) |
+| `ADISPATCH_CONTEXT_FILE` | Pfad der Kontextdatei (JSON, s. u.) |
+| `ADISPATCH_RESULT_FILE` | Pfad, an den der Worker optional sein Ergebnis schreibt |
+| `ADISPATCH_WORKSPACE` | absoluter Workspace-Pfad |
 
-`ORCH_*` kann durch `env`/`secrets` nicht überschrieben werden (reservierter Präfix).
+`ADISPATCH_*` kann durch `env`/`secrets` nicht überschrieben werden (reservierter Präfix).
 
-### Kontextdatei `ORCH_CONTEXT_FILE` (`data-dir/runs/<run-id>/context.json`, Modus 0600)
+### Kontextdatei `ADISPATCH_CONTEXT_FILE` (`data-dir/runs/<run-id>/context.json`, Modus 0600)
 
 ```json
 {
@@ -44,7 +44,7 @@ Der Worker erbt **nicht** die Umgebung des Orchestrators. Er bekommt nur:
     "attributes": { "title": "Implement OAuth", "labels": ["coding"] }
   },
   "parameters": {},
-  "workspace": { "path": "/var/lib/agent-orchestrator/workspaces/coder-project-a/run-…" }
+  "workspace": { "path": "/var/lib/adispatchd/workspaces/coder-project-a/run-…" }
 }
 ```
 
@@ -94,9 +94,9 @@ Ergebnisdatei (max. 1 MiB, **atomar schreiben**: temporäre Datei + `mv`):
 | `artifacts` | nein | ≤ 100 Einträge `{type, name?, url?}` |
 
 ```sh
-tmp="${ORCH_RESULT_FILE}.tmp"
+tmp="${ADISPATCH_RESULT_FILE}.tmp"
 printf '%s\n' '{"schema_version":1,"result":"success","message":"PR opened"}' > "$tmp"
-mv "$tmp" "$ORCH_RESULT_FILE"
+mv "$tmp" "$ADISPATCH_RESULT_FILE"
 ```
 
 ### Logs und Events (Spec §9.3)
@@ -104,12 +104,12 @@ mv "$tmp" "$ORCH_RESULT_FILE"
 - stdout und stderr werden getrennt und unverändert nach `data-dir/logs/<run-id>/{stdout,stderr}.log` geschrieben
   (best-effort Redaction bekannter Secrets) und live per SSE an die UI gesendet. Limit `retention.max_log_size_per_run`
   (stdout+stderr zusammen, Default 100 MB): danach wird abgeschnitten und das als Diagnose-Event markiert.
-- Strukturierte Events: eine Zeile `@@ORCH_EVENT {json}` auf stdout oder stderr, JSON-Objekt mit `type`, max. 64 KiB:
+- Strukturierte Events: eine Zeile `@@ADISPATCH_EVENT {json}` auf stdout oder stderr, JSON-Objekt mit `type`, max. 64 KiB:
 
 ```text
-@@ORCH_EVENT {"type":"status","message":"Tests laufen"}
-@@ORCH_EVENT {"type":"progress","value":60}
-@@ORCH_EVENT {"type":"question","message":"Welcher OAuth-Anbieter?"}
+@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}
+@@ADISPATCH_EVENT {"type":"progress","value":60}
+@@ADISPATCH_EVENT {"type":"question","message":"Welcher OAuth-Anbieter?"}
 ```
 
   Events sind **nur informativ** (keine Workflow-Transitionen); `status`-Events mit `message` erscheinen als letzte
@@ -139,7 +139,7 @@ Event-/Result-/Log-Inhalte werden in API/UI als untrusted Text behandelt.
 
 | Art | Erfolg | Kontext |
 |---|---|---|
-| `shell`-Action in Hooks | Exit 0 (Ergebnisdatei wird ignoriert); sonst Retry gemäß `lifecycle.action_retry` | `ORCH_CONTEXT_FILE` mit `kind: lifecycle_action`, Run, Hook, Action, `result` (außer `on_start`), Minimal-Env + `env` + `ORCH_*`, **keine Secrets** |
-| `conditions.*`, `shell_filter` | Exit 0 = passt, 1 = passt nicht, ≥ 2/Timeout/Signal = Prüffehler (`unknown`, kein Start) | `ORCH_CHECK_CONTEXT_FILE` (Workflow bzw. Item) |
+| `shell`-Action in Hooks | Exit 0 (Ergebnisdatei wird ignoriert); sonst Retry gemäß `lifecycle.action_retry` | `ADISPATCH_CONTEXT_FILE` mit `kind: lifecycle_action`, Run, Hook, Action, `result` (außer `on_start`), Minimal-Env + `env` + `ADISPATCH_*`, **keine Secrets** |
+| `conditions.*`, `shell_filter` | Exit 0 = passt, 1 = passt nicht, ≥ 2/Timeout/Signal = Prüffehler (`unknown`, kein Start) | `ADISPATCH_CHECK_CONTEXT_FILE` (Workflow bzw. Item) |
 
 Die Exit-Code-Semantik 0/1/≥2 gilt **nur** für Prüfskripte, nicht für den Haupt-Worker. Dry-Runs führen Prüfskripte nie aus.

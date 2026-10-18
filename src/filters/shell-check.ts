@@ -4,7 +4,7 @@
  * - Command as argument list (no shell), unless `shell: true` is configured
  *   explicitly (then `/bin/sh -c <command> sh <args...>`).
  * - Minimal environment (PATH, HOME, LANG, TZ, USER, LOGNAME, TMPDIR) plus
- *   explicit `env` plus `ORCH_CHECK_CONTEXT_FILE` pointing to a JSON file with
+ *   explicit `env` plus `ADISPATCH_CHECK_CONTEXT_FILE` pointing to a JSON file with
  *   the check context (written with mode 0600, removed afterwards).
  * - Exit 0 = `true`, exit 1 = `false`; exit ≥ 2, signal, timeout, spawn error
  *   or abort = `unknown` with error detail.
@@ -31,7 +31,7 @@ import {
 } from '../core/index.js';
 
 /** Environment variable holding the path of the check context JSON file. */
-export const CHECK_CONTEXT_ENV = 'ORCH_CHECK_CONTEXT_FILE';
+export const CHECK_CONTEXT_ENV = 'ADISPATCH_CHECK_CONTEXT_FILE';
 
 /** Variables copied from the controller environment into every check process. */
 export const MINIMAL_ENV_KEYS = ['PATH', 'HOME', 'LANG', 'TZ', 'USER', 'LOGNAME', 'TMPDIR'] as const;
@@ -60,7 +60,7 @@ export interface ShellCheckSpec {
 /** Kind of check, part of the context file. */
 export type ShellCheckKind = 'shell_filter' | 'workflow_condition' | 'item_condition';
 
-/** Content of the file at `ORCH_CHECK_CONTEXT_FILE`. Never contains secrets. */
+/** Content of the file at `ADISPATCH_CHECK_CONTEXT_FILE`. Never contains secrets. */
 export interface ShellCheckContext {
   schema_version: 1;
   kind: ShellCheckKind;

@@ -85,11 +85,11 @@ export function parseSourceItemKey(key: string): { sourceId: string; itemId: str
 }
 
 /** Prefix of comment idempotency markers. */
-export const COMMENT_MARKER_PREFIX = 'orch';
+export const COMMENT_MARKER_PREFIX = 'adispatchd';
 
 /**
  * Stable, unobtrusive idempotency marker for a lifecycle action, e.g.
- * `orch:run-20261016T190000123Z-3fa2c91b:a12`. The source adapter decides how
+ * `adispatchd:run-20261016T190000123Z-3fa2c91b:a12`. The source adapter decides how
  * to embed it (GitHub: HTML comment) and finds it again via
  * `SourceAdapter.findCommentByMarker` (Spec §10).
  */

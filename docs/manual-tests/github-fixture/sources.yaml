@@ -1,13 +1,13 @@
-# Zwei Test-Repos im selben Account/Org. ORCH_TEST_OWNER wird beim Kopieren ersetzt (siehe github.md, Abschnitt 2).
+# Zwei Test-Repos im selben Account/Org. ADISPATCH_TEST_OWNER wird beim Kopieren ersetzt (siehe github.md, Abschnitt 2).
 # Das dritte Repo (orch-test-hidden) ist bewusst KEINE Source und für keine App installiert.
 sources:
   test_a:
     type: github
-    owner: ORCH_TEST_OWNER
+    owner: ADISPATCH_TEST_OWNER
     repository: orch-test-a
     identity: maintainer    # Lesen (Polling, Dependencies, Views) mit der Maintainer-App
   test_b:
     type: github
-    owner: ORCH_TEST_OWNER
+    owner: ADISPATCH_TEST_OWNER
     repository: orch-test-b
     identity: maintainer

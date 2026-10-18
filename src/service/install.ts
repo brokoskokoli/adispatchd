@@ -104,8 +104,8 @@ export function assertSafeServicePaths(dirs: { configDir: string; dataDir: strin
     ['data dir', dirs.dataDir],
   ] as const) {
     const p = path.resolve(raw);
-    if (PROTECTED_PATHS.includes(p)) fail(`${label} ${p} is a system directory – use a dedicated directory such as /etc/agent-orchestrator or /var/lib/agent-orchestrator`);
-    if (depth(p) < 2) fail(`${label} ${p} is too close to the file system root (at least two levels, e.g. /srv/agent-orchestrator)`);
+    if (PROTECTED_PATHS.includes(p)) fail(`${label} ${p} is a system directory – use a dedicated directory such as /etc/adispatchd or /var/lib/adispatchd`);
+    if (depth(p) < 2) fail(`${label} ${p} is too close to the file system root (at least two levels, e.g. /srv/adispatchd)`);
     for (const home of HOME_ROOTS) {
       if (path.dirname(p) === home) fail(`${label} ${p} is a user home directory – use a dedicated subdirectory`);
     }
@@ -221,7 +221,7 @@ export function planUninstall(input: { unitName: string; unitDir: string }): Ser
     ],
     notes: [
       'config dir, data dir (database, logs, workspaces) and the service user are kept; remove them manually if no longer needed',
-      `for a graceful stop of long runs, run "agent-orchestrator drain --wait" before uninstalling`,
+      `for a graceful stop of long runs, run "adispatch drain --wait" before uninstalling`,
     ],
   };
 }

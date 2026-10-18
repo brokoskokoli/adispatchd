@@ -1,4 +1,4 @@
-# agent-orchestrator
+# Agent Dispatch Daemon (`adispatchd`)
 
 Konfigurationsgetriebener Orchestrator für Shell-Prozesse und KI-Agenten. Er findet Aufgaben in externen Quellen
 (V1: GitHub Issues/PRs), wählt sie über Filter und Prioritäten aus, prüft Startbedingungen, führt unabhängige
@@ -20,36 +20,35 @@ Dokumentation: [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-p
 Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 22.13** (empfohlen 24 LTS; SQLite kommt aus
 `node:sqlite`, kein natives Addon). Windows wird nicht unterstützt.
 
-> **Paketname noch nicht festgelegt (Spec §24.6) – nicht aus der npm-Registry installieren.** Der Name
-> `agent-orchestrator` gehört in der Registry einem fremden Paket; `npm install -g agent-orchestrator` bzw.
-> `npx agent-orchestrator` würde fremden Code installieren. Installation nur aus dem Repository-Checkout bzw. als Tarball.
+> **Paketname:** `adispatchd` (Befehl: `adispatch`). Das Paket ist noch **nicht** in der npm-Registry veröffentlicht
+> (`private: true`) – bis dahin nur aus dem Repository-Checkout bzw. als Tarball installieren.
 
 ```bash
-git clone <repo-url> agent-orchestrator && cd agent-orchestrator
+git clone <repo-url> adispatchd && cd adispatchd
 npm install
-npm pack                                        # baut (prepack) und erzeugt agent-orchestrator-0.1.0.tgz
-npm install -g ./agent-orchestrator-0.1.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
+npm pack                                        # baut (prepack) und erzeugt adispatchd-0.1.0.tgz
+npm install -g ./adispatchd-0.1.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
 # lokal ohne globale Installation: npm run build && node dist/cli/main.js <kommando> …
 ```
 
 ## Quickstart (lokal)
 
 ```bash
-agent-orchestrator init --config-dir ./config --data-dir ./data      # legt Beispielkonfiguration + Skripte an
-agent-orchestrator start --config-dir ./config --data-dir ./data     # Vordergrund, Ctrl-C = Drain
+adispatch init --config-dir ./config --data-dir ./data      # legt Beispielkonfiguration + Skripte an
+adispatch start --config-dir ./config --data-dir ./data     # Vordergrund, Ctrl-C = Drain
 ```
 
 - Weboberfläche/API: <http://127.0.0.1:8787/> (`/health`, `/ready`, `/api/v1/…`).
 - Workflow **hello** (manuell, ohne GitHub) starten – in der UI unter *Workflows* oder:
   ```bash
-  curl -X POST -H 'X-Orchestrator-Request: 1' -H 'Content-Type: application/json' \
+  curl -X POST -H 'X-Adispatch-Request: 1' -H 'Content-Type: application/json' \
        -d '{"parameters":{"name":"Ada"}}' http://127.0.0.1:8787/api/v1/workflows/hello/start
   ```
   Logs liegen unter `data/logs/<run-id>/`, Kontext/Ergebnis unter `data/runs/<run-id>/`.
-- Steuerung: `agent-orchestrator status|pause|resume|drain|cancel-all --config-dir ./config`.
+- Steuerung: `adispatch status|pause|resume|drain|cancel-all --config-dir ./config`.
 - GitHub anbinden: GitHub App je Rolle anlegen (Rechte: Issues r/w, Pull requests write, Metadata read), App-/Installation-ID in
   `identities.yaml`, Repo in `sources.yaml`, Private Key als Umgebungsvariable (`export GITHUB_CODER_PRIVATE_KEY="$(cat key.pem)"`),
-  dann in `workflows/coder.yaml` `enabled: true` setzen und `agent-orchestrator config reload --config-dir ./config`.
+  dann in `workflows/coder.yaml` `enabled: true` setzen und `adispatch config reload --config-dir ./config`.
 
 `init` überschreibt nie bestehende Dateien (vorhandene werden als „kept“ gemeldet) und validiert danach die Konfiguration.
 
@@ -78,8 +77,8 @@ Beispiele darin werden per Test gegen den echten Loader geprüft).
 
 ```
 config-dir/                      data-dir/
-  config.yaml   global (§5.1)      orchestrator.sqlite   Runs, Locks, Events, Blocks, Journale
-  sources.yaml  GitHub-Repos       orchestrator.lock     Instanzsperre (nie anfassen)
+  config.yaml   global (§5.1)      adispatchd.sqlite   Runs, Locks, Events, Blocks, Journale
+  sources.yaml  GitHub-Repos       adispatchd.lock     Instanzsperre (nie anfassen)
   identities.yaml GitHub Apps      logs/<run>/stdout.log, stderr.log
   workflows/*.yaml                 runs/<run>/context.json, result.json
   views/*.yaml                     workspaces/<workflow>/<run>/
@@ -126,13 +125,13 @@ on_crash:   [ { type: source.update, labels: { add: [ready-for-coding], remove: 
 
 Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
-- **Input:** Minimalumgebung (`PATH`, `HOME`, …) + `execute.env` + deklarierte Secrets + `ORCH_RUN_ID`, `ORCH_WORKFLOW_ID`,
-  `ORCH_SOURCE_*`, `ORCH_WORKSPACE`, `ORCH_CONTEXT_FILE` (JSON-Kontext), `ORCH_RESULT_FILE`. Keine Controller-Umgebung.
+- **Input:** Minimalumgebung (`PATH`, `HOME`, …) + `execute.env` + deklarierte Secrets + `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`,
+  `ADISPATCH_SOURCE_*`, `ADISPATCH_WORKSPACE`, `ADISPATCH_CONTEXT_FILE` (JSON-Kontext), `ADISPATCH_RESULT_FILE`. Keine Controller-Umgebung.
 - **Exit-Code = technischer Status:** `0` = ok, alles andere = `crashed` (technischer Fehler, zählt zum Retry-Block).
 - **Fachliches Ergebnis** nur über die Ergebnisdatei (atomar schreiben):
   `{"schema_version":1,"result":"failure","message":"Requirements unclear"}` + `exit 0` → `on_failure` („Needs Maintainer“),
   kein technischer Fehler. Ohne Datei gilt Exit 0 als `success`.
-- **Events:** Zeilen `@@ORCH_EVENT {"type":"status","message":"Tests laufen"}` auf stdout/stderr – nur informativ.
+- **Events:** Zeilen `@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}` auf stdout/stderr – nur informativ.
 - **Cancel/Timeout:** SIGTERM an die Prozessgruppe, nach `cancel_grace` (30 s) SIGKILL. Eigene Sessions/Container räumt das
   Skript selbst auf.
 
@@ -141,7 +140,7 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **Keine Anmeldung in V1.** Die API bindet standardmäßig nur an `127.0.0.1`. Fernzugriff ausschließlich über einen
   **authentifizierenden** Reverse Proxy, VPN oder Tailscale; dessen Hostnamen in `server.allowed_hosts` eintragen
   (DNS-Rebinding-Schutz). Bei Nicht-Loopback-Bind warnt `start`. Anleitung: [Betrieb → Fernzugriff](docs/operations.md#fernzugriff-reverse-proxy-spec-15-201).
-- Mutierende Requests brauchen den Header `X-Orchestrator-Request: 1`; es gibt keine CORS-Freigaben.
+- Mutierende Requests brauchen den Header `X-Adispatch-Request: 1`; es gibt keine CORS-Freigaben.
 - **Skripte und YAML sind vertrauenswürdiger Code** mit den Rechten des Dienstes – keine Sandbox. Schreibrecht auf das
   config-dir ist gleichbedeutend mit Codeausführung; `service install` legt es `root`-eigen an und lässt den Dienst unter einem
   eigenen Benutzer laufen.
@@ -155,13 +154,13 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
 Kurzfassung – Details in [docs/operations.md](docs/operations.md):
 
-- **systemd:** `sudo agent-orchestrator service install --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator --create-user`
+- **systemd:** `sudo adispatch service install --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd --create-user`
   (vorher `--dry-run`). Unit mit absolutem Node-/Paketpfad, dediziertem Benutzer, `Restart=on-failure`, `KillMode=mixed`,
-  `TimeoutStopSec` > Drain + Cancel + Grace. Secrets in `/etc/default/agent-orchestrator`.
-- **Geplante Stopps/Updates:** `agent-orchestrator drain --wait`, dann neuen Tarball installieren (`npm install -g ./agent-orchestrator-<neu>.tgz`), starten.
+  `TimeoutStopSec` > Drain + Cancel + Grace. Secrets in `/etc/default/adispatchd`.
+- **Geplante Stopps/Updates:** `adispatch drain --wait`, dann neuen Tarball installieren (`npm install -g ./adispatchd-<neu>.tgz`), starten.
   Migrationen laufen automatisch mit Backup in `data-dir/backups/`; config-dir und data-dir bleiben erhalten.
-- **Backups:** config-dir (git), Env-Datei, `orchestrator.sqlite` per `sqlite3 … ".backup …"`, `logs/`, `runs/`.
-  `orchestrator.lock*` nie kopieren oder öffnen. data-dir nur auf lokalem Dateisystem (kein NFS).
+- **Backups:** config-dir (git), Env-Datei, `adispatchd.sqlite` per `sqlite3 … ".backup …"`, `logs/`, `runs/`.
+  `adispatchd.lock*` nie kopieren oder öffnen. data-dir nur auf lokalem Dateisystem (kein NFS).
 - **Recovery:** nach Absturz/Neustart werden verwaiste Runs `crashed` + `on_crash`, nicht sicher identifizierbare Prozesse
   `recovery_pending` (UI „Retry Recovery“); der Scheduler startet erst danach.
 

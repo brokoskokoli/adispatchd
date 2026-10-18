@@ -67,7 +67,7 @@ describe('RetentionService', () => {
       expect(exists(kept.id)).toEqual({ run: true, log: true });
     }
     // Instance lock files are never touched.
-    expect(existsSync(path.join(dir, 'orchestrator.sqlite'))).toBe(true);
+    expect(existsSync(path.join(dir, 'adispatchd.sqlite'))).toBe(true);
 
     clock.advance(60 * DAY);
     const later = await svc.runOnce();

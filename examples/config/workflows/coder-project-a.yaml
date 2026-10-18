@@ -26,14 +26,14 @@ item_priority:
 conditions:
   workflow:
     - type: shell
-      command: /etc/agent-orchestrator/scripts/check-credits.sh
+      command: /etc/adispatchd/scripts/check-credits.sh
       timeout: 15s
       cache: 60s
   item: []
 
 execute:
   type: shell
-  command: /etc/agent-orchestrator/scripts/coder.sh
+  command: /etc/adispatchd/scripts/coder.sh
   working_directory: '{workspace.base_dir}/{workflow.id}/{run.id}'
   create_directory: true
   env:

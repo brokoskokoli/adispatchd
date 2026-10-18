@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { computeTimeoutStopSec, formatCliDuration, quoteSystemdArg, renderSystemdUnit, type UnitOptions } from './unit.js';
 
 const BASE: UnitOptions = {
-  unitName: 'agent-orchestrator',
-  user: 'agent-orchestrator',
-  group: 'agent-orchestrator',
+  unitName: 'adispatchd',
+  user: 'adispatchd',
+  group: 'adispatchd',
   nodePath: '/usr/bin/node',
-  entryPath: '/usr/lib/node_modules/agent-orchestrator/dist/cli/main.js',
-  configDir: '/etc/agent-orchestrator',
-  dataDir: '/var/lib/agent-orchestrator',
-  envFile: '/etc/default/agent-orchestrator',
+  entryPath: '/usr/lib/node_modules/adispatchd/dist/cli/main.js',
+  configDir: '/etc/adispatchd',
+  dataDir: '/var/lib/adispatchd',
+  envFile: '/etc/default/adispatchd',
   drainTimeoutMs: 10 * 60_000,
   cancelTimeoutMs: 2 * 60_000,
   maxCancelGraceMs: 30_000,
@@ -26,17 +26,17 @@ describe('systemd unit generation', () => {
     expect(lines.some((l) => /npx/.test(l))).toBe(false);
     const exec = lines.find((l) => l.startsWith('ExecStart='));
     expect(exec).toBe(
-      'ExecStart=/usr/bin/node /usr/lib/node_modules/agent-orchestrator/dist/cli/main.js start ' +
-        '--config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator --drain-timeout 10m --cancel-timeout 2m',
+      'ExecStart=/usr/bin/node /usr/lib/node_modules/adispatchd/dist/cli/main.js start ' +
+        '--config-dir /etc/adispatchd --data-dir /var/lib/adispatchd --drain-timeout 10m --cancel-timeout 2m',
     );
-    expect(lines).toContain('User=agent-orchestrator');
-    expect(lines).toContain('Group=agent-orchestrator');
+    expect(lines).toContain('User=adispatchd');
+    expect(lines).toContain('Group=adispatchd');
     expect(lines).toContain('Restart=on-failure');
     expect(lines).toContain('RestartPreventExitStatus=78');
     expect(lines).toContain('KillMode=mixed');
     expect(lines).toContain('KillSignal=SIGTERM');
-    expect(lines).toContain('WorkingDirectory=/var/lib/agent-orchestrator');
-    expect(lines).toContain('EnvironmentFile=-/etc/default/agent-orchestrator');
+    expect(lines).toContain('WorkingDirectory=/var/lib/adispatchd');
+    expect(lines).toContain('EnvironmentFile=-/etc/default/adispatchd');
     // 10m drain + 2m cancel + 30s grace + 60s buffer
     expect(lines).toContain('TimeoutStopSec=810');
   });
@@ -68,7 +68,7 @@ describe('systemd unit generation', () => {
   });
 
   it('rejects npx, relative paths, root, TypeScript entry points and line breaks', () => {
-    expect(() => renderSystemdUnit({ ...BASE, entryPath: '/root/.npm/_npx/123/node_modules/agent-orchestrator/dist/cli/main.js' })).toThrow(/npx/);
+    expect(() => renderSystemdUnit({ ...BASE, entryPath: '/root/.npm/_npx/123/node_modules/adispatchd/dist/cli/main.js' })).toThrow(/npx/);
     expect(() => renderSystemdUnit({ ...BASE, nodePath: '/usr/local/bin/npx' })).toThrow(/npx/);
     expect(() => renderSystemdUnit({ ...BASE, nodePath: 'node' })).toThrow(/absolute/);
     expect(() => renderSystemdUnit({ ...BASE, configDir: './config' })).toThrow(/absolute/);

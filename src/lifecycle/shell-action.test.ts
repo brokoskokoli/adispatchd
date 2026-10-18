@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createEnv, drive, loadSnapshot, type LifecycleTestEnv } from './testing/helpers.js';
 
-const CONTROLLER_VAR = 'ORCH_LIFECYCLE_TEST_CONTROLLER_SECRET';
+const CONTROLLER_VAR = 'ADISPATCH_LIFECYCLE_TEST_CONTROLLER_SECRET';
 const CONTROLLER_VALUE = 'controller-only-value-4711';
 
 describe('shell actions', () => {
@@ -24,7 +24,7 @@ describe('shell actions', () => {
       [
         '#!/bin/sh',
         'env > "$OUT/env.txt"',
-        'cp "$ORCH_CONTEXT_FILE" "$OUT/context.json"',
+        'cp "$ADISPATCH_CONTEXT_FILE" "$OUT/context.json"',
         'pwd > "$OUT/pwd.txt"',
         'printf "%s\\n" "$@" > "$OUT/args.txt"',
         'echo "attempt" >> "$OUT/attempts.txt"',
@@ -67,16 +67,16 @@ ${extra}`;
     const envDump = readFileSync(path.join(out, 'env.txt'), 'utf8');
     expect(envDump).not.toContain(CONTROLLER_VAR);
     expect(envDump).not.toContain(CONTROLLER_VALUE);
-    expect(envDump).toContain(`ORCH_RUN_ID=${run.id}`);
-    expect(envDump).toContain('ORCH_WORKFLOW_ID=wf');
-    expect(envDump).toContain('ORCH_SOURCE_ITEM_ID=7');
+    expect(envDump).toContain(`ADISPATCH_RUN_ID=${run.id}`);
+    expect(envDump).toContain('ADISPATCH_WORKFLOW_ID=wf');
+    expect(envDump).toContain('ADISPATCH_SOURCE_ITEM_ID=7');
     expect(envDump).toContain('MSG=msg=Tests green');
     const names = envDump
       .split('\n')
       .map((l) => l.split('=')[0])
       .filter((n): n is string => !!n);
     const allowed = new Set(['PATH', 'HOME', 'LANG', 'TZ', 'USER', 'LOGNAME', 'TMPDIR', 'OUT', 'MSG', 'PWD', 'SHLVL', '_', 'OLDPWD']);
-    expect(names.filter((n) => !allowed.has(n) && !n.startsWith('ORCH_') && !n.startsWith('__CF'))).toEqual([]);
+    expect(names.filter((n) => !allowed.has(n) && !n.startsWith('ADISPATCH_') && !n.startsWith('__CF'))).toEqual([]);
 
     const context = JSON.parse(readFileSync(path.join(out, 'context.json'), 'utf8')) as Record<string, unknown>;
     expect(context).toMatchObject({

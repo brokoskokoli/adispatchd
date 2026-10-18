@@ -12,7 +12,7 @@
 7. Doku: `README.md` (Installation, Quickstart, Konfiguration, Worker-Protokoll, Sicherheitshinweise), `docs/operations.md` (systemd, Drain/Update-Ablauf, Backups, Recovery), `docs/worker-protocol.md`, `docs/manual-tests/systemd.md` (§22.1 systemd-Tests als Checkliste), `docs/manual-tests/process-supervision.md` (§24.3-Spike).
 
 ## Acceptance Criteria
-- [ ] `npm pack` + Installation in Temp-Verzeichnis + `agent-orchestrator init` + `start` funktioniert (Skript-Test).
+- [ ] `npm pack` + Installation in Temp-Verzeichnis + `adispatch init` + `start` funktioniert (Skript-Test).
 - [ ] `init` überschreibt nichts (Test).
 - [ ] Generierte Unit enthält keine `npx`-Zeile, absolute Pfade, dedizierten User (Snapshot-Test).
 - [ ] Szenario 12 dokumentiert und so weit lokal möglich getestet (Update erhält data-dir, Migration mit Backup).

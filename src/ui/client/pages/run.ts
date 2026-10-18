@@ -370,7 +370,7 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
       h(
         'section',
         { class: 'card' },
-        h('p', { class: 'hint' }, 'Structured events (worker @@ORCH_EVENT lines and orchestrator events). Events are informational only. Live updates append here.'),
+        h('p', { class: 'hint' }, 'Structured events (worker @@ADISPATCH_EVENT lines and orchestrator events). Events are informational only. Live updates append here.'),
         eventsDropped,
         h(
           'div',

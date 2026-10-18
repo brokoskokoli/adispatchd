@@ -137,15 +137,15 @@ function isAlive(pid: number): boolean {
 /** Script fragment: start a background sleeper in the worker's group, publish its pid, signal readiness. */
 const BACKGROUND_CHILD = `
 sleep 30 &
-echo $! > "$ORCH_WORKSPACE/bg.pid"
-echo '@@ORCH_EVENT {"type":"ready"}'
+echo $! > "$ADISPATCH_WORKSPACE/bg.pid"
+echo '@@ADISPATCH_EVENT {"type":"ready"}'
 `;
 
 async function backgroundPid(spec: ExecutionSpec): Promise<number> {
   return Number((await readFile(path.join(spec.workingDirectory, 'bg.pid'), 'utf8')).trim());
 }
 
-const writeResult = (json: string) => `cat > "$ORCH_RESULT_FILE.tmp" <<'EOF'\n${json}\nEOF\nmv "$ORCH_RESULT_FILE.tmp" "$ORCH_RESULT_FILE"`;
+const writeResult = (json: string) => `cat > "$ADISPATCH_RESULT_FILE.tmp" <<'EOF'\n${json}\nEOF\nmv "$ADISPATCH_RESULT_FILE.tmp" "$ADISPATCH_RESULT_FILE"`;
 
 describe.runIf(supported)('ShellExecutor – result contract (Spec §8.2 table)', () => {
   it('exit 0 + result success → completed/success', async () => {
@@ -173,7 +173,7 @@ describe.runIf(supported)('ShellExecutor – result contract (Spec §8.2 table)'
   });
 
   it('exit 0 + invalid result file → crashed (protocol error)', async () => {
-    const invalidJson = await run(`echo '{"schema_version":1,' > "$ORCH_RESULT_FILE"`);
+    const invalidJson = await run(`echo '{"schema_version":1,' > "$ADISPATCH_RESULT_FILE"`);
     expect(invalidJson.outcome.resultFile.state).toBe('invalid');
     expect(invalidJson.classification.status).toBe('crashed');
 
@@ -181,13 +181,13 @@ describe.runIf(supported)('ShellExecutor – result contract (Spec §8.2 table)'
     expect(wrongSchema.classification).toMatchObject({ status: 'crashed', businessResult: null });
 
     const tooBig = await run(
-      `printf '{"schema_version":1,"result":"success","message":"' > "$ORCH_RESULT_FILE"\n` +
-        `head -c 1100000 /dev/zero | tr '\\0' 'a' >> "$ORCH_RESULT_FILE"\nprintf '"}' >> "$ORCH_RESULT_FILE"`,
+      `printf '{"schema_version":1,"result":"success","message":"' > "$ADISPATCH_RESULT_FILE"\n` +
+        `head -c 1100000 /dev/zero | tr '\\0' 'a' >> "$ADISPATCH_RESULT_FILE"\nprintf '"}' >> "$ADISPATCH_RESULT_FILE"`,
     );
     expect(tooBig.outcome.resultFile).toMatchObject({ state: 'invalid', error: expect.stringContaining('exceeds') });
     expect(tooBig.classification.status).toBe('crashed');
 
-    const notAFile = await run(`mkdir "$ORCH_RESULT_FILE"`);
+    const notAFile = await run(`mkdir "$ADISPATCH_RESULT_FILE"`);
     expect(notAFile.outcome.resultFile).toMatchObject({ state: 'invalid', error: 'result file is not a regular file' });
     expect(notAFile.classification.status).toBe('crashed');
   });
@@ -241,7 +241,7 @@ describe.runIf(supported)('ShellExecutor – result contract (Spec §8.2 table)'
 
   it('controlled cancel → cancelled, even with a result file', async () => {
     const h = await launch(
-      await makeSpec(`${writeResult('{"schema_version":1,"result":"success"}')}\necho '@@ORCH_EVENT {"type":"ready"}'\nsleep 30`),
+      await makeSpec(`${writeResult('{"schema_version":1,"result":"success"}')}\necho '@@ADISPATCH_EVENT {"type":"ready"}'\nsleep 30`),
     );
     await h.nextEvent('ready');
     await h.proc.cancel(200);
@@ -310,7 +310,7 @@ describe.runIf(supported)('ShellExecutor – process group supervision (Spec §1
 
   it('reports kill_failed and does not report the run as finished when the group cannot be killed', async () => {
     // Simulate an unkillable group: the injected signal function ignores all signals.
-    const h = await launch(await makeSpec(`echo '@@ORCH_EVENT {"type":"ready"}'\nsleep 30`), {
+    const h = await launch(await makeSpec(`echo '@@ADISPATCH_EVENT {"type":"ready"}'\nsleep 30`), {
       kill: () => undefined,
       killConfirmMs: 100,
     });
@@ -329,7 +329,7 @@ describe.runIf(supported)('ShellExecutor – process group supervision (Spec §1
   });
 
   it('captures the start identity of the process group leader', async () => {
-    const h = await launch(await makeSpec(`echo '@@ORCH_EVENT {"type":"ready"}'\nsleep 30`));
+    const h = await launch(await makeSpec(`echo '@@ADISPATCH_EVENT {"type":"ready"}'\nsleep 30`));
     expect(h.proc.pid).toBeGreaterThan(1);
     expect(h.proc.startIdentity).toMatchObject({ pid: h.proc.pid, pgid: h.proc.pid });
     expect(h.proc.startIdentity?.token.startsWith(`${process.platform}:`)).toBe(true);
@@ -372,7 +372,7 @@ describe.runIf(supported)('ShellExecutor – idle timeout (Spec §8.3)', () => {
     const body = `
 i=0
 while [ $i -lt 16 ]; do
-  if [ $((i % 2)) -eq 0 ]; then echo "tick $i"; else echo '@@ORCH_EVENT {"type":"progress"}' >&2; fi
+  if [ $((i % 2)) -eq 0 ]; then echo "tick $i"; else echo '@@ADISPATCH_EVENT {"type":"progress"}' >&2; fi
   sleep 0.05
   i=$((i + 1))
 done`;
@@ -394,7 +394,7 @@ describe.runIf(supported)('ShellExecutor – environment and context (Spec §9.1
 
   it('worker sees no undeclared controller variable', async () => {
     process.env[LEAK] = 'leaked';
-    const { outcome, spec } = await run(`env > "$ORCH_WORKSPACE/env.txt"`, {
+    const { outcome, spec } = await run(`env > "$ADISPATCH_WORKSPACE/env.txt"`, {
       env: { DECLARED: 'yes' },
       secrets: { GH_TOKEN: 'ghs_secretvalue123' },
     });
@@ -405,15 +405,15 @@ describe.runIf(supported)('ShellExecutor – environment and context (Spec §9.1
     expect(env[LEAK]).toBeUndefined();
     expect(env.DECLARED).toBe('yes');
     expect(env.GH_TOKEN).toBe('ghs_secretvalue123');
-    expect(env.ORCH_RUN_ID).toBe(spec.runId);
-    expect(env.ORCH_WORKFLOW_ID).toBe('wf');
-    expect(env.ORCH_SOURCE_TYPE).toBe('github');
-    expect(env.ORCH_SOURCE_ID).toBe('project_a');
-    expect(env.ORCH_SOURCE_ITEM_ID).toBe('123');
-    expect(env.ORCH_SOURCE_URL).toBe('https://github.com/example/project-a/issues/123');
-    expect(env.ORCH_CONTEXT_FILE).toBe(spec.files.contextFile);
-    expect(env.ORCH_RESULT_FILE).toBe(spec.files.resultFile);
-    expect(env.ORCH_WORKSPACE).toBe(spec.workingDirectory);
+    expect(env.ADISPATCH_RUN_ID).toBe(spec.runId);
+    expect(env.ADISPATCH_WORKFLOW_ID).toBe('wf');
+    expect(env.ADISPATCH_SOURCE_TYPE).toBe('github');
+    expect(env.ADISPATCH_SOURCE_ID).toBe('project_a');
+    expect(env.ADISPATCH_SOURCE_ITEM_ID).toBe('123');
+    expect(env.ADISPATCH_SOURCE_URL).toBe('https://github.com/example/project-a/issues/123');
+    expect(env.ADISPATCH_CONTEXT_FILE).toBe(spec.files.contextFile);
+    expect(env.ADISPATCH_RESULT_FILE).toBe(spec.files.resultFile);
+    expect(env.ADISPATCH_WORKSPACE).toBe(spec.workingDirectory);
 
     // Everything else must come from the minimal set or be added by the shell itself.
     const allowed = new Set<string>([
@@ -426,12 +426,12 @@ describe.runIf(supported)('ShellExecutor – environment and context (Spec §9.1
       '_',
       '__CF_USER_TEXT_ENCODING', // injected by macOS for every process
     ]);
-    const unexpected = Object.keys(env).filter((k) => !allowed.has(k) && !k.startsWith('ORCH_'));
+    const unexpected = Object.keys(env).filter((k) => !allowed.has(k) && !k.startsWith('ADISPATCH_'));
     expect(unexpected).toEqual([]);
   });
 
   it('writes context.json without secrets and runs in the workspace', async () => {
-    const { spec } = await run(`pwd > "$ORCH_WORKSPACE/pwd.txt"\ncp "$ORCH_CONTEXT_FILE" "$ORCH_WORKSPACE/ctx.json"`, {
+    const { spec } = await run(`pwd > "$ADISPATCH_WORKSPACE/pwd.txt"\ncp "$ADISPATCH_CONTEXT_FILE" "$ADISPATCH_WORKSPACE/ctx.json"`, {
       secrets: { API_KEY: 'very-secret-key' },
     });
     const ctx = JSON.parse(await readFile(path.join(spec.workingDirectory, 'ctx.json'), 'utf8'));
@@ -494,25 +494,25 @@ async function realpathOf(p: string): Promise<string> {
 describe.runIf(supported)('ShellExecutor – logs and events (Spec §9.3, §5.1, §12)', () => {
   it('persists stdout and stderr separately and unchanged, including event lines', async () => {
     const { outcome, spec } = await run(
-      `printf 'out1\\n'\nprintf 'err1\\n' >&2\necho '@@ORCH_EVENT {"type":"status","message":"Tests laufen"}'\nprintf 'no newline'`,
+      `printf 'out1\\n'\nprintf 'err1\\n' >&2\necho '@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}'\nprintf 'no newline'`,
     );
     expect(await readFile(spec.files.stdoutLog, 'utf8')).toBe(
-      'out1\n@@ORCH_EVENT {"type":"status","message":"Tests laufen"}\nno newline',
+      'out1\n@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}\nno newline',
     );
     expect(await readFile(spec.files.stderrLog, 'utf8')).toBe('err1\n');
-    expect(outcome.logs).toEqual({ stdoutBytes: 71, stderrBytes: 5, truncated: false });
+    expect(outcome.logs).toEqual({ stdoutBytes: 76, stderrBytes: 5, truncated: false });
   });
 
   it('parses events across chunk boundaries; invalid events produce a warning and stay in the log', async () => {
     const { events, diagnostics, spec } = await run(`
-printf '@@ORCH_EV'
+printf '@@ADISPATCH_EV'
 sleep 0.05
 printf 'ENT {"type":"sta'
 sleep 0.05
 printf 'tus","message":"split"}\\n'
-echo '@@ORCH_EVENT {not json'
-echo '@@ORCH_EVENT {"type":"progress","value":60}' >&2
-echo '@@ORCH_EVENT {"value":1}'`);
+echo '@@ADISPATCH_EVENT {not json'
+echo '@@ADISPATCH_EVENT {"type":"progress","value":60}' >&2
+echo '@@ADISPATCH_EVENT {"value":1}'`);
     expect(events.map((e) => [e.type, e.stream])).toEqual([
       ['status', 'stdout'],
       ['progress', 'stderr'],
@@ -521,8 +521,8 @@ echo '@@ORCH_EVENT {"value":1}'`);
     expect(events[1]?.data).toEqual({ type: 'progress', value: 60 });
     const warnings = diagnostics.filter((d) => d.type === 'event_parse_warning');
     expect(warnings).toHaveLength(2);
-    expect(warnings[0]?.details?.line).toBe('@@ORCH_EVENT {not json');
-    expect(await readFile(spec.files.stdoutLog, 'utf8')).toContain('@@ORCH_EVENT {not json\n');
+    expect(warnings[0]?.details?.line).toBe('@@ADISPATCH_EVENT {not json');
+    expect(await readFile(spec.files.stdoutLog, 'utf8')).toContain('@@ADISPATCH_EVENT {not json\n');
   });
 
   it('stops writing at the per-run log limit and reports truncation instead of overwriting', async () => {
@@ -580,7 +580,7 @@ echo '@@ORCH_EVENT {"value":1}'`);
   it('redacts known secret values from logs, live output, events and the result', async () => {
     const secret = 'ghs_TopSecretValue42';
     const { outcome, spec, outputs, events } = await run(
-      `echo "token=$GH_TOKEN"\necho "$GH_TOKEN" >&2\necho "@@ORCH_EVENT {\\"type\\":\\"status\\",\\"message\\":\\"$GH_TOKEN\\"}"\n` +
+      `echo "token=$GH_TOKEN"\necho "$GH_TOKEN" >&2\necho "@@ADISPATCH_EVENT {\\"type\\":\\"status\\",\\"message\\":\\"$GH_TOKEN\\"}"\n` +
         writeResult(`{"schema_version":1,"result":"success","message":"${secret}"}`),
       { secrets: { GH_TOKEN: secret } },
     );
@@ -619,7 +619,7 @@ echo '@@ORCH_EVENT {"value":1}'`);
     const spawnDetached =
       "const c=require('child_process').spawn('sleep',['30'],{detached:true,stdio:['ignore','inherit','inherit']});" +
       "require('fs').writeFileSync(process.argv[1], String(c.pid));c.unref();";
-    const spec = await makeSpec(`"$NODE_BIN" -e "${spawnDetached}" "$ORCH_WORKSPACE/gc.pid"\necho done`, {
+    const spec = await makeSpec(`"$NODE_BIN" -e "${spawnDetached}" "$ADISPATCH_WORKSPACE/gc.pid"\necho done`, {
       env: { NODE_BIN: process.execPath },
     });
     const before = Date.now();

@@ -18,7 +18,7 @@ import {
   type RunsTestEnv,
 } from './testing/helpers.js';
 
-const FAILURE_SCRIPT = `printf '%s' '{"schema_version":1,"result":"failure","message":"OAuth provider missing"}' > "$ORCH_RESULT_FILE"
+const FAILURE_SCRIPT = `printf '%s' '{"schema_version":1,"result":"failure","message":"OAuth provider missing"}' > "$ADISPATCH_RESULT_FILE"
 exit 0`;
 
 describe('RunController', () => {
@@ -38,8 +38,8 @@ describe('RunController', () => {
     const script = env.script(
       'ok.sh',
       `echo "$1 $2 $GREETING" > "${env.marks}/args.txt"
-cat "$ORCH_CONTEXT_FILE" > "${env.marks}/context.json"
-echo '@@ORCH_EVENT {"type":"status","message":"Tests laufen"}'
+cat "$ADISPATCH_CONTEXT_FILE" > "${env.marks}/context.json"
+echo '@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}'
 echo hello`,
     );
     const snapshot = await env.snapshot(

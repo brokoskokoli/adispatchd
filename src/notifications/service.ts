@@ -308,7 +308,7 @@ export class NotificationService implements Notifier {
       };
     }
     this.redactor.add(url);
-    const headers: Record<string, string> = { 'content-type': 'application/json', 'user-agent': 'agent-orchestrator' };
+    const headers: Record<string, string> = { 'content-type': 'application/json', 'user-agent': 'adispatchd' };
     for (const [name, envName] of Object.entries(channel.headersEnv)) {
       const value = this.env[envName];
       if (value === undefined || value === '') {
@@ -381,7 +381,7 @@ export class NotificationService implements Notifier {
 /** JSON body posted to webhook channels (Slack-compatible `text` + structured data). */
 export function webhookBody(n: NotificationRecord): Record<string, unknown> {
   return {
-    source: 'agent-orchestrator',
+    source: 'adispatchd',
     id: n.id,
     event: n.eventType,
     createdAt: n.createdAt,
@@ -395,10 +395,10 @@ export function summarize(type: NotificationEventType, p: Record<string, unknown
   const s = (v: unknown): string => (typeof v === 'string' || typeof v === 'number' ? String(v) : '-');
   switch (type) {
     case 'retry_block_created':
-      return `[agent-orchestrator] Retry block created for workflow ${s(p.workflowId)} (item ${s(p.itemKey ?? 'workflow')}): ${s(p.reason)}`;
+      return `[adispatchd] Retry block created for workflow ${s(p.workflowId)} (item ${s(p.itemKey ?? 'workflow')}): ${s(p.reason)}`;
     case 'lifecycle_action_failed':
-      return `[agent-orchestrator] Lifecycle action ${s(p.actionName ?? p.actionId)} (${s(p.hook)}) of run ${s(p.runId)} failed finally`;
+      return `[adispatchd] Lifecycle action ${s(p.actionName ?? p.actionId)} (${s(p.hook)}) of run ${s(p.runId)} failed finally`;
     case 'recovery_failed':
-      return `[agent-orchestrator] Recovery of run ${s(p.runId)} (workflow ${s(p.workflowId)}) failed: ${s(p.reason)}`;
+      return `[adispatchd] Recovery of run ${s(p.runId)} (workflow ${s(p.workflowId)}) failed: ${s(p.reason)}`;
   }
 }

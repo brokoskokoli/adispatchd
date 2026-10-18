@@ -19,11 +19,11 @@ beforeAll(async () => {
     const worker = e.script(
       'coder.sh',
       [
-        'echo "starting work on $ORCH_SOURCE_ITEM_ID"',
-        `echo '@@ORCH_EVENT {"type":"status","message":"phase 1"}'`,
+        'echo "starting work on $ADISPATCH_SOURCE_ITEM_ID"',
+        `echo '@@ADISPATCH_EVENT {"type":"status","message":"phase 1"}'`,
         `while [ ! -f "${gate}" ]; do sleep 0.05; done`,
-        `echo '@@ORCH_EVENT {"type":"status","message":"phase 2"}'`,
-        `printf '{"schema_version":1,"result":"success","message":"PR opened"}' > "$ORCH_RESULT_FILE"`,
+        `echo '@@ADISPATCH_EVENT {"type":"status","message":"phase 2"}'`,
+        `printf '{"schema_version":1,"result":"success","message":"PR opened"}' > "$ADISPATCH_RESULT_FILE"`,
       ].join('\n'),
     );
     writeFileSync(
@@ -68,7 +68,7 @@ describe('end-to-end', () => {
 
     env.github.createIssue(REPO_A, { number: 42, title: 'Implement feature', labels: ['ready-for-coding'] });
     // Trigger a planning step (resume plans immediately).
-    const resume = await fetch(`${base}/api/v1/scheduler/resume`, { method: 'POST', headers: { 'x-orchestrator-request': '1' } });
+    const resume = await fetch(`${base}/api/v1/scheduler/resume`, { method: 'POST', headers: { 'x-adispatch-request': '1' } });
     expect(resume.status).toBe(200);
 
     const running = await sse.waitFor((m) => statusTo(m) === 'running');

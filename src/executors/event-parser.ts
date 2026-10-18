@@ -1,12 +1,12 @@
 /**
  * Line buffering and parsing of structured worker events (Spec §9.3).
  *
- * Lines starting with `@@ORCH_EVENT ` carry a JSON object `{type: string, ...}`.
+ * Lines starting with `@@ADISPATCH_EVENT ` carry a JSON object `{type: string, ...}`.
  * Valid events are reported via callback; invalid event lines produce a
  * parser warning. The raw line always stays in the log (this parser only
  * observes the stream).
  */
-import { MAX_EVENT_LINE_BYTES, ORCH_EVENT_PREFIX, workerEventPayloadSchema } from '../core/index.js';
+import { MAX_EVENT_LINE_BYTES, ADISPATCH_EVENT_PREFIX, workerEventPayloadSchema } from '../core/index.js';
 
 /** Result of parsing one complete line. */
 export type EventLineResult =
@@ -19,8 +19,8 @@ const PREVIEW_CHARS = 200;
 
 /** Parse one complete line (without the line terminator). */
 export function parseEventLine(line: string): EventLineResult {
-  if (!line.startsWith(ORCH_EVENT_PREFIX)) return { kind: 'none' };
-  const payload = line.slice(ORCH_EVENT_PREFIX.length);
+  if (!line.startsWith(ADISPATCH_EVENT_PREFIX)) return { kind: 'none' };
+  const payload = line.slice(ADISPATCH_EVENT_PREFIX.length);
   if (Buffer.byteLength(payload, 'utf8') > MAX_EVENT_LINE_BYTES) {
     return { kind: 'invalid', error: `event payload exceeds ${MAX_EVENT_LINE_BYTES} bytes` };
   }
@@ -57,7 +57,7 @@ export class EventLineParser {
   private skipping = false;
   /** The current event line exceeded the limit; skip until newline, then warn. */
   private overflow = false;
-  private readonly maxLineChars = ORCH_EVENT_PREFIX.length + MAX_EVENT_LINE_BYTES;
+  private readonly maxLineChars = ADISPATCH_EVENT_PREFIX.length + MAX_EVENT_LINE_BYTES;
 
   constructor(private readonly handlers: EventLineHandlers) {}
 
@@ -85,8 +85,8 @@ export class EventLineParser {
   private append(part: string): void {
     if (this.skipping || this.overflow || part === '') return;
     this.buffer += part;
-    const prefixPart = this.buffer.slice(0, ORCH_EVENT_PREFIX.length);
-    if (!ORCH_EVENT_PREFIX.startsWith(prefixPart)) {
+    const prefixPart = this.buffer.slice(0, ADISPATCH_EVENT_PREFIX.length);
+    if (!ADISPATCH_EVENT_PREFIX.startsWith(prefixPart)) {
       this.skipping = true;
       this.buffer = '';
       return;

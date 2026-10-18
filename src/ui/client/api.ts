@@ -1,6 +1,6 @@
 /**
  * HTTP client for `/api/v1` (docs/api.md). Mutating requests always carry
- * the CSRF header `X-Orchestrator-Request: 1` and a JSON body.
+ * the CSRF header `X-Adispatch-Request: 1` and a JSON body.
  */
 
 /** Error returned by the API (`{error:{code,message,details}}`) or the network. */
@@ -19,7 +19,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const headers: Record<string, string> = { accept: 'application/json' };
   const mutating = method !== 'GET' && method !== 'HEAD';
   if (mutating) {
-    headers['x-orchestrator-request'] = '1';
+    headers['x-adispatch-request'] = '1';
     headers['content-type'] = 'application/json';
   }
   let res: Response;

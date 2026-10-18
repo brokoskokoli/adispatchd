@@ -69,7 +69,7 @@ export function defaultEntryPath(): string {
 function unsupported(io: Io, platform: string, command: string): number {
   io.stderr(
     `service ${command}: systemd service management is only supported on Linux (this is ${platform}).\n` +
-      '  On macOS run the orchestrator in the foreground: agent-orchestrator start --config-dir <dir> --data-dir <dir>\n' +
+      '  On macOS run the orchestrator in the foreground: adispatch start --config-dir <dir> --data-dir <dir>\n' +
       '  (or under launchd/your own supervisor). "service install --dry-run" prints the systemd unit anyway.\n',
   );
   return 2;
@@ -95,7 +95,7 @@ async function maxCancelGrace(configDir: string, dataDir: string, io: Io, dryRun
   const loaded = exists ? await loadConfig(configDir, { dataDir }) : null;
   if (!loaded || !loaded.ok) {
     const why = !exists
-      ? `${configFile} does not exist (create the configuration with "agent-orchestrator init" first)`
+      ? `${configFile} does not exist (create the configuration with "adispatch init" first)`
       : `configuration in ${configDir} is invalid (${loaded?.ok === false ? loaded.errors.length : 0} error(s); see "config validate")`;
     if (!dryRun) throw new ServiceError('service_config_invalid', why);
     io.stderr(`warning: ${why}; TimeoutStopSec assumes a cancel grace of 30s\n`);
@@ -128,7 +128,7 @@ export function cancelGraceWarning(maxCancelGraceMs: number, cancelTimeoutMs: nu
 export async function unitOptionsFromCli(opts: ServiceCliOptions, deps: ServiceDeps, io: Io): Promise<UnitOptions> {
   const dryRun = opts.dryRun === true;
   if (!opts.configDir || !opts.dataDir) {
-    throw new ServiceError('service_invalid_option', 'service install: --config-dir and --data-dir are required (absolute paths recommended, e.g. /etc/agent-orchestrator and /var/lib/agent-orchestrator)');
+    throw new ServiceError('service_invalid_option', 'service install: --config-dir and --data-dir are required (absolute paths recommended, e.g. /etc/adispatchd and /var/lib/adispatchd)');
   }
   const unitName = opts.name ?? DEFAULT_UNIT_NAME;
   const user = opts.user ?? DEFAULT_SERVICE_USER;
@@ -162,7 +162,7 @@ function pathWarnings(unit: UnitOptions): string[] {
     if (/^\/(root|home|Users)\//.test(p)) {
       warnings.push(
         `${label} path ${p} lies in a home directory (nvm/user install?) – the service user "${unit.user}" may not be able to read it; ` +
-          'prefer a system-wide node and a global install of the package tarball (npm install -g ./agent-orchestrator-<version>.tgz) or pass --node/--entry',
+          'prefer a system-wide node and a global install of the package tarball (npm install -g ./adispatchd-<version>.tgz) or pass --node/--entry',
       );
     }
   }
@@ -221,7 +221,7 @@ export function createServiceInstallHandler(io: Io, deps: ServiceDeps = {}) {
     }
     const euid = deps.euid ?? (() => process.geteuid?.() ?? -1);
     if (euid() !== 0) {
-      io.stderr('service install: must run as root (e.g. sudo "$(command -v node)" "$(command -v agent-orchestrator)" service install ...)\n');
+      io.stderr('service install: must run as root (e.g. sudo "$(command -v node)" "$(command -v adispatch)" service install ...)\n');
       return 1;
     }
     for (const w of warnings) io.stderr(`warning: ${w}\n`);
@@ -276,7 +276,7 @@ export function createServiceStatusHandler(io: Io, deps: ServiceDeps = {}) {
     if (r.stdout) io.stdout(r.stdout);
     if (r.stderr) io.stderr(r.stderr);
     // systemctl status: 0 = active, 3 = inactive, 4 = unknown unit.
-    if (r.code === 4) io.stderr(`unit ${unitName}.service is not installed (agent-orchestrator service install ...)\n`);
+    if (r.code === 4) io.stderr(`unit ${unitName}.service is not installed (adispatch service install ...)\n`);
     return r.code === 0 ? 0 : 1;
   };
 }

@@ -61,7 +61,7 @@ describe('LifecycleEngine', () => {
       `Completed: All done (run ${run.id}, #7 Implement OAuth, example/a, Coder WF)`,
     );
     const commentAction = result.actions[1];
-    expect(comments[0]).toContain(`<!-- orch:${run.id}:${commentAction?.id} -->`);
+    expect(comments[0]).toContain(`<!-- adispatchd:${run.id}:${commentAction?.id} -->`);
     expect(commentAction?.externalKey).toBe(String(env.github.comments(REPO, ISSUE)[0]?.id));
     expect(env.p.runs.require(run.id).lifecycleStatus).toBe('succeeded');
     expect(env.notifications).toEqual([]);
@@ -303,7 +303,7 @@ on_success:
     const secondId = journal[1]?.id ?? -1;
     // the worker writes the second action's marker into its result message
     env.p.runs.update(run.id, {
-      result: { schema_version: 1, result: 'success', message: `ok\n\n<!-- orch:${run.id}:${secondId} -->\n` },
+      result: { schema_version: 1, result: 'success', message: `ok\n\n<!-- adispatchd:${run.id}:${secondId} -->\n` },
     });
     // once comment 1 is posted, the second action's first POST fails → its retry looks up its marker
     const engine = env.engine({
@@ -319,7 +319,7 @@ on_success:
     expect(result.status).toBe('succeeded');
     const comments = env.github.comments(REPO, ISSUE);
     expect(comments).toHaveLength(2);
-    expect(comments[0]?.body).toContain('&lt;!-- orch:');
+    expect(comments[0]?.body).toContain('&lt;!-- adispatchd:');
     expect(result.actions[0]?.externalKey).toBe(String(comments[0]?.id));
     expect(result.actions[1]?.externalKey).toBe(String(comments[1]?.id));
     expect(comments[1]?.body).toContain('second comment');

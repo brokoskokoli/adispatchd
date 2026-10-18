@@ -87,8 +87,8 @@ describe('cli program', () => {
     expect(seen.install).toMatchObject({
       dryRun: true,
       createUser: true,
-      user: 'agent-orchestrator',
-      name: 'agent-orchestrator',
+      user: 'adispatchd',
+      name: 'adispatchd',
       unitDir: '/etc/systemd/system',
       drainTimeout: '10m',
       cancelTimeout: '2m',

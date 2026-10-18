@@ -103,7 +103,7 @@ export function createInitHandler(io: Pick<CliIo, 'stdout' | 'stderr'>) {
       [
         '',
         'Next steps:',
-        `  agent-orchestrator start --config-dir ${q(result.configDir)} --data-dir ${q(result.dataDir)}`,
+        `  adispatch start --config-dir ${q(result.configDir)} --data-dir ${q(result.dataDir)}`,
         `  open http://127.0.0.1:${loaded.config.global.server.port}/ and start the "hello" workflow`,
         '  configure sources.yaml / identities.yaml and enable workflows/coder.yaml for GitHub (see README.md)',
         '',

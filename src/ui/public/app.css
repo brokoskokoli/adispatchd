@@ -1,4 +1,4 @@
-/* agent-orchestrator web UI – plain CSS, light/dark via prefers-color-scheme. */
+/* Agent Dispatch Daemon (adispatchd) web UI – plain CSS, light/dark via prefers-color-scheme. */
 :root {
   --bg: #f6f7f9;
   --surface: #ffffff;

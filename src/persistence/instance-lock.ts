@@ -1,7 +1,7 @@
 /**
  * Data-dir instance lock (Spec §21): only one orchestrator per data directory.
  *
- * Approach: an OS-level advisory lock held by SQLite. `orchestrator.lock` is a
+ * Approach: an OS-level advisory lock held by SQLite. `adispatchd.lock` is a
  * tiny SQLite database opened with `locking_mode=EXCLUSIVE`; after the first
  * write transaction SQLite keeps the EXCLUSIVE file lock (POSIX `fcntl` on
  * Unix, `LockFileEx` on Windows) until the connection closes. The operating
@@ -13,7 +13,7 @@
  * second acquisition from the same process is refused as well.
  *
  * Holder information (pid, host, start time) is written into the lock
- * database and mirrored to `orchestrator.lock.json` for diagnostics only; it
+ * database and mirrored to `adispatchd.lock.json` for diagnostics only; it
  * never decides who owns the lock.
  *
  * The connection is kept strongly reachable in a module-level set until
@@ -25,10 +25,10 @@
  *   without lock daemon) – the data dir must be on a local file system.
  * - POSIX `fcntl` locks belong to the process and are dropped when the process
  *   closes ANY file descriptor of that file. Therefore the holding process must
- *   never open `orchestrator.lock` otherwise (no `readFileSync`, `fs.cp`,
+ *   never open `adispatchd.lock` otherwise (no `readFileSync`, `fs.cp`,
  *   copying the data dir, ...). Backup/copy/cleanup routines must exclude
- *   `orchestrator.lock` (and `orchestrator.lock.json`); `backupDatabase` only
- *   reads `orchestrator.sqlite` via SQLite. Opening it through `node:sqlite`
+ *   `adispatchd.lock` (and `adispatchd.lock.json`); `backupDatabase` only
+ *   reads `adispatchd.sqlite` via SQLite. Opening it through `node:sqlite`
  *   in the same process is safe (SQLite shares lock state per inode).
  */
 import { readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -41,7 +41,7 @@ import { InstanceLockedError } from './errors.js';
 const HELD = new Set<DatabaseSync>();
 
 /** File names inside the data dir that copy/backup/cleanup routines must never open. */
-export const INSTANCE_LOCK_FILES = ['orchestrator.lock', 'orchestrator.lock.json'] as const;
+export const INSTANCE_LOCK_FILES = ['adispatchd.lock', 'adispatchd.lock.json'] as const;
 
 /** A held instance lock. */
 export interface InstanceLock {

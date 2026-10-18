@@ -568,7 +568,7 @@ export interface ExecutionSpec {
    * Context written to `files.contextFile` (contains no secrets). The main
    * worker gets a {@link WorkerContext}; other executions (e.g. lifecycle
    * `shell` actions, WI-07) may pass their own JSON object (e.g. run + result).
-   * `ORCH_SOURCE_*` variables are derived from a `source` block shaped like
+   * `ADISPATCH_SOURCE_*` variables are derived from a `source` block shaped like
    * {@link WorkerContext.source} if present.
    */
   context: WorkerContext | Readonly<Record<string, unknown>>;
@@ -596,7 +596,7 @@ export interface OutputChunk {
   at: Date;
 }
 
-/** Structured worker event from a `@@ORCH_EVENT {...}` line (Spec §9.3). Informative only. */
+/** Structured worker event from a `@@ADISPATCH_EVENT {...}` line (Spec §9.3). Informative only. */
 export interface WorkerEvent {
   /** Event type, e.g. `status`, `progress`, `question`. */
   type: string;

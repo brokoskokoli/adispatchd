@@ -154,7 +154,7 @@ export function renderHookText(template: string, values: TemplateValues, scope: 
   return renderTemplate(template, values, { mode: 'text', scope });
 }
 
-/** JSON context written to `ORCH_CONTEXT_FILE` for `shell` actions. */
+/** JSON context written to `ADISPATCH_CONTEXT_FILE` for `shell` actions. */
 export type ShellActionContext = {
   schema_version: typeof WORKER_PROTOCOL_VERSION;
   kind: 'lifecycle_action';
@@ -168,7 +168,7 @@ export type ShellActionContext = {
   workflow: { id: string; name: string };
   hook: HookName;
   action: { id: number; name: string | null; ordinal: number; type: 'shell'; attempt: number };
-  /** Shape of `WorkerContext.source` (sets `ORCH_SOURCE_*`). */
+  /** Shape of `WorkerContext.source` (sets `ADISPATCH_SOURCE_*`). */
   source?: {
     id: string;
     type: string;

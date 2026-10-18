@@ -131,5 +131,5 @@ export function markedComments(github: FakeGitHub): string[] {
   return github
     .comments(REPO, ISSUE)
     .map((c) => c.body)
-    .filter((b) => b.includes('<!-- orch:'));
+    .filter((b) => b.includes('<!-- adispatchd:'));
 }

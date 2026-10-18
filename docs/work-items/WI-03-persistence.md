@@ -4,7 +4,7 @@
 
 ## Umfang
 1. `openDatabase(dataDir)` mit `node:sqlite` (`DatabaseSync`), `PRAGMA foreign_keys=ON`, WAL, `busy_timeout`.
-2. Versionierte Migrationen (`schema_migrations`); **vor** Anwendung neuer Migrationen Backup nach `data-dir/backups/orchestrator-<version>-<ts>.sqlite` (nur wenn DB bereits existiert und Migrationen ausstehen).
+2. Versionierte Migrationen (`schema_migrations`); **vor** Anwendung neuer Migrationen Backup nach `data-dir/backups/adispatchd-<version>-<ts>.sqlite` (nur wenn DB bereits existiert und Migrationen ausstehen).
 3. DDL für alle Tabellen aus §12 inkl. Indizes und Fremdschlüssel; zusätzlich `runs.lifecycle_status`, `runs.status_message` (letzte Event-Statusmeldung), `runs.identity`, `runs.command`, `runs.result_json`, `runs.error_json`, `runs.block_generation`; `run_logs_meta` o. ä. für Log-Trunkierungs-/Schreibfehler-Ereignisse (oder als `run_events` Typ `system`). `blocks` mit `generation`; `failure_counters` oder Ableitung aus Runs (Zählung aufeinanderfolgender technischer Fehler pro `(workflow_id, item_key)` seit letztem Erfolg/Entblockung – Design im Handoff begründen).
 4. Repositories (synchron, klar typisiert):
    - `RunRepository`: `reserve(...)` **atomar** in einer Transaktion: Lock prüfen+anlegen (Unique `(workflow_id, lock_key)`), Run mit `reserved` anlegen; schlägt fehl, wenn aktiver Lock existiert. Transitionen mit erlaubter Zustandsmaschine (§8.1) – ungültige Transition = Fehler. `finish(...)` setzt Endstatus, Ergebnis, gibt Lock frei. Abfragen: aktive Runs, Historie mit Paging/Filter, `countActive(workflowId?)`, letzter Run je Item (für Views `run.last_*`).

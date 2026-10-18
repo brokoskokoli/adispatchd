@@ -79,11 +79,11 @@ describe('manual GitHub test fixture (docs/manual-tests/github-fixture)', () => 
     );
     const env: Record<string, string> = {
       PATH: process.env.PATH ?? '/usr/bin:/bin',
-      ORCH_CONTEXT_FILE: contextFile,
-      ORCH_RESULT_FILE: resultFile,
-      ORCH_RUN_ID: 'run-test',
-      ORCH_WORKFLOW_ID: 'coder-test',
-      ORCH_WORKSPACE: dir,
+      ADISPATCH_CONTEXT_FILE: contextFile,
+      ADISPATCH_RESULT_FILE: resultFile,
+      ADISPATCH_RUN_ID: 'run-test',
+      ADISPATCH_WORKFLOW_ID: 'coder-test',
+      ADISPATCH_WORKSPACE: dir,
     };
     const proc = spawnSync('/bin/sh', [WORKER, '7', 'owner/orch-test-a'], { env, encoding: 'utf8', timeout: 20_000 });
     expect(proc.status, proc.stderr).toBe(exit);

@@ -69,7 +69,7 @@ describe('config ids and markers', () => {
   });
 
   it('builds comment markers', () => {
-    expect(commentMarker('run-1', 7)).toBe('orch:run-1:7');
+    expect(commentMarker('run-1', 7)).toBe('adispatchd:run-1:7');
     expect(() => commentMarker('run 1', 'x')).toThrow(ValidationError);
   });
 });

@@ -351,7 +351,7 @@ describe('comments with marker', () => {
 
   it('rejects markers that could break out of the HTML comment', async () => {
     github.createIssue(REPO);
-    await expect(adapter.postComment(await item(1), 'x', 'orch:a --> <b>', 'coder')).rejects.toMatchObject({ kind: 'invalid' });
+    await expect(adapter.postComment(await item(1), 'x', 'adispatchd:a --> <b>', 'coder')).rejects.toMatchObject({ kind: 'invalid' });
   });
 });
 

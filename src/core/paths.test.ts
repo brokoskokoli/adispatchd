@@ -90,7 +90,7 @@ describe('segments', () => {
 describe('dataPaths', () => {
   it('builds the spec layout', () => {
     const p = dataPaths('/var/lib/orch');
-    expect(p.database).toBe('/var/lib/orch/orchestrator.sqlite');
+    expect(p.database).toBe('/var/lib/orch/adispatchd.sqlite');
     expect(p.defaultWorkspacesDir).toBe('/var/lib/orch/workspaces');
     expect(p.run('run-1')).toMatchObject({
       contextFile: '/var/lib/orch/runs/run-1/context.json',

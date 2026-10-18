@@ -155,7 +155,7 @@ export async function performSourceComment(
 /**
  * Neutralize HTML comment openers in a comment body (`<!--` → `&lt;!--`).
  * Rendered values such as `{result.message}` are untrusted worker output and
- * must not be able to smuggle idempotency markers (`<!-- orch:… -->`) or
+ * must not be able to smuggle idempotency markers (`<!-- adispatchd:… -->`) or
  * hidden content into the comment; the adapter appends the only real marker.
  */
 export function neutralizeHtmlComments(body: string): string {
@@ -174,7 +174,7 @@ async function isDirectory(p: string | null): Promise<boolean> {
 /**
  * `shell`: runs the command via the executor with the minimal environment
  * (no controller env), the rendered `env`/`args`, a JSON context file with
- * run + result (`ORCH_CONTEXT_FILE`) and the action timeout. Exit code 0 =
+ * run + result (`ADISPATCH_CONTEXT_FILE`) and the action timeout. Exit code 0 =
  * success; anything else (exit ≠ 0, signal, timeout, start error) fails the attempt.
  * Working directory: the run workspace if it exists, else a per-attempt directory.
  */

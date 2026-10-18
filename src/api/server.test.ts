@@ -11,7 +11,7 @@ let release: string;
 beforeAll(async () => {
   env = await startAppEnv(
     {
-      allowedHosts: ['orch.example.com', 'proxy.example.com:8443'],
+      allowedHosts: ['adispatchd.example.com', 'proxy.example.com:8443'],
       configExtra: [
         'notifications:',
         '  channels:',
@@ -28,7 +28,7 @@ beforeAll(async () => {
       release = path.join(e.marks, 'release');
       const ok = e.script(
         'ok.sh',
-        `echo "hello stdout"; echo "oops" >&2; echo '@@ORCH_EVENT {"type":"status","message":"working"}'; printf '{"schema_version":1,"result":"success","message":"done %s"}' "$1" > "$ORCH_RESULT_FILE"`,
+        `echo "hello stdout"; echo "oops" >&2; echo '@@ADISPATCH_EVENT {"type":"status","message":"working"}'; printf '{"schema_version":1,"result":"success","message":"done %s"}' "$1" > "$ADISPATCH_RESULT_FILE"`,
       );
       const slow = e.script('slow.sh', `while [ ! -f "${release}" ]; do sleep 0.05; done`);
       const crash = e.script('crash.sh', 'exit 3');
@@ -117,7 +117,7 @@ describe('CSRF protection', () => {
     const text = await env.app.http.inject({
       method: 'POST',
       url: '/api/v1/scheduler/pause',
-      headers: { 'x-orchestrator-request': '1', 'content-type': 'text/plain' },
+      headers: { 'x-adispatch-request': '1', 'content-type': 'text/plain' },
       payload: 'x',
     });
     expect(text.statusCode).toBe(415);
@@ -156,18 +156,18 @@ describe('DNS-rebinding protection (Host / Origin allowlist)', () => {
   });
 
   it('accepts loopback names on any port and configured allowed_hosts', async () => {
-    for (const host of ['localhost', '127.0.0.1:8787', '[::1]:9999', 'LOCALHOST:1234', 'orch.example.com', 'orch.example.com:443', 'proxy.example.com:8443']) {
+    for (const host of ['localhost', '127.0.0.1:8787', '[::1]:9999', 'LOCALHOST:1234', 'adispatchd.example.com', 'adispatchd.example.com:443', 'proxy.example.com:8443']) {
       expect((await env.request('GET', '/health', undefined, { host })).status, host).toBe(200);
     }
     expect((await env.request('GET', '/health', undefined, { host: 'proxy.example.com:8080' })).status).toBe(421);
-    expect((await env.request('GET', '/health', undefined, { host: 'orch.example.com.attacker.example' })).status).toBe(421);
+    expect((await env.request('GET', '/health', undefined, { host: 'adispatchd.example.com.attacker.example' })).status).toBe(421);
   });
 
   it('requires the Origin to name an allowed host as well', async () => {
     const res = await env.request('GET', '/api/v1/status', undefined, { host: 'localhost', origin: 'https://attacker.example' });
     expect(res.status).toBe(403);
     expect(res.json.error.code).toBe('origin_not_allowed');
-    const viaProxy = await env.request('POST', '/api/v1/scheduler/resume', undefined, { host: 'orch.example.com', origin: 'https://orch.example.com' });
+    const viaProxy = await env.request('POST', '/api/v1/scheduler/resume', undefined, { host: 'adispatchd.example.com', origin: 'https://adispatchd.example.com' });
     expect(viaProxy.status).toBe(200);
     expect((await env.request('GET', '/health', undefined, { origin: 'null' })).status).toBe(403);
     // Same-origin exactly (host AND port): another local origin (e.g. a dev server on :3000) is refused.

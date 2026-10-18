@@ -111,7 +111,7 @@ export class GitHubHttpClient {
     this.retryBaseDelayMs = options.retryBaseDelayMs ?? 1_000;
     this.requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
     this.maxPages = options.maxPages ?? 50;
-    this.userAgent = options.userAgent ?? 'agent-orchestrator';
+    this.userAgent = options.userAgent ?? 'adispatchd';
   }
 
   /** Perform one request (with retries for idempotent calls) and parse the JSON body. */

@@ -1,11 +1,11 @@
 /**
  * Packaging smoke test (WI-12): `npm pack` → install the tarball into a temp
- * prefix → `agent-orchestrator init` → `start` → run the example workflow →
+ * prefix → `adispatch init` → `start` → run the example workflow →
  * `status` → `drain --wait` (exit 0) → "update" (install the tarball into a
  * second prefix) → start again on the same config/data dirs → history and
  * logs are still there → SIGTERM (exit 0).
  *
- * Runs only with `ORCH_PACK_TEST=1` (`npm run test:pack`): it builds the
+ * Runs only with `ADISPATCH_PACK_TEST=1` (`npm run test:pack`): it builds the
  * package, needs npm with the dependencies in its cache or registry access
  * and takes ~10–60 s, so it is not part of the per-commit gate.
  */
@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const ENABLED = process.env.ORCH_PACK_TEST === '1';
+const ENABLED = process.env.ADISPATCH_PACK_TEST === '1';
 
 function run(cmd: string, args: string[], opts: { cwd?: string; timeoutMs?: number } = {}): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -92,9 +92,9 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     const prefix1 = path.join(root, 'install-1');
     const install = await run('npm', ['install', '--prefix', prefix1, tarball, '--omit=dev', '--no-audit', '--no-fund', '--prefer-offline'], { cwd: root });
     expect(install.code, install.stderr).toBe(0);
-    const bin1 = path.join(prefix1, 'node_modules', '.bin', 'agent-orchestrator');
+    const bin1 = path.join(prefix1, 'node_modules', '.bin', 'adispatch');
     expect(existsSync(bin1)).toBe(true);
-    expect(readFileSync(path.join(prefix1, 'node_modules', 'agent-orchestrator', 'dist', 'cli', 'main.js'), 'utf8').startsWith('#!/usr/bin/env node')).toBe(true);
+    expect(readFileSync(path.join(prefix1, 'node_modules', 'adispatchd', 'dist', 'cli', 'main.js'), 'utf8').startsWith('#!/usr/bin/env node')).toBe(true);
     const version = await run(bin1, ['--version'], { cwd: root });
     expect(version.stdout.trim()).toBe('0.1.0');
 
@@ -127,7 +127,7 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     expect((await fetch(`${base}/js/client/app.js`)).status).toBe(200);
     const started = await fetch(`${base}/api/v1/workflows/hello/start`, {
       method: 'POST',
-      headers: { 'x-orchestrator-request': '1', 'content-type': 'application/json' },
+      headers: { 'x-adispatch-request': '1', 'content-type': 'application/json' },
       body: JSON.stringify({ parameters: { name: 'pack' } }),
     });
     expect(started.status).toBe(202);
@@ -149,7 +149,7 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     const install2 = await run('npm', ['install', '--prefix', prefix2, tarball, '--omit=dev', '--no-audit', '--no-fund', '--prefer-offline'], { cwd: root });
     expect(install2.code, install2.stderr).toBe(0);
     rmSync(prefix1, { recursive: true, force: true }); // old code is gone
-    const bin2 = path.join(prefix2, 'node_modules', '.bin', 'agent-orchestrator');
+    const bin2 = path.join(prefix2, 'node_modules', '.bin', 'adispatch');
     const second = startInstance(bin2, configDir, dataDir);
     await waitFor('ready after update', async () => ((await fetch(`${base}/ready`)).status === 200 ? true : undefined));
     const kept = (await (await fetch(`${base}/api/v1/runs/${runId}`)).json()) as { status: string; resultMessage: string };
@@ -159,6 +159,6 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     expect(readFileSync(path.join(configDir, 'workflows', 'hello.yaml'), 'utf8')).toContain('# local edit');
     second.child.kill('SIGTERM');
     expect(await second.exited).toBe(0);
-    expect(second.out.stdout).toContain('agent-orchestrator stopped');
+    expect(second.out.stdout).toContain('adispatchd stopped');
   }, 600_000);
 });

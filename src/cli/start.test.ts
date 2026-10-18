@@ -71,12 +71,12 @@ describe('start command', () => {
       expect(stdout).toContain(`listening on http://127.0.0.1:${port}`);
       const run = await fetch(`http://127.0.0.1:${port}/api/v1/workflows/hello/start`, {
         method: 'POST',
-        headers: { 'x-orchestrator-request': '1' },
+        headers: { 'x-adispatch-request': '1' },
       });
       expect(run.status).toBe(202);
       child.kill('SIGTERM');
       expect(await exited).toBe(0);
-      expect(stdout).toContain('agent-orchestrator stopped');
+      expect(stdout).toContain('adispatchd stopped');
     } finally {
       if (child.exitCode === null) child.kill('SIGKILL');
     }

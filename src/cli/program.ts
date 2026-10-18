@@ -57,9 +57,9 @@ export interface InitCliOptions extends GlobalOptions {
 export interface ServiceCliOptions extends GlobalOptions {
   /** Print what would be done (unit file + steps) without changing anything. */
   dryRun?: boolean;
-  /** Unit name without `.service` (default `agent-orchestrator`). */
+  /** Unit name without `.service` (default `adispatchd`). */
   name?: string;
-  /** Dedicated service user (default `agent-orchestrator`). */
+  /** Dedicated service user (default `adispatchd`). */
   user?: string;
   /** Group (default = user). */
   group?: string;
@@ -119,10 +119,10 @@ export const processIo: CliIo = {
 
 const URL_HELP = 'base URL of the running instance (default: server.host/port from --config-dir, else http://127.0.0.1:8787)';
 
-/** Build the `agent-orchestrator` command tree. */
+/** Build the `adispatch` command tree. */
 export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo): Command {
-  const program = new Command('agent-orchestrator')
-    .description('Configuration-driven orchestrator for shell processes and AI agents')
+  const program = new Command('adispatch')
+    .description('Agent Dispatch Daemon (adispatchd) – configuration-driven orchestrator for shell processes and AI agents')
     .version(APP_VERSION)
     .option('--config-dir <path>', 'configuration directory (config.yaml, sources.yaml, workflows/, ...)')
     .option('--data-dir <path>', 'data directory (SQLite database, logs, runs, workspaces)')
@@ -156,7 +156,7 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
     async (...args: unknown[]): Promise<void> => {
       const cmd = args[args.length - 1] as Command;
       if (!handler) {
-        io.stderr(`agent-orchestrator: "${name}" is not implemented yet\n`);
+        io.stderr(`adispatch: "${name}" is not implemented yet\n`);
         io.setExitCode(EXIT_NOT_IMPLEMENTED);
         return;
       }
@@ -218,7 +218,7 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
     .option('--local', 'always evaluate locally (needs --config-dir), even if an instance is running')
     .action(async (workflowId: string, _opts: unknown, cmd: Command) => {
       if (!handlers.workflowDryRun) {
-        io.stderr('agent-orchestrator: "workflow dry-run" is not implemented yet\n');
+        io.stderr('adispatch: "workflow dry-run" is not implemented yet\n');
         io.setExitCode(EXIT_NOT_IMPLEMENTED);
         return;
       }
@@ -230,12 +230,12 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
     service
       .command(name)
       .description(description)
-      .option('--name <unit>', 'unit name without .service', 'agent-orchestrator')
+      .option('--name <unit>', 'unit name without .service', 'adispatchd')
       .option('--unit-dir <path>', 'directory of unit files', '/etc/systemd/system')
       .action(run(`service ${name}`, handler));
   serviceCommand('install', 'install and enable the systemd service (needs root)', handlers.serviceInstall)
     .option('--dry-run', 'only print the unit file and the planned steps')
-    .option('--user <name>', 'dedicated service user', 'agent-orchestrator')
+    .option('--user <name>', 'dedicated service user', 'adispatchd')
     .option('--group <name>', 'service group (default: same as --user)')
     .option('--create-user', 'create the service user if it does not exist')
     .option('--node <path>', 'absolute node executable (default: the running node)')

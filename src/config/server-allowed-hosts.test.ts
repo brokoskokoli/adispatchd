@@ -7,9 +7,9 @@ describe('server.allowed_hosts (WI-10, DNS-rebinding protection)', () => {
   afterEach(async () => t?.cleanup());
 
   it('normalizes allowed hosts to lower case', async () => {
-    t = await createTempConfigDir({ ...BASE_FILES, 'config.yaml': 'server: { allowed_hosts: [Orch.Example.com, "proxy.example.com:8443", "[::1]"] }\n' });
+    t = await createTempConfigDir({ ...BASE_FILES, 'config.yaml': 'server: { allowed_hosts: [Adispatchd.Example.com, "proxy.example.com:8443", "[::1]"] }\n' });
     const res = await loadConfig(t.dir, { dataDir: t.dataDir });
-    expect(res.ok && res.config.global.server.allowedHosts).toEqual(['orch.example.com', 'proxy.example.com:8443', '[::1]']);
+    expect(res.ok && res.config.global.server.allowedHosts).toEqual(['adispatchd.example.com', 'proxy.example.com:8443', '[::1]']);
   });
 
   it('rejects entries with scheme, path or wildcards', async () => {

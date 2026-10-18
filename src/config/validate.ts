@@ -33,7 +33,7 @@ export const SOURCES_FILE = 'sources.yaml';
 export const IDENTITIES_FILE = 'identities.yaml';
 
 /** Env variable prefix reserved for the orchestrator (Spec §9.1). */
-export const RESERVED_ENV_PREFIX = 'ORCH_';
+export const RESERVED_ENV_PREFIX = 'ADISPATCH_';
 
 /** A workflow together with the raw data needed for checks the model cannot express. */
 export interface WorkflowEntry {

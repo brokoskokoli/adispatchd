@@ -56,7 +56,7 @@ describe('cli init', () => {
     }
     for (const d of DATA_DIR_LAYOUT) expect(statSync(path.join(dataDir, d)).isDirectory()).toBe(true);
     expect(io.out).toContain('Next steps:');
-    expect(io.out).toContain(`agent-orchestrator start --config-dir ${configDir} --data-dir ${dataDir}`);
+    expect(io.out).toContain(`adispatch start --config-dir ${configDir} --data-dir ${dataDir}`);
 
     const config = readFileSync(path.join(configDir, 'config.yaml'), 'utf8');
     expect(config).toContain('port: 18999');

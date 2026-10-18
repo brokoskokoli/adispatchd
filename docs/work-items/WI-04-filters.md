@@ -9,7 +9,7 @@
 4. **Pushdown-Split:** Funktion, die einen AST in (a) vom Adapter unterstützten Teil (anhand `FieldDefinition.operators`/Pushdown-Fähigkeit) und (b) lokal auszuwertenden Rest teilt – konservativ (nur `all`-Konjunktionen pushen).
 5. **Item-Priorität** (`item_priority.rules`, erste passende Regel gewinnt, sonst `default`; `unknown` matcht nicht).
 6. **Deterministische Sortierung** von Kandidaten: Workflow-Priorität desc, Item-Priorität desc, Tie-Breaker Erstellungszeit asc, dann Item-Key asc (§7).
-7. **Shell-Check-Runner** (für Shell-Filter und Conditions): Kommando als Argumentliste (`execFile`, kein Shell-String, außer explizit konfiguriert), Item-Kontext als JSON via Datei/Env (`ORCH_CHECK_CONTEXT_FILE`) mit Minimal-Env, Timeout → `unknown`/Prüffehler, Exit 0 = true, 1 = false, ≥2/Signal/Spawnfehler = `unknown` mit Fehlerdetail. Cache für Workflow-Conditions (TTL aus Config, Clock-basiert); Item-Conditions ohne Cache standardmäßig. Ausgabe begrenzen.
+7. **Shell-Check-Runner** (für Shell-Filter und Conditions): Kommando als Argumentliste (`execFile`, kein Shell-String, außer explizit konfiguriert), Item-Kontext als JSON via Datei/Env (`ADISPATCH_CHECK_CONTEXT_FILE`) mit Minimal-Env, Timeout → `unknown`/Prüffehler, Exit 0 = true, 1 = false, ≥2/Signal/Spawnfehler = `unknown` mit Fehlerdetail. Cache für Workflow-Conditions (TTL aus Config, Clock-basiert); Item-Conditions ohne Cache standardmäßig. Ausgabe begrenzen.
 
 ## Acceptance Criteria
 - [ ] Wahrheitstabellen für all/any/not mit unknown getestet.

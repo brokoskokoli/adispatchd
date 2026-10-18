@@ -10,20 +10,20 @@ import type { TriggerType } from './types.js';
 export const WORKER_PROTOCOL_VERSION = 1;
 
 /** Environment variables provided to every worker (Spec §9.1). */
-export const ORCH_ENV = {
-  RUN_ID: 'ORCH_RUN_ID',
-  WORKFLOW_ID: 'ORCH_WORKFLOW_ID',
+export const ADISPATCH_ENV = {
+  RUN_ID: 'ADISPATCH_RUN_ID',
+  WORKFLOW_ID: 'ADISPATCH_WORKFLOW_ID',
   /** Only for source-bound runs. */
-  SOURCE_TYPE: 'ORCH_SOURCE_TYPE',
+  SOURCE_TYPE: 'ADISPATCH_SOURCE_TYPE',
   /** Only for source-bound runs. */
-  SOURCE_ID: 'ORCH_SOURCE_ID',
+  SOURCE_ID: 'ADISPATCH_SOURCE_ID',
   /** Only for source-bound runs. */
-  SOURCE_ITEM_ID: 'ORCH_SOURCE_ITEM_ID',
+  SOURCE_ITEM_ID: 'ADISPATCH_SOURCE_ITEM_ID',
   /** Only for source-bound runs. */
-  SOURCE_URL: 'ORCH_SOURCE_URL',
-  CONTEXT_FILE: 'ORCH_CONTEXT_FILE',
-  RESULT_FILE: 'ORCH_RESULT_FILE',
-  WORKSPACE: 'ORCH_WORKSPACE',
+  SOURCE_URL: 'ADISPATCH_SOURCE_URL',
+  CONTEXT_FILE: 'ADISPATCH_CONTEXT_FILE',
+  RESULT_FILE: 'ADISPATCH_RESULT_FILE',
+  WORKSPACE: 'ADISPATCH_WORKSPACE',
 } as const;
 
 /** Content of `context.json` (Spec §9.1). Never contains secrets. */
@@ -65,7 +65,7 @@ export const workerArtifactSchema = z
   })
   .loose();
 
-/** Schema of the result file `ORCH_RESULT_FILE` (Spec §9.2). */
+/** Schema of the result file `ADISPATCH_RESULT_FILE` (Spec §9.2). */
 export const workerResultSchema = z.object({
   schema_version: z.literal(WORKER_PROTOCOL_VERSION),
   result: z.enum(['success', 'failure']),
@@ -103,7 +103,7 @@ export function parseWorkerResult(content: string): { ok: true; result: WorkerRe
 }
 
 /** Reserved line prefix for structured worker events (Spec §9.3). */
-export const ORCH_EVENT_PREFIX = '@@ORCH_EVENT ';
+export const ADISPATCH_EVENT_PREFIX = '@@ADISPATCH_EVENT ';
 
 /** Maximum accepted length of one event line's JSON payload. */
 export const MAX_EVENT_LINE_BYTES = 64 * 1024;

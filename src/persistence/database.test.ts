@@ -68,7 +68,7 @@ describe('openDatabase / migrations', () => {
     expect(v2.migration.fromVersion).toBe(1);
     expect(v2.migration.toVersion).toBe(2);
     expect(v2.migration.applied).toEqual([2]);
-    expect(v2.migration.backupPath).toBe(path.join(tmp.dir, 'backups', 'orchestrator-1-20261017T083000123Z.sqlite'));
+    expect(v2.migration.backupPath).toBe(path.join(tmp.dir, 'backups', 'adispatchd-1-20261017T083000123Z.sqlite'));
     expect(schemaVersion(v2.db)).toBe(2);
     v2.close();
 

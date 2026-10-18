@@ -5,7 +5,7 @@ Verbindliche Regeln für alle Work-Items (Coder- und Reviewer-Agents).
 ## Grundlage
 - Spezifikation: `docs/spec-v0.1.md` (im Folgenden „Spec“, Abschnitte als `§n`).
 - Bei Widerspruch gilt §8.2 (Exit-Code/Ergebnisdatei) vor §24.2: Exit-Code ≠ 0 ist immer technisch (`crashed`), fachliches `failure` nur über gültige Ergebnisdatei.
-- Arbeitsname des Pakets: `agent-orchestrator`, Binary: `agent-orchestrator`.
+- Name: **Agent Dispatch Daemon**; npm-Paket, Repository, systemd-Unit, Dienstbenutzer und Standardpfade: `adispatchd`; CLI-Befehl: `adispatch`.
 
 ## Stack
 - Node.js ≥ 22.13 (entwickelt mit Node 24), TypeScript `strict`, ESM (`"type": "module"`, `NodeNext`-Module, Importe mit `.js`-Endung).

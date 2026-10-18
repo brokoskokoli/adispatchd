@@ -54,7 +54,7 @@ export function formatStatus(s: any): string {
   const sched = s?.scheduler ?? {};
   const usage = s?.usage ?? {};
   const limits = s?.limits ?? {};
-  lines.push(`agent-orchestrator ${s?.version ?? '?'} – started ${s?.startedAt ?? '?'}`);
+  lines.push(`adispatchd ${s?.version ?? '?'} – started ${s?.startedAt ?? '?'}`);
   lines.push(`ready:      ${s?.readiness?.ready ? 'yes' : 'no'}`);
   lines.push(`scheduler:  ${sched.state ?? '?'}${sched.pollingIntervalMs ? ` (polling every ${Math.round(sched.pollingIntervalMs / 1000)}s)` : ''}`);
   lines.push(

@@ -44,10 +44,10 @@ export interface OpenedDatabase {
 }
 
 /**
- * Open (creating if needed) `<dataDir>/orchestrator.sqlite`, configure it
+ * Open (creating if needed) `<dataDir>/adispatchd.sqlite`, configure it
  * (foreign keys, WAL, busy timeout) and apply pending migrations. If the
  * database already existed and migrations are pending, it is first backed up
- * to `<dataDir>/backups/orchestrator-<version>-<ts>.sqlite`.
+ * to `<dataDir>/backups/adispatchd-<version>-<ts>.sqlite`.
  *
  * The caller should hold the data-dir instance lock ({@link acquireInstanceLock}) first.
  */
@@ -148,11 +148,11 @@ export function migrate(db: DatabaseSync, options: MigrateOptions): MigrationRes
 
 /**
  * Write a consistent copy of the database (`VACUUM INTO`, safe in WAL mode)
- * to `<backupDir>/orchestrator-<version>-<ts>.sqlite`. Returns its path.
+ * to `<backupDir>/adispatchd-<version>-<ts>.sqlite`. Returns its path.
  */
 export function backupDatabase(db: DatabaseSync, backupDir: string, version: number, clock: Clock): string {
   mkdirSync(backupDir, { recursive: true });
-  const base = `orchestrator-${version}-${formatCompactTimestamp(clock.now(), true)}`;
+  const base = `adispatchd-${version}-${formatCompactTimestamp(clock.now(), true)}`;
   let target = path.join(backupDir, `${base}.sqlite`);
   for (let i = 1; existsSync(target); i++) target = path.join(backupDir, `${base}-${i}.sqlite`);
   db.prepare('VACUUM INTO ?').run(target);

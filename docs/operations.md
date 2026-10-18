@@ -7,14 +7,14 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
 
 | Pfad (Vorschlag) | Inhalt | Eigentümer / Modus |
 |---|---|---|
-| `/etc/agent-orchestrator/` (config-dir) | `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/`, `views/`, `scripts/` | `root:agent-orchestrator`, Verzeichnisse 0750, Dateien 0640, Skripte 0750 |
-| `/etc/default/agent-orchestrator` | Secrets als Umgebungsvariablen (GitHub-App-Keys, Webhook-URLs) | `root:agent-orchestrator`, 0640 |
-| `/var/lib/agent-orchestrator/` (data-dir) | `orchestrator.sqlite` (+ `-wal`/`-shm`), `orchestrator.lock`, `logs/`, `runs/`, `workspaces/`, `backups/` | `agent-orchestrator`, 0750 |
-| Paket, z. B. `/usr/lib/node_modules/agent-orchestrator/` | Code (`dist/`), wird bei Updates ersetzt | `root`, nur lesbar für den Dienst |
+| `/etc/adispatchd/` (config-dir) | `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/`, `views/`, `scripts/` | `root:adispatchd`, Verzeichnisse 0750, Dateien 0640, Skripte 0750 |
+| `/etc/default/adispatchd` | Secrets als Umgebungsvariablen (GitHub-App-Keys, Webhook-URLs) | `root:adispatchd`, 0640 |
+| `/var/lib/adispatchd/` (data-dir) | `adispatchd.sqlite` (+ `-wal`/`-shm`), `adispatchd.lock`, `logs/`, `runs/`, `workspaces/`, `backups/` | `adispatchd`, 0750 |
+| Paket, z. B. `/usr/lib/node_modules/adispatchd/` | Code (`dist/`), wird bei Updates ersetzt | `root`, nur lesbar für den Dienst |
 
 - **Schreibrecht auf config-dir = Codeausführung** mit den Rechten des Dienstes (Skripte, Kommandos in YAML, Spec §20.2).
   Deshalb gehört config-dir `root`, der Dienst kann seine eigene Konfiguration nicht ändern.
-- **data-dir muss auf einem lokalen Dateisystem liegen (kein NFS/SMB).** Der Instanz-Lock (`orchestrator.lock`) beruht auf
+- **data-dir muss auf einem lokalen Dateisystem liegen (kein NFS/SMB).** Der Instanz-Lock (`adispatchd.lock`) beruht auf
   `fcntl`-Sperren, die auf Netzwerk-Dateisystemen unzuverlässig sind; zwei Instanzen auf demselben data-dir wären möglich.
 - Es läuft genau **eine** Instanz pro data-dir (OS-Sperre, wird bei Prozessende immer freigegeben, auch nach SIGKILL).
   Mehrere Instanzen mit getrennten data-dirs koordinieren sich nicht.
@@ -30,29 +30,29 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 # 1. Feste Version aus dem Tarball global installieren (kein npx im Dienst!).
 #    Paketname noch nicht festgelegt: NICHT aus der npm-Registry installieren (fremdes Paket gleichen Namens).
 #    Tarball im Repository-Checkout bauen: npm install && npm pack
-sudo npm install -g ./agent-orchestrator-0.1.0.tgz
+sudo npm install -g ./adispatchd-0.1.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
-sudo agent-orchestrator init --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator
-sudoedit /etc/agent-orchestrator/sources.yaml /etc/agent-orchestrator/identities.yaml   # anpassen
-sudo agent-orchestrator config validate --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator
+sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
+sudoedit /etc/adispatchd/sources.yaml /etc/adispatchd/identities.yaml   # anpassen
+sudo adispatch config validate --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
 
 # 3. Vorschau: Unit-Datei und geplante Schritte (ändert nichts)
-sudo agent-orchestrator service install --dry-run \
-  --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator --create-user
+sudo adispatch service install --dry-run \
+  --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd --create-user
 
 # 4. Installieren: Benutzer anlegen, Rechte setzen, Env-Datei-Vorlage, Unit schreiben, daemon-reload, enable
-sudo agent-orchestrator service install \
-  --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator --create-user
+sudo adispatch service install \
+  --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd --create-user
 
 # 5. Secrets eintragen und starten
-sudoedit /etc/default/agent-orchestrator
-sudo systemctl start agent-orchestrator
-agent-orchestrator status --config-dir /etc/agent-orchestrator
-journalctl -u agent-orchestrator -f
+sudoedit /etc/default/adispatchd
+sudo systemctl start adispatchd
+adispatch status --config-dir /etc/adispatchd
+journalctl -u adispatchd -f
 ```
 
-Optionen von `service install`: `--user`/`--group` (Default `agent-orchestrator`), `--create-user`, `--name` (Unit-Name),
+Optionen von `service install`: `--user`/`--group` (Default `adispatchd`), `--create-user`, `--name` (Unit-Name),
 `--node`/`--entry` (absolute Pfade, Default: das laufende Node und diese Installation), `--env-file <pfad|none>`,
 `--drain-timeout` (Default 10m), `--cancel-timeout` (Default 2m), `--unit-dir`, `--now` (sofort starten).
 `service install` verweigert `npx`-Cache-Pfade, relative Pfade, TypeScript-Quellen und `root` als Dienstbenutzer.
@@ -69,11 +69,11 @@ die Unit-Datei – config-dir, data-dir und Benutzer bleiben. Auf macOS lehnen d
 ```ini
 [Service]
 Type=simple
-User=agent-orchestrator
-Group=agent-orchestrator
-ExecStart=/usr/bin/node /usr/lib/node_modules/agent-orchestrator/dist/cli/main.js start --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator --drain-timeout 10m --cancel-timeout 2m
-WorkingDirectory=/var/lib/agent-orchestrator
-EnvironmentFile=-/etc/default/agent-orchestrator
+User=adispatchd
+Group=adispatchd
+ExecStart=/usr/bin/node /usr/lib/node_modules/adispatchd/dist/cli/main.js start --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd --drain-timeout 10m --cancel-timeout 2m
+WorkingDirectory=/var/lib/adispatchd
+EnvironmentFile=-/etc/default/adispatchd
 Environment=NODE_ENV=production
 Restart=on-failure
 RestartSec=5s
@@ -87,7 +87,7 @@ PrivateTmp=true
 ```
 
 `NoNewPrivileges` verhindert `sudo`/setuid in Workern, `PrivateTmp` gibt dem Dienst ein eigenes `/tmp`. Werden weitere
-Härtungen (`ProtectSystem=`, `ReadWritePaths=`) gewünscht, per Drop-in (`systemctl edit agent-orchestrator`) ergänzen –
+Härtungen (`ProtectSystem=`, `ReadWritePaths=`) gewünscht, per Drop-in (`systemctl edit adispatchd`) ergänzen –
 Agent-Skripte brauchen oft Schreibzugriff auf Caches im Home-Verzeichnis. Änderungen direkt in der Unit-Datei überschreibt
 das nächste `service install`.
 
@@ -96,10 +96,10 @@ das nächste `service install`.
 | Ereignis | Verhalten | Exit | systemd |
 |---|---|---|---|
 | `systemctl stop` / `restart` | SIGTERM an den **Hauptprozess** → Drain bis `--drain-timeout`, dann Cancel-All (`on_cancel`) bis `--cancel-timeout`, danach werden Hooks unterbrochen (Recovery setzt sie beim nächsten Start fort) | 0 | gestoppt |
-| zweites SIGTERM (`systemctl kill --kill-whom=main --signal=SIGTERM agent-orchestrator`) | sofort Cancel-All | 0 | gestoppt |
+| zweites SIGTERM (`systemctl kill --kill-whom=main --signal=SIGTERM adispatchd`) | sofort Cancel-All | 0 | gestoppt |
 | drittes Signal | sofortiger Exit (Recovery räumt beim nächsten Start auf) | 1 | – |
-| `agent-orchestrator drain` / UI „Drain“ | keine neuen Runs, aktive laufen zu Ende, dann Ende | 0 | inactive, **kein** Neustart |
-| `agent-orchestrator cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel`, dann Ende | 0 | inactive, **kein** Neustart |
+| `adispatch drain` / UI „Drain“ | keine neuen Runs, aktive laufen zu Ende, dann Ende | 0 | inactive, **kein** Neustart |
+| `adispatch cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel`, dann Ende | 0 | inactive, **kein** Neustart |
 | Konfigurations-/Startfehler (ungültige YAML, Instanz-Lock belegt, DB-Schema neuer als der Code) | Start abgebrochen | 78 (EX_CONFIG) | **kein** Neustart (`RestartPreventExitStatus=78`) – Fehler beheben, dann `systemctl start` |
 | Absturz / Exit ≠ 0 | – | ≠ 0 | Neustart nach 5 s → Recovery |
 | `TimeoutStopSec` abgelaufen | systemd SIGKILLt die ganze cgroup inkl. Worker | – | gestoppt; nächster Start: Runs `crashed` + `on_crash` |
@@ -113,7 +113,7 @@ das nächste `service install`.
   ggf. vor dem SIGKILL (dann räumt erst systemd per cgroup ab) – `service install` und `start` warnen.
 - **`Restart=on-failure`**: Ein absichtlicher Shutdown über UI/CLI endet mit Exit 0 und wird **nicht** als Crash neu gestartet.
 - **Lange Runs:** Ein Agent-Run dauert oft länger als der Drain-Timeout. `systemctl stop` kann einen vollständigen Drain daher
-  nicht garantieren – für geplante Stopps vorher `agent-orchestrator drain --wait` ausführen (beliebig lange, ohne Timeout)
+  nicht garantieren – für geplante Stopps vorher `adispatch drain --wait` ausführen (beliebig lange, ohne Timeout)
   und erst danach `systemctl stop`/Update/Reboot.
 - **Absturz unter systemd:** Stirbt der Hauptprozess, beendet systemd (bei `KillMode=mixed`) auch alle Worker der cgroup per
   SIGKILL. Die Recovery findet beim Neustart die Prozessgruppen daher i. d. R. bereits beendet und finalisiert die Runs als
@@ -124,13 +124,13 @@ das nächste `service install`.
 ## Pause, Drain, Cancel-All
 
 ```bash
-agent-orchestrator status    --config-dir /etc/agent-orchestrator     # Zustand, Limits, Auslastung, Blocks
-agent-orchestrator pause     --config-dir /etc/agent-orchestrator     # keine automatischen Starts (manuelle weiter möglich)
-agent-orchestrator resume    --config-dir /etc/agent-orchestrator
-agent-orchestrator drain     --config-dir /etc/agent-orchestrator --wait [--timeout 2h]
-agent-orchestrator cancel-all --config-dir /etc/agent-orchestrator --reason "maintenance" --wait
-agent-orchestrator config reload --config-dir /etc/agent-orchestrator # atomar; ungültige YAML behält aktive Konfiguration
-agent-orchestrator workflow dry-run coder --config-dir /etc/agent-orchestrator   # gegen die laufende Instanz, sonst lokal
+adispatch status    --config-dir /etc/adispatchd     # Zustand, Limits, Auslastung, Blocks
+adispatch pause     --config-dir /etc/adispatchd     # keine automatischen Starts (manuelle weiter möglich)
+adispatch resume    --config-dir /etc/adispatchd
+adispatch drain     --config-dir /etc/adispatchd --wait [--timeout 2h]
+adispatch cancel-all --config-dir /etc/adispatchd --reason "maintenance" --wait
+adispatch config reload --config-dir /etc/adispatchd # atomar; ungültige YAML behält aktive Konfiguration
+adispatch workflow dry-run coder --config-dir /etc/adispatchd   # gegen die laufende Instanz, sonst lokal
 ```
 
 Die Kommandos sprechen per HTTP mit der laufenden Instanz: `--url http://127.0.0.1:8787` oder – mit `--config-dir` – Host/Port
@@ -139,7 +139,7 @@ aus `config.yaml` (Wildcard-Binds `0.0.0.0`/`::` werden über Loopback angesproc
 meldet das Kommando dann „not readable (permission denied)“ und fällt auf `http://127.0.0.1:8787` zurück. URLs mit
 Zugangsdaten (`user:pass@`) werden abgelehnt (Exit 2) – Proxy-Authentifizierung unterstützt die CLI nicht; auf dem Host
 selbst die lokale URL nutzen. Sie senden den CSRF-Header
-`X-Orchestrator-Request: 1`. Exit-Codes: 0 ok, 1 API-Fehler (z. B. Reload abgelehnt), 2 Aufruffehler, 3 Instanz nicht
+`X-Adispatch-Request: 1`. Exit-Codes: 0 ok, 1 API-Fehler (z. B. Reload abgelehnt), 2 Aufruffehler, 3 Instanz nicht
 erreichbar, 4 `--wait`-Timeout (der Shutdown läuft im Hintergrund weiter). `workflow dry-run` fällt ohne erreichbare Instanz
 auf die lokale Auswertung zurück (`--local` erzwingt sie; mit explizitem `--url` kein Fallback).
 
@@ -148,24 +148,24 @@ auf die lokale Auswertung zurück (`--local` erzwingt sie; mit explizitem `--url
 Updates ersetzen nur den Code; config-dir, data-dir und Env-Datei bleiben unverändert.
 
 ```bash
-agent-orchestrator drain --config-dir /etc/agent-orchestrator --wait    # aktive Runs sauber beenden (ohne Zeitlimit)
-sudo systemctl stop agent-orchestrator                                  # falls noch aktiv (nach Drain bereits beendet)
-sudo cp -a /etc/agent-orchestrator /root/agent-orchestrator-config-$(date +%F)   # optional, config-dir sichern
-sudo npm install -g ./agent-orchestrator-<neue-version>.tgz   # Tarball aus dem Repository-Checkout (npm pack)
-sudo agent-orchestrator config validate --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator
-sudo agent-orchestrator service install --config-dir /etc/agent-orchestrator --data-dir /var/lib/agent-orchestrator   # nur wenn sich Pfade/Optionen ändern
-sudo systemctl start agent-orchestrator
-agent-orchestrator status --config-dir /etc/agent-orchestrator
-journalctl -u agent-orchestrator -n 50      # "database migrated" + Backup-Pfad, "recovery finished"
+adispatch drain --config-dir /etc/adispatchd --wait    # aktive Runs sauber beenden (ohne Zeitlimit)
+sudo systemctl stop adispatchd                                  # falls noch aktiv (nach Drain bereits beendet)
+sudo cp -a /etc/adispatchd /root/adispatchd-config-$(date +%F)   # optional, config-dir sichern
+sudo npm install -g ./adispatchd-<neue-version>.tgz   # Tarball aus dem Repository-Checkout (npm pack)
+sudo adispatch config validate --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
+sudo adispatch service install --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd   # nur wenn sich Pfade/Optionen ändern
+sudo systemctl start adispatchd
+adispatch status --config-dir /etc/adispatchd
+journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recovery finished"
 ```
 
 - **DB-Migrationen** sind versioniert und laufen beim Start automatisch. Existiert die DB und stehen Migrationen aus, wird
   **vorher** eine konsistente Kopie geschrieben: `data-dir/backups/orchestrator-<alte-version>-<zeitstempel>.sqlite`
   (`VACUUM INTO`, auch im WAL-Modus konsistent). Schlägt eine Migration fehl, wird sie zurückgerollt und der Start abgebrochen.
 - Eine DB mit **neuerer** Schemaversion als der Code kennt wird abgelehnt (kein stilles Downgrade).
-- **Rollback:** Dienst stoppen, alte Paketversion installieren, `orchestrator.sqlite`, `orchestrator.sqlite-wal` und
-  `orchestrator.sqlite-shm` beiseitelegen, das passende Backup als `orchestrator.sqlite` zurückkopieren (Eigentümer
-  `agent-orchestrator`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).
+- **Rollback:** Dienst stoppen, alte Paketversion installieren, `adispatchd.sqlite`, `adispatchd.sqlite-wal` und
+  `adispatchd.sqlite-shm` beiseitelegen, das passende Backup als `adispatchd.sqlite` zurückkopieren (Eigentümer
+  `adispatchd`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).
 - Alte Dateien unter `backups/` werden nicht automatisch gelöscht.
 
 ## Backups
@@ -174,19 +174,19 @@ journalctl -u agent-orchestrator -n 50      # "database migrated" + Backup-Pfad,
 |---|---|
 | config-dir | Versionsverwaltung (git) oder Dateikopie; enthält keine Secrets |
 | Env-Datei | sicher (verschlüsselt) aufbewahren – enthält Private Keys |
-| `orchestrator.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/agent-orchestrator/orchestrator.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
+| `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
 | `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal) |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
-**`orchestrator.lock` und `orchestrator.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
-ist eine POSIX-`fcntl`-Sperre auf `orchestrator.lock`; sie gehört dem Orchestrator-Prozess und fällt, sobald *dieser* Prozess
+**`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
+ist eine POSIX-`fcntl`-Sperre auf `adispatchd.lock`; sie gehört dem Orchestrator-Prozess und fällt, sobald *dieser* Prozess
 irgendeinen Deskriptor auf die Datei schließt – deshalb öffnet der Orchestrator sie selbst (auch bei Retention/Backups) nie
 ein zweites Mal. Externe Werkzeuge, die die Datei als SQLite-DB öffnen (`sqlite3`, Backup-Agenten mit SQLite-Support),
 konkurrieren um die Sperre und scheitern bzw. blockieren; eine kopierte Lock-Datei ist wertlos. Beim Sichern ausschließen, z. B.:
 
 ```bash
-rsync -a --exclude 'orchestrator.lock*' --exclude 'orchestrator.sqlite*' /var/lib/agent-orchestrator/ /backup/orch-data/
-sqlite3 /var/lib/agent-orchestrator/orchestrator.sqlite ".backup '/backup/orch-data/orchestrator.sqlite'"
+rsync -a --exclude 'adispatchd.lock*' --exclude 'adispatchd.sqlite*' /var/lib/adispatchd/ /backup/orch-data/
+sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch-data/adispatchd.sqlite'"
 ```
 
 Wiederherstellen nur bei gestopptem Dienst; die Lock-Dateien legt der Orchestrator selbst neu an.
@@ -213,7 +213,7 @@ V1 hat **keine Anmeldung**. Standard ist `server.host: 127.0.0.1`. Bei einem Nic
   Basic-Auth über TLS), VPN oder Tailscale. Der Proxy muss **jede** Anfrage authentifizieren, auch `/api/v1/events` (SSE).
 - Den öffentlichen Namen des Proxys in `server.allowed_hosts` eintragen (DNS-Rebinding-Schutz: jede Anfrage braucht einen
   erlaubten `Host`, ein gesendeter `Origin` muss exakt passen); der Proxy muss den ursprünglichen `Host` weiterreichen.
-- Keine CORS-Header am Proxy hinzufügen; mutierende Requests brauchen `X-Orchestrator-Request: 1` (die UI setzt ihn).
+- Keine CORS-Header am Proxy hinzufügen; mutierende Requests brauchen `X-Adispatch-Request: 1` (die UI setzt ihn).
 
 ```yaml
 # config.yaml
@@ -228,7 +228,7 @@ server {
   listen 443 ssl;
   server_name orchestrator.example.com;
   # ssl_certificate …;
-  auth_basic "agent-orchestrator";                 # oder auth_request an oauth2-proxy
+  auth_basic "Agent Dispatch Daemon";                 # oder auth_request an oauth2-proxy
   auth_basic_user_file /etc/nginx/orchestrator.htpasswd;
   location / {
     proxy_pass http://127.0.0.1:8787;
@@ -244,8 +244,8 @@ Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen i
 
 ## Observability
 
-- `GET /health` (Prozess lebt), `GET /ready` (DB ok, Recovery fertig, Scheduler läuft, kein Shutdown), `agent-orchestrator status`.
-- Dienstlog: JSON-Zeilen auf stderr → `journalctl -u agent-orchestrator` (Secrets werden redigiert).
+- `GET /health` (Prozess lebt), `GET /ready` (DB ok, Recovery fertig, Scheduler läuft, kein Shutdown), `adispatch status`.
+- Dienstlog: JSON-Zeilen auf stderr → `journalctl -u adispatchd` (Secrets werden redigiert).
 - Run-Logs: `data-dir/logs/<run-id>/{stdout,stderr}.log`, Events/Status in SQLite, live per SSE.
 - Aufbewahrung über `retention` in `config.yaml` (Default: erfolgreiche Runs 30 d, fehlgeschlagene 90 d, Block-Runs nie,
   100 MB Log pro Run, Prüfung alle 24 h). Aktive Runs, offene Blocks und unvollständige Aktionsketten werden nie gelöscht.
@@ -259,7 +259,7 @@ Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen i
 | `Configuration … is invalid` | `config validate` zeigt Datei:Zeile: Pfad: Meldung. |
 | „Database schema version … is newer than this build supports“ | data-dir stammt von einer neueren Version → passende Version installieren oder Backup einspielen. |
 | `ExperimentalWarning: SQLite` | Node 22: `node:sqlite` ist experimentell; Node 24 verwenden. |
-| `GITHUB_…_PRIVATE_KEY is not set` | Env-Datei fehlt/unvollständig (`systemctl show agent-orchestrator -p EnvironmentFiles`). |
+| `GITHUB_…_PRIVATE_KEY is not set` | Env-Datei fehlt/unvollständig (`systemctl show adispatchd -p EnvironmentFiles`). |
 
 ## Bekannte Grenzen
 

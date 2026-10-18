@@ -1,5 +1,5 @@
 /**
- * Component `cli` – public API (commands of the `agent-orchestrator` binary).
+ * Component `cli` – public API (commands of the `adispatch` binary).
  */
 export { createProgram, EXIT_NOT_IMPLEMENTED } from './program.js';
 export type {

@@ -15,8 +15,8 @@ export interface TemplateFile {
 }
 
 const CONFIG_YAML = (port: number): string => `# config.yaml – global settings (Spec §5.1). All keys are optional; shown values are the defaults
-# unless noted. Validate after every change:  agent-orchestrator config validate --config-dir <dir>
-# Apply changes to a running instance:          agent-orchestrator config reload --config-dir <dir>
+# unless noted. Validate after every change:  adispatch config validate --config-dir <dir>
+# Apply changes to a running instance:          adispatch config reload --config-dir <dir>
 
 server:
   # The HTTP API/UI has NO authentication (V1). Keep it on loopback. To expose it, put an
@@ -35,7 +35,7 @@ scheduler:
 workspace:
   # One workspace per run under base_dir/<workflow>/<run> (default: <data-dir>/workspaces).
   # Relative paths are relative to this config dir.
-  # base_dir: /var/lib/agent-orchestrator/workspaces
+  # base_dir: /var/lib/adispatchd/workspaces
   cleanup: on_success     # always | on_success | never
 
 lifecycle:
@@ -73,7 +73,7 @@ sources:
 const IDENTITIES_YAML = `# identities.yaml – GitHub App identities, one per role (Spec §5.3).
 # The private key is NEVER stored here: private_key_env names an environment variable that holds
 # the PEM (real line breaks or "\\n" escapes). Under systemd put it into the EnvironmentFile
-# (default /etc/default/agent-orchestrator, mode 0640).
+# (default /etc/default/adispatchd, mode 0640).
 # Minimal app permissions: Issues read/write, Pull requests write (labels/comments on PRs), Metadata read.
 identities:
   maintainer:
@@ -90,7 +90,7 @@ identities:
 
 const HELLO_YAML = `# workflows/hello.yaml – a manual workflow that runs without any external source.
 # Start it in the web UI (Workflows → hello → Start) or via the API:
-#   curl -X POST -H 'X-Orchestrator-Request: 1' -H 'Content-Type: application/json' \\
+#   curl -X POST -H 'X-Adispatch-Request: 1' -H 'Content-Type: application/json' \\
 #        -d '{"parameters":{"name":"Ada"}}' http://127.0.0.1:8787/api/v1/workflows/hello/start
 id: hello
 name: Hello World
@@ -109,7 +109,7 @@ execute:
     max_duration: 10m       # total runtime (default: unlimited)
     idle_timeout: 5m        # time without output (default: unlimited)
 on_success:
-  - type: shell             # lifecycle shell action; gets run + result context (ORCH_CONTEXT_FILE)
+  - type: shell             # lifecycle shell action; gets run + result context (ADISPATCH_CONTEXT_FILE)
     command: scripts/notify.sh
     args: ['{workflow.id}', '{run.id}', '{result.message}']
     timeout: 30s
@@ -225,26 +225,26 @@ sort: { field: updated_at, direction: desc }
 
 const HELLO_SH = `#!/bin/sh
 # Example worker (worker protocol: docs/worker-protocol.md).
-# Input:  ORCH_* environment variables + JSON context file ORCH_CONTEXT_FILE.
-# Output: stdout/stderr (logged), optional "@@ORCH_EVENT {json}" lines, optional result file ORCH_RESULT_FILE.
+# Input:  ADISPATCH_* environment variables + JSON context file ADISPATCH_CONTEXT_FILE.
+# Output: stdout/stderr (logged), optional "@@ADISPATCH_EVENT {json}" lines, optional result file ADISPATCH_RESULT_FILE.
 # Exit code: 0 = technically OK (business result from the result file, default success); != 0 = crashed.
 set -eu
 
 name="\${1:-world}"
-echo '@@ORCH_EVENT {"type":"status","message":"Saying hello"}'
+echo '@@ADISPATCH_EVENT {"type":"status","message":"Saying hello"}'
 echo "Hello, \${name}!"
-echo "run \${ORCH_RUN_ID} of workflow \${ORCH_WORKFLOW_ID} in \${ORCH_WORKSPACE}"
-echo '@@ORCH_EVENT {"type":"progress","value":100}'
+echo "run \${ADISPATCH_RUN_ID} of workflow \${ADISPATCH_WORKFLOW_ID} in \${ADISPATCH_WORKSPACE}"
+echo '@@ADISPATCH_EVENT {"type":"progress","value":100}'
 
 # Write the result atomically (temp file + rename). "failure" would trigger on_failure instead.
-tmp="\${ORCH_RESULT_FILE}.tmp"
+tmp="\${ADISPATCH_RESULT_FILE}.tmp"
 printf '%s\\n' '{"schema_version":1,"result":"success","message":"Said hello"}' > "\${tmp}"
-mv "\${tmp}" "\${ORCH_RESULT_FILE}"
+mv "\${tmp}" "\${ADISPATCH_RESULT_FILE}"
 `;
 
 const NOTIFY_SH = `#!/bin/sh
 # Example lifecycle shell action: receives the rendered args and the run/result context
-# (ORCH_CONTEXT_FILE). Replace with e.g. a Slack webhook call. Exit != 0 = action failed (retried).
+# (ADISPATCH_CONTEXT_FILE). Replace with e.g. a Slack webhook call. Exit != 0 = action failed (retried).
 set -eu
 echo "workflow $1, run $2 finished: $3"
 `;
@@ -253,12 +253,12 @@ const CODER_SH = `#!/bin/sh
 # Example coder wrapper – replace the body with your agent invocation.
 # GH_TOKEN (declared under execute.secrets) authenticates the GitHub CLI as the coder app.
 set -eu
-echo "Working on \${ORCH_SOURCE_URL:-?} (item \${ORCH_SOURCE_ITEM_ID:-?}) in \${ORCH_WORKSPACE}"
-# git clone ... && your-agent --context "\${ORCH_CONTEXT_FILE}"
+echo "Working on \${ADISPATCH_SOURCE_URL:-?} (item \${ADISPATCH_SOURCE_ITEM_ID:-?}) in \${ADISPATCH_WORKSPACE}"
+# git clone ... && your-agent --context "\${ADISPATCH_CONTEXT_FILE}"
 
 # Business failure ("needs maintainer"): write a valid result file and exit 0:
-#   printf '%s\\n' '{"schema_version":1,"result":"failure","message":"Requirements unclear"}' > "\${ORCH_RESULT_FILE}.tmp"
-#   mv "\${ORCH_RESULT_FILE}.tmp" "\${ORCH_RESULT_FILE}"
+#   printf '%s\\n' '{"schema_version":1,"result":"failure","message":"Requirements unclear"}' > "\${ADISPATCH_RESULT_FILE}.tmp"
+#   mv "\${ADISPATCH_RESULT_FILE}.tmp" "\${ADISPATCH_RESULT_FILE}"
 # Any exit code != 0 counts as a technical failure (crashed) and towards the retry block.
 exit 0
 `;

@@ -23,28 +23,28 @@ slow="${TEST_SLOW_SECONDS:-90}"
 labels=""
 if command -v node >/dev/null 2>&1; then
   labels="$(node -e '
-    const c = JSON.parse(require("fs").readFileSync(process.env.ORCH_CONTEXT_FILE, "utf8"));
+    const c = JSON.parse(require("fs").readFileSync(process.env.ADISPATCH_CONTEXT_FILE, "utf8"));
     const l = (c.source && c.source.attributes && c.source.attributes.labels) || [];
     process.stdout.write(l.join("\n"));
   ')"
 else
-  labels="$(grep -o '"test:[a-z-]*"' "${ORCH_CONTEXT_FILE}" | tr -d '"' || true)"
+  labels="$(grep -o '"test:[a-z-]*"' "${ADISPATCH_CONTEXT_FILE}" | tr -d '"' || true)"
 fi
 has() { printf '%s\n' "${labels}" | grep -qx "$1"; }
 
 # Ergebnis atomar schreiben (temporäre Datei im selben Verzeichnis + mv).
 write_result() { # $1 = success|failure, $2 = message
-  tmp="${ORCH_RESULT_FILE}.tmp.$$"
+  tmp="${ADISPATCH_RESULT_FILE}.tmp.$$"
   msg="$(printf '%s' "$2" | sed 's/\\/\\\\/g; s/"/\\"/g')"
   printf '{"schema_version":1,"result":"%s","message":"%s","details":{"repo":"%s","number":"%s"}}\n' \
     "$1" "${msg}" "${repo}" "${number}" > "${tmp}"
-  mv "${tmp}" "${ORCH_RESULT_FILE}"
+  mv "${tmp}" "${ADISPATCH_RESULT_FILE}"
 }
 
-echo "test-worker: run ${ORCH_RUN_ID} workflow ${ORCH_WORKFLOW_ID} item ${repo}#${number}"
+echo "test-worker: run ${ADISPATCH_RUN_ID} workflow ${ADISPATCH_WORKFLOW_ID} item ${repo}#${number}"
 echo "test-worker: labels: $(printf '%s' "${labels}" | tr '\n' ' ')"
-echo "test-worker: workspace ${ORCH_WORKSPACE}"
-echo '@@ORCH_EVENT {"type":"status","message":"test-worker gestartet"}'
+echo "test-worker: workspace ${ADISPATCH_WORKSPACE}"
+echo '@@ADISPATCH_EVENT {"type":"status","message":"test-worker gestartet"}'
 
 if has test:token; then
   code="$(curl -s -o /dev/null -w '%{http_code}' \
@@ -68,7 +68,7 @@ fi
 if has test:slow; then
   elapsed=0
   while [ "${elapsed}" -lt "${slow}" ]; do
-    printf '@@ORCH_EVENT {"type":"progress","value":%s}\n' "$((elapsed * 100 / slow))"
+    printf '@@ADISPATCH_EVENT {"type":"progress","value":%s}\n' "$((elapsed * 100 / slow))"
     echo "test-worker: working ${elapsed}/${slow}s"
     sleep 10
     elapsed=$((elapsed + 10))
@@ -82,19 +82,19 @@ if has test:crash; then
 fi
 
 if has test:invalid-result; then
-  tmp="${ORCH_RESULT_FILE}.tmp.$$"
+  tmp="${ADISPATCH_RESULT_FILE}.tmp.$$"
   printf '%s\n' '{"schema_version":1,"result":"maybe"}' > "${tmp}"
-  mv "${tmp}" "${ORCH_RESULT_FILE}"
+  mv "${tmp}" "${ADISPATCH_RESULT_FILE}"
   echo "test-worker: wrote invalid result file"
   exit 0
 fi
 
 if has test:failure; then
   write_result failure "Simulierter fachlicher Fehler fuer ${repo}#${number}"
-  echo '@@ORCH_EVENT {"type":"question","message":"Anforderungen unklar (simuliert)"}'
+  echo '@@ADISPATCH_EVENT {"type":"question","message":"Anforderungen unklar (simuliert)"}'
   exit 0
 fi
 
 write_result success "Simulierter Erfolg fuer ${repo}#${number}"
-echo '@@ORCH_EVENT {"type":"progress","value":100}'
+echo '@@ADISPATCH_EVENT {"type":"progress","value":100}'
 exit 0

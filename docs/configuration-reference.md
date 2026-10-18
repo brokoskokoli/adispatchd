@@ -43,7 +43,7 @@ config-dir/
   scripts/…            frei; Skripte werden über Pfade referenziert (siehe §2.4)
 ```
 
-`agent-orchestrator init --config-dir D --data-dir D` legt eine kommentierte, gültige Beispielkonfiguration an
+`adispatch init --config-dir D --data-dir D` legt eine kommentierte, gültige Beispielkonfiguration an
 (`src/cli/init-templates.ts`): `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/hello.yaml`
 (manuell, aktiv), `workflows/coder.yaml` und `workflows/nightly-maintenance.yaml` (beide `enabled: false`),
 `views/needs-maintainer.yaml` und Beispielskripte unter `scripts/`. `init` überschreibt nie bestehende Dateien.
@@ -99,7 +99,7 @@ Exit-Code: 0 = gültig (ggf. mit Warnungen), 1 = ungültig.
 
 ### 1.5 Wann Änderungen wirken
 
-Konfigurationsänderungen wirken **nur** durch einen manuellen Reload (`agent-orchestrator config reload`,
+Konfigurationsänderungen wirken **nur** durch einen manuellen Reload (`adispatch config reload`,
 `POST /api/v1/config/reload`, UI „Reload“) oder einen Neustart. Es gibt keine Dateiüberwachung.
 
 - **Atomar:** Der Reload lädt alles neu. Nur wenn **kein Fehler** auftritt, wird die neue Konfiguration aktiv;
@@ -171,7 +171,7 @@ Syntax: `<zahl>[ ]<einheit>`, Einheit ohne Beachtung der Groß-/Kleinschreibung:
 | Konfigurations-ID | `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$` – Buchstaben, Ziffern, `_`, `-`; beginnt mit Buchstabe/Ziffer; 1–64 Zeichen; Groß-/Kleinschreibung zählt | Workflow-`id`, View-`id`, Source- und Identity-Schlüssel, Action-`id`, Kanal-`id`, alle Referenzen darauf |
 | Parametername | `^[A-Za-z_][A-Za-z0-9_-]*$` | Schlüssel unter `parameters`, `{parameters.<name>}` |
 | Env-Variablenname | `^[A-Za-z_][A-Za-z0-9_]*$` | Schlüssel in `env`/`secrets`, `private_key_env`, `url_env`, Werte in `headers_env` |
-| Präfix `ORCH_` | in `env`/`secrets` verboten (Groß-/Kleinschreibung egal) | reserviert für das Worker-Protokoll |
+| Präfix `ADISPATCH_` | in `env`/`secrets` verboten (Groß-/Kleinschreibung egal) | reserviert für das Worker-Protokoll |
 | HTTP-Header-Name | `^[A-Za-z0-9-]+$` | Schlüssel in `headers_env` |
 
 Source-IDs sind Teil des globalen Item-Schlüssels `<source-id>:<item-id>` (z. B. `project_a:123`), der für Locks,
@@ -266,7 +266,7 @@ Retry-Blocks. Gelöscht werden DB-Zeilen, `runs/<id>/`, `logs/<id>/` und der Wor
 | `on` | Liste Enum | nein | `notifications.on` | Ereignisse für diesen Kanal. Wirksam ist nur die Schnittmenge mit `notifications.on`. |
 
 Zustellung: `POST` mit `content-type: application/json`, Body
-`{"source":"agent-orchestrator","id":…,"event":"…","createdAt":"…","text":"[agent-orchestrator] …","payload":{…}}`
+`{"source":"adispatchd","id":…,"event":"…","createdAt":"…","text":"[adispatchd] …","payload":{…}}`
 (Slack-kompatibles `text`), Timeout 10 s, keine Redirects. 2xx = Erfolg; 408/429/5xx/Netzfehler werden bis zu
 6-mal versucht (Pausen 5 s, 30 s, 2 min, 10 min, 30 min); andere Status sind endgültig. Ereignisse:
 `retry_block_created` (Retry-Block entstanden), `lifecycle_action_failed` (Action endgültig gescheitert und
@@ -285,7 +285,7 @@ scheduler:
   polling_interval: 30s
   max_concurrent: 5
 workspace:
-  base_dir: /var/lib/agent-orchestrator/workspaces   # Default: <data-dir>/workspaces
+  base_dir: /var/lib/adispatchd/workspaces   # Default: <data-dir>/workspaces
   cleanup: on_success                                # always | on_success | never
 lifecycle:
   action_retry:
@@ -363,7 +363,7 @@ identities:
 | `<id>.private_key_env` | Env-Name | ja | `^[A-Za-z_][A-Za-z0-9_]*$` | Name der Umgebungsvariable mit dem privaten Schlüssel |
 
 **Secrets über die Umgebung:** Der Schlüssel steht nie in YAML. Die Variable muss in der Umgebung des
-Orchestrator-Prozesses gesetzt sein (unter systemd: `EnvironmentFile`, Default `/etc/default/agent-orchestrator`,
+Orchestrator-Prozesses gesetzt sein (unter systemd: `EnvironmentFile`, Default `/etc/default/adispatchd`,
 siehe [operations.md](operations.md)). Format des Werts: **RSA**-Private-Key im PEM-Format
 (`-----BEGIN RSA PRIVATE KEY-----` bzw. PKCS#8 `-----BEGIN PRIVATE KEY-----`); akzeptiert werden echte
 Zeilenumbrüche, wörtliche `\n`-Escapes (typisch in Env-Dateien), CRLF sowie umschließende `"…"`/`'…'`.
@@ -402,7 +402,7 @@ filter:                          # deklarativ, nur bei trigger.type: source
         - { field: labels, operator: contains, value: ignore-dependencies }
 
 shell_filter:                    # nur Source-Workflows; ein Programm ohne Argumente
-  command: scripts/filter.sh     # bekommt ORCH_CHECK_CONTEXT_FILE; Exit 0/1/≥2
+  command: scripts/filter.sh     # bekommt ADISPATCH_CHECK_CONTEXT_FILE; Exit 0/1/≥2
   timeout: 30s
 
 item_priority:
@@ -521,7 +521,7 @@ Source (beachte §4.5: standardmäßig nur offene Issues/PRs).
 
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
-| `command` | String | ja | | Programm (§2.4). **Keine `args`** – das Item kommt über `ORCH_CHECK_CONTEXT_FILE`. |
+| `command` | String | ja | | Programm (§2.4). **Keine `args`** – das Item kommt über `ADISPATCH_CHECK_CONTEXT_FILE`. |
 | `timeout` | Dauer | nein | `30s` | > 0; danach `unknown` |
 
 Exit `0` = passt, `1` = passt nicht, `≥ 2`/Signal/Timeout/Startfehler = `unknown` (kein Start). Nie gecacht, nie im
@@ -587,10 +587,10 @@ Regeln der Konfigurationsprüfung:
 | `type` | `shell` | ja | | einziger Executor in V1 | |
 | `command` | String | ja | | §2.4 | Worker-Programm |
 | `args` | Liste String | nein | `[]` | Templates, Modus `text` | Argumente |
-| `working_directory` | String | nein | `{workspace.base_dir}/{workflow.id}/{run.id}` | Modus `path`; beginnt mit `/` oder `{workspace.base_dir}` | Arbeitsverzeichnis = Workspace (`ORCH_WORKSPACE`) |
+| `working_directory` | String | nein | `{workspace.base_dir}/{workflow.id}/{run.id}` | Modus `path`; beginnt mit `/` oder `{workspace.base_dir}` | Arbeitsverzeichnis = Workspace (`ADISPATCH_WORKSPACE`) |
 | `create_directory` | Boolean | nein | `true` | | Verzeichnis anlegen; bei `false` muss es existieren (sonst `start_error`) |
-| `env` | Map Name → String/Zahl/Boolean | nein | `{}` | Templates; kein `ORCH_`-Präfix | zusätzliche Umgebungsvariablen |
-| `secrets` | Map Name → `{ identity: <id> }` | nein | `{}` | Identity muss existieren; Name nicht zugleich in `env`; kein `ORCH_` | Installation-Token der Identity als Env-Variable (nur im Speicher) |
+| `env` | Map Name → String/Zahl/Boolean | nein | `{}` | Templates; kein `ADISPATCH_`-Präfix | zusätzliche Umgebungsvariablen |
+| `secrets` | Map Name → `{ identity: <id> }` | nein | `{}` | Identity muss existieren; Name nicht zugleich in `env`; kein `ADISPATCH_` | Installation-Token der Identity als Env-Variable (nur im Speicher) |
 | `timeout.max_duration` | Dauer | nein | unbegrenzt | > 0 | Gesamtlaufzeit → `timed_out` |
 | `timeout.idle_timeout` | Dauer | nein | unbegrenzt | > 0 | Zeit ohne Ausgabe auf stdout/stderr → `timed_out` (Warnung, wenn > `max_duration`) |
 | `cancel_grace` | Dauer | nein | `30s` | | Wartezeit zwischen `SIGTERM` und `SIGKILL` an die Prozessgruppe bei Cancel/Timeout |
@@ -656,7 +656,7 @@ entfernt (Vergleich ohne Groß-/Kleinschreibung) → idempotent. Schreib-Identit
 |---|---|---|---|---|
 | `command` | String | ja | | §2.4 |
 | `args` | Liste String | nein | `[]` | Templates |
-| `env` | Map | nein | `{}` | Templates, kein `ORCH_`-Präfix |
+| `env` | Map | nein | `{}` | Templates, kein `ADISPATCH_`-Präfix |
 | `timeout` | Dauer | nein | `5m` | Laufzeitlimit pro Versuch (> 0) |
 
 Erfolg = Exit 0; alles andere (Exit ≠ 0, Signal, Timeout, Startfehler) = gescheiterter, wiederholbarer Versuch.
@@ -708,9 +708,9 @@ ein Konfigurationsfehler (§4.3).
 ### 3.6 Bekannte Grenzen (V1)
 
 - `shell_filter` hat nur `command` und `timeout`: **keine `args`**, kein `env`. Das Item kommt ausschließlich über
-  `ORCH_CHECK_CONTEXT_FILE`; Parameter für das Skript über einen Wrapper bzw. die Kontextdatei.
+  `ADISPATCH_CHECK_CONTEXT_FILE`; Parameter für das Skript über einen Wrapper bzw. die Kontextdatei.
 - Conditions (`conditions.workflow`, `conditions.item`) haben `args`, aber **kein `env`**; die Umgebung ist die
-  Minimalumgebung plus `ORCH_CHECK_CONTEXT_FILE` (§6.11).
+  Minimalumgebung plus `ADISPATCH_CHECK_CONTEXT_FILE` (§6.11).
 - `shell`-Actions: Frist zwischen `SIGTERM` und `SIGKILL` fest **5 s**, Log-Limit fest **10 MiB** pro Versuch –
   nicht konfigurierbar (`execute.cancel_grace` und `retention.max_log_size_per_run` gelten nur für den Haupt-Worker).
 - Prüfskripte (Conditions, `shell_filter`): Ausgabe wird bis 16 KiB je Stream erfasst, SIGTERM→SIGKILL nach 2 s.
@@ -869,7 +869,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `run.last_status` | string | technischer Status (`running`, `completed`, `crashed`, …) |
 | `run.last_result` | string | fachliches Ergebnis `success`/`failure` (sonst `null`) |
 | `run.last_result.message` | string | `message` der Ergebnisdatei |
-| `run.last_status_message` | string | letzte Status-Meldung des Workers (`@@ORCH_EVENT` `status`) |
+| `run.last_status_message` | string | letzte Status-Meldung des Workers (`@@ADISPATCH_EVENT` `status`) |
 | `run.last_started_at` | date | Start |
 | `run.last_finished_at` | date | Ende |
 
@@ -1058,7 +1058,7 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
   `on_start`, wenn der Run nicht mehr `starting` ist) und `POST /api/v1/actions/:id/skip` (failed/pending →
   `skipped`, Kette läuft weiter). Der Haupt-Worker wird nie neu gestartet; erfolgreiche Actions laufen nie erneut.
 - **Idempotenz:** `source.update` liest vor dem Schreiben neu und ändert nur, was fehlt. `source.comment` hängt als
-  letzte Zeile `<!-- orch:<run-id>:<journal-action-id> -->` an; vor jeder Wiederholung (und nach Neustart) wird ein
+  letzte Zeile `<!-- adispatchd:<run-id>:<journal-action-id> -->` an; vor jeder Wiederholung (und nach Neustart) wird ein
   Kommentar mit diesem Marker gesucht, der von der eigenen App stammt → kein Duplikat. `<!--` im gerenderten Text
   wird zu `&lt;!--`.
 - **Neustart:** unterbrochene `source.*`-Actions werden fortgesetzt; eine unterbrochene `shell`-Action wird
@@ -1080,10 +1080,10 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
 |---|---|---|---|
 | Basis | `PATH`, `HOME`, `LANG`, `TZ`, `USER`, `LOGNAME`, `TMPDIR` aus der Controller-Umgebung (PATH-Fallback `/usr/local/bin:/usr/bin:/bin`) | wie Worker | dieselben Variablen (ohne PATH-Fallback) |
 | Konfiguriert | `execute.env`, dann `execute.secrets` | Action-`env` | – |
-| Orchestrator | `ORCH_RUN_ID`, `ORCH_WORKFLOW_ID`, `ORCH_CONTEXT_FILE`, `ORCH_RESULT_FILE`, `ORCH_WORKSPACE`; bei Item zusätzlich `ORCH_SOURCE_TYPE`, `ORCH_SOURCE_ID`, `ORCH_SOURCE_ITEM_ID`, `ORCH_SOURCE_URL` | dieselben (`ORCH_WORKSPACE` = Arbeitsverzeichnis der Action; Kontext `kind: lifecycle_action` mit Hook, Action, `result`) | `ORCH_CHECK_CONTEXT_FILE` (JSON: `kind`, `workflow.id`, bei Item `source{id,type,item_id,item_key,url,item_type,created_at,attributes}`) |
+| Orchestrator | `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`, `ADISPATCH_CONTEXT_FILE`, `ADISPATCH_RESULT_FILE`, `ADISPATCH_WORKSPACE`; bei Item zusätzlich `ADISPATCH_SOURCE_TYPE`, `ADISPATCH_SOURCE_ID`, `ADISPATCH_SOURCE_ITEM_ID`, `ADISPATCH_SOURCE_URL` | dieselben (`ADISPATCH_WORKSPACE` = Arbeitsverzeichnis der Action; Kontext `kind: lifecycle_action` mit Hook, Action, `result`) | `ADISPATCH_CHECK_CONTEXT_FILE` (JSON: `kind`, `workflow.id`, bei Item `source{id,type,item_id,item_key,url,item_type,created_at,attributes}`) |
 | Arbeitsverzeichnis | Workspace | Workspace, falls vorhanden, sonst Versuchsverzeichnis | temporäres Verzeichnis |
 
-Vorrang (spätere gewinnen): Basis < `env` < `secrets` < `ORCH_*`. Die übrige Controller-Umgebung wird **nie**
+Vorrang (spätere gewinnen): Basis < `env` < `secrets` < `ADISPATCH_*`. Die übrige Controller-Umgebung wird **nie**
 vererbt. Details zu Kontextdatei, Ergebnisdatei, Events und Cancel: [worker-protocol.md](worker-protocol.md).
 
 ### 6.12 Workspace-Cleanup
@@ -1094,7 +1094,7 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 
 ### 6.13 Dry-Run
 
-`agent-orchestrator workflow dry-run <id>` (gegen die laufende Instanz, sonst mit `--config-dir` lokal) bzw.
+`adispatch workflow dry-run <id>` (gegen die laufende Instanz, sonst mit `--config-dir` lokal) bzw.
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
@@ -1345,7 +1345,7 @@ on_success:
     args: ['Deploy {parameters.version} nach {parameters.environment}: {result.message}']
 ```
 
-Start: `curl -X POST -H 'X-Orchestrator-Request: 1' -H 'Content-Type: application/json'
+Start: `curl -X POST -H 'X-Adispatch-Request: 1' -H 'Content-Type: application/json'
 -d '{"parameters":{"environment":"staging","version":"1.4.2"}}' http://127.0.0.1:8787/api/v1/workflows/deploy/start`.
 
 ### 7.6 Notifications per Webhook
@@ -1368,7 +1368,7 @@ notifications:
       on: [recovery_failed]               # nur dieses Ereignis
 ```
 
-Umgebung (z. B. `/etc/default/agent-orchestrator`): `SLACK_WEBHOOK_URL=https://hooks.slack.com/services/…`,
+Umgebung (z. B. `/etc/default/adispatchd`): `SLACK_WEBHOOK_URL=https://hooks.slack.com/services/…`,
 `OPS_WEBHOOK_AUTH=Bearer …`. Danach **Neustart** (Env-Änderung) bzw. `config reload` (nur YAML-Änderung).
 
 ---
@@ -1547,7 +1547,7 @@ execute: { type: shell, command: scripts/nightly.sh }
 # example: err-env
 # extends: github
 # invalid
-# expect: workflows/coder.yaml: execute.env.ORCH_MODE: Environment variables with prefix "ORCH_" are reserved
+# expect: workflows/coder.yaml: execute.env.ADISPATCH_MODE: Environment variables with prefix "ADISPATCH_" are reserved
 # expect: workflows/coder.yaml: execute.secrets.GH_TOKEN: "GH_TOKEN" is defined both in "env" and "secrets"
 # file: workflows/coder.yaml
 id: coder
@@ -1555,7 +1555,7 @@ trigger: { type: source, source: project_a }
 execute:
   type: shell
   command: scripts/coder.sh
-  env: { ORCH_MODE: fast, GH_TOKEN: '' }
+  env: { ADISPATCH_MODE: fast, GH_TOKEN: '' }
   secrets: { GH_TOKEN: { identity: coder } }
 ```
 
@@ -1776,10 +1776,10 @@ nicht existierende/nicht ausführbare Skripte, fehlende App-Rechte (→ Felder u
 6. **Hooks:** Label-Übergänge für jeden Ausgang (`on_start`, `on_success`, `on_failure`, `on_crash`,
    `on_start_error`, `on_timeout`, `on_cancel`) so wählen, dass das Item nicht hängen bleibt und nicht sofort wieder
    matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab).
-7. **Validieren:** `agent-orchestrator config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
-8. **Trockenlauf:** `agent-orchestrator workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
+7. **Validieren:** `adispatch config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
+8. **Trockenlauf:** `adispatch workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
    (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität.
-9. **Aktivieren:** `enabled: true` setzen und `agent-orchestrator config reload --config-dir <dir>` (bei Fehlern
+9. **Aktivieren:** `enabled: true` setzen und `adispatch config reload --config-dir <dir>` (bei Fehlern
    bleibt die alte Konfiguration aktiv). Alternativ zuerst ein manueller Start über die UI.
 10. **Beobachten:** erster Run in der UI (Status, Logs, Lifecycle-Journal), ggf. `max_concurrent` per Override
     anpassen und danach in YAML übernehmen (Overrides gehen beim Neustart verloren).

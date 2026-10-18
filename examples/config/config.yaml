@@ -11,7 +11,7 @@ scheduler:
   max_concurrent: 5
 
 workspace:
-  base_dir: /var/lib/agent-orchestrator/workspaces
+  base_dir: /var/lib/adispatchd/workspaces
   cleanup: on_success  # always | on_success | never
 
 lifecycle:

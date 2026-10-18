@@ -229,7 +229,7 @@ describe('Scheduler – planning step (Spec §7)', () => {
   it('applies the shell filter and item conditions per candidate', async () => {
     s.env.github.createIssue(REPO, { number: 8, labels: ['ready-for-coding'] });
     s.env.github.createIssue(REPO, { number: 9, labels: ['ready-for-coding'] });
-    const sf = s.env.script('sf.sh', `grep -q '"item_id":"8"' "$ORCH_CHECK_CONTEXT_FILE" && exit 1\nexit 0`);
+    const sf = s.env.script('sf.sh', `grep -q '"item_id":"8"' "$ADISPATCH_CHECK_CONTEXT_FILE" && exit 1\nexit 0`);
     const ic = s.env.script('ic.sh', `[ "$1" = "9" ] && exit 1\nexit 0`);
     s.workflow(
       'coder',
@@ -421,7 +421,7 @@ parameters:
   dry: { type: boolean, default: false }
 execute:
   type: shell
-  command: ${s.env.script('deploy.sh', `echo "$ORCH_CONTEXT_FILE" > /dev/null\nexit 0`)}
+  command: ${s.env.script('deploy.sh', `echo "$ADISPATCH_CONTEXT_FILE" > /dev/null\nexit 0`)}
 `,
     );
     const b = await s.build();

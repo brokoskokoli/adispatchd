@@ -115,9 +115,9 @@ export function sanitizeSegment(value: string): string {
 export interface RunPaths {
   /** `runs/<run-id>/` */
   runDir: string;
-  /** `runs/<run-id>/context.json` (`ORCH_CONTEXT_FILE`) */
+  /** `runs/<run-id>/context.json` (`ADISPATCH_CONTEXT_FILE`) */
   contextFile: string;
-  /** `runs/<run-id>/result.json` (`ORCH_RESULT_FILE`) */
+  /** `runs/<run-id>/result.json` (`ADISPATCH_RESULT_FILE`) */
   resultFile: string;
   /** `logs/<run-id>/` */
   logDir: string;
@@ -130,7 +130,7 @@ export interface RunPaths {
 /** Canonical `data-dir` layout (Spec §4). All paths are absolute. */
 export interface DataPaths {
   dataDir: string;
-  /** `orchestrator.sqlite` */
+  /** `adispatchd.sqlite` */
   database: string;
   /** Instance lock file next to the database. */
   instanceLock: string;
@@ -153,8 +153,8 @@ export function dataPaths(dataDir: string): DataPaths {
   const runsDir = path.join(root, 'runs');
   return {
     dataDir: root,
-    database: path.join(root, 'orchestrator.sqlite'),
-    instanceLock: path.join(root, 'orchestrator.lock'),
+    database: path.join(root, 'adispatchd.sqlite'),
+    instanceLock: path.join(root, 'adispatchd.lock'),
     logsDir,
     runsDir,
     defaultWorkspacesDir: path.join(root, 'workspaces'),

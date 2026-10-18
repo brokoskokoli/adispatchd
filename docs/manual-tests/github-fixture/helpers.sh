@@ -1,14 +1,14 @@
 # Shell-Helfer für docs/manual-tests/github.md – NICHT vom Orchestrator ausgeführt, sondern in der eigenen
 # Shell geladen (bash oder zsh), im Repo-Root:
 #
-#   export ORCH_TEST_OWNER=<account-oder-org>
+#   export ADISPATCH_TEST_OWNER=<account-oder-org>
 #   source docs/manual-tests/github-fixture/helpers.sh
 #
 # Benötigt: gh (angemeldet als Maintainer-Mensch, Zugriff auf alle drei Test-Repos), curl, jq, openssl, npx.
 
-: "${ORCH_TEST_OWNER:?ORCH_TEST_OWNER setzen (GitHub-Account oder Org der Test-Repos)}"
-export ORCH_CFG="${ORCH_CFG:-$PWD/tmp/orch-cfg}"
-export ORCH_DATA="${ORCH_DATA:-$PWD/tmp/orch-data}"
+: "${ADISPATCH_TEST_OWNER:?ADISPATCH_TEST_OWNER setzen (GitHub-Account oder Org der Test-Repos)}"
+export ADISPATCH_CFG="${ADISPATCH_CFG:-$PWD/tmp/orch-cfg}"
+export ADISPATCH_DATA="${ADISPATCH_DATA:-$PWD/tmp/orch-data}"
 export API="${API:-http://127.0.0.1:8791/api/v1}"
 export GH_API_VERSION="${GH_API_VERSION:-2026-03-10}"   # = GITHUB_API_VERSION in src/sources/github/http.ts
 
@@ -18,7 +18,7 @@ api() { curl -sS "$API$1"; }                                               # GET
 post() {                                                                   # POST mit CSRF-Header
   local body="${2:-}"
   [ -n "$body" ] || body='{}'
-  curl -sS -X POST -H 'X-Orchestrator-Request: 1' -H 'Content-Type: application/json' -d "$body" "$API$1"
+  curl -sS -X POST -H 'X-Adispatch-Request: 1' -H 'Content-Type: application/json' -d "$body" "$API$1"
 }
 runs() {                                                                   # runs <workflow> [limit]
   api "/runs?workflow=$1&limit=${2:-10}" |
@@ -41,14 +41,14 @@ view() {                                                                   # vie
 }
 
 # --- GitHub (als Mensch über gh) ---------------------------------------------------------------------------
-repo() { printf '%s/%s' "$ORCH_TEST_OWNER" "$1"; }                         # repo orch-test-a → owner/orch-test-a
+repo() { printf '%s/%s' "$ADISPATCH_TEST_OWNER" "$1"; }                         # repo orch-test-a → owner/orch-test-a
 issue_url() { printf 'https://github.com/%s/issues/%s' "$(repo "$1")" "$2"; }
 mkissue() {                                                                # mkissue <repo> <titel> [label ...] → Nummer
   local r="$1" title="$2" l
   shift 2
   local args=()
   for l in "$@"; do args+=(--label "$l"); done
-  gh issue create -R "$(repo "$r")" --title "$title" --body "agent-orchestrator manual test: $title" "${args[@]}" | sed 's#.*/##'
+  gh issue create -R "$(repo "$r")" --title "$title" --body "adispatchd manual test: $title" "${args[@]}" | sed 's#.*/##'
 }
 blockedby() {                                                              # blockedby <repo> <nr> <blocker-repo> <blocker-nr>
   gh issue edit "$2" -R "$(repo "$1")" --add-blocked-by "$(issue_url "$3" "$4")"

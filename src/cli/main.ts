@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Executable entry point of the `agent-orchestrator` binary. */
+/** Executable entry point of the `adispatch` binary. */
 import { createConfigValidateHandler } from './config-validate.js';
 import { createConfigReloadHandler, createSchedulerHandler, createShutdownHandler, createStatusHandler } from './control.js';
 import { createInitHandler } from './init.js';

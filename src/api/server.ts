@@ -4,7 +4,7 @@
  *
  * Security (Spec §15, §20): no built-in authentication – bind to loopback
  * (default) or run behind an authenticating proxy/VPN. Mutating requests
- * (POST/PATCH/PUT/DELETE) require the header `X-Orchestrator-Request: 1`,
+ * (POST/PATCH/PUT/DELETE) require the header `X-Adispatch-Request: 1`,
  * a JSON body (or none), and – if the browser sends an `Origin` – an origin
  * matching the `Host` (or an allowed origin); cross-site fetches
  * (`Sec-Fetch-Site: cross-site`) are refused. No CORS headers are ever sent,
@@ -46,7 +46,7 @@ import { runDetailFields, toBlockView, toRunSummary, toWorkflowView, type Action
 import type { EventHub } from './sse.js';
 
 /** Header that every mutating request must carry (CSRF protection). */
-export const CSRF_HEADER = 'x-orchestrator-request';
+export const CSRF_HEADER = 'x-adispatch-request';
 /** Max size of `context.json`/`result.json` returned in run details. */
 const MAX_JSON_FILE_BYTES = 1024 * 1024;
 /** Max events embedded in the run detail (more via `/runs/:id/events`). */
@@ -286,7 +286,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     if (req.method === 'GET' || req.method === 'HEAD') return;
     if (req.method === 'OPTIONS') throw new ApiError(405, 'method_not_allowed', 'CORS preflight is not supported');
     if (req.headers[CSRF_HEADER] !== '1') {
-      throw new ApiError(403, 'csrf_header_missing', `Mutating requests require the header "X-Orchestrator-Request: 1"`);
+      throw new ApiError(403, 'csrf_header_missing', `Mutating requests require the header "X-Adispatch-Request: 1"`);
     }
     if (req.headers['sec-fetch-site'] === 'cross-site') {
       throw new ApiError(403, 'cross_site_request', 'Cross-site requests are not allowed');
