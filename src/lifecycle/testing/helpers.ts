@@ -1,11 +1,12 @@
 /**
  * Test helpers for lifecycle tests (excluded from the build).
  */
-import { FakeClock, type Notifier, type NotificationEventType, type SourceAdapter } from '../../core/index.js';
+import { FakeClock, type CredentialProvider, type Notifier, type NotificationEventType, type SourceAdapter } from '../../core/index.js';
 import { BASE_FILES, createTempConfigDir } from '../../config/testing/fixtures.js';
 import { formatConfigIssue, loadConfig, snapshotWorkflow, type WorkflowSnapshot } from '../../config/index.js';
 import { openTestPersistence } from '../../persistence/testing/helpers.js';
 import type { Persistence, RunRecord } from '../../persistence/index.js';
+import type { GitHubSourceProjectConfig } from '../../sources/index.js';
 import { FakeGitHub, createFakeGitHubSource, staticCredentials } from '../../sources/github/testing/index.js';
 import { LifecycleEngine, type LifecycleEngineOptions } from '../engine.js';
 
@@ -14,9 +15,12 @@ export const ISSUE = 7;
 export const ITEM_KEY = `repo_a:${ISSUE}`;
 export const ITEM_URL = `https://github.com/${REPO}/issues/${ISSUE}`;
 
-/** Load a workflow YAML (id `wf`, source `repo_a` unless the YAML says otherwise) and snapshot it. */
-export async function loadSnapshot(workflowYaml: string, workflowId = 'wf'): Promise<WorkflowSnapshot> {
-  const cfg = await createTempConfigDir({ ...BASE_FILES, [`workflows/${workflowId}.yaml`]: workflowYaml });
+/**
+ * Load a workflow YAML (id `wf`, source `repo_a` unless the YAML says
+ * otherwise) and snapshot it; `files` overrides base files (e.g. `sources.yaml`).
+ */
+export async function loadSnapshot(workflowYaml: string, workflowId = 'wf', files: Record<string, string> = {}): Promise<WorkflowSnapshot> {
+  const cfg = await createTempConfigDir({ ...BASE_FILES, ...files, [`workflows/${workflowId}.yaml`]: workflowYaml });
   try {
     const loaded = await loadConfig(cfg.dir, { dataDir: cfg.dataDir });
     if (!loaded.ok) throw new Error(`invalid test config:\n${loaded.errors.map(formatConfigIssue).join('\n')}`);
@@ -39,7 +43,7 @@ export interface LifecycleTestEnv {
   dataDir: string;
   github: FakeGitHub;
   adapter: SourceAdapter;
-  credentials: ReturnType<typeof staticCredentials>;
+  credentials: CredentialProvider & { calls: string[] };
   notifications: RecordedNotification[];
   notifier: Notifier;
   /** Engine over the shared DB (a second call simulates a restarted controller). */
@@ -51,11 +55,19 @@ export interface LifecycleTestEnv {
   cleanup(): void;
 }
 
-export function createEnv(): LifecycleTestEnv {
+/** Options of {@link createEnv}. */
+export interface LifecycleTestEnvOptions {
+  /** GitHub project of source `repo_a` (WI-16). */
+  project?: GitHubSourceProjectConfig;
+  /** Credentials of the adapter; default {@link staticCredentials}. */
+  credentials?: CredentialProvider & { calls: string[] };
+}
+
+export function createEnv(options: LifecycleTestEnvOptions = {}): LifecycleTestEnv {
   const { p, clock, dir, cleanup } = openTestPersistence();
   const github = new FakeGitHub({ clock });
   github.createIssue(REPO, { number: ISSUE, title: 'Implement OAuth', labels: ['coding', 'manual-label'] });
-  const credentials = staticCredentials();
+  const credentials = options.credentials ?? staticCredentials();
   const adapter = createFakeGitHubSource(github, {
     sourceId: 'repo_a',
     owner: 'example',
@@ -63,6 +75,7 @@ export function createEnv(): LifecycleTestEnv {
     identity: 'maintainer',
     credentials,
     clock,
+    ...(options.project ? { project: options.project } : {}),
   });
   const notifications: RecordedNotification[] = [];
   const notifier: Notifier = { notify: (type, payload) => notifications.push({ type, payload }) };
