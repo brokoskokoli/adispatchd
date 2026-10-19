@@ -31,7 +31,8 @@ function key(value: unknown, type: string): number | string {
     if (!Number.isNaN(t)) return t;
   }
   if (typeof value === 'boolean') return value ? 1 : 0;
-  if (Array.isArray(value)) return value.map((v) => String(v)).join(', ');
+  // object[] (e.g. closing_prs) sorts by its display text (`#12 open, …`), never by "[object Object]".
+  if (Array.isArray(value)) return value.map((v) => (typeof v === 'object' && v !== null ? objectText(v) : String(v))).join(', ');
   if (value !== null && typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }

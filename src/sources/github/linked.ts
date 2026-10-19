@@ -55,7 +55,7 @@ export const LINKED_QUERY = `query($owner: String!, $name: String!, $number: Int
           nodes { number state isDraft merged headRefName url isCrossRepository repository { nameWithOwner } }
         }
       }
-      ... on PullRequest { number state isDraft merged headRefName url }
+      ... on PullRequest { number state isDraft merged headRefName url isCrossRepository }
     }
   }
 }`;
@@ -85,12 +85,19 @@ export class GitHubLinkedReader {
 
   constructor(
     private readonly settings: GitHubLinkedSettings,
-    private readonly deps: { http: GitHubHttpClient; clock: Clock; logger: Logger; withToken: LinkedWithToken },
+    private readonly deps: {
+      http: GitHubHttpClient;
+      clock: Clock;
+      logger: Logger;
+      withToken: LinkedWithToken;
+      /** Rate-limit pause shared with other GraphQL readers of the same identity (adapter); default: own. */
+      pause?: GraphQLRateLimitPause;
+    },
   ) {
     this.repo = `${settings.owner}/${settings.repository}`;
-    this.pause = new GraphQLRateLimitPause(deps, 'GitHub GraphQL rate limit: linked branches/PRs unknown until reset', {
-      repository: this.repo,
-    });
+    this.pause =
+      deps.pause ??
+      new GraphQLRateLimitPause(deps, 'GitHub GraphQL rate limit: linked branches/PRs unknown until reset', { repository: this.repo });
   }
 
   /**
@@ -134,16 +141,17 @@ export class GitHubLinkedReader {
     return { reason: `unexpected item type ${String(node.__typename)}` };
   }
 
-  /** PR item: own head ref; own number while open. */
+  /** PR item: own head ref (`null` for fork PRs – the branch is not in this repository); own number while open. */
   private parsePullRequest(node: Json): Parsed {
     const pr = pullRequest(node);
     if ('reason' in pr) return pr;
+    if (typeof node.isCrossRepository !== 'boolean') return { reason: `pull request #${pr.number} without isCrossRepository` };
     const open = pr.state === 'open';
     return {
       values: values({
         linked_branches: [],
         closing_prs: [],
-        work_branch: pr.head_ref,
+        work_branch: node.isCrossRepository ? null : pr.head_ref,
         work_pr: open ? pr.number : null,
         work_pr_url: open ? pr.url : null,
       }),

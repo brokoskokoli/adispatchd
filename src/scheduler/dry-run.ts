@@ -19,7 +19,7 @@ import { UnknownWorkflowError, type ConfigManager } from '../config/index.js';
 import { sortCandidates } from '../filters/index.js';
 import { notEvaluatedConditions } from './checks.js';
 import { nextSlots, parseCron } from './cron.js';
-import { checkEligibility, prepareSourceWorkflow, type SourceLookup } from './planner.js';
+import { candidateLinkedFields, checkEligibility, prepareSourceWorkflow, type SourceLookup } from './planner.js';
 import type { SchedulingState } from './state.js';
 import type { CandidateDiagnosis, CronSlotForecast, DryRunResult, GateInfo } from './types.js';
 
@@ -106,6 +106,9 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
       });
       const diag = candidate.diagnosis;
       ordered.push(diag);
+      // Same memoized batch as the expensive filter part: no extra query when the filter needed them.
+      const linked = await candidateLinkedFields(candidate, 'diagnosis');
+      if (linked) diag.linkedFields = linked;
       if (!eligibility.eligible) continue;
       if (!eff.enabled) {
         diag.decision = 'workflow_unavailable';

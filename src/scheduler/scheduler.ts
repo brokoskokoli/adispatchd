@@ -41,7 +41,7 @@ import { SchedulerChecks, type ChecksOutcome } from './checks.js';
 import { dueSlots, parseCron, type CronSchedule } from './cron.js';
 import { dryRunWorkflow } from './dry-run.js';
 import { SchedulerError } from './errors.js';
-import { checkEligibility, prepareSourceWorkflow, verifyItemFor, type ListCache, type PreparedCandidate, type PreparedWorkflow, type SourceLookup } from './planner.js';
+import { candidateLinkedFields, checkEligibility, prepareSourceWorkflow, verifyItemFor, type ListCache, type PreparedCandidate, type PreparedWorkflow, type SourceLookup } from './planner.js';
 import { repositoryState, type SchedulingState } from './state.js';
 import {
   MAX_DIAGNOSED_CANDIDATES,
@@ -398,6 +398,8 @@ export class Scheduler {
       },
     });
     if (!eligibility.eligible) return null;
+    // Linked fields already fetched for the filter are handed to the start (no second identical query).
+    const linkedFields = await candidateLinkedFields(candidate, 'start');
 
     // --- synchronous section: re-validate and reserve atomically -------------
     if (this.stopped) return set('gate_closed', 'scheduler is stopping');
@@ -436,7 +438,7 @@ export class Scheduler {
     diag.runId = run.id;
     try {
       const verifyItem = verifyItemFor(candidate.workflow, candidate.adapter);
-      this.controller.startRun(run, verifyItem ? { verifyItem } : {});
+      this.controller.startRun(run, { ...(verifyItem ? { verifyItem } : {}), ...(linkedFields ? { linkedFields } : {}) });
     } catch (err) {
       // The controller finalizes a refused reserved run itself (lock released).
       return set('start_failed', `run ${run.id} could not be started: ${errorMessage(err)}`);

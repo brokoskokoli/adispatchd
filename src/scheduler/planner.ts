@@ -14,13 +14,14 @@
  *   checks: they are reported as `not_evaluated`.
  */
 import {
+  LINKED_ITEM_FIELDS,
   errorMessage,
   type FieldResolution,
   type FilterNode,
   type SourceAdapter,
   type SourceItem,
 } from '../core/index.js';
-import type { WorkflowConfig } from '../config/index.js';
+import { linkedFieldUsage, type WorkflowConfig } from '../config/index.js';
 import { PROJECT_FIELD_PREFIX } from '../sources/index.js';
 import {
   collectFields,
@@ -144,6 +145,11 @@ export async function prepareSourceWorkflow(
 
   const wanted = new Set<string>(filter ? collectFields(filter) : []);
   for (const rule of workflow.itemPriority?.rules ?? []) for (const f of collectFields(rule.when)) wanted.add(f);
+  // Linked branch/PR fields (WI-21) come from one query: fetch them all in the same batch, so that the
+  // dry-run block and the run start can reuse them without another query.
+  const linkedNames = linkedNamesOf(definitions);
+  const linkedUsage = linkedFieldUsage(workflow);
+  if (linkedUsage.filter.length > 0) for (const f of linkedNames) wanted.add(f);
   const wantedFields = [...wanted];
   const projectFieldNames = definitions.filter((d) => d.name.startsWith(PROJECT_FIELD_PREFIX)).map((d) => d.name);
 
@@ -201,6 +207,39 @@ export async function prepareSourceWorkflow(
     });
   }
   return { diagnosis, candidates, rejected };
+}
+
+/** Linked branch/PR fields (WI-21) the adapter provides. */
+function linkedNamesOf(definitions: readonly { name: string }[]): string[] {
+  const provided = new Set(definitions.map((d) => d.name));
+  return LINKED_ITEM_FIELDS.filter((f) => provided.has(f));
+}
+
+/**
+ * Linked branch/PR fields (WI-21) of a candidate through its memoized field
+ * source: no extra query when the filter already needed them (same batch).
+ * `undefined` if the adapter has none or the workflow does not use them –
+ * `start`: in `filter`/`item_priority` (only then were they fetched in planning);
+ * `diagnosis` (dry-run): anywhere (filter, item_priority, execute, actions).
+ */
+export async function candidateLinkedFields(
+  candidate: Pick<PreparedCandidate, 'workflow' | 'adapter' | 'fields'>,
+  mode: 'start' | 'diagnosis',
+): Promise<Record<string, FieldResolution> | undefined> {
+  const usage = linkedFieldUsage(candidate.workflow);
+  if (mode === 'start' ? usage.filter.length === 0 : !usage.any) return undefined;
+  const names = linkedNamesOf(candidate.adapter.fieldDefinitions());
+  if (names.length === 0) return undefined;
+  const entries = await Promise.all(
+    names.map(async (n): Promise<[string, FieldResolution]> => {
+      try {
+        return [n, await candidate.fields.resolve(n)];
+      } catch (err) {
+        return [n, { known: false, reason: `field resolution failed: ${errorMessage(err)}` }];
+      }
+    }),
+  );
+  return Object.fromEntries(entries);
 }
 
 /** Diagnosis view of the `project.*` fields of an item (value or unknown reason). */

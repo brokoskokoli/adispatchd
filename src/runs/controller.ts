@@ -19,6 +19,7 @@
 import {
   HOOK_NAMES,
   LINKED_ITEM_FIELDS,
+  LINKED_PLACEHOLDER_FIELDS,
   errorMessage,
   hookForOutcome,
   isOrchestratorError,
@@ -99,6 +100,12 @@ export interface StartRunOptions {
    * `cancelled` (not counted, no hooks). Manual starts omit it.
    */
   verifyItem?: (item: SourceItem) => boolean | Promise<boolean>;
+  /**
+   * Linked branch/PR fields (WI-21) the scheduler already resolved for this
+   * item in the same planning step. Reused at the start when every field is
+   * known (no second identical GraphQL query); otherwise they are read again.
+   */
+  linkedFields?: Readonly<Record<string, FieldResolution>>;
 }
 
 /** Handle returned by {@link RunController.startRun}. */
@@ -866,15 +873,25 @@ export class RunController {
       const provided = new Set(adapter.fieldDefinitions().map((d) => d.name));
       const names = LINKED_ITEM_FIELDS.filter((f) => provided.has(f));
       if (names.length > 0) {
-        try {
-          linked = await adapter.resolveFields(item, names, { signal: entry.cancel.signal });
-        } catch (err) {
-          if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: false });
-          const reason = `linked fields could not be resolved: ${errorMessage(err)}`;
-          linked = Object.fromEntries(names.map((n) => [n, { known: false, reason }]));
+        const prefetched = options.linkedFields;
+        const reused = prefetched !== undefined && names.every((n) => prefetched[n]?.known === true);
+        if (reused) {
+          linked = Object.fromEntries(names.map((n) => [n, prefetched[n] as FieldResolution]));
+        } else {
+          try {
+            linked = await adapter.resolveFields(item, names, { signal: entry.cancel.signal });
+          } catch (err) {
+            if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: false });
+            const reason = `linked fields could not be resolved: ${errorMessage(err)}`;
+            linked = Object.fromEntries(names.map((n) => [n, { known: false, reason }]));
+          }
         }
         const known = names.filter((n) => linked?.[n]?.known === true);
-        this.appendEvent(runId, RUN_EVENTS.linkedResolved, { known, unknown: names.filter((n) => !known.includes(n)) });
+        this.appendEvent(runId, RUN_EVENTS.linkedResolved, {
+          known,
+          unknown: names.filter((n) => !known.includes(n)),
+          ...(reused ? { reused: true } : {}),
+        });
       }
       if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: false });
       const missing = unknownLinkedField(usage.templates, linked);
@@ -883,6 +900,20 @@ export class RunController {
         return this.finalize(runId, snapshot, startError(message), {
           hooks: false,
           update: { error: { code: 'run_linked_field_unknown', message, field: missing.field } },
+        });
+      }
+      // working_directory is rendered in path mode: a known-empty value would fail there anyway – fail now,
+      // before on_start changed anything at the item.
+      const empty = usage.workingDirectory.find((f) => {
+        const r = linked?.[f];
+        return r?.known === true && r.value === null;
+      });
+      if (empty !== undefined) {
+        const placeholder = Object.keys(LINKED_PLACEHOLDER_FIELDS).find((p) => LINKED_PLACEHOLDER_FIELDS[p] === empty) ?? empty;
+        const message = `{${placeholder}} is empty (null) and cannot be used in working_directory`;
+        return this.finalize(runId, snapshot, startError(message), {
+          hooks: false,
+          update: { error: { code: 'run_linked_field_empty', message, field: empty } },
         });
       }
     }

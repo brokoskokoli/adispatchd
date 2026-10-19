@@ -213,6 +213,7 @@ export interface Candidate {
   blockId: number | null;
   /** GitHub Projects fields of the item: value or unknown reason. */
   projectFields?: Record<string, { known: true; value: unknown } | { known: false; reason: string }>;
+  linkedFields?: Record<string, { known: true; value: unknown } | { known: false; reason: string }>;
 }
 
 export interface CronFiring {

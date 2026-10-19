@@ -93,6 +93,11 @@ export interface CandidateDiagnosis {
    * `project.*` for this item; absent when the source declares none.
    */
   projectFields?: Record<string, FieldResolution>;
+  /**
+   * Values (or unknown reasons) of the linked branch/PR fields (WI-21) when
+   * the workflow uses them anywhere (filter, item_priority, templates); dry-run only.
+   */
+  linkedFields?: Record<string, FieldResolution>;
 }
 
 /** Status of a workflow in the last planning step. */

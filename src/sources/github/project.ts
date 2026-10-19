@@ -155,10 +155,18 @@ export class GitHubProjectReader {
 
   constructor(
     private readonly settings: GitHubProjectSettings,
-    private readonly deps: { http: GitHubHttpClient; clock: Clock; logger: Logger; withToken: WithToken },
+    private readonly deps: {
+      http: GitHubHttpClient;
+      clock: Clock;
+      logger: Logger;
+      withToken: WithToken;
+      /** Rate-limit pause shared with other GraphQL readers of the same identity (adapter); default: own. */
+      pause?: GraphQLRateLimitPause;
+    },
   ) {
     this.label = `${settings.owner}/${settings.number}`;
-    this.pause = new GraphQLRateLimitPause(deps, 'GitHub GraphQL rate limit: project fields unknown until reset', { project: this.label });
+    this.pause =
+      deps.pause ?? new GraphQLRateLimitPause(deps, 'GitHub GraphQL rate limit: project fields unknown until reset', { project: this.label });
   }
 
   /** Full names (`project.<name>`) of all declared fields. */

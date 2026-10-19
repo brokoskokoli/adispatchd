@@ -42,6 +42,13 @@ function candidateLines(c: CandidateDiagnosis, n: number): string[] {
       ...project.map(([name, r]) => `       ${name}: ${r.known ? JSON.stringify(r.value) : `unknown – ${r.reason}`}`),
     );
   }
+  const linked = Object.entries(c.linkedFields ?? {});
+  if (linked.length > 0) {
+    lines.push(
+      '     linked fields:',
+      ...linked.map(([name, r]) => `       ${name}: ${r.known ? JSON.stringify(r.value) : `unknown – ${r.reason}`}`),
+    );
+  }
   if (c.filter) lines.push('     filter:', ...traceLines(c.filter, '       '));
   if (c.shellFilter) lines.push(`     ${checkLine(c.shellFilter)}`);
   for (const ic of c.itemConditions) lines.push(`     ${checkLine(ic)}`);

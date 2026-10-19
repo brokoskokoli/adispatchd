@@ -74,13 +74,30 @@ describe('linked branches and PRs end-to-end', () => {
     expect(byKey.get('repo_a:2')?.decision).toBe('filtered');
     // The PR itself is an item too: its own number while open.
     expect(byKey.get('repo_a:3')?.decision).toBe('would_start');
-    expect(formatDryRun(dry.json)).toContain("work_pr not_equals null: true (actual 3)");
+    expect(formatDryRun(dry.json)).toContain('work_pr not_equals null: true (actual 3)');
+    // linkedFields block per candidate (workflow uses the fields), from the same batch as the filter.
+    expect((dry.json.candidates as Array<{ itemKey: string; linkedFields?: unknown }>).find((c) => c.itemKey === 'repo_a:1')?.linkedFields).toEqual({
+      linked_branches: { known: true, value: ['feature/1'] },
+      closing_prs: { known: true, value: [{ number: 3, state: 'open', head_ref: 'feature/1', is_draft: false, url: 'https://github.com/example/a/pull/3' }] },
+      work_branch: { known: true, value: 'feature/1' },
+      work_pr: { known: true, value: 3 },
+      work_pr_url: { known: true, value: 'https://github.com/example/a/pull/3' },
+    });
+    expect(formatDryRun(dry.json)).toContain('     linked fields:\n       linked_branches: ["feature/1"]');
     // One GraphQL query per candidate.
     expect(env.github.requests.filter((r) => r.graphql).length - before).toBe(3);
 
+    const beforePlan = env.github.requests.filter((r) => r.graphql).length;
     const report = await env.app.scheduler.planOnce();
     expect(report.startedRunIds).toHaveLength(2);
     for (const id of report.startedRunIds) expect((await env.waitTerminal(id)).status).toBe('completed');
+    // Planning reads each candidate once; the starts reuse that (no second identical query) – only the
+    // on_success comments of the two runs read again (fresh per action attempt).
+    expect(env.github.requests.filter((r) => r.graphql).length - beforePlan).toBe(3 + 2);
+    for (const id of report.startedRunIds) {
+      const event = env.app.persistence.events.listForRun(id).find((e) => e.type === 'run.linked_resolved');
+      expect(event?.payload).toMatchObject({ reused: true, unknown: [] });
+    }
     expect(readFileSync(path.join(env.marks, 'args-1.txt'), 'utf8')).toBe('feature/1 3');
     expect(readFileSync(path.join(env.marks, 'args-3.txt'), 'utf8')).toBe('feature/1 3');
     expect(env.github.comments(REPO_A, 1).at(-1)?.body).toMatch(/^Reviewed PR #3/);

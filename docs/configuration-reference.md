@@ -227,8 +227,8 @@ Action scheitert; nur ein bekannt leerer Wert (`null`) wird zum leeren String.
   `working_directory` nur Parameter stehen, die `required` sind oder einen `default` haben.
 - Das Ergebnis muss absolut sein und darf nicht `workspace.base_dir` selbst sein.
 
-**Sicherheit:** Ersetzte Werte (z. B. `{item.title}`, `{result.message}`) stammen aus externen Quellen und sind
-untrusted. In `args` sind sie wegen der fehlenden Shell unkritisch; wer sie über `/bin/sh -c` interpoliert,
+**Sicherheit:** Ersetzte Werte (z. B. `{item.title}`, `{result.message}`, `{item.work_branch}` – Branch-Namen dürfen
+Shell-Metazeichen wie `;`, `$`, `` ` `` enthalten) stammen aus externen Quellen und sind untrusted. In `args` sind sie wegen der fehlenden Shell unkritisch; wer sie über `/bin/sh -c` interpoliert,
 erzeugt eine Injection. In `source.comment.message` wird `<!--` zu `&lt;!--` neutralisiert (§6.9).
 
 ---
@@ -1126,7 +1126,7 @@ Variablen; Identity = Source-Identity (braucht Lesezugriff auf Issues, Pull Requ
 |---|---|---|
 | `linked_branches` | Namen der Branches aus `linkedBranches(first: 20)`, nur Branches **dieses** Repositorys; gelöschte Branches (Link ohne `ref`) fehlen | `[]` |
 | `closing_prs` | PRs aus `closedByPullRequestsReferences(first: 20, includeClosedPrs: true)`, nur PRs **dieses** Repositorys; je PR `{ number, state, head_ref, is_draft, url }` mit `state` = `open`/`merged`/`closed`; sortiert: offene, dann gemergte, dann geschlossene, je nach Nummer aufsteigend | `[]` |
-| `work_branch` | erster verlinkter Branch, sonst `head_ref` des ersten offenen, dann des ersten gemergten PRs aus `closing_prs` (PRs aus Forks zählen dafür nicht – ihr Branch liegt nicht im Repository); sonst `null` | eigener `head_ref` |
+| `work_branch` | erster verlinkter Branch, sonst `head_ref` des ersten offenen, dann des ersten gemergten PRs aus `closing_prs` (PRs aus Forks zählen dafür nicht – ihr Branch liegt nicht im Repository); sonst `null` | eigener `head_ref`; bei PRs aus einem Fork (`isCrossRepository`) `null` |
 | `work_pr` | Nummer des ersten offenen PRs aus `closing_prs` (auch aus einem Fork); sonst `null` | eigene Nummer, solange offen; sonst `null` |
 | `work_pr_url` | URL dieses PRs; sonst `null` | eigene URL, solange offen; sonst `null` |
 
@@ -1231,7 +1231,12 @@ gelesen (eine GraphQL-Abfrage), nie aus der Planung übernommen:
   (`working_directory`, `args`, `env`) einen der Platzhalter verwendet. Ist ein verwendeter Wert unknown, endet der
   Run als **`start_error` ohne Hooks** (`on_start` lief nie, am Item wurde nichts geändert; zählt als technischer
   Fehler) mit Grund `{item.work_pr} is unknown: …` (Fehlercode `run_linked_field_unknown`). Ein bekannt leerer Wert
-  (`null`) ergibt in `args`/`env` einen leeren String, im `working_directory` (Modus `path`) einen `start_error`.
+  (`null`) ergibt in `args`/`env` einen leeren String; im `working_directory` (Modus `path`) ebenfalls einen
+  **`start_error` ohne Hooks** vor `on_start` (`{item.work_branch} is empty (null) and cannot be used in
+  working_directory`, Fehlercode `run_linked_field_empty`).
+- **Keine doppelte Abfrage:** stehen die Felder im `filter`/`item_priority`, liest der Planungsschritt alle fünf in
+  einer Abfrage, und der unmittelbar folgende Start übernimmt sie, wenn alle bekannt sind (Event
+  `run.linked_resolved` mit `reused: true`); sonst liest der Start frisch. Manuelle Starts lesen immer frisch.
 - **Actions** (`source.comment.message`, `shell` `args`/`env`, in jedem Hook): bei **jedem Versuch** frisch gelesen –
   z. B. sieht `on_success` den PR, den der Worker gerade geöffnet hat. Unknown → der Versuch scheitert mit
   `lifecycle_linked_field_unknown` (wiederholbar nach `lifecycle.action_retry`); es wird nichts gepostet.
@@ -1427,7 +1432,9 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
 `project.*`-Felder (`projectFields`), die Werte der im Filter verwendeten teuren Felder (z. B.
-`work_pr not_equals null: true (actual 12)`) im Filter-Trace, den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
+`work_pr not_equals null: true (actual 12)`) im Filter-Trace, je Kandidat die verknüpften Branches/PRs
+(`linkedFields`, Textausgabe `linked fields:`), wenn der Workflow sie irgendwo verwendet (Filter, `item_priority`,
+`execute`, Actions; nicht für Items, die schon der billige Filterteil verwirft), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
 Textausgabe `filter:`). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
@@ -2377,8 +2384,8 @@ fields:
 sort: { field: closing_prs }
 ```
 
-Lösung: im Filter `work_pr` (offener PR vorhanden?) oder `work_branch` verwenden; für Prüfskripte die Kontextdatei
-lesen bzw. die Prüfung in den Worker verlegen; Views nach `work_pr` sortieren. Erst **zur Laufzeit** fallen auf:
+Lösung: im Filter `work_pr` (offener PR vorhanden?) oder `work_branch` verwenden; eine Prüfung des Branches in den
+Worker verlegen (Prüfskripte bekommen die Felder nicht); Views nach `work_pr` sortieren. Erst **zur Laufzeit** fallen auf:
 unknown Werte (fehlende Rechte, Rate-Limit) → `start_error` bzw. Action `failed` (§5.3).
 
 **`state` an wirkungsloser Stelle** – die Source liest ohne `state`-Selektor auf oberster Ebene nur offene Items.

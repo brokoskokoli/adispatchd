@@ -128,6 +128,17 @@ describe('linked branches and closing PRs (WI-21)', () => {
     expect(known(await values(3))).toMatchObject({ work_branch: 'feature/x', work_pr: null, work_pr_url: null });
   });
 
+  it('pull request items from a fork: no work branch (not in this repository), own number while open', async () => {
+    github.openPullRequest(REPO, { number: 4, headRef: 'patch-1', crossRepository: true });
+    expect(known(await values(4))).toEqual({
+      linked_branches: [],
+      closing_prs: [],
+      work_branch: null,
+      work_pr: 4,
+      work_pr_url: 'https://github.com/example/project-a/pull/4',
+    });
+  });
+
   it('reads all fields with ONE GraphQL query; owner, name and number only as variables', async () => {
     github.createIssue(REPO, { number: 12 });
     const it12 = await item(12);
@@ -200,6 +211,19 @@ describe('linked branches and closing PRs (WI-21)', () => {
     clock.advance(31_000);
     expect((await adapter.resolveFields(it1, ['work_branch'])).work_branch).toEqual({ known: true, value: 'b' });
     expect(logger.records.some((e) => e.msg === 'Linked branches/PRs readable again')).toBe(true);
+  });
+
+  it('the rate-limit pause is shared with the project reader of the same identity', async () => {
+    github.createProject('example', { number: 3, fields: [{ name: 'Status', dataType: 'SINGLE_SELECT' }] });
+    const withProject = createFakeGitHubSource(github, { clock, logger, project: { number: 3, fields: { Status: 'single_select' } } });
+    github.createIssue(REPO, { number: 1 });
+    github.failNext({ path: '/graphql' }, { status: 200, body: { data: null, errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }] } });
+    const [listed] = await withProject.listCandidates();
+    expect(listed?.unknownFields?.['project.Status']).toMatch(/rate_limited/);
+    const before = graphqlRequests();
+    const res = await withProject.resolveFields(listed as SourceItem, ['work_pr']);
+    expect(res.work_pr).toEqual({ known: false, reason: expect.stringMatching(/GitHub GraphQL rate limit until /) });
+    expect(graphqlRequests()).toBe(before);
   });
 
   it('filters: work_pr not_equals null is true/false/unknown', async () => {

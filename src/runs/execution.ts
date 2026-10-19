@@ -6,12 +6,10 @@
  */
 import path from 'node:path';
 import {
-  LINKED_ITEM_FIELDS,
   WORKER_PROTOCOL_VERSION,
   buildTemplateValues,
   dataPaths,
   isWithin,
-  linkedFieldsUsed,
   linkedTemplateItem,
   renderTemplate,
   unknownLinkedField,
@@ -24,8 +22,7 @@ import {
   type TemplateValues,
   type WorkerContext,
 } from '../core/index.js';
-import type { WorkflowSnapshot } from '../config/index.js';
-import { collectFields } from '../filters/index.js';
+import { linkedFieldUsage as workflowLinkedFieldUsage, type WorkflowSnapshot } from '../config/index.js';
 import type { RunRecord } from '../persistence/index.js';
 import { RunControllerError } from './errors.js';
 
@@ -62,17 +59,9 @@ export interface ExecutionInput {
  *   the known values are also written to `source.attributes` of the worker
  *   context ("when used"; costs one GraphQL query per run start).
  */
-export function linkedFieldUsage(snapshot: WorkflowSnapshot): { templates: string[]; resolve: boolean } {
-  const workflow = snapshot.workflow;
-  if (workflow.trigger.type !== 'source') return { templates: [], resolve: false };
-  const execute = workflow.execute;
-  const templates = linkedFieldsUsed([execute.workingDirectory, ...execute.args, ...Object.values(execute.env)]);
-  const linked = new Set<string>(LINKED_ITEM_FIELDS);
-  const filterFields = [
-    ...collectFields(workflow.filter),
-    ...(workflow.itemPriority?.rules.flatMap((r) => collectFields(r.when)) ?? []),
-  ];
-  return { templates, resolve: templates.length > 0 || filterFields.some((f) => linked.has(f)) };
+export function linkedFieldUsage(snapshot: WorkflowSnapshot): { templates: string[]; workingDirectory: string[]; resolve: boolean } {
+  const usage = workflowLinkedFieldUsage(snapshot.workflow);
+  return { templates: usage.execute, workingDirectory: usage.workingDirectory, resolve: usage.resolveAtStart };
 }
 
 /** Known linked field values for `source.attributes` of a context. */

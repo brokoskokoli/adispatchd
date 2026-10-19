@@ -35,6 +35,9 @@ describe('view sorting (browser only, Spec §17)', () => {
       }),
     ).toBe('#12 open (draft), #9 merged, {"other":1}');
     expect(objectText({ number: 3, state: 'closed' })).toBe('#3 closed');
+    // Browser sorting of object[] columns uses the display text (numeric collation).
+    const prs = (n: number) => ({ cells: [{ value: [{ number: n, state: 'open' }], known: true }] });
+    expect(sortRows([prs(12), prs(3), prs(7)], 0, 'object[]', 'asc').map((r) => (r.cells[0]!.value as Array<{ number: number }>)[0]!.number)).toEqual([3, 7, 12]);
   });
 });
 

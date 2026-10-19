@@ -29,6 +29,7 @@ import {
 import { DEPENDENCY_FIELDS, GITHUB_FIELD_DEFINITIONS, LINKED_FIELDS, projectFieldDefinitions, type ProjectFieldKind } from './fields.js';
 import { GitHubHttpClient, type GitHubHttpClientOptions } from './http.js';
 import { GitHubLinkedReader } from './linked.js';
+import { GraphQLRateLimitPause } from './rate-limit.js';
 import { GitHubProjectReader, type ProjectLookupItem } from './project.js';
 import { GitHubProjectWriter, withApplied } from './project-write.js';
 import { pushdownQuery } from './pushdown.js';
@@ -147,6 +148,20 @@ export class GitHubSourceAdapter implements SourceAdapter {
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
         ...(config.apiBaseUrl ? { baseUrl: config.apiBaseUrl } : {}),
       });
+    // GraphQL rate limits apply per token: readers using the same identity share one pause.
+    const pauses = new Map<IdentityRef, GraphQLRateLimitPause>();
+    const pauseFor = (identity: IdentityRef): GraphQLRateLimitPause => {
+      let pause = pauses.get(identity);
+      if (!pause) {
+        pause = new GraphQLRateLimitPause(
+          { clock: deps.clock, logger: this.logger },
+          'GitHub GraphQL rate limit: GraphQL-based fields unknown until reset',
+          { identity },
+        );
+        pauses.set(identity, pause);
+      }
+      return pause;
+    };
     const project = config.project;
     this.definitions = Object.freeze(project ? [...GITHUB_FIELD_DEFINITIONS, ...projectFieldDefinitions(project.fields)] : GITHUB_FIELD_DEFINITIONS);
     this.project = project
@@ -162,6 +177,7 @@ export class GitHubSourceAdapter implements SourceAdapter {
             clock: deps.clock,
             logger: this.logger,
             withToken: (identity, signal, fn) => this.withToken(identity, signal, fn),
+            pause: pauseFor(project.identity ?? config.identity),
           },
         )
       : undefined;
@@ -188,6 +204,7 @@ export class GitHubSourceAdapter implements SourceAdapter {
         clock: deps.clock,
         logger: this.logger,
         withToken: (identity, signal, fn) => this.withToken(identity, signal, fn),
+        pause: pauseFor(config.identity),
       },
     );
   }
