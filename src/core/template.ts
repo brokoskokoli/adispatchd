@@ -19,7 +19,7 @@ import path from 'node:path';
 import { OrchestratorError } from './errors.js';
 import { formatCompactTimestamp } from './ids.js';
 import { sanitizeSegment } from './paths.js';
-import type { BusinessResult, TerminalStatus, TriggerType } from './types.js';
+import type { BusinessResult, FieldResolution, TerminalStatus, TriggerType } from './types.js';
 
 /** Interpolation mode, see module docs. */
 export type TemplateMode = 'text' | 'path';
@@ -102,6 +102,44 @@ export function linkedFieldsUsed(templates: Iterable<string>): string[] {
     }
   }
   return out;
+}
+
+/** A linked field used by a template that could not be determined. */
+export interface UnknownLinkedField {
+  field: string;
+  placeholder: string;
+  reason: string;
+}
+
+/**
+ * The first field of `used` (see {@link linkedFieldsUsed}) that is not known
+ * in `resolved` – such a template must not be rendered (fail closed, never an
+ * empty string). `undefined` if all are known.
+ */
+export function unknownLinkedField(
+  used: readonly string[],
+  resolved: Readonly<Record<string, FieldResolution>> | undefined,
+): UnknownLinkedField | undefined {
+  for (const field of used) {
+    const res = resolved?.[field];
+    if (res?.known) continue;
+    const placeholder = Object.keys(LINKED_PLACEHOLDER_FIELDS).find((p) => LINKED_PLACEHOLDER_FIELDS[p] === field) ?? field;
+    return { field, placeholder, reason: res ? res.reason : `field "${field}" was not resolved` };
+  }
+  return undefined;
+}
+
+/** `workBranch`/`workPr` of {@link TemplateInput.item} from resolved fields (only known values of the right type). */
+export function linkedTemplateItem(resolved: Readonly<Record<string, FieldResolution>> | undefined): {
+  workBranch?: string | null;
+  workPr?: number | null;
+} {
+  const branch = resolved?.work_branch;
+  const pr = resolved?.work_pr;
+  return {
+    ...(branch?.known && (typeof branch.value === 'string' || branch.value === null) ? { workBranch: branch.value } : {}),
+    ...(pr?.known && (typeof pr.value === 'number' || pr.value === null) ? { workPr: pr.value } : {}),
+  };
 }
 
 /** Prefix of parameter placeholders: `{parameters.<name>}`. */
@@ -227,6 +265,13 @@ function checkAvailability(name: string, scope: TemplateScope): TemplateIssue | 
   const def = PLACEHOLDER_BY_NAME.get(name);
   if (!def) {
     return { code: 'unknown_placeholder', message: `Unknown placeholder "{${name}}"`, placeholder: name };
+  }
+  if (def.group === 'linked' && !scope.linked) {
+    return {
+      code: 'unavailable_placeholder',
+      message: `Placeholder "{${name}}" is only available in "execute" and lifecycle actions of workflows triggered by a GitHub source`,
+      placeholder: name,
+    };
   }
   if (def.group !== 'always' && def.group !== 'parameters' && !scope[def.group]) {
     return {

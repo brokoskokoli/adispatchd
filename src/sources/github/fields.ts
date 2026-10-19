@@ -2,7 +2,7 @@
  * Field catalogue of the GitHub source adapter (Spec §6, §17), including the
  * per-source GitHub Projects (v2) fields `project.<name>` (WI-14).
  */
-import { OPERATORS_BY_TYPE, type FieldDefinition, type FieldType } from '../../core/index.js';
+import { LINKED_ITEM_FIELDS, OPERATORS_BY_TYPE, type FieldDefinition, type FieldType } from '../../core/index.js';
 
 const STRING_OPS = OPERATORS_BY_TYPE.string;
 const NUMBER_OPS = OPERATORS_BY_TYPE.number;
@@ -22,7 +22,7 @@ export const DEPENDENCY_FIELDS = [
  * Names of the expensive linked-branch/PR fields (WI-21), resolved together by
  * ONE GraphQL query per item. `work_pr_url` is the link target of `work_pr` in views.
  */
-export const LINKED_FIELDS = ['linked_branches', 'closing_prs', 'work_branch', 'work_pr', 'work_pr_url'] as const;
+export const LINKED_FIELDS = LINKED_ITEM_FIELDS;
 
 /** All fields provided by the GitHub adapter. */
 export const GITHUB_FIELD_DEFINITIONS: readonly FieldDefinition[] = Object.freeze([

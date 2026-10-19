@@ -63,11 +63,23 @@ export function nextSort(current: { column: number; direction: SortDirection } |
   return { column, direction: current.direction === 'asc' ? 'desc' : 'asc' };
 }
 
-/** Display text of a cell value (arrays joined, objects as JSON); `''` for empty. */
+/**
+ * Display text of one element of an `object[]` value: pull requests
+ * (`{ number, state, is_draft }`, e.g. GitHub `closing_prs`) as `#12 open`
+ * (`#12 open (draft)`); other objects as JSON.
+ */
+export function objectText(o: unknown): string {
+  if (typeof o !== 'object' || o === null) return String(o);
+  const r = o as Record<string, unknown>;
+  if (typeof r.number === 'number' && typeof r.state === 'string') return `#${r.number} ${r.state}${r.is_draft === true ? ' (draft)' : ''}`;
+  return JSON.stringify(o);
+}
+
+/** Display text of a cell value (arrays joined, objects via {@link objectText}); `''` for empty. */
 export function cellText(c: CellLike | undefined): string {
   if (isEmpty(c)) return '';
   const v = c!.value;
-  if (Array.isArray(v)) return v.map((x) => (typeof x === 'object' && x !== null ? JSON.stringify(x) : String(x))).join(', ');
+  if (Array.isArray(v)) return v.map((x) => (typeof x === 'object' && x !== null ? objectText(x) : String(x))).join(', ');
   if (typeof v === 'object' && v !== null) return JSON.stringify(v);
   return String(v);
 }

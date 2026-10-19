@@ -18,6 +18,7 @@
  */
 import {
   HOOK_NAMES,
+  LINKED_ITEM_FIELDS,
   errorMessage,
   hookForOutcome,
   isOrchestratorError,
@@ -31,6 +32,7 @@ import {
   type CredentialProvider,
   type ExecutionOutcome,
   type Executor,
+  type FieldResolution,
   type FinalizationTarget,
   type HookName,
   type Logger,
@@ -41,6 +43,7 @@ import {
   type TechnicalStatus,
   type TerminalStatus,
   type Timers,
+  unknownLinkedField,
 } from '../core/index.js';
 import type { WorkflowSnapshot } from '../config/index.js';
 import {
@@ -62,11 +65,13 @@ import {
 } from '../persistence/index.js';
 import { RunControllerError } from './errors.js';
 import { PersistedEventPublisher, RunEventBus, type ControllerStatus } from './event-bus.js';
-import { buildExecutionSpec } from './execution.js';
+import { buildExecutionSpec, linkedFieldUsage } from './execution.js';
 import { removeWorkspace, shouldCleanupWorkspace } from './workspace.js';
 
 /** Orchestrator-side event types persisted by the controller (besides `run.status`). */
 export const RUN_EVENTS = {
+  /** Linked fields (WI-21) resolved before the start (`{known, unknown}` field names). */
+  linkedResolved: 'run.linked_resolved',
   /** Worker spawn is about to happen (`{command, args, workingDirectory}`); recovery uses it. */
   spawn: 'run.spawn',
   /** Item re-read before `on_start` (Spec §7): `{found, matches?}`. */
@@ -853,6 +858,35 @@ export class RunController {
     }
     if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: false });
 
+    // 1b. Linked branch / PR (WI-21): resolved freshly when the workflow uses them; a used but unknown
+    // placeholder ends the run as start_error BEFORE on_start (nothing was changed at the item yet).
+    let linked: Record<string, FieldResolution> | undefined;
+    const usage = linkedFieldUsage(snapshot);
+    if (item && adapter && usage.resolve) {
+      const provided = new Set(adapter.fieldDefinitions().map((d) => d.name));
+      const names = LINKED_ITEM_FIELDS.filter((f) => provided.has(f));
+      if (names.length > 0) {
+        try {
+          linked = await adapter.resolveFields(item, names, { signal: entry.cancel.signal });
+        } catch (err) {
+          if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: false });
+          const reason = `linked fields could not be resolved: ${errorMessage(err)}`;
+          linked = Object.fromEntries(names.map((n) => [n, { known: false, reason }]));
+        }
+        const known = names.filter((n) => linked?.[n]?.known === true);
+        this.appendEvent(runId, RUN_EVENTS.linkedResolved, { known, unknown: names.filter((n) => !known.includes(n)) });
+      }
+      if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: false });
+      const missing = unknownLinkedField(usage.templates, linked);
+      if (missing) {
+        const message = `{${missing.placeholder}} is unknown: ${missing.reason}`;
+        return this.finalize(runId, snapshot, startError(message), {
+          hooks: false,
+          update: { error: { code: 'run_linked_field_unknown', message, field: missing.field } },
+        });
+      }
+    }
+
     // 2. starting + on_start.
     this.repos.runs.transition(runId, 'starting', { expectedFrom: 'reserved' });
     this.publisher.flush();
@@ -906,6 +940,7 @@ export class RunController {
         ...(this.options.credentials ? { credentials: this.options.credentials } : {}),
         ...(this.maxLogBytes() !== undefined ? { maxLogBytes: this.maxLogBytes() } : {}),
         signal: entry.cancel.signal,
+        ...(linked ? { linked } : {}),
       });
     } catch (err) {
       if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: true, ...ctx });

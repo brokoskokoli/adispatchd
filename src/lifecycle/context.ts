@@ -6,8 +6,10 @@
 import {
   WORKER_PROTOCOL_VERSION,
   buildTemplateValues,
+  linkedTemplateItem,
   parseSourceItemKey,
   renderTemplate,
+  type FieldResolution,
   type HookName,
   type IdentityRef,
   type SourceItem,
@@ -67,6 +69,7 @@ export function hookTemplateScope(snapshot: WorkflowSnapshot, hook: HookName): T
     workspace: true,
     source: isSourceWorkflow(snapshot),
     result: hook !== 'on_start',
+    linked: isSourceWorkflow(snapshot),
     parameters: Object.keys(snapshot.workflow.parameters ?? {}),
   };
 }
@@ -101,6 +104,8 @@ export interface HookValueInput {
   /** `{source.repository}` (adapter's value); defaults to `owner/repository` of the snapshot source. */
   repository?: string;
   now: Date;
+  /** Freshly resolved linked fields (WI-21) when an action template uses them. */
+  linked?: Readonly<Record<string, FieldResolution>>;
 }
 
 /** Placeholder values for a hook action of `run`. Result values only outside `on_start`. */
@@ -128,6 +133,7 @@ export function buildHookTemplateValues(input: HookValueInput): TemplateValues {
             ...(/^\d+$/.test(item.itemId) ? { number: item.itemId } : {}),
             ...(item.url ? { url: item.url } : {}),
             ...(typeof title === 'string' ? { title } : {}),
+            ...linkedTemplateItem(input.linked),
           },
         }
       : {}),
@@ -197,6 +203,8 @@ export function buildShellActionContext(input: {
   hook: HookName;
   item: SourceItem | null;
   action: { id: number; name: string | null; ordinal: number; attempt: number };
+  /** Linked fields (WI-21) resolved for this attempt; known values go to `source.attributes`. */
+  linked?: Readonly<Record<string, FieldResolution>>;
 }): ShellActionContext {
   const { run, snapshot, hook, item } = input;
   const result = runResult(run);
@@ -222,7 +230,7 @@ export function buildShellActionContext(input: {
             item_id: item.itemId,
             item_key: item.key,
             url: item.url,
-            attributes: { ...item.fields },
+            attributes: { ...item.fields, ...knownAttributes(input.linked) },
           },
         }
       : {}),
@@ -240,4 +248,10 @@ export function buildShellActionContext(input: {
             artifacts: result?.artifacts ?? null,
           },
   };
+}
+
+function knownAttributes(linked: Readonly<Record<string, FieldResolution>> | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, res] of Object.entries(linked ?? {})) if (res.known) out[name] = res.value;
+  return out;
 }

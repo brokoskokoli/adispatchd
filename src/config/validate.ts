@@ -16,7 +16,16 @@ import {
   type TemplateScope,
 } from '../core/index.js';
 import { PROJECT_FIELD_PREFIX, valueProblem } from '../sources/index.js';
-import { checkFieldName, checkFilterFields, sourceFieldContext, suggestField, viewFieldContext, type FieldIssue } from './field-catalog.js';
+import {
+  checkFieldName,
+  checkFilterFields,
+  fieldType,
+  providesLinkedFields,
+  sourceFieldContext,
+  suggestField,
+  viewFieldContext,
+  type FieldIssue,
+} from './field-catalog.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssueCollector, IssuePath } from './issues.js';
 import type {
@@ -209,6 +218,9 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   checkIdentity(wf.identity, input, issues, file, ['identity']);
 
   const isSource = wf.trigger.type === 'source';
+  // `{item.work_branch}` / `{item.work_pr}` need an adapter that provides the linked fields (WI-21).
+  const linkedSource = wf.trigger.type === 'source' ? input.sources[wf.trigger.source] : undefined;
+  const linked = linkedSource !== undefined && providesLinkedFields(linkedSource.type);
   if (wf.trigger.type === 'source' && !input.sources[wf.trigger.source]) {
     issues.error(file, ['trigger', 'source'], `Unknown source "${wf.trigger.source}"`);
   }
@@ -274,7 +286,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   // Execute
   const exec = wf.execute;
   const wdIssues = issues.items.length;
-  checkTemplate(exec.workingDirectory, 'path', { run: true, source: isSource, parameters: parameterNames }, issues, file, [
+  checkTemplate(exec.workingDirectory, 'path', { run: true, source: isSource, linked, parameters: parameterNames }, issues, file, [
     'execute',
     'working_directory',
   ]);
@@ -296,7 +308,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   ) {
     issues.error(file, ['execute', 'working_directory'], 'Must be absolute: start with "/" or "{workspace.base_dir}"');
   }
-  const runScope: TemplateScope = { run: true, workspace: true, source: isSource, parameters: parameterNames };
+  const runScope: TemplateScope = { run: true, workspace: true, source: isSource, linked, parameters: parameterNames };
   exec.args.forEach((arg, i) => checkTemplate(arg, 'text', runScope, issues, file, ['execute', 'args', i]));
   for (const [name, value] of Object.entries(exec.env)) {
     checkTemplate(value, 'text', runScope, issues, file, ['execute', 'env', name]);
@@ -327,7 +339,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
         issues.error(file, [...at, 'id'], `Duplicate action ID "${action.id}" (also used at ${previous})`);
       }
       actionIds.set(action.id, where);
-      validateAction(action, hook, at, isSource, parameterNames, input, issues, file, triggerSource);
+      validateAction(action, hook, at, isSource, linked, parameterNames, input, issues, file, triggerSource);
     });
   }
 }
@@ -345,6 +357,7 @@ function validateAction(
   hook: HookName,
   at: IssuePath,
   isSource: boolean,
+  linked: boolean,
   parameterNames: string[],
   input: SemanticInput,
   issues: IssueCollector,
@@ -356,6 +369,7 @@ function validateAction(
     workspace: true,
     source: isSource,
     result: hook !== 'on_start',
+    linked,
     parameters: parameterNames,
   };
   if ((action.type === 'source.update' || action.type === 'source.comment') && !isSource) {
@@ -514,7 +528,11 @@ function validateView(entry: ViewEntry, input: SemanticInput, issues: IssueColle
       checkName(f.field, ['fields', i, 'field']);
       if (f.link) checkName(f.link, ['fields', i, 'link']);
     });
-    if (view.sort) checkName(view.sort.field, ['sort', 'field']);
+    if (view.sort) {
+      checkName(view.sort.field, ['sort', 'field']);
+      const type = fieldType(view.sort.field, ctx);
+      if (type === 'object[]') issues.error(file, ['sort', 'field'], `Views cannot be sorted by "${view.sort.field}" (type object[])`);
+    }
   }
 }
 

@@ -152,6 +152,17 @@ function unknownFieldMessage(field: string, ctx: FieldContext, defs: readonly Fi
   return `Unknown field "${field}" for source type ${ctx.sourceType}${hint}`;
 }
 
+/** Declared type of `field` in `ctx`, if known. */
+export function fieldType(field: string, ctx: FieldContext): FieldType | undefined {
+  return definitions(ctx)?.find((d) => d.name === field)?.type;
+}
+
+/** True if sources of `sourceType` provide `work_branch`/`work_pr` (placeholders `{item.work_branch}`, `{item.work_pr}`, WI-21). */
+export function providesLinkedFields(sourceType: string): boolean {
+  const defs = FIELD_CATALOG[sourceType] ?? [];
+  return defs.some((d) => d.name === 'work_branch') && defs.some((d) => d.name === 'work_pr');
+}
+
 /** Check a single field name (view columns, links, sort). */
 export function checkFieldName(field: string, ctx: FieldContext): string | undefined {
   const defs = definitions(ctx);

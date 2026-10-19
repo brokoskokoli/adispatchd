@@ -318,6 +318,14 @@ export interface FieldDefinition {
 }
 
 /**
+ * Expensive item fields describing the work branch / pull request of an item
+ * (WI-21, GitHub adapter). They are resolved together (one query) and are the
+ * source of the placeholders `{item.work_branch}` / `{item.work_pr}`.
+ * `work_pr_url` is the link target of `work_pr` in views.
+ */
+export const LINKED_ITEM_FIELDS = ['linked_branches', 'closing_prs', 'work_branch', 'work_pr', 'work_pr_url'] as const;
+
+/**
  * Operators that are meaningful per field type; config validation accepts
  * exactly these. (`equals` on lists is not expressible: list values are only
  * allowed for `in`.)
