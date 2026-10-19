@@ -226,7 +226,8 @@ function checkTemplate(
   }
 }
 
-function checkEnvNames(
+/** Error for env names with the reserved prefix. */
+export function checkEnvNames(
   names: readonly string[],
   issues: IssueCollector,
   file: string,
@@ -239,7 +240,8 @@ function checkEnvNames(
   }
 }
 
-function checkLiteralSecrets(env: Readonly<Record<string, string>>, issues: IssueCollector, file: string, at: IssuePath): void {
+/** Warning for literal values of secret-looking env names. */
+export function checkLiteralSecrets(env: Readonly<Record<string, string>>, issues: IssueCollector, file: string, at: IssuePath): void {
   for (const [name, value] of Object.entries(env)) {
     if (value !== '' && isSecretKey(name)) {
       issues.warning(

@@ -34,7 +34,7 @@ import {
   type FilterTrace,
   type PrioritizedCandidate,
 } from '../filters/index.js';
-import { notEvaluatedCheck, notEvaluatedConditions, type ChecksOutcome, type SchedulerChecks } from './checks.js';
+import { checkReason, notEvaluatedCheck, notEvaluatedConditions, type ChecksOutcome, type SchedulerChecks } from './checks.js';
 import type { SchedulingState } from './state.js';
 import type { CandidateDiagnosis, CheckDiagnosis, SourcePollDiagnosis, WorkflowPlanningDiagnosis } from './types.js';
 
@@ -342,8 +342,8 @@ export async function checkEligibility(candidate: PreparedCandidate, ctx: Eligib
       if (outcome.value !== true) {
         const f = outcome.failed;
         return outcome.value === false
-          ? reject('condition_failed', `workflow condition ${f?.index ?? '?'} (${f?.command ?? ''}) is false`)
-          : reject('condition_unknown', `workflow condition ${f?.index ?? '?'} (${f?.command ?? ''}) is unknown: ${f?.error ?? 'check error'}`);
+          ? reject('condition_failed', `workflow condition ${checkReason(f)} is false`)
+          : reject('condition_unknown', `workflow condition ${checkReason(f)} is unknown: ${f?.error ?? 'check error'}`);
       }
     } else {
       pending = true;
@@ -372,7 +372,7 @@ export async function checkEligibility(candidate: PreparedCandidate, ctx: Eligib
       if (sf.value === false) return reject('shell_filter_rejected', 'shell filter exited with 1');
       if (sf.value !== true) return reject('shell_filter_unknown', `shell filter check error: ${sf.error ?? 'unknown'}`);
     } else {
-      diag.shellFilter = notEvaluatedCheck('shell_filter', 0, workflow.shellFilter.command);
+      diag.shellFilter = notEvaluatedCheck('shell_filter', 0, workflow.shellFilter);
       pending = true;
     }
   }
@@ -385,8 +385,8 @@ export async function checkEligibility(candidate: PreparedCandidate, ctx: Eligib
       if (outcome.value !== true) {
         const f = outcome.failed as CheckDiagnosis;
         return outcome.value === false
-          ? reject('condition_failed', `item condition ${f.index} (${f.command}) is false`)
-          : reject('condition_unknown', `item condition ${f.index} (${f.command}) is unknown: ${f.error ?? 'check error'}`);
+          ? reject('condition_failed', `item condition ${checkReason(f)} is false`)
+          : reject('condition_unknown', `item condition ${checkReason(f)} is unknown: ${f.error ?? 'check error'}`);
       }
     } else {
       diag.itemConditions = notEvaluatedConditions(workflow, 'item_condition');

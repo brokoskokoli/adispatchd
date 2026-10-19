@@ -46,7 +46,8 @@ import {
   type RunRecord,
 } from '../persistence/index.js';
 import type { ControllerStatus, RunHandle, StartRunOptions } from '../runs/index.js';
-import { SchedulerChecks, type ChecksOutcome } from './checks.js';
+import { checkReason, SchedulerChecks, type ChecksOutcome } from './checks.js';
+import { ConditionStatusStore, summarizeItemChecks, type WorkflowConditionStatus } from './condition-status.js';
 import { dueSlots, parseCron, type CronSchedule } from './cron.js';
 import { dryRunWorkflow } from './dry-run.js';
 import { SchedulerError } from './errors.js';
@@ -94,6 +95,11 @@ export interface SchedulerOptions {
   cronMisfireToleranceMs?: number;
   /** Max. `skipped_missed` records written per catch-up (older ones are only counted). Default 100. */
   maxRecordedMissedSlots?: number;
+  /**
+   * Called when the status of a workflow condition or the item-check summary
+   * of a workflow changed (WI-24, e.g. for the SSE event `workflow.conditions`).
+   */
+  onConditionStatusChange?: (workflowId: string) => void;
 }
 
 /** Request of {@link Scheduler.startManual}. */
@@ -154,6 +160,7 @@ export class Scheduler {
   private readonly state: SchedulingState;
   private readonly shellChecks: ShellCheckRunner;
   private readonly checks: SchedulerChecks;
+  private readonly conditionStatusStore: ConditionStatusStore;
   private readonly clock: Clock;
   private readonly timers: Timers;
   private readonly logger: Logger;
@@ -181,7 +188,10 @@ export class Scheduler {
     this.state = repositoryState(this.repos);
     // Check timeouts use real timers; the clock drives the condition cache TTL.
     this.shellChecks = options.shellChecks ?? new ShellCheckRunner({ clock: this.clock, logger: this.logger });
-    this.checks = new SchedulerChecks(this.shellChecks, () => this.clock.now());
+    this.conditionStatusStore = new ConditionStatusStore(() => this.clock.now(), options.onConditionStatusChange);
+    this.checks = new SchedulerChecks(this.shellChecks, () => this.clock.now(), (wf, diag, result) =>
+      this.conditionStatusStore.recordWorkflowCondition(wf.id, wf.conditions.workflow.length, diag, result),
+    );
     this.misfireToleranceMs = options.cronMisfireToleranceMs ?? 60_000;
     this.maxRecordedMissed = options.maxRecordedMissedSlots ?? 100;
   }
@@ -201,6 +211,8 @@ export class Scheduler {
       if (event.kind !== 'reload') return;
       // Changed commands/TTLs must not be served from the old cache.
       this.shellChecks.invalidate();
+      // The last condition status (WI-24) of changed/removed workflows no longer matches their definition.
+      this.conditionStatusStore.forget([...event.diff.changedWorkflows, ...event.diff.removedWorkflows]);
       this.syncCron();
       for (const id of [...this.diagnoses.keys()]) {
         const wf = event.config.workflows[id];
@@ -379,6 +391,15 @@ export class Scheduler {
       const memo = conditionMemo.get(diag.workflowId);
       if (memo) diag.conditions = (await memo).checks;
       const all = [...ordered.filter((c) => c.workflowId === diag.workflowId).map((c) => c.diagnosis), ...p.rejected];
+      if (diag.status !== 'disabled') {
+        const wf = cfg.workflows[diag.workflowId];
+        if (wf && (wf.conditions.item.length > 0 || wf.shellFilter)) {
+          this.conditionStatusStore.recordItemSummary(
+            diag.workflowId,
+            summarizeItemChecks(startedAt, wf.conditions.item.length, wf.shellFilter !== null, all),
+          );
+        }
+      }
       diag.candidates = all.slice(0, MAX_DIAGNOSED_CANDIDATES);
       diag.omittedCandidates = all.length - diag.candidates.length;
       diag.startedRunIds = all.filter((c) => c.decision === 'started' && c.runId).map((c) => c.runId as string);
@@ -622,7 +643,7 @@ export class Scheduler {
       state.lastConditions = outcome.checks;
       if (outcome.value !== true) {
         const f = outcome.failed;
-        const what = `workflow condition ${f?.index ?? '?'} (${f?.command ?? ''})`;
+        const what = `workflow condition ${checkReason(f)}`;
         return outcome.value === false
           ? this.recordFiring(state, slot, 'skipped_condition', `${what} is false`)
           : this.recordFiring(state, slot, 'skipped_condition_unknown', `${what} is unknown: ${f?.error ?? 'check error'}`);
@@ -821,6 +842,17 @@ export class Scheduler {
   /** Last planning diagnoses of all source workflows, sorted by workflow ID. */
   listDiagnoses(): WorkflowPlanningDiagnosis[] {
     return [...this.diagnoses.values()].sort((a, b) => (a.workflowId < b.workflowId ? -1 : a.workflowId > b.workflowId ? 1 : 0));
+  }
+
+  /**
+   * Last status of the shell checks of a workflow (WI-24): every workflow
+   * condition (planning step or cron slot) and the item-check summary of the
+   * last planning step. `undefined` for an unknown workflow.
+   */
+  conditionStatus(workflowId: string): WorkflowConditionStatus | undefined {
+    const wf = this.config.current.workflows[workflowId];
+    if (!wf) return undefined;
+    return this.conditionStatusStore.get(workflowId, wf.conditions.workflow.length);
   }
 
   /** Summary of the last planning step (`null` before the first one). */

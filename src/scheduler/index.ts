@@ -12,6 +12,17 @@ export {
 } from './scheduler.js';
 export { dryRunWorkflow, DRY_RUN_CRON_SLOTS, DRY_RUN_RECENT_FIRINGS, type DryRunDeps } from './dry-run.js';
 export { formatDryRun } from './format.js';
+export { checkDisplayName, checkReason, MAX_CHECK_LABEL_LENGTH } from './checks.js';
+export {
+  ConditionStatusStore,
+  MAX_STDERR_LINE,
+  summarizeItemChecks,
+  type CheckCounts,
+  type ConditionStatus,
+  type ItemCheckSummary,
+  type LastConditionCheck,
+  type WorkflowConditionStatus,
+} from './condition-status.js';
 export { SchedulerError, type SchedulerErrorCode } from './errors.js';
 export { repositoryState, emptyState, type SchedulingState } from './state.js';
 export { parseCron, nextSlots, dueSlots, type CronSchedule, type DueSlots } from './cron.js';

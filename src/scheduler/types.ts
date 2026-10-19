@@ -55,6 +55,8 @@ export interface CheckDiagnosis {
   /** Index in `conditions.workflow` / `conditions.item` (0 for the shell filter). */
   index: number;
   command: string;
+  /** Configured display name (WI-24); absent when not configured. */
+  name?: string;
   /** `not_evaluated` = not executed (dry-run, or skipped because an earlier check already decided). */
   value: TraceValue;
   /** Served from the workflow-condition cache. */

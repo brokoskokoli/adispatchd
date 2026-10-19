@@ -15,22 +15,67 @@ export interface ChecksOutcome {
   failed: CheckDiagnosis | null;
 }
 
+/** What identifies a check in diagnoses: its command and optional display name (WI-24). */
+export interface CheckRef {
+  command: string;
+  name?: string;
+}
+
+/** Max. length of a display name derived from command + args. */
+export const MAX_CHECK_LABEL_LENGTH = 80;
+
+/**
+ * Display name of a shell check (WI-24): the configured `name`, otherwise the
+ * command (relative to the config dir when inside it; only the script name
+ * when too long) plus its arguments, shortened to {@link MAX_CHECK_LABEL_LENGTH} characters.
+ */
+export function checkDisplayName(check: { command: string; name?: string; args?: readonly string[] }, configDir?: string): string {
+  if (check.name !== undefined && check.name !== '') return check.name;
+  let command = check.command;
+  if (configDir) {
+    const prefix = configDir.endsWith('/') ? configDir : `${configDir}/`;
+    if (command.startsWith(prefix)) command = command.slice(prefix.length);
+  }
+  let text = [command, ...(check.args ?? [])].join(' ');
+  // Too long: keep the script name and the arguments rather than the directory.
+  const slash = command.lastIndexOf('/');
+  if (text.length > MAX_CHECK_LABEL_LENGTH && slash > 0) text = [`…${command.slice(slash)}`, ...(check.args ?? [])].join(' ');
+  return text.length > MAX_CHECK_LABEL_LENGTH ? `${text.slice(0, MAX_CHECK_LABEL_LENGTH - 1)}…` : text;
+}
+
+/** Short reference to a check in reasons: `0 "Credits available" (/path/check.sh)` or `0 (/path/check.sh)`. */
+export function checkReason(c: { index: number; command: string; name?: string } | null | undefined): string {
+  if (!c) return '? ()';
+  return `${c.index}${c.name !== undefined ? ` "${c.name}"` : ''} (${c.command})`;
+}
+
 /** Diagnosis entry for a check that was not executed. */
-export function notEvaluatedCheck(kind: CheckKind, index: number, command: string): CheckDiagnosis {
-  return { kind, index, command, value: 'not_evaluated', cached: false, exitCode: null, error: null, durationMs: null };
+export function notEvaluatedCheck(kind: CheckKind, index: number, check: CheckRef): CheckDiagnosis {
+  return {
+    kind,
+    index,
+    command: check.command,
+    ...(check.name !== undefined ? { name: check.name } : {}),
+    value: 'not_evaluated',
+    cached: false,
+    exitCode: null,
+    error: null,
+    durationMs: null,
+  };
 }
 
 /** Diagnoses for all workflow conditions, none executed. */
 export function notEvaluatedConditions(workflow: WorkflowConfig, kind: 'workflow_condition' | 'item_condition'): CheckDiagnosis[] {
   const list = kind === 'workflow_condition' ? workflow.conditions.workflow : workflow.conditions.item;
-  return list.map((c, i) => notEvaluatedCheck(kind, i, c.command));
+  return list.map((c, i) => notEvaluatedCheck(kind, i, c));
 }
 
-function fromResult(kind: CheckKind, index: number, command: string, r: ShellCheckResult): CheckDiagnosis {
+function fromResult(kind: CheckKind, index: number, check: CheckRef, r: ShellCheckResult): CheckDiagnosis {
   return {
     kind,
     index,
-    command,
+    command: check.command,
+    ...(check.name !== undefined ? { name: check.name } : {}),
     value: r.value,
     cached: r.cached,
     exitCode: r.exitCode,
@@ -75,11 +120,24 @@ export interface CheckItem {
   vars?: Readonly<Record<string, string>>;
 }
 
+/**
+ * Observer of executed workflow conditions (WI-24): called once per condition
+ * of a {@link SchedulerChecks.workflowConditions} call, in order; `result` is
+ * `null` when the condition was not executed (an earlier one decided, or its
+ * argument template failed – then `diagnosis.error` says why).
+ */
+export type WorkflowConditionObserver = (
+  workflow: WorkflowConfig,
+  diagnosis: CheckDiagnosis,
+  result: ShellCheckResult | null,
+) => void;
+
 /** Runs the scheduler's shell checks. */
 export class SchedulerChecks {
   constructor(
     private readonly runner: ShellCheckRunner,
     private readonly now: () => Date,
+    private readonly observer?: WorkflowConditionObserver,
   ) {}
 
   /** Cache key of a workflow condition (WI-04 proposal). */
@@ -102,7 +160,7 @@ export class SchedulerChecks {
     const spec: ShellCheckSpec = { command: filter.command, timeoutMs: filter.timeoutMs };
     const ctx = buildCheckContext('shell_filter', workflow.id, target.item, target.sourceType);
     const result = await this.runner.run(spec, ctx, signal ? { signal } : {});
-    return fromResult('shell_filter', 0, filter.command, result);
+    return fromResult('shell_filter', 0, filter, result);
   }
 
   private async runList(
@@ -116,15 +174,26 @@ export class SchedulerChecks {
     let failed: CheckDiagnosis | null = null;
     for (const [index, condition] of list.entries()) {
       if (failed) {
-        checks.push(notEvaluatedCheck(kind, index, condition.command));
+        const skipped = notEvaluatedCheck(kind, index, condition);
+        checks.push(skipped);
+        if (kind === 'workflow_condition') this.notify(workflow, skipped, null);
         continue;
       }
-      const diag = await this.runOne(workflow, kind, index, condition, target, signal);
+      const { diag, result } = await this.runOne(workflow, kind, index, condition, target, signal);
       checks.push(diag);
+      if (kind === 'workflow_condition') this.notify(workflow, diag, result);
       if (diag.value !== true) failed = diag;
     }
     const value: TriValue = failed === null ? true : failed.value === false ? false : 'unknown';
     return { value, checks, failed };
+  }
+
+  private notify(workflow: WorkflowConfig, diag: CheckDiagnosis, result: ShellCheckResult | null): void {
+    try {
+      this.observer?.(workflow, diag, result);
+    } catch {
+      // Observers are informational (UI status); they must never affect scheduling.
+    }
   }
 
   private async runOne(
@@ -134,14 +203,14 @@ export class SchedulerChecks {
     condition: ShellCheckConfig,
     target: CheckItem | undefined,
     signal: AbortSignal | undefined,
-  ): Promise<CheckDiagnosis> {
+  ): Promise<{ diag: CheckDiagnosis; result: ShellCheckResult | null }> {
     let args: string[];
     try {
       const values = templateValues(workflow, this.now(), target);
       const scope = kind === 'item_condition' ? { source: true } : {};
       args = condition.args.map((a) => renderTemplate(a, values, { mode: 'text', scope }));
     } catch (err) {
-      return { ...notEvaluatedCheck(kind, index, condition.command), value: 'unknown', error: `argument template: ${errorMessage(err)}` };
+      return { diag: { ...notEvaluatedCheck(kind, index, condition), value: 'unknown', error: `argument template: ${errorMessage(err)}` }, result: null };
     }
     const spec: ShellCheckSpec = { command: condition.command, args, timeoutMs: condition.timeoutMs };
     const ctx =
@@ -153,6 +222,6 @@ export class SchedulerChecks {
       kind === 'workflow_condition' && condition.cacheMs !== null && condition.cacheMs > 0
         ? await this.runner.runCached(SchedulerChecks.conditionCacheKey(workflow.id, index), condition.cacheMs, spec, ctx, opts)
         : await this.runner.run(spec, ctx, opts);
-    return fromResult(kind, index, condition.command, result);
+    return { diag: fromResult(kind, index, condition, result), result };
   }
 }
