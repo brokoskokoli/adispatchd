@@ -24,6 +24,16 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 - `workflow dry-run` (CLI, API, UI) zeigt je Kandidat die Werte bzw. Unknown-Gründe der `project.*`-Felder.
 - Beispiele: `examples/config/workflows/reviewer-project-b.yaml`, Konfigurationsreferenz §7.7; `init` legt
   auskommentierte `project`- und `github_token`-Blöcke an.
+- **Benannte, wiederverwendbare Filter** (`filters/<id>.yaml`): einmal definieren, in Workflows und Views per
+  Kurzform `filter: <id>` oder per Referenzknoten `{ use: <id> }` an beliebiger Stelle im Filterbaum verwenden
+  (auch in `item_priority` und in anderen benannten Filtern). Referenzen werden beim Laden eingesetzt; Pushdown und
+  `state`-Regel gelten für die Position nach dem Einsetzen. Unbekannte IDs (mit „did you mean …“), Zyklen und
+  Ketten tiefer als 16 Ebenen sind Fehler; Feldfehler werden am Verwendungsort mit dem Pfad im benannten Filter
+  gemeldet; unbenutzte Filter ergeben eine Warnung. Änderungen wirken nach `config reload` auf alle Verwender.
+- `workflow dry-run` zeigt den ausgewerteten (expandierten) Filter (`source.filter`, Zeile `filter:`);
+  `GET /api/v1/config` listet die benannten Filter, `GET /api/v1/config/files` und die UI zeigen `filters/`.
+- `init` und `examples/config` enthalten den benannten Filter `needs-maintainer`, den Coder-Workflow und View
+  gemeinsam nutzen; `config validate` nennt die Zahl der benannten Filter.
 
 ### Geändert
 

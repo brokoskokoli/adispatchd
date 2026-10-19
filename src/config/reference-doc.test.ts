@@ -7,6 +7,7 @@
  *   loader. Sets marked `# invalid` must fail with exactly the documented
  *   errors (`# expect: <file>: <path>: <message>` substrings); all other sets
  *   must load, with exactly the documented warnings (`# expect-warning:`).
+ * - The named filter grammar (`Use`) and its depth limit are documented.
  * - The placeholder whitelist, the GitHub field catalogue (incl. the project
  *   field kinds), the view run fields, hooks, operators and notification
  *   events must all be documented.
@@ -18,7 +19,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { FILTER_OPERATORS, HOOK_NAMES, NOTIFICATION_EVENT_TYPES, OPERATORS_BY_TYPE, PLACEHOLDERS } from '../core/index.js';
 import { GITHUB_FIELD_DEFINITIONS, PROJECT_FIELD_DATA_TYPES, PROJECT_FIELD_KINDS, PROJECT_FIELD_TYPES } from '../sources/github/index.js';
 import { VIEW_RUN_FIELDS } from '../views/index.js';
-import { DEFAULT_WORKING_DIRECTORY, loadConfig, type ConfigIssue } from './index.js';
+import { DEFAULT_WORKING_DIRECTORY, loadConfig, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
 import { createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
 
 const DOC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../docs/configuration-reference.md');
@@ -108,7 +109,7 @@ async function load(name: string): Promise<Awaited<ReturnType<typeof loadConfig>
 
 describe('docs/configuration-reference.md', () => {
   it('contains the documented example sets', () => {
-    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects']) {
+    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters']) {
       expect(sets.get(name)?.invalid, name).toBe(false);
     }
     expect([...sets.values()].filter((s) => s.invalid).length).toBeGreaterThanOrEqual(10);
@@ -169,6 +170,12 @@ describe('docs/configuration-reference.md', () => {
     for (const [type, operators] of Object.entries(OPERATORS_BY_TYPE)) {
       expect(markdown, type).toContain(`| \`${type}\` | ${operators.join(', ')} |`);
     }
+  });
+
+  it('documents the grammar and the depth limit of named filters (WI-15)', () => {
+    expect(markdown).toContain('Use        := { use: <Filter-ID> }');
+    expect(markdown).toContain('Wurzel     := Knoten | <Filter-ID>');
+    expect(markdown).toMatch(new RegExp(`tiefer\\s+als ${MAX_FILTER_USE_DEPTH} Ebenen`));
   });
 
   it('documents all hooks, operators and notification events', () => {

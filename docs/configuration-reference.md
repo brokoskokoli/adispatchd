@@ -19,7 +19,7 @@
 2. [Gemeinsame Datentypen](#2-gemeinsame-datentypen)
 3. [Die Dateien](#3-die-dateien) – [config.yaml](#31-configyaml), [sources.yaml](#32-sourcesyaml),
    [identities.yaml](#33-identitiesyaml), [workflows/*.yaml](#34-workflowsyaml), [views/*.yaml](#35-viewsyaml),
-   [Grenzen](#36-bekannte-grenzen-v1)
+   [filters/*.yaml](#36-filtersyaml), [Grenzen](#37-bekannte-grenzen-v1)
 4. [Filter-Sprache](#4-filter-sprache)
 5. [Platzhalter-Referenz](#5-platzhalter-referenz)
 6. [Auswertungsablauf](#6-auswertungsablauf)
@@ -40,13 +40,15 @@ config-dir/
   identities.yaml      GitHub-Identitäten (Apps, Tokens)          optional (fehlt → keine Identities)
   workflows/*.yaml     ein Workflow pro Datei                     optional (fehlt → keine Workflows)
   views/*.yaml         eine View pro Datei                        optional
+  filters/*.yaml       ein benannter Filter pro Datei             optional (fehlt → keine benannten Filter)
   scripts/…            frei; Skripte werden über Pfade referenziert (siehe §2.4)
 ```
 
 `adispatch init --config-dir D --data-dir D` legt eine kommentierte, gültige Beispielkonfiguration an
 (`src/cli/init-templates.ts`): `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/hello.yaml`
 (manuell, aktiv), `workflows/coder.yaml` und `workflows/nightly-maintenance.yaml` (beide `enabled: false`),
-`views/needs-maintainer.yaml` und Beispielskripte unter `scripts/`. `init` überschreibt nie bestehende Dateien.
+`views/needs-maintainer.yaml`, den benannten Filter `filters/needs-maintainer.yaml` (von `coder.yaml` und der View
+verwendet) und Beispielskripte unter `scripts/`. `init` überschreibt nie bestehende Dateien.
 
 Das `data-dir` (SQLite, Logs, `runs/<id>/context.json|result.json`, Default-Workspaces) ist **keine**
 Konfiguration und wird hier nur erwähnt, wo es Defaults bestimmt.
@@ -56,10 +58,10 @@ Konfiguration und wird hier nur erwähnt, wo es Defaults bestimmt.
 | Regel | Verhalten |
 |---|---|
 | Top-Level-Dateien | exakt `config.yaml`, `sources.yaml`, `identities.yaml`. `.yml`-Varianten werden **nicht** gelesen. |
-| `workflows/`, `views/` | alle Einträge, deren Name auf `.yaml` **oder** `.yml` endet und nicht mit `.` beginnt, alphabetisch sortiert. |
+| `workflows/`, `views/`, `filters/` | alle Einträge, deren Name auf `.yaml` **oder** `.yml` endet und nicht mit `.` beginnt, alphabetisch sortiert. |
 | Unterordner | werden **nicht** rekursiv gelesen (`workflows/alt/x.yaml` wird ignoriert). Ein *Verzeichnis* namens `x.yaml` ist ein Fehler („Not a regular file“). |
 | Versteckte Dateien | `.foo.yaml` wird ignoriert (z. B. Editor-Backups). Andere Endungen (`x.yaml.bak`, `x.json`) ebenfalls. |
-| Dateiname ↔ `id` | Maßgeblich ist das Feld `id`. Weicht der Dateiname (ohne Endung) davon ab, gibt es nur eine **Warnung** (nur für Workflows). Doppelte `id` über zwei Dateien ist ein **Fehler** in der alphabetisch späteren Datei. |
+| Dateiname ↔ `id` | Maßgeblich ist das Feld `id`. Weicht der Dateiname (ohne Endung) davon ab, gibt es nur eine **Warnung** (nur für Workflows und benannte Filter). Doppelte `id` über zwei Dateien ist ein **Fehler** in der alphabetisch späteren Datei. |
 | Größe | max. 1 MiB pro Datei, sonst Fehler. |
 
 ### 1.3 Kodierung und YAML-Dialekt
@@ -83,6 +85,7 @@ Konfiguration und wird hier nur erwähnt, wo es Defaults bestimmt.
 2. Alle Dateien werden gelesen und geparst (YAML-Syntaxfehler mit Zeilennummer).
 3. Jede Datei wird gegen ihr Schema geprüft (`src/config/schemas.ts`: Struktur, Typen, Dauern, Größen, Defaults).
    Ist `config.yaml` ungültig, werden Workflows trotzdem gegen die **Default**-Globalwerte weitergeprüft.
+   Benannte Filter (`filters/`) werden zuerst geladen und in Workflows/Views eingesetzt (§3.6).
 4. Semantische Prüfung über alle Dateien (`src/config/validate.ts`): Referenzen, eindeutige IDs, Platzhalter je
    Kontext, Widersprüche, Cron/Zeitzone, Parameter-Defaults, Feldnamen/Operatoren/Werttypen in Filtern und Views
    gegen den statischen Feldkatalog des Adaptertyps (`src/config/field-catalog.ts`, §4.3).
@@ -122,6 +125,7 @@ Konfigurationsänderungen wirken **nur** durch einen manuellen Reload (`adispatc
 | `sources.yaml`, `identities.yaml` | Adapter/Credentials werden neu aufgebaut, wenn sich etwas geändert hat; entfernte bleiben für laufende Runs verfügbar |
 | Workflows | sofort für Planung/Cron; geänderte Cron-Ausdrücke planen ab „jetzt“; Cache der Workflow-Conditions wird geleert |
 | Views | sofort; View-Cache wird verworfen |
+| Benannte Filter (`filters/`) | wie eine Änderung an jedem verwendenden Workflow/jeder verwendenden View (dort ist der Filter eingesetzt); Workflows zählen im Reload-Diff als `changedWorkflows` |
 | Umgebungsvariablen (Keys, Tokens, Webhook-URLs, Header) | gehören zum Prozess, nicht zur Konfiguration → Änderung erfordert **Neustart** |
 
 **Runtime-Overrides** (UI bzw. `PATCH /api/v1/workflows/:id/runtime`, `PATCH /api/v1/scheduler/runtime`):
@@ -444,7 +448,7 @@ filter:                          # deklarativ, nur bei trigger.type: source
   all:
     - { field: labels, operator: contains, value: ready }
     - { field: is_pull_request, operator: equals, value: false }
-    - not: { field: labels, operator: contains, value: on-hold }
+    - not: { use: on-hold }        # benannter Filter filters/on-hold.yaml (§3.6)
     - any:
         - { field: dependencies.blocked_by_open, operator: equals, value: 0 }
         - { field: labels, operator: contains, value: ignore-dependencies }
@@ -563,7 +567,8 @@ vom Trigger – manuell gestartet werden; Source-Workflows dann mit Item-Referen
 #### 3.4.3 `filter`
 
 Deklarativer Filter-AST, siehe §4. Nur für Source-Workflows (sonst Fehler). Fehlt er, passt jedes Item der
-Source (beachte §4.5: standardmäßig nur offene Issues/PRs).
+Source (beachte §4.5: standardmäßig nur offene Issues/PRs). Statt eines Mappings darf die ID eines benannten
+Filters stehen (`filter: ready-for-coding`, §3.6); `{ use: <id> }` geht an jeder Stelle im Baum.
 
 #### 3.4.4 `shell_filter`
 
@@ -579,7 +584,7 @@ Dry-Run ausgeführt, nicht in Views. Umgebung und Kontextdatei: §6.11.
 
 | Schlüssel | Typ | Default | Bedeutung |
 |---|---|---|---|
-| `rules` | Liste `{ when: <Filter-AST>, value: <Zahl> }` | `[]` | in Reihenfolge ausgewertet; die erste Regel mit Ergebnis `true` liefert die Priorität; `false`/`unknown` zählen nicht |
+| `rules` | Liste `{ when: <Filter-AST oder Filter-ID>, value: <Zahl> }` | `[]` | in Reihenfolge ausgewertet; die erste Regel mit Ergebnis `true` liefert die Priorität; `false`/`unknown` zählen nicht |
 | `default` | Zahl | `0` | wenn keine Regel zutrifft |
 
 Ohne `item_priority` ist die Item-Priorität 0. Regeln dürfen teure Felder verwenden (werden dann aufgelöst).
@@ -740,7 +745,7 @@ sort: { field: updated_at, direction: desc }
 | `id` | Konfigurations-ID | ja | | eindeutig über alle Views | |
 | `title` | String | nein | `id` | nicht leer | |
 | `sources` | Liste Source-ID | ja | | ≥ 1, existieren, eindeutig, gleicher Adaptertyp | Datenquellen |
-| `filter` | Filter-AST | nein | alles | §4; inkl. `run.last_*` | nur Items mit Ergebnis `true` werden gezeigt |
+| `filter` | Filter-AST oder ID eines benannten Filters (§3.6) | nein | alles | §4; inkl. `run.last_*` | nur Items mit Ergebnis `true` werden gezeigt |
 | `shell_filter` | – | – | | **verboten** (Fehler) | Views führen nie Skripte aus |
 | `fields` | Liste | ja | | ≥ 1 | Spalten in Reihenfolge |
 | `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen; `project.*` nur, wenn **alle** Sources der View es mit gleicher Art deklarieren (§4.7.1) | Feldname (§4.7, §4.8) |
@@ -753,7 +758,63 @@ Laden: beim Öffnen/Refresh aus allen Sources (parallel; eine fehlerhafte Source
 anderen liefern trotzdem), Cache 30 s, max. 2 000 Zeilen. Nicht auflösbare Felder (z. B. fehlende API-Rechte) bleiben erkennbar leer; unbekannte Feldnamen sind bereits
 ein Konfigurationsfehler (§4.3).
 
-### 3.6 Bekannte Grenzen (V1)
+### 3.6 filters/*.yaml
+
+Ein **benannter Filter** pro Datei: einmal zentral definiert, in Workflows und Views nur noch referenziert, damit
+alle dieselben Items sehen.
+
+```yaml
+# example: reference
+# file: filters/on-hold.yaml
+id: on-hold                        # Pflicht; Dateiname sollte <id>.yaml sein
+description: Zurückgestellte Items  # optional, nur zur Anzeige
+filter:
+  any:
+    - { field: labels, operator: contains, value: on-hold }
+    - { field: labels, operator: contains, value: blocked }
+```
+
+| Schlüssel | Typ | Pflicht | Regeln | Bedeutung |
+|---|---|---|---|---|
+| `id` | Konfigurations-ID | ja | eindeutig über alle Filterdateien (sonst Fehler in der alphabetisch späteren Datei); weicht der Dateiname ab → Warnung | Name für `use` |
+| `description` | String | nein | | Beschreibung (API `GET /api/v1/config` → `filters`) |
+| `filter` | Filter-AST oder Filter-ID | ja | §4; darf selbst andere benannte Filter verwenden | der Filter |
+
+**Verwendung** (§4.1):
+
+- **Kurzform:** `filter: on-hold` – ein String statt Mapping – in Workflow, View und `item_priority.rules[].when`
+  bedeutet genau diesen Filter.
+- **Referenzknoten** `{ use: on-hold }` (einziger Schlüssel) **überall** im Filterbaum: Workflow-`filter`,
+  `item_priority.rules[].when`, View-`filter` und in anderen benannten Filtern. Damit lässt sich kombinieren:
+  `all: [{ use: ready-for-coding }, { field: labels, operator: contains, value: backend }]`.
+
+**Auflösung beim Laden:** Jede Referenz wird durch den Baum des benannten Filters ersetzt (expandiert). Der
+geladene Workflow bzw. die View enthält nur noch den expandierten Baum; Scheduler, Planner, Views, Pushdown,
+Dry-Run und Run-Snapshot sehen keine Referenzen. Ein `use` steht für seinen Inhalt an genau dieser Stelle: für die
+`state`-Regel und den Pushdown (§4.5) zählt die Position **nach** dem Einsetzen.
+
+**Prüfung:**
+
+- Jeder benannte Filter wird strukturell geprüft (wie jeder Filter) – auch wenn ihn niemand verwendet. Fehler in
+  der Filterdatei selbst: unbekannte Filter-ID (mit „did you mean …“), Zyklus (`a → b → a`), Referenzkette tiefer
+  als 16 Ebenen, `use` mit weiteren Schlüsseln oder ohne gültige ID.
+- Die **Feldprüfung** (Feldkatalog, Operatoren, Werttypen, `run.last_*` nur in Views, `project.*` je Source, §4.3)
+  hängt vom Kontext ab und läuft daher **an jedem Verwendungsort** auf dem expandierten Baum. Die Meldung nennt den
+  Verwendungsort und den Pfad im benannten Filter, z. B.
+  `workflows/coder.yaml: filter.all[0] (use "ready-for-coding" → filters/ready-for-coding.yaml: filter.all[1].field): Unknown field …`.
+  Ein Filter mit `run.last_status` ist also in einer View gültig, in einem Workflow ein Fehler.
+- Verwendet ein Workflow/eine View einen fehlerhaften benannten Filter, kommt dort zusätzlich
+  `Named filter "x" is invalid (see filters/x.yaml)`. Wie jeder Fehler macht das die ganze Konfiguration ungültig
+  (Laden und Reload sind atomar, §1.5).
+- Ein benannter Filter, den kein Workflow und keine View verwendet (auch nicht über andere benannte Filter), ergibt
+  eine **Warnung**.
+
+**Reload:** `config reload` und der Start lesen `filters/` mit; eine Änderung an einem benannten Filter wirkt nach
+dem Reload auf alle verwendenden Workflows und Views (§1.5). `workflow dry-run` zeigt den expandierten Filter
+(Zeile `filter:`), `GET /api/v1/config` listet die benannten Filter unter `filters` (expandiert), die Dateien
+erscheinen in `GET /api/v1/config/files` (UI: Configuration).
+
+### 3.7 Bekannte Grenzen (V1)
 
 - `shell_filter` hat nur `command` und `timeout`: **keine `args`**, kein `env`. Das Item kommt ausschließlich über
   `ADISPATCH_CHECK_CONTEXT_FILE`; Parameter für das Skript über einen Wrapper bzw. die Kontextdatei.
@@ -767,20 +828,24 @@ ein Konfigurationsfehler (§4.3).
 - Projektfelder: ein Projekt je Source; Metadaten lesen die ersten 100 Felder des Projekts; je Issue/PR werden die
   ersten 20 (nicht archivierten) Projekt-Mitgliedschaften gelesen (mehr → unknown, §4.7.1). Kein Pushdown: die
   Issue-Liste wird wie bisher nur über `state`/`labels` eingeschränkt.
+- Benannte Filter haben keine Parameter (kein `{use: x, value: …}`); Referenzketten höchstens 16 Ebenen tief
+  (gezählt ab jedem Workflow-, View- oder Filter-Wurzelknoten).
 
 ---
 
 ## 4. Filter-Sprache
 
-Gemeinsam für `filter` (Workflows), `item_priority.rules[].when` und `filter` (Views).
+Gemeinsam für `filter` (Workflows), `item_priority.rules[].when`, `filter` (Views) und benannte Filter (§3.6).
 
 ### 4.1 Grammatik
 
 ```text
-Knoten     := All | Any | Not | Prädikat
+Wurzel     := Knoten | <Filter-ID>            # Kurzform: String = { use: <Filter-ID> }
+Knoten     := All | Any | Not | Use | Prädikat
 All        := { all: [ Knoten, … ] }          # einziger Schlüssel; [] = true
 Any        := { any: [ Knoten, … ] }          # einziger Schlüssel; [] = false
 Not        := { not: Knoten }                 # einziger Schlüssel
+Use        := { use: <Filter-ID> }            # einziger Schlüssel; benannter Filter aus filters/ (§3.6)
 Prädikat   := { field: <String>, operator: <Operator>, value: <Wert> }   # genau diese drei Schlüssel
 Operator   := equals | not_equals | contains | in | greater_than | less_than
 Wert       := String | Zahl | Boolean | null            # equals, not_equals, contains
@@ -790,7 +855,8 @@ Wert       := String | Zahl | Boolean | null            # equals, not_equals, co
 
 `value` ist immer Pflicht (`null` explizit schreiben). Strukturfehler werden exakt verortet
 (`filter.all[1].operator`). Eine Liste als `value` nimmt **nur** `in`; alle anderen Operatoren verlangen einen
-Skalar (`greater_than`/`less_than`: Zahl oder Datums-String) – sonst Fehler.
+Skalar (`greater_than`/`less_than`: Zahl oder Datums-String) – sonst Fehler. `Use` wird beim Laden durch den
+Baum des benannten Filters ersetzt (§3.6).
 
 ### 4.2 Operatoren – exakte Semantik
 
@@ -834,6 +900,8 @@ und `source.update` (`Ready` passt auf `ready`). Alle anderen String-Vergleiche 
   `item_priority.rules[].when`; Views: `filter`, `fields[].field`, `fields[].link`, `sort.field`): unbekannte
   Feldnamen (mit Vorschlag „did you mean …“), nicht erlaubte Operatoren, falsche Werttypen, ungültige Datumswerte.
 - `run.last_*` ist nur in Views erlaubt; in Workflows ist es ein Fehler („only available in views“).
+- Benannte Filter (§3.6) werden am Verwendungsort gegen dessen Kontext geprüft; die Meldung nennt in Klammern den
+  Pfad im benannten Filter.
 - `project.<Name>` gibt es je Source genau für die in `sources.yaml` unter `project.fields` deklarierten Namen
   (Workflow: die Trigger-Source; View: nur Felder, die alle Sources der View mit gleicher Art deklarieren). Sonst
   Fehler `Unknown project field "…"` mit Grund (nicht deklariert / keine `project`-Einstellung / fehlt in Source X /
@@ -869,6 +937,8 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 - **Pushdown:** Nur Prädikate der obersten Konjunktion (`all`, verschachtelte `all` werden abgeflacht; ein
   einzelnes Prädikat zählt auch) mit billigem Feld und in `pushdown` deklariertem Operator gehen in die API-Abfrage.
   `any`/`not` werden nie gepusht. Der vollständige Filter wird **immer** zusätzlich lokal ausgewertet.
+  Benannte Filter zählen nach dem Einsetzen: `{ use: x }` direkt in der obersten `all` (oder `filter: x`) wird wie
+  ein verschachteltes `all` abgeflacht, unter `any`/`not` nicht.
 - **GitHub-Abfrage:** `state` = `open` (Default!), `closed` oder `all`, abgeleitet aus `state equals open|closed`
   bzw. `state in [...]` auf oberster Ebene; `labels contains "x"` (ohne Komma) → `labels=x` (alle müssen
   vorhanden sein). **Ohne ein solches `state`-Prädikat werden nur offene Issues/PRs gelesen.**
@@ -876,7 +946,9 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
   stehen (direkt oder in oberster `all`), nur mit `equals` oder `in` und nur mit den Werten `open`/`closed`.
   Unter `any`/`not`, mit `not_equals`/`contains` oder mit anderen Werten wäre es stillschweigend wirkungslos
   (es würden trotzdem nur offene Items gelesen) und ist daher ein Fehler. In `item_priority` ist `state` frei
-  verwendbar (beeinflusst die Abfrage nicht).
+  verwendbar (beeinflusst die Abfrage nicht). Mit benannten Filtern zählt die Position nach dem Einsetzen:
+  `filter: x` bzw. `{ use: x }` direkt in der obersten `all` ist oberste Ebene, unter `any`/`not` nicht – ein
+  benannter Filter mit `state` ist also je nach Verwendungsort gültig oder ein Fehler.
 
 ### 4.6 Workflow-Filter vs. View-Filter
 
@@ -1192,7 +1264,8 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 `adispatch workflow dry-run <id>` (gegen die laufende Instanz, sonst mit `--config-dir` lokal) bzw.
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
-`project.*`-Felder (`projectFields`). Reserviert nichts, startet keine Worker oder Actions
+`project.*`-Felder (`projectFields`), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
+Textausgabe `filter:`). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 
@@ -1556,6 +1629,70 @@ Umgebung: `GITHUB_PROJECT_TOKEN=github_pat_…` (fine-grained Token von `alice` 
 klassisch `read:project`) in der Env-Datei, danach Neustart. `project.Sprint` gibt es nur in Workflows auf
 `project_a`; in der View wäre es ein Fehler, weil `project_b` es nicht deklariert. Ohne Projektzugriff ist der
 Filter `unknown` (kein Start) und der Dry-Run nennt den Grund.
+
+### 7.8 Benannte Filter teilen
+
+„Bereit fürs Coding“ wird einmal definiert. Der Backend-Coder nimmt davon nur Backend-Items, die View zeigt
+genau die Items, die ein Coder nehmen würde, und beide sortieren dringende nach vorn.
+
+```yaml
+# example: named-filters
+# extends: github
+# file: filters/ready-for-coding.yaml
+id: ready-for-coding
+description: Offene Issues mit Label ready-for-coding, ohne offene Blocker
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-coding }
+    - { field: is_pull_request, operator: equals, value: false }
+    - { field: dependencies.blocked_by_open, operator: equals, value: 0 }
+```
+
+```yaml
+# example: named-filters
+# file: filters/urgent.yaml
+id: urgent
+filter: { field: labels, operator: in, value: ['priority:high', 'priority:critical'] }
+```
+
+```yaml
+# example: named-filters
+# file: workflows/coder-backend.yaml
+id: coder-backend
+identity: coder
+trigger: { type: source, source: project_a }
+filter:
+  all:
+    - { use: ready-for-coding }        # oberste Ebene: labels contains → Pushdown wie direkt geschrieben
+    - { field: labels, operator: contains, value: backend }
+item_priority:
+  rules:
+    - when: urgent                     # Kurzform auch in item_priority
+      value: 100
+execute:
+  type: shell
+  command: scripts/coder.sh
+  args: ['{item.url}']
+```
+
+```yaml
+# example: named-filters
+# file: views/ready.yaml
+id: ready
+title: Bereit fürs Coding
+sources: [project_a, project_b]
+filter: ready-for-coding               # Kurzform
+fields:
+  - { field: title, link: url }
+  - { field: repository }
+  - { field: labels }
+sort: { field: updated_at }
+```
+
+Der geladene Workflow enthält den eingesetzten Baum
+`all: [ { all: [labels…, is_pull_request…, dependencies…] }, labels contains backend ]`; der Pushdown flacht ihn
+zu `labels=ready-for-coding,backend` ab. Eine Änderung an `filters/ready-for-coding.yaml` wirkt nach
+`config reload` auf Coder und View zugleich.
 
 ---
 
@@ -1945,6 +2082,64 @@ fields: [ { field: title } ]
 
 Lösung: `state` als oberstes Prädikat, z. B. `all: [{ field: state, operator: in, value: [open, closed] }, { any: [...] }]`.
 
+**Benannte Filter** – Feldfehler werden am Verwendungsort mit dem Pfad im benannten Filter gemeldet (§3.6),
+Referenzfehler in der Datei, in der die Referenz steht.
+
+```yaml
+# example: err-named-filters
+# extends: github
+# invalid
+# expect: workflows/backend.yaml: filter.all[0] (use "ready-for-coding" → filters/ready-for-coding.yaml: filter.all[1].field): Unknown field "labls" for source type github (did you mean "labels"?)
+# expect: workflows/backend.yaml: filter.all[1]: Unknown named filter "closd" (did you mean "closed"?)
+# expect: workflows/backend.yaml: filter.all[2].any[0] (use "closed" → filters/closed.yaml: filter.field): "state" only works at the top level of the filter
+# expect: filters/loop.yaml: filter.not: Cycle in named filters: loop → loop
+# expect: filters/extra.yaml: filter: "use" must be the only key of its filter node ({ use: <filter-id> } references a named filter)
+# file: workflows/backend.yaml
+id: backend
+trigger: { type: source, source: project_a }
+filter:
+  all:
+    - { use: ready-for-coding }
+    - { use: closd }
+    - any: [ { use: closed }, { field: labels, operator: contains, value: reopen } ]
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+```yaml
+# example: err-named-filters
+# file: filters/ready-for-coding.yaml
+id: ready-for-coding
+filter:
+  all:
+    - { field: is_pull_request, operator: equals, value: false }
+    - { field: labls, operator: contains, value: ready-for-coding }
+```
+
+```yaml
+# example: err-named-filters
+# file: filters/closed.yaml
+id: closed
+filter: { field: state, operator: equals, value: closed }   # gültig nur als oberstes Prädikat (§4.5)
+```
+
+```yaml
+# example: err-named-filters
+# file: filters/loop.yaml
+id: loop
+filter: { not: { use: loop } }
+```
+
+```yaml
+# example: err-named-filters
+# file: filters/extra.yaml
+id: extra
+filter: { use: closed, field: labels }
+```
+
+Weitere Meldungen: `Named filter "x" is invalid (see filters/x.yaml)` (verwendeter Filter ist selbst fehlerhaft),
+`Named filters are nested more than 16 levels deep: a → b → …`, `"use" requires the ID of a named filter`
+(`use` ohne gültige ID), `Duplicate filter ID "x" (already defined in filters/a.yaml)`.
+
 **Null-Intervalle und -Timeouts**
 
 ```yaml
@@ -1980,6 +2175,15 @@ execute:
   command: scripts/hello.sh
   env: { API_TOKEN: abc123 }
   timeout: { max_duration: 1m, idle_timeout: 5m }
+```
+
+```yaml
+# example: warn-common
+# expect-warning: filters/old.yaml: id: Named filter "spare" is not used by any workflow or view
+# expect-warning: filters/old.yaml: id: Filter ID "spare" differs from file name "old.yaml"
+# file: filters/old.yaml
+id: spare
+filter: { field: labels, operator: contains, value: spare }
 ```
 
 Weitere häufige Meldungen (ohne eigenes Beispiel):
@@ -2018,7 +2222,9 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 3. **Datei** `workflows/<id>.yaml` anlegen (Dateiname = `id`), am besten mit `enabled: false` beginnen.
 4. **Filter** nur mit Feldern aus §4.7; Labels exakt schreiben; für geschlossene Items ein `state`-Prädikat auf
    oberster Ebene; teure `dependencies.*` nur wenn nötig; Projektwerte (`project.Status in [...]`) genau so
-   schreiben, wie sie im Projekt heißen (Groß-/Kleinschreibung zählt).
+   schreiben, wie sie im Projekt heißen (Groß-/Kleinschreibung zählt). Filter, die mehrere Workflows/Views teilen
+   sollen, als benannten Filter in `filters/<id>.yaml` anlegen und mit `filter: <id>` bzw. `{ use: <id> }`
+   verwenden (§3.6).
 5. **execute:** Skript ausführbar machen (`chmod +x`), Pfad relativ zum config-dir oder absolut; Argumente als
    Liste; Timeouts setzen; Secrets nur über `secrets`.
 6. **Hooks:** Label-Übergänge für jeden Ausgang (`on_start`, `on_success`, `on_failure`, `on_crash`,

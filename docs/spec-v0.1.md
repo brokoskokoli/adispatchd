@@ -71,6 +71,8 @@ config-dir/
     nightly-maintenance.yaml
   views/
     needs-maintainer.yaml
+  filters/                  # Nachtrag 0.2.0 (WI-15): benannte Filter
+    ready-for-coding.yaml
   scripts/
     coder.sh
     check-credits.sh
@@ -320,6 +322,8 @@ Eine gemeinsame deklarative Filter-AST unterstützt `all`, `any`, `not` sowie mi
 **GitHub Dependencies:** Die native `blocked by`-Relation muss über die GitHub-API aufgelöst werden, einschließlich referenzierter Issues in anderen Repositories, sofern die verwendete App darauf Zugriff besitzt. Ableitbare Felder: `dependencies.blocked_by_total`, `dependencies.blocked_by_open`, `dependencies.blocked` (optional), `dependencies.status`. Eine offene Abhängigkeit verhindert einen Start **nur dann**, wenn der Workflow dies ausdrücklich filtert. Fehlender API-Zugriff ist nicht „0 offene Abhängigkeiten“. Die tatsächliche API-Verfügbarkeit, Berechtigungen und Cross-Repo-Eigenschaften sind per Integrationstest gegen GitHub zu prüfen.
 
 **Nachtrag 0.2.0 (WI-14) – Feldkatalog:** Billige Issue-Felder `state_reason`, `milestone` (Titel), `issue_type` (Name des Issue-Typs). Dazu je Source die deklarierten GitHub-Projects-Felder `project.<Name>` (Arten `single_select`/`text`/`iteration` → string, `number`, `date`), gelesen per GraphQL im selben Planungsschritt, nicht teuer, ohne Pushdown. Item nicht im Projekt → `null`; Projekt nicht erreichbar, Feld fehlt/falsche Art, Abfragefehler → nur die betroffenen `project.*` `unknown` (Grund über `SourceItem.unknownFields`), das Listing scheitert nicht. Die Offline-Validierung kennt `project.*` je Source (Views: nur gemeinsame Felder). Details: [configuration-reference.md](configuration-reference.md) §4.7.1.
+
+**Nachtrag 0.2.0 (WI-15) – Benannte Filter:** Filter können einmal in `filters/<id>.yaml` (`id`, optional `description`, `filter`) definiert und überall im Filterbaum per `{ use: <id> }` bzw. als Kurzform `filter: <id>` verwendet werden (Workflow-`filter`, `item_priority.rules[].when`, View-`filter`, andere benannte Filter). Referenzen werden beim Laden expandiert; Scheduler, Views, Pushdown und Dry-Run sehen nur den eingesetzten Baum (Position nach dem Einsetzen zählt). Unbekannte IDs, Zyklen und Ketten tiefer als 16 Ebenen sind Konfigurationsfehler; Feldprüfungen laufen am Verwendungsort; unbenutzte Filter ergeben eine Warnung. Details: [configuration-reference.md](configuration-reference.md) §3.6.
 
 **Shell-Filter:** Nur für Workflows. Jeder Aufruf bekommt den einzelnen Item-Kontext; Exit `0` = passt, Exit `1` = passt nicht, Exit `>=2` = Prüffehler. Shell-Conditions verwenden dieselbe Konvention, sind aber eigenständige Startprüfungen. Die Exit-Code-Semantik gilt für diese Prüfskripte, **nicht automatisch für den Haupt-Worker**. Workflow-Conditions können gecacht werden; itembezogene nicht notwendigerweise. Timeouts sind konfigurierbar. Views führen keine Shell-Skripte aus.
 

@@ -90,7 +90,8 @@ config-dir/                      data-dir/
   identities.yaml Apps/Tokens      logs/<run>/stdout.log, stderr.log
   workflows/*.yaml                 runs/<run>/context.json, result.json
   views/*.yaml                     workspaces/<workflow>/<run>/
-  scripts/*.sh                     backups/   DB-Backups vor Migrationen
+  filters/*.yaml benannte Filter   backups/   DB-Backups vor Migrationen
+  scripts/*.sh
 ```
 
 Ein Workflow (vollständiges Beispiel: `workflows/coder.yaml` nach `init`, Referenz: [Konfigurationsreferenz](docs/configuration-reference.md)):
@@ -125,6 +126,9 @@ on_crash:   [ { type: source.update, labels: { add: [ready-for-coding], remove: 
   `{parameters.<name>}`, `{workspace.base_dir}` … – unbekannte Platzhalter sind Konfigurationsfehler.
 - Manuelle Starts (UI/API) umgehen Filter, Conditions, Limits und Retry-Blocks, nie aber den aktiven Lock pro Workflow+Item.
 - Views (`views/*.yaml`) sind read-only Tabellen über mehrere Sources inkl. `run.last_*`-Feldern.
+- Benannte Filter (`filters/<id>.yaml`) einmal definieren und in Workflows/Views mit `filter: <id>` oder
+  `{ use: <id> }` an beliebiger Stelle im Filterbaum verwenden – alle sehen dieselben Items
+  ([Konfigurationsreferenz §3.6](docs/configuration-reference.md#36-filtersyaml)).
 - Änderungen gelten erst nach `config reload` (oder UI „Reload“); laufende Runs nutzen ihren Snapshot. Runtime-Overrides aus
   der UI gehen bei Neustart verloren.
 - Secrets stehen nie in YAML: Private Keys/Webhook-URLs nur über Umgebungsvariablen (`private_key_env`, `url_env`, `headers_env`).
