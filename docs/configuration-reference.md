@@ -19,7 +19,7 @@
 2. [Gemeinsame Datentypen](#2-gemeinsame-datentypen)
 3. [Die Dateien](#3-die-dateien) – [config.yaml](#31-configyaml), [sources.yaml](#32-sourcesyaml),
    [identities.yaml](#33-identitiesyaml), [workflows/*.yaml](#34-workflowsyaml), [views/*.yaml](#35-viewsyaml),
-   [filters/*.yaml](#36-filtersyaml), [Grenzen](#37-bekannte-grenzen-v1)
+   [filters/*.yaml](#36-filtersyaml), [dashboard.yaml](#37-dashboardyaml), [Grenzen](#38-bekannte-grenzen-v1)
 4. [Filter-Sprache](#4-filter-sprache)
 5. [Platzhalter-Referenz](#5-platzhalter-referenz)
 6. [Auswertungsablauf](#6-auswertungsablauf)
@@ -41,6 +41,7 @@ config-dir/
   workflows/*.yaml     ein Workflow pro Datei                     optional (fehlt → keine Workflows)
   views/*.yaml         eine View pro Datei                        optional
   filters/*.yaml       ein benannter Filter pro Datei             optional (fehlt → keine benannten Filter)
+  dashboard.yaml       Info-Kacheln im Dashboard (§3.7)           optional (fehlt → kein Bereich „Information“)
   scripts/…            frei; Skripte werden über Pfade referenziert (siehe §2.4)
 ```
 
@@ -48,7 +49,8 @@ config-dir/
 (`src/cli/init-templates.ts`): `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/hello.yaml`
 (manuell, aktiv), `workflows/coder.yaml` und `workflows/nightly-maintenance.yaml` (beide `enabled: false`),
 `views/needs-maintainer.yaml`, den benannten Filter `filters/needs-maintainer.yaml` (von `coder.yaml` und der View
-verwendet) und Beispielskripte unter `scripts/`. `init` überschreibt nie bestehende Dateien.
+verwendet), `dashboard.yaml` mit einer Info-Kachel (Plattenbelegung des data-dir, Skript `scripts/info/data-disk.sh`)
+und Beispielskripte unter `scripts/`. `init` überschreibt nie bestehende Dateien.
 
 Das `data-dir` (SQLite, Logs, `runs/<id>/context.json|result.json`, bei Container-Runs `runs/<id>/out/result.json`, Default-Workspaces) ist **keine**
 Konfiguration und wird hier nur erwähnt, wo es Defaults bestimmt.
@@ -57,7 +59,7 @@ Konfiguration und wird hier nur erwähnt, wo es Defaults bestimmt.
 
 | Regel | Verhalten |
 |---|---|
-| Top-Level-Dateien | exakt `config.yaml`, `sources.yaml`, `identities.yaml`. `.yml`-Varianten werden **nicht** gelesen. |
+| Top-Level-Dateien | exakt `config.yaml`, `sources.yaml`, `identities.yaml`, `dashboard.yaml`. `.yml`-Varianten werden **nicht** gelesen. |
 | `workflows/`, `views/`, `filters/` | alle Einträge, deren Name auf `.yaml` **oder** `.yml` endet und nicht mit `.` beginnt, alphabetisch sortiert. |
 | Unterordner | werden **nicht** rekursiv gelesen (`workflows/alt/x.yaml` wird ignoriert). Ein *Verzeichnis* namens `x.yaml` ist ein Fehler („Not a regular file“). |
 | Versteckte Dateien | `.foo.yaml` wird ignoriert (z. B. Editor-Backups). Andere Endungen (`x.yaml.bak`, `x.json`) ebenfalls. |
@@ -96,7 +98,8 @@ Folgefehler sind möglich: Ist z. B. `identities.yaml` ungültig, meldet `source
 `Unknown identity "…"`. Den ersten Fehler zuerst beheben.
 
 Der Loader liest **keine** Umgebungsvariablen. `config validate` prüft also nicht, ob `private_key_env`,
-`token_env`, `url_env` oder `headers_env` gesetzt sind, und es prüft weder Skriptpfade auf Existenz noch App-Rechte
+`token_env`, `url_env` oder `headers_env` gesetzt sind, und es prüft weder Skriptpfade auf Existenz (Ausnahme: die
+Skripte der Info-Kacheln in `dashboard.yaml`, §3.7) noch App-Rechte
 oder die Erreichbarkeit von GitHub. Feldnamen werden offline gegen den Feldkatalog geprüft (§4.3) – auch
 `project.*` nur gegen die Deklaration in `sources.yaml`, nicht gegen das echte Projekt (das zeigt erst der Dry-Run).
 Exit-Code: 0 = gültig (ggf. mit Warnungen), 1 = ungültig.
@@ -117,13 +120,15 @@ Konfigurationsänderungen wirken **nur** durch einen manuellen Reload (`adispatc
 |---|---|
 | `server.host`, `server.port` | erst nach Neustart |
 | `server.allowed_hosts` | sofort (nächster Request) |
+| `ui.external_links` | sofort: Toolbar der geöffneten UI, `GET /api/v1/config`, CSP `frame-src` für neu geladene Seiten (ein neu eingebettetes Tool braucht im bereits geöffneten Tab einen Browser-Reload; die UI weist darauf hin) |
 | `scheduler.polling_interval` | für den nächsten Timer (nach dem laufenden Planungsschritt) |
 | `scheduler.max_concurrent` | sofort |
 | `workspace.*`, `lifecycle.action_retry` | für neu reservierte Runs (Snapshot) |
 | `retention.*` | ab dem nächsten Retention-Durchlauf; `cleanup_interval` bestimmt den Timer nach jedem Durchlauf |
 | `notifications.*` | sofort für neue Benachrichtigungen; offene Zustellungen an entfernte Kanäle scheitern endgültig |
 | `sources.yaml`, `identities.yaml` | Adapter/Credentials werden neu aufgebaut, wenn sich etwas geändert hat; entfernte bleiben für laufende Runs verfügbar |
-| Workflows | sofort für Planung/Cron; geänderte Cron-Ausdrücke planen ab „jetzt“; Cache der Workflow-Conditions wird geleert |
+| Workflows | sofort für Planung/Cron; geänderte Cron-Ausdrücke planen ab „jetzt“; Cache der Workflow-Conditions wird geleert; der angezeigte letzte Condition-Status geänderter/entfernter Workflows wird verworfen |
+| `dashboard.yaml` | sofort: neue und geänderte Kacheln werden gleich abgerufen, unveränderte behalten Wert und Ablaufzeit, entfernte verschwinden (ein laufendes Skript wird beendet) |
 | Views | sofort; View-Cache wird verworfen |
 | Benannte Filter (`filters/`) | wie eine Änderung an jedem verwendenden Workflow/jeder verwendenden View (dort ist der Filter eingesetzt); Workflows zählen im Reload-Diff als `changedWorkflows` |
 | Umgebungsvariablen (Keys, Tokens, Webhook-URLs, Header) | gehören zum Prozess, nicht zur Konfiguration → Änderung erfordert **Neustart** |
@@ -263,6 +268,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `monitoring.retention` | Dauer | `6h` | ≥ 10 und ≤ 20 000 Intervalle | wie lange Messpunkte **im Speicher** gehalten werden (Ringpuffer; geht beim Neustart verloren). |
 | `monitoring.top_processes` | Integer | `5` | 0–50 | fremde Prozesse (weder Daemon noch Run noch Hook), die einzeln mit Namen gezeigt werden; gleichnamige werden zusammengefasst (`node ×3`). `0` = keine. |
 | `monitoring.min_cpu_percent` | Zahl | `2` | ≥ 0 | fremde Prozesse(-gruppen) mit weniger CPU landen in „Others“. 100 = ein voll ausgelasteter Kern. |
+| `ui.external_links` | Liste | `[]` | | externe Tools in der Toolbar der Web-UI (seit 0.3.1), siehe unten. `[]` = keine Einträge sichtbar. |
 
 Retention löscht nie aktive Runs, Runs mit unfertiger oder gescheiterter Lifecycle-Kette und Runs eines **aktiven**
 Retry-Blocks. Gelöscht werden DB-Zeilen, `runs/<id>/`, `logs/<id>/` und der Workspace (nur unter `base_dir`).
@@ -284,6 +290,72 @@ Zustellung: `POST` mit `content-type: application/json`, Body
 6-mal versucht (Pausen 5 s, 30 s, 2 min, 10 min, 30 min); andere Status sind endgültig. Ereignisse:
 `retry_block_created` (Retry-Block entstanden), `lifecycle_action_failed` (Action endgültig gescheitert und
 **ohne** `continue_on_error`), `recovery_failed` (Run nach Neustart nicht sicher zuordenbar → `recovery_pending`).
+
+**Externe Tools `ui.external_links`** (seit 0.3.1): beliebige lokale Werkzeuge, z. B. das Agenten-Dashboard
+[claude-inspect](https://github.com/brokoskokoli/claude_inspect), als Eintrag in der Navigation – als Link in neuem Tab
+oder eingebettet als eigene Seite. Kein Proxy: Der **Browser** spricht das Tool direkt an; die URL muss also vom Browser
+aus erreichbar sein (lokal oder über einen Reverse Proxy). Betrieb von claude-inspect: [operations.md](operations.md).
+
+| Schlüssel | Typ | Pflicht | Default | Bedeutung |
+|---|---|---|---|---|
+| `id` | Konfigurations-ID | ja | | eindeutig innerhalb der Liste; Teil der Route `#/tools/<id>` |
+| `label` | String | ja | | Text des Eintrags, 1–40 Zeichen (nur als Text dargestellt, nie als HTML) |
+| `url` | String | ja | | absolute `http(s)`-URL, wie der Browser das Tool erreicht. Keine Zugangsdaten (`user:pass@` → Fehler). Query-Parameter sind erlaubt; ein Parameter, der wie ein Token aussieht (`t`, `token`, `access_token`, `key`, `secret`, `password`, …), ergibt eine **Warnung** – solange der Eintrag aktiv ist, sieht jeder, der UI/API erreicht, die vollständige URL (siehe unten). |
+| `enabled` | Boolean | nein | `true` | `false` entfernt den Eintrag aus der Toolbar, aus `externalLinks` und `config.global.ui` von `GET /api/v1/config` und aus der CSP. Die URL bleibt nur in `config.yaml` (in `GET /api/v1/config/files` ist sie wie jeder `url`-Wert redigiert). |
+| `embed` | Boolean | nein | `false` | `false` = Link in neuem Tab (`noopener noreferrer`, Symbol „↗“); `true` = Seite `#/tools/<id>` mit dem Tool in einem `iframe` (Sandbox `allow-scripts allow-same-origin allow-forms allow-popups allow-downloads`, kein Referrer) und „Open in new tab“ |
+
+Für jeden aktivierten Eintrag mit `embed: true` erlaubt die Content-Security-Policy der UI dessen Origin
+(`schema://host[:port]`) in `frame-src`; sonst bleibt die Policy unverändert. Ob das Tool sich einbetten lässt, entscheidet
+das Tool selbst (`X-Frame-Options`/`frame-ancestors`); verbietet es das, nicht läuft oder die Anfrage ablehnt (z. B.
+Host-Prüfung), bleibt die Seite leer – der Link „Open in new tab“ und ein Hinweis bleiben sichtbar. Bei `embed: true`
+muss sich der Host in der CSP ausdrücken lassen – nur Buchstaben, Ziffern, `.` und `-` (Hostname oder IPv4); IPv6-Literale
+(`http://[::1]:…`) und Hosts mit `_`, `*`, `;`, `,` … sind ein **Fehler** (`embed: false` geht).
+
+**Sichtbarkeit:** Die URL jedes **aktiven** Eintrags – inklusive eines Tokens darin – sieht jeder, der die UI oder die API
+erreicht (Toolbar, Feld `externalLinks` von `GET /api/v1/config`). Das ist dieselbe Vertrauensgrenze wie für adispatchd
+selbst: die UI nur lokal oder hinter einem authentifizierenden Reverse Proxy betreiben. Die Konfigurationsansicht
+(`config.global.ui.externalLinks`) zeigt nur aktive Einträge und redigiert deren Query-String und Fragment.
+
+**Gleicher Hostname und gleiches Schema:** UI und Tool sollten mit demselben Hostnamen und Schema geöffnet werden, z. B.
+beide über `127.0.0.1` (`http://127.0.0.1:8787/` und `http://127.0.0.1:47717/`) – nicht einmal `localhost` und einmal
+`127.0.0.1`. Sonst ist der Frame für den Browser „cross-site“, und Cookies mit `SameSite=Strict`/`Lax` (z. B. das
+Zugangs-Cookie eines per Token geschützten Tools) werden im Frame nicht gesendet. Auf einem Server: UI und Tool unter
+derselben registrierbaren Domain (z. B. `orchestrator.example.com` und `inspect.example.com`) und beide per HTTPS.
+
+```yaml
+# example: external-links
+# extends: minimal
+# file: config.yaml
+# expect-warning: config.yaml: ui.external_links[2].url: Query parameter "t" looks like an access token
+ui:
+  external_links:
+    - id: claude-inspect                 # lokales Agenten-Dashboard (Dienst auf Port 47717, ohne Token)
+      label: Claude Inspect
+      url: http://127.0.0.1:47717/       # so, wie der Browser das Tool erreicht
+      embed: true                        # Seite in der UI (#/tools/claude-inspect)
+    - id: grafana
+      label: Grafana
+      url: https://grafana.example.com/d/agents?orgId=1   # Link in neuem Tab (embed: false)
+    - id: inspect-manual
+      label: Inspect (manuell)
+      url: http://localhost:7717/?t=example-token          # Warnung: Token in der URL
+      enabled: false
+```
+
+```yaml
+# example: external-links-invalid
+# extends: minimal
+# file: config.yaml
+# invalid
+# expect: config.yaml: ui.external_links[0].url: Must be an absolute http(s) URL
+# expect: config.yaml: ui.external_links[1].url: Must not contain credentials
+# expect: config.yaml: ui.external_links[2].id: Duplicate external link ID "tool"
+ui:
+  external_links:
+    - { id: tool, label: Tool, url: "/inspect/" }                          # relativ → Fehler
+    - { id: proxy, label: Proxy, url: "https://admin:secret@tools.example.com/" }
+    - { id: tool, label: Tool 2, url: "https://tools.example.com/" }
+```
 
 Vollständige `config.yaml` mit allen Schlüsseln (Defaults, außer wo kommentiert):
 
@@ -326,6 +398,13 @@ monitoring:                                          # Server-Ressourcen im Dash
   retention: 6h                                      # nur im Speicher
   top_processes: 5
   min_cpu_percent: 2
+ui:
+  external_links:                                    # Default: [] (keine Einträge)
+    - id: claude-inspect
+      label: Claude Inspect
+      url: http://127.0.0.1:47717/
+      enabled: true
+      embed: true                                    # Default: false (Link in neuem Tab)
 ```
 
 **Ressourcen-Monitor (`monitoring`, seit 0.3.1).** Der Daemon misst im Abstand `interval` die CPU-Auslastung
@@ -679,6 +758,7 @@ Filters stehen (`filter: ready-for-coding`, §3.6); `{ use: <id> }` geht an jede
 
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
+| `name` | String (1–80 Zeichen) | nein | | Anzeigename in UI und Dry-Run (seit 0.3.1); ohne `name` wird das Kommando angezeigt |
 | `command` | String | ja | | Programm (§2.4). **Keine `args`** – das Item kommt über `ADISPATCH_CHECK_CONTEXT_FILE`. |
 | `timeout` | Dauer | nein | `30s` | > 0; danach `unknown` |
 
@@ -700,6 +780,7 @@ Ohne `item_priority` ist die Item-Priorität 0. Regeln dürfen teure Felder verw
 
 | Schlüssel | Typ | Pflicht | Default | Regeln | Bedeutung |
 |---|---|---|---|---|---|
+| `name` | String | nein | | 1–80 Zeichen, nicht leer | Anzeigename in UI, Dry-Run und Ablehnungsgründen (seit 0.3.1); ohne `name` zeigt die UI `command` + `args` (gekürzt, relativ zum config-dir) |
 | `type` | `shell` | ja | | | |
 | `command` | String | ja | | §2.4 | Prüfprogramm |
 | `args` | Liste String | nein | `[]` | Templates (§5) | |
@@ -711,6 +792,25 @@ Ohne `item_priority` ist die Item-Priorität 0. Regeln dürfen teure Felder verw
   (manuelle Starts umgehen Conditions).
 - `item`: pro Kandidat, nur Source-Workflows, nie gecacht.
 - Exit-Semantik wie `shell_filter`. Dry-Runs führen Conditions nie aus.
+- **Anzeige (seit 0.3.1):** Workflows → Workflow-Detail (Bereich „Conditions“) und kompakt in der Workflow-Liste
+  zeigen jede Condition mit Anzeigename, Timeout, Cache und dem **letzten Status**: Workflow-Conditions grün = ok
+  (Exit 0), rot = „nicht jetzt“ (Exit 1), gelb = Prüffehler (Exit ≥ 2, Timeout, Signal), grau = nicht ausgewertet
+  (eine frühere Condition hat entschieden) bzw. seit Start/Reload noch nie geprüft – dazu Zeitpunkt, Dauer, ob aus
+  dem Cache, Exit-Code und die erste stderr-Zeile (redigiert, gekürzt). Für Item-Conditions und `shell_filter`
+  gibt es eine Zusammenfassung des letzten Planungsschritts (Anzahl ok / nicht jetzt / Fehler / nicht ausgewertet
+  über die geprüften Items). Der Status liegt nur im Speicher; ein Reload verwirft ihn für geänderte Workflows.
+  API: `conditions` in `GET /api/v1/workflows[/:id]`, SSE `workflow.conditions` ([api.md](api.md)).
+
+```yaml
+# Ausschnitt
+conditions:
+  workflow:
+    - name: Credits verfügbar
+      type: shell
+      command: scripts/check-credits.sh
+      timeout: 15s
+      cache: 60s
+```
 
 #### 3.4.7 `parameters`
 
@@ -1109,7 +1209,7 @@ Dry-Run und Run-Snapshot sehen keine Referenzen. Ein `use` steht für seinen Inh
 
 - Jeder benannte Filter wird strukturell geprüft (wie jeder Filter) – auch wenn ihn niemand verwendet. Fehler in
   der Filterdatei selbst: unbekannte Filter-ID (mit „did you mean …“), Zyklus (`a → b → a`), Referenzkette tiefer
-  als 16 Ebenen, mehr als 10 000 Knoten nach dem Einsetzen (§3.7), `use` mit weiteren Schlüsseln oder ohne gültige ID.
+  als 16 Ebenen, mehr als 10 000 Knoten nach dem Einsetzen (§3.8), `use` mit weiteren Schlüsseln oder ohne gültige ID.
 - Die **Feldprüfung** (Feldkatalog, Operatoren, Werttypen, `run.last_*` nur in Views, `project.*` je Source, §4.3)
   hängt vom Kontext ab und läuft daher **an jedem Verwendungsort** auf dem expandierten Baum. Die Meldung nennt den
   Verwendungsort und den Pfad im benannten Filter, z. B.
@@ -1126,7 +1226,93 @@ dem Reload auf alle verwendenden Workflows und Views (§1.5). `workflow dry-run`
 (Zeile `filter:`), `GET /api/v1/config` listet die benannten Filter unter `filters` (expandiert), die Dateien
 erscheinen in `GET /api/v1/config/files` (UI: Configuration).
 
-### 3.7 Bekannte Grenzen (V1)
+### 3.7 dashboard.yaml
+
+Optionale Datei mit **Info-Kacheln** für den Dashboard-Bereich „Information“ (seit 0.3.1). Jede Kachel ist ein
+vertrauenswürdiges Skript wie eine Condition; seine erste Ausgabezeile ist der angezeigte Wert. Fehlt die Datei,
+gibt es keinen Info-Bereich.
+
+```yaml
+# example: dashboard
+# extends: minimal
+# file: dashboard.yaml
+info:
+  - id: data-disk                     # Pflicht, eindeutig
+    title: Plattenbelegung data-dir   # optional, Default: id
+    type: percent                     # text | number | percent
+    command: scripts/info/data-disk.sh
+    timeout: 10s
+    cache: 5m                         # so lange gilt der Wert; danach im Hintergrund neu abrufen
+    warn_above: 80                    # gelb ab 80
+    critical_above: 95                # rot ab 95
+  - id: open-prs
+    title: Offene PRs
+    type: number
+    command: scripts/info/open-prs.sh
+    args: [--state, open]
+    env: { REPOSITORY: example/repo }
+    unit: PRs
+    cache: 10m
+    warn_below: 1
+```
+
+```sh
+#!/bin/sh
+# example: dashboard
+# file: scripts/info/data-disk.sh
+# Wert auf der ersten stdout-Zeile, Exit 0.
+df -P "${ADISPATCH_DATA_DIR:-.}" | awk 'NR == 2 { sub("%", "", $5); print $5; exit }'
+```
+
+```sh
+#!/bin/sh
+# example: dashboard
+# file: scripts/info/open-prs.sh
+# Anzahl offener PRs; Argumente kommen ohne Shell an ("$1" = --state, "$2" = open).
+set -eu
+gh pr list --repo "$REPOSITORY" "$1" "$2" --json number --jq length
+```
+
+| Schlüssel | Typ | Pflicht | Default | Regeln | Bedeutung |
+|---|---|---|---|---|---|
+| `info` | Liste | nein | `[]` | höchstens 50 Kacheln | Kacheln in Anzeigereihenfolge |
+| `info[].id` | Konfigurations-ID | ja | | eindeutig in der Datei | ID (API, Refresh) |
+| `info[].title` | String | nein | `id` | 1–80 Zeichen | Überschrift der Kachel |
+| `info[].type` | `text` \| `number` \| `percent` | ja | | | wie die Ausgabe gelesen wird (unten) |
+| `info[].command` | String | ja | | §2.4; ein Pfad (absolut oder mit `/`) **muss existieren** | Skript |
+| `info[].args` | Liste String | nein | `[]` | keine Templates | Argumente (ohne Shell) |
+| `info[].env` | Map | nein | `{}` | Namen ohne Präfix `ADISPATCH_`; geheim wirkende Namen mit Literalwert → Warnung | zusätzliche Umgebung |
+| `info[].timeout` | Dauer | nein | `15s` | > 0, höchstens `5m` und nicht länger als `cache` | danach Fehler, Prozessgruppe wird beendet |
+| `info[].cache` | Dauer | nein | `5m` | ≥ 10s | Gültigkeit eines Werts |
+| `info[].unit` | String | nein | | max. 20 Zeichen; nur `number` | Einheit hinter der Zahl (`percent` zeigt immer `%`) |
+| `info[].warn_above` / `critical_above` | Zahl | nein | | nur `number`/`percent`; `critical_above` ≥ `warn_above`; bei `percent` außerhalb 0–100 → Warnung | gelb/rot, wenn Wert **≥** Schwelle |
+| `info[].warn_below` / `critical_below` | Zahl | nein | | nur `number`/`percent`; `critical_below` ≤ `warn_below` | gelb/rot, wenn Wert **≤** Schwelle |
+
+**Ausgabe:** erste nicht-leere stdout-Zeile, getrimmt. `text`: beliebiger Text (auf 200 Zeichen gekürzt, als Text
+dargestellt, redigiert). `number`: Dezimalzahl mit Punkt (`42`, `-1.5`), optional gefolgt von der konfigurierten
+`unit` (`12.5 GB`). `percent`: Zahl 0–100, optional mit `%`, Anzeige mit Balken. Exit ≠ 0, Timeout, Signal,
+Startfehler oder eine unlesbare Ausgabe → Fehlerzustand mit kurzer Meldung (`exit code 2: <erste stderr-Zeile>`,
+`timed out after 10000ms`, `unparsable output "…"`); Werte, Meldungen und stderr-Zeilen werden von ANSI-Escapes,
+Steuer- und Bidi-Zeichen bereinigt, dann redigiert und erst dann gekürzt;
+der letzte gültige Wert bleibt mit Zeitstempel sichtbar („stale“). Rot (`critical`) hat Vorrang vor Gelb (`warn`);
+`above` und `below` dürfen kombiniert werden.
+
+**Ausführung:** Der Daemon führt die Skripte **nur im Hintergrund** aus: einmal beim Start (nach der Recovery),
+wenn ein Wert abgelaufen ist (`cache`), nach einem Fehler erneut nach `min(cache, 60s)`, und nach einem Reload für
+neue/geänderte Kacheln – **nie** durch einen Seitenaufruf. Der „Refresh“-Knopf je Kachel
+(`POST /api/v1/dashboard/info/:id/refresh`) stößt einen sofortigen Abruf an; er ist gedrosselt (je Kachel höchstens
+alle 10 s, insgesamt 20 je Minute; sonst HTTP 429) und unterliegt denselben CSRF-/Host-/Origin-Regeln wie jede
+schreibende Anfrage. Höchstens eine Ausführung je Kachel gleichzeitig, insgesamt höchstens 2 parallel (weitere
+warten). Mechanik wie Conditions: Argumentliste ohne Shell, Minimalumgebung + `env` + Kontext (§6.11),
+Arbeitsverzeichnis = config-dir, Timeout mit Beenden der Prozessgruppe, Ausgabe bis 4 KiB je Stream.
+
+**Prüfung beim Laden:** Schema (unbekannte Schlüssel mit „did you mean …“), eindeutige IDs, Schwellwerte nur bei
+`number`/`percent` und in sinnvoller Reihenfolge, `unit` nur bei `number`, `cache` ≥ 10 s, `timeout` ≤ 5 min und
+≤ `cache`, reservierte
+Env-Namen, Existenz des Skripts (Pfade relativ zum config-dir). Die Datei ist Teil des Konfigurations-Hashs und der
+Dateiliste (`GET /api/v1/config/files`, UI: Configuration); `config reload` lädt sie mit (§1.5).
+
+### 3.8 Bekannte Grenzen (V1)
 
 - `shell_filter` hat nur `command` und `timeout`: **keine `args`**, kein `env`. Das Item kommt ausschließlich über
   `ADISPATCH_CHECK_CONTEXT_FILE`; Parameter für das Skript über einen Wrapper bzw. die Kontextdatei.
@@ -1135,6 +1321,11 @@ erscheinen in `GET /api/v1/config/files` (UI: Configuration).
 - `shell`-Actions: Frist zwischen `SIGTERM` und `SIGKILL` fest **5 s**, Log-Limit fest **10 MiB** pro Versuch –
   nicht konfigurierbar (`execute.cancel_grace` und `retention.max_log_size_per_run` gelten nur für den Haupt-Worker).
 - Prüfskripte (Conditions, `shell_filter`): Ausgabe wird bis 16 KiB je Stream erfasst, SIGTERM→SIGKILL nach 2 s.
+- Info-Kacheln (`dashboard.yaml`): keine `secrets` (nur `env`), keine Templates in `args`; höchstens 50 Kacheln,
+  2 parallele Ausführungen, Ausgabe bis 4 KiB je Stream; Werte und Status nur im Speicher (nach einem Neustart
+  zunächst `pending`, bis der erste Abruf fertig ist).
+- Der angezeigte letzte Condition-Status liegt nur im Speicher; Item-Conditions und `shell_filter` werden nur als
+  Zusammenfassung je Planungsschritt angezeigt, nicht je Item.
 - Nur Adapter `github` (github.com), Identity-Typen `github_app` und `github_token`, nur Kanaltyp `webhook`, nur
   Executor `shell`.
 - Projektfelder: ein Projekt je Source; Metadaten lesen die ersten 100 Felder des Projekts; je Issue/PR werden die
@@ -1682,6 +1873,10 @@ stattdessen `on_error`, wenn der spezifische Hook nicht definiert ist (§3.4.10)
 | Orchestrator | `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`, `ADISPATCH_CONTEXT_FILE`, `ADISPATCH_RESULT_FILE`, `ADISPATCH_WORKSPACE`; bei Item zusätzlich `ADISPATCH_SOURCE_TYPE`, `ADISPATCH_SOURCE_ID`, `ADISPATCH_SOURCE_ITEM_ID`, `ADISPATCH_SOURCE_URL` | dieselben (`ADISPATCH_WORKSPACE` = Arbeitsverzeichnis der Action; Kontext `kind: lifecycle_action` mit Hook, Action, `result`) | `ADISPATCH_CHECK_CONTEXT_FILE` (JSON: `kind`, `workflow.id`, bei Item `source{id,type,item_id,item_key,url,item_type,created_at,attributes}`) |
 | Arbeitsverzeichnis | Workspace | Workspace, falls vorhanden, sonst Versuchsverzeichnis | temporäres Verzeichnis |
 
+**Info-Skripte** (`dashboard.yaml`, §3.7): Basis wie Conditions, dann `info[].env`, dann `ADISPATCH_INFO_ID`,
+`ADISPATCH_CONFIG_DIR`, `ADISPATCH_DATA_DIR` und `ADISPATCH_CHECK_CONTEXT_FILE` (JSON: `schema_version`,
+`kind: dashboard_info`, `info{id,type}`, `config_dir`, `data_dir`); Arbeitsverzeichnis = config-dir.
+
 Vorrang (spätere gewinnen): Basis < `env` < `secrets` < `ADISPATCH_*`. Die übrige Controller-Umgebung wird **nie**
 vererbt. Details zu Kontextdatei, Ergebnisdatei, Events und Cancel: [worker-protocol.md](worker-protocol.md).
 
@@ -1708,7 +1903,8 @@ seit 0.3.0 alle deklarierten Secrets von `execute` und `shell`-Actions mit Ort, 
 kein Token geholt). Bei mehreren Sources (seit 0.3.0) je Source eine Zeile mit gepollten Items, Pushdown und
 ggf. Fehler (`source.sources`), je Kandidat `sourceId`, bei `max_concurrent_per_source` die Auslastung je Source
 (`capacity.perSource`, Textzeile `capacity per source:`). Reserviert nichts, startet keine Worker oder Actions
-und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
+und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`); seit 0.3.1 mit
+ihrem Anzeigenamen (`name`, Textausgabe `workflow condition 0 "Credits verfügbar" (/pfad/check.sh): …`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 
 ---
@@ -2946,7 +3142,7 @@ filter: { use: closed, field: labels }
 Weitere Meldungen: `Named filter "x" is invalid (see filters/x.yaml)` (verwendeter Filter ist selbst fehlerhaft),
 `Named filters are nested more than 16 levels deep: a → b → …`, `Expanded filter would exceed 10000 nodes ("x"
 alone has …; named filters are copied at every place of use)` (zu viele Kopien, z. B. Auffächerung über mehrere
-Ebenen, §3.7), `"use" requires the ID of a named filter` (`use` ohne gültige ID), `Filter node must be a mapping …;
+Ebenen, §3.8), `"use" requires the ID of a named filter` (`use` ohne gültige ID), `Filter node must be a mapping …;
 to reference a named filter write { use: x }` (Kurzform `x` gibt es nur an der Wurzel),
 `Duplicate filter ID "x" (already defined in filters/a.yaml)`.
 
@@ -3101,6 +3297,64 @@ execute:
 Lösung: Verzeichnis anlegen (relativ zum config-dir) bzw. absolut angeben, den Workspace unter einem eigenen Ziel
 (z. B. `/work`) mounten und Ziele eindeutig wählen.
 
+**Info-Kacheln** – Schwellwerte, Einheit, IDs und Skriptpfad werden beim Laden geprüft (§3.7).
+
+```yaml
+# example: err-dashboard
+# extends: minimal
+# invalid
+# expect: dashboard.yaml: info[0].cache: Duration must be at least 10s
+# expect: dashboard.yaml: info[1]: Unknown key(s): "warn_abve" (did you mean "warn_above"?)
+# file: dashboard.yaml
+info:
+  - id: disk
+    type: percent
+    command: /bin/sh
+    cache: 5s
+  - id: prs
+    type: number
+    command: /bin/sh
+    warn_abve: 3
+```
+
+```yaml
+# example: err-dashboard-semantics
+# extends: minimal
+# invalid
+# expect: dashboard.yaml: info[0].unit: "unit" is only supported for "number" tiles (percent tiles always show %)
+# expect: dashboard.yaml: info[1].id: Duplicate info tile ID "disk" (also used by info[0])
+# expect: dashboard.yaml: info[1].warn_above: Thresholds are only supported for "number" and "percent" tiles (type is "text")
+# expect: dashboard.yaml: info[1].command: Script does not exist:
+# expect: dashboard.yaml: info[2].critical_above: "critical_above" (80) must not be lower than "warn_above" (90)
+# expect: dashboard.yaml: info[3].timeout: "timeout" (60s) must not be longer than "cache" (30s)
+# expect: dashboard.yaml: info[4].timeout: "timeout" must not exceed 5m
+# file: dashboard.yaml
+info:
+  - id: disk
+    type: percent
+    command: /bin/sh
+    unit: GB
+  - id: disk
+    type: text
+    command: scripts/info/missing.sh
+    warn_above: 3
+  - id: load
+    type: number
+    command: /bin/sh
+    warn_above: 90
+    critical_above: 80
+  - id: slow
+    type: number
+    command: /bin/sh
+    timeout: 1m
+    cache: 30s
+  - id: slower
+    type: number
+    command: /bin/sh
+    timeout: 10m
+    cache: 1h
+```
+
 Weitere häufige Meldungen (ohne eigenes Beispiel):
 
 | Meldung | Ursache / Lösung |
@@ -3113,9 +3367,13 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Duplicate workflow ID "x" (already defined in workflows/a.yaml)` | zwei Dateien mit gleicher `id` |
 | `Default does not match parameter type: expected …` | `default` passt nicht zu `type`/`values` |
 | `"cache" is only supported for workflow conditions` | `cache` unter `conditions.item` |
+| `At most 80 characters` (Pfad `conditions.workflow[0].name`) | Anzeigename einer Condition zu lang |
 | `Duration must be greater than 0` | `max_duration`/`idle_timeout: 0s` |
 | `Invalid host name (expected "name" or "name:port")` | Schema/Pfad in `allowed_hosts` (`https://…`) |
 | `Invalid environment variable name` | z. B. `private_key_env: my-key` |
+| `Must be an absolute http(s) URL` (Pfad `ui.external_links[n].url`) | relative URL oder anderes Schema – volle URL angeben, wie der Browser das Tool erreicht |
+| `Query parameter "t" looks like an access token …` (Warnung) | Token in `ui.external_links[n].url` – für jeden sichtbar, der UI/API erreicht; besser Tool ohne Token nur lokal betreiben bzw. hinter dem authentifizierenden Proxy |
+| `The host cannot be allowed in the Content-Security-Policy (frame-src) …` (Pfad `ui.external_links[n].embed`) | IPv6-Literal oder Host mit `_`, `*`, `;` … bei `embed: true` – Hostname/IPv4 verwenden oder `embed: false` |
 | `Expected a size such as 100MB` | Größe als Zahl statt String (`max_log_size_per_run: 100`) |
 | `Invalid size "100" (expected e.g. 512KB, 100MB, 1GB)` | String ohne oder mit unbekannter Einheit (`'100'`, `'100MiBs'`) |
 | `Must be greater than 0` (Pfad `execute.keep_max_size`) | `keep_max_size: 0MB` |
@@ -3124,7 +3382,7 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `config.yaml not found, using defaults` (Warnung) | `config.yaml` fehlt |
 
 Laufzeitfehler, die `config validate` **nicht** findet: fehlende Umgebungsvariablen (Keys, Tokens, Webhooks),
-nicht existierende/nicht ausführbare Skripte, fehlende App-Rechte (→ Felder unknown bzw. Actions scheitern),
+nicht existierende/nicht ausführbare Skripte (außer Info-Kacheln, §3.7), fehlende App-Rechte (→ Felder unknown bzw. Actions scheitern),
 Projekt nicht gefunden bzw. deklariertes Projektfeld fehlt im Projekt oder hat eine andere Art (→ `project.*`
 unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 

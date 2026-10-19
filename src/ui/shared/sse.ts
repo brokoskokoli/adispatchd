@@ -44,6 +44,8 @@ export const LIVE_EVENT_TYPES = [
   'config.reloaded',
   'retention.finished',
   'system.metrics',
+  'workflow.conditions',
+  'dashboard.info',
 ] as const;
 
 /** Parsed message. */

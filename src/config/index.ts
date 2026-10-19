@@ -25,7 +25,11 @@ export {
   MIN_MONITORING_INTERVAL_MS,
   MIN_MONITORING_SAMPLES,
   SECRET_DELIVERIES,
+  DASHBOARD_INFO_TYPES,
+  MAX_INFO_TILES,
+  MIN_INFO_CACHE_MS,
 } from './schemas.js';
+export { DASHBOARD_FILE, MAX_INFO_TIMEOUT_MS } from './dashboard.js';
 export { MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH } from './named-filters.js';
 export {
   ConfigLoadError,
@@ -57,4 +61,5 @@ export {
   type ParameterIssue,
   type ParameterValidationResult,
 } from './parameters.js';
-export { toPublicConfig } from './public.js';
+export { redactExternalLinkUrl, toPublicConfig } from './public.js';
+export { activeExternalLinks, externalLinkFrameOrigins, frameOrigin, isTokenLikeParam, type ExternalLinkInfo } from './external-links.js';

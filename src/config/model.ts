@@ -123,6 +123,23 @@ export interface MonitoringConfig {
   minCpuPercent: number;
 }
 
+/** External tool linked from the web UI toolbar (`ui.external_links`, WI-25). */
+export interface ExternalLinkConfig {
+  id: string;
+  /** Text of the toolbar entry (1–40 characters, rendered as text only). */
+  label: string;
+  /** Absolute http(s) URL as the *browser* reaches the tool. */
+  url: string;
+  enabled: boolean;
+  /** `true` = shown inside the UI (iframe), `false` = link opening a new tab. */
+  embed: boolean;
+}
+
+/** Web UI settings (`ui:` in config.yaml, WI-25). */
+export interface UiConfig {
+  externalLinks: readonly ExternalLinkConfig[];
+}
+
 /** Content of `config.yaml`. */
 export interface GlobalConfig {
   server: ServerConfig;
@@ -141,6 +158,8 @@ export interface GlobalConfig {
    * read from the live configuration.
    */
   monitoring: MonitoringConfig;
+  /** Web UI settings (WI-25). */
+  ui: UiConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +266,8 @@ export type TriggerConfig = SourceTriggerConfig | ScheduleTriggerConfig | Manual
 
 /** Shell condition (Spec §6): exit 0 = pass, 1 = fail, ≥ 2 = check error. */
 export interface ShellCheckConfig {
+  /** Display name (WI-24); absent when not configured (keeps workflow hashes stable). */
+  name?: string;
   type: 'shell';
   command: string;
   args: readonly string[];
@@ -258,6 +279,8 @@ export interface ShellCheckConfig {
 
 /** Item-level shell filter (workflows only, never views). */
 export interface ShellFilterConfig {
+  /** Display name (WI-24); absent when not configured. */
+  name?: string;
   command: string;
   /** Default 30s. */
   timeoutMs: number;
@@ -560,6 +583,50 @@ export interface NamedFilterConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Dashboard info tiles (dashboard.yaml, WI-24)
+// ---------------------------------------------------------------------------
+
+/** How the output of an info script is parsed and shown. */
+export type DashboardInfoType = 'text' | 'number' | 'percent';
+
+/** Threshold of a number/percent tile; `null` = not configured. */
+export interface DashboardInfoThresholds {
+  /** Value ≥ this → `warn`. */
+  warnAbove: number | null;
+  /** Value ≥ this → `critical`. */
+  criticalAbove: number | null;
+  /** Value ≤ this → `warn`. */
+  warnBelow: number | null;
+  /** Value ≤ this → `critical`. */
+  criticalBelow: number | null;
+}
+
+/** One info tile: a trusted script whose first output line is shown on the dashboard. */
+export interface DashboardInfoConfig {
+  id: string;
+  /** Default: the ID. */
+  title: string;
+  type: DashboardInfoType;
+  /** Resolved like other commands (relative paths against the config dir). */
+  command: string;
+  args: readonly string[];
+  env: Readonly<Record<string, string>>;
+  /** Default 15s. */
+  timeoutMs: number;
+  /** How long a value is valid before it is fetched again in the background (default 5m, ≥ 10s). */
+  cacheMs: number;
+  /** Unit shown after number values (e.g. `GB`); `null` = none. */
+  unit: string | null;
+  thresholds: DashboardInfoThresholds;
+}
+
+/** Content of `dashboard.yaml`. */
+export interface DashboardConfig {
+  file: string;
+  info: readonly DashboardInfoConfig[];
+}
+
+// ---------------------------------------------------------------------------
 // Loaded configuration
 // ---------------------------------------------------------------------------
 
@@ -580,6 +647,8 @@ export interface LoadedConfig {
   views: Readonly<Record<string, ViewConfig>>;
   /** Named filters (`filters/*.yaml`); already expanded into workflows and views. */
   filters: Readonly<Record<string, NamedFilterConfig>>;
+  /** `dashboard.yaml` (WI-24); `null` = file not present (no info tiles). */
+  dashboard: DashboardConfig | null;
   /** SHA-256 per workflow definition (detects changed workflows on reload). */
   workflowHashes: Readonly<Record<string, string>>;
 }

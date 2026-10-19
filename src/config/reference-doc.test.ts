@@ -59,7 +59,9 @@ function parseExampleSets(markdown: string): Map<string, ExampleSet> {
   const sets = new Map<string, ExampleSet>();
   const lines = markdown.split('\n');
   for (let i = 0; i < lines.length; i++) {
-    if (lines[i]?.trim() !== '```yaml') continue;
+    const fence = lines[i]?.trim();
+    // ```sh blocks (WI-24) carry scripts referenced by an example (e.g. dashboard.yaml); their shebang precedes the header.
+    if (fence !== '```yaml' && fence !== '```sh') continue;
     const start = i + 1;
     let end = start;
     while (end < lines.length && lines[end]?.trim() !== '```') end++;
@@ -67,7 +69,7 @@ function parseExampleSets(markdown: string): Map<string, ExampleSet> {
     i = end;
 
     const header: Array<[string, string]> = [];
-    for (const raw of body) {
+    for (const raw of fence === '```sh' && body[0]?.startsWith('#!') ? body.slice(1) : body) {
       const m = /^#\s*(example|extends|file|invalid|expect-warning|expect)(?![\w-]):?\s*(.*)$/.exec(raw.trim());
       if (!raw.trim().startsWith('#') || !m) break;
       header.push([m[1] as string, (m[2] ?? '').trim()]);
@@ -124,7 +126,7 @@ async function load(name: string): Promise<Awaited<ReturnType<typeof loadConfig>
 
 describe('docs/configuration-reference.md', () => {
   it('contains the documented example sets', () => {
-    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters', 'multi-source', 'linked']) {
+    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters', 'multi-source', 'linked', 'dashboard']) {
       expect(sets.get(name)?.invalid, name).toBe(false);
     }
     expect([...sets.values()].filter((s) => s.invalid).length).toBeGreaterThanOrEqual(10);

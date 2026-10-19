@@ -35,6 +35,12 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Deklarative Filter und Prioritäten** auf Labels, Zustand, Milestone, Issue-Typ, native Abhängigkeiten („blocked by“)
   und Felder aus **GitHub Projects** (Status, Priorität, eigene Felder; „A oder B“ per `in`) – fehlender Zugriff ergibt
   `unknown` statt eines falschen Starts. **Benannte Filter** (`filters/<id>.yaml`) einmal definieren, überall verwenden.
+- **Sichtbare Startbedingungen:** Shell-Prüfungen (`conditions`, `shell_filter`) bekommen optionale Namen; die UI zeigt
+  jede Prüfung mit ihrem letzten Ergebnis (ok / nicht jetzt / Prüffehler, Zeitpunkt, Cache, erste stderr-Zeile) und je
+  Planungsschritt, wie viele Items die Item-Prüfungen bestanden haben.
+- **Info-Kacheln im Dashboard:** `dashboard.yaml` definiert kleine Skripte (Text, Zahl oder Prozent mit Warn- und
+  Kritisch-Schwellen), die der Daemon im Hintergrund nach Cache-Ablauf ausführt – z. B. Plattenbelegung, offene PRs,
+  Guthaben.
 - **Arbeits-Branch und PR eines Issues** als Felder (`work_branch`, `work_pr`, `linked_branches`, `closing_prs`):
   filtern („hat offenen PR“), in Views mit Link auf den PR anzeigen und per `{item.work_branch}`/`{item.work_pr}`
   direkt an Worker und Actions übergeben – frisch gelesen, nie leer geraten, wenn GitHub sie nicht liefern kann.
@@ -57,6 +63,9 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Server-Ressourcen im Dashboard:** CPU über die Zeit, gestapelt nach Daemon, jedem Run (Klick → Run), Hooks/Checks
   und den größten fremden Prozessen, dazu RAM, Load und freier Plattenplatz; Messwerte nur im Speicher (`monitoring` in
   `config.yaml`), gezeigt werden nur Befehlsnamen, nie Argumente.
+  über mehrere Repositories; dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools in der Toolbar
+  (z. B. das Dashboard [claude-inspect](https://github.com/brokoskokoli/claude_inspect)), im neuen Tab oder eingebettet
+  (`ui.external_links`).
 - **Dry-Run:** `adispatch workflow dry-run <id>` zeigt, welche Items starten würden und warum die anderen nicht – ohne
   etwas zu starten.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per
@@ -196,7 +205,7 @@ item_priority:
     - when: { field: project.Priority, operator: in, value: [P0, P1] }
       value: 100
 conditions:
-  workflow: [ { type: shell, command: scripts/check-credits.sh, cache: 60s } ]
+  workflow: [ { name: Credits verfügbar, type: shell, command: scripts/check-credits.sh, cache: 60s } ]
 execute:
   type: shell
   command: scripts/coder.sh          # relativ zum config-dir; ohne Shell, Argumente als Liste

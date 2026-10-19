@@ -36,14 +36,16 @@ import {
   type TechnicalStatus,
 } from '../core/index.js';
 import { readFileNoFollow } from '../executors/index.js';
-import { loadConfig, toPublicConfig, type ConfigManager, type ReloadResult } from '../config/index.js';
+import { activeExternalLinks, externalLinkFrameOrigins, loadConfig, toPublicConfig, type ConfigManager, type ReloadResult } from '../config/index.js';
 import type { LifecycleEngine } from '../lifecycle/index.js';
 import type { NotificationService } from '../notifications/index.js';
 import type { Repositories, RunRecord } from '../persistence/index.js';
 import { listKeptFiles, RUN_EVENTS, type RetentionService, type RunController } from '../runs/index.js';
+import type { DashboardInfoService } from '../dashboard/index.js';
 import type { Scheduler } from '../scheduler/index.js';
 import type { ResourceMonitor } from '../monitoring/index.js';
 import type { ViewService } from '../views/index.js';
+import { uiContentSecurityPolicy } from './csp.js';
 import { ApiError, toErrorResponse } from './errors.js';
 import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile } from './kept.js';
 import { readLogPage } from './logs.js';
@@ -78,6 +80,8 @@ export interface ApiDeps {
   views: ViewService;
   notifications: NotificationService;
   retention?: RetentionService;
+  /** Dashboard info tiles (WI-24); absent = endpoint reports "not configured". */
+  dashboard?: DashboardInfoService;
   events: EventHub;
   /** Server resource monitor (WI-23); without it `/system/metrics` reports `enabled: false`. */
   monitor?: ResourceMonitor;
@@ -320,7 +324,12 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'no-referrer');
     reply.header('x-frame-options', 'DENY');
-    if (req.url.startsWith('/api/') || req.url === '/health' || req.url === '/ready') reply.header('cache-control', 'no-store');
+    const pathname = req.url.split('?')[0] ?? '';
+    if (pathname.startsWith('/api/') || pathname === '/health' || pathname === '/ready') reply.header('cache-control', 'no-store');
+    else if (!reply.hasHeader('content-security-policy')) {
+      // Web UI: frame-src follows the active configuration (updated by every reload).
+      reply.header('content-security-policy', uiContentSecurityPolicy(externalLinkFrameOrigins(deps.config.current.global)));
+    }
     return payload;
   });
   app.setErrorHandler((err, req, reply) => {
@@ -452,6 +461,9 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
       activeBlocks: repos.blocks.listForWorkflow(id).filter((b) => b.clearedAt === null).length,
       cron,
       diagnosis,
+      conditionStatus: deps.scheduler.conditionStatus(id),
+      configDir: deps.config.current.configDir,
+      redact,
     });
     return detail ? { ...view, diagnosis: diagnosis ?? null, filter: wf.config.filter, hooks: wf.config.hooks } : view;
   };
@@ -717,7 +729,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
   // --- Configuration --------------------------------------------------------
   app.get('/api/v1/config', async () => {
     const cfg = toPublicConfig(deps.config.current);
-    return { config: cfg, overrides: deps.config.getOverrides() };
+    return { config: cfg, overrides: deps.config.getOverrides(), externalLinks: activeExternalLinks(deps.config.current.global) };
   });
   app.get('/api/v1/config/files', async () => ({ files: await readConfigFiles(deps.config.current.configDir, redact) }));
   app.post('/api/v1/config/validate', async (req) => {
@@ -742,6 +754,26 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
       resetOverrides: res.resetOverrides,
       warnings: res.warnings,
     };
+  });
+
+  // --- Dashboard info tiles (WI-24) -------------------------------------------
+  // Reading never starts a script; only the throttled refresh POST does (CSRF/Host/Origin rules as for every POST).
+  app.get('/api/v1/dashboard/info', async () => {
+    const configured = deps.dashboard?.configured ?? false;
+    return { configured, file: configured ? 'dashboard.yaml' : null, info: deps.dashboard?.list() ?? [] };
+  });
+  app.post('/api/v1/dashboard/info/:id/refresh', async (req, reply) => {
+    const { id } = parse(idParam, req.params, 'path');
+    parse(emptyBody, req.body, 'body');
+    const res = deps.dashboard?.refresh(id) ?? ({ ok: false, reason: 'not_found' } as const);
+    if (!res.ok) {
+      if (res.reason === 'not_found') throw new ApiError(404, 'not_found', `Unknown info tile "${id}"`);
+      if (res.reason === 'stopped') throw new ApiError(503, 'shutting_down', 'Server is shutting down');
+      const seconds = Math.max(1, Math.ceil(res.retryAfterMs / 1000));
+      void reply.header('retry-after', String(seconds));
+      throw new ApiError(429, 'rate_limited', `Refresh of "${id}" is throttled; try again in ${seconds}s`, { retryAfterMs: res.retryAfterMs });
+    }
+    return accepted(reply, { accepted: true, alreadyRunning: res.alreadyRunning, tile: res.tile });
   });
 
   // --- Notifications --------------------------------------------------------
@@ -808,7 +840,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
 async function readConfigFiles(configDir: string, redact: Redactor): Promise<Array<{ file: string; content: string | null; error?: string }>> {
   const { readdir } = await import('node:fs/promises');
   const files: string[] = [];
-  for (const top of ['config.yaml', 'sources.yaml', 'identities.yaml']) if (existsSync(path.join(configDir, top))) files.push(top);
+  for (const top of ['config.yaml', 'sources.yaml', 'identities.yaml', 'dashboard.yaml']) if (existsSync(path.join(configDir, top))) files.push(top);
   for (const sub of ['workflows', 'views', 'filters']) {
     try {
       const names = (await readdir(path.join(configDir, sub))).filter((n) => /\.ya?ml$/.test(n)).sort();

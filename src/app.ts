@@ -58,6 +58,7 @@ import {
   type ShutdownResult,
 } from './runs/index.js';
 import { Scheduler } from './scheduler/index.js';
+import { DashboardInfoService, type DashboardInfoServiceOptions } from './dashboard/index.js';
 import { createGitHubSourceFactory } from './sources/index.js';
 import { ViewService } from './views/index.js';
 import { createApiServer, EventHub, type ReadinessReport } from './api/index.js';
@@ -272,6 +273,8 @@ export interface AppOptions {
   uiDir?: string;
   /** Resource monitor (WI-23); tests inject a fake OS probe. */
   monitoring?: { probe?: SystemProbe; primeDelayMs?: number };
+  /** Tuning of the dashboard info tiles (WI-24; tests). */
+  dashboardInfo?: Partial<Pick<DashboardInfoServiceOptions, 'maxParallel' | 'manualMinIntervalMs' | 'manualPerMinute'>>;
 }
 
 /** Options of {@link App.shutdown}. */
@@ -302,6 +305,8 @@ export interface App {
   readonly notifications: NotificationService;
   readonly views: ViewService;
   readonly retention: RetentionService;
+  /** Dashboard info tiles (WI-24). */
+  readonly dashboard: DashboardInfoService;
   readonly events: EventHub;
   /** Server resource monitor (WI-23). */
   readonly monitor: ResourceMonitor;
@@ -425,7 +430,30 @@ export async function createApp(options: AppOptions): Promise<App> {
     maxLogBytesPerRun: () => config.current.global.retention.maxLogSizePerRunBytes,
     secretValues: () => redactor.values(),
   });
-  const scheduler = new Scheduler({ config, repositories: repos, controller, sources: sourceLookup, clock, timers, logger });
+  const scheduler = new Scheduler({
+    config,
+    repositories: repos,
+    controller,
+    sources: sourceLookup,
+    clock,
+    timers,
+    logger,
+    // WI-24: live update of the condition status in the workflow views (the UI reloads via REST).
+    onConditionStatusChange: (workflowId) => events.publish('workflow.conditions', { workflowId }),
+    redact: redactor.asRedactor,
+  });
+  // WI-24: info tiles of dashboard.yaml (background scripts; started with the scheduler).
+  const dashboard = new DashboardInfoService({
+    dashboard: () => config.current.dashboard,
+    configDir: () => config.current.configDir,
+    dataDir,
+    clock,
+    timers,
+    logger,
+    redact: redactor.asRedactor,
+    onChange: (tile) => events.publish('dashboard.info', tile),
+    ...options.dashboardInfo,
+  });
   const views = new ViewService({ config, sources: sourceLookup, runs: repos.runs, clock, logger, redact: redactor.asRedactor, ...(options.viewCacheTtlMs !== undefined ? { cacheTtlMs: options.viewCacheTtlMs } : {}) });
   const retention = new RetentionService({
     repositories: repos,
@@ -502,6 +530,7 @@ export async function createApp(options: AppOptions): Promise<App> {
         void checkContainerEngines(containers, newEngines, log);
       }
       views.invalidate();
+      dashboard.sync();
       notifications.refreshSecrets();
       events.publish('config.reloaded', {
         version: res.config.version,
@@ -549,6 +578,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     views,
     notifications,
     retention,
+    dashboard,
     events,
     monitor,
     dataDir,
@@ -632,6 +662,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       let result: ShutdownResult | null = null;
       try {
         await scheduler.stop();
+        await dashboard.stop();
         result = await controller.shutdown(controllerOpts);
       } catch (err) {
         fatalError ??= errorMessage(err);
@@ -672,6 +703,7 @@ export async function createApp(options: AppOptions): Promise<App> {
         if (shuttingDown) return;
         scheduler.start();
         schedulerStarted = true;
+        dashboard.start();
         retention.start(options.retentionInitialDelayMs ?? 60_000);
         events.publish('system.ready', { ready: true });
         resolveReady();
@@ -695,6 +727,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     notifications,
     views,
     retention,
+    dashboard,
     events,
     monitor,
     http,

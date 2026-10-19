@@ -32,6 +32,7 @@ import {
   workflowFieldContext,
   type FieldIssue,
 } from './field-catalog.js';
+import { validateExternalLinks } from './external-links.js';
 import type { RawFilterNode } from './filter-schema.js';
 import { formatIssuePath, type IssueCollector, type IssuePath } from './issues.js';
 import {
@@ -142,6 +143,7 @@ function validateGlobal(global: GlobalConfig, issues: IssueCollector): void {
   } else if (retentionMs > intervalMs * MAX_MONITORING_SAMPLES) {
     issues.error(CONFIG_FILE, ['monitoring', 'retention'], `Must be at most ${MAX_MONITORING_SAMPLES} sampling intervals (${MAX_MONITORING_SAMPLES} × ${formatDuration(intervalMs)})`);
   }
+  validateExternalLinks(global.ui.externalLinks, CONFIG_FILE, issues);
   const ids = new Set<string>();
   global.notifications.channels.forEach((channel, i) => {
     const at: IssuePath = ['notifications', 'channels', i];
@@ -233,7 +235,8 @@ function checkTemplate(
   }
 }
 
-function checkEnvNames(
+/** Error for env names with the reserved prefix. */
+export function checkEnvNames(
   names: readonly string[],
   issues: IssueCollector,
   file: string,
@@ -246,7 +249,8 @@ function checkEnvNames(
   }
 }
 
-function checkLiteralSecrets(env: Readonly<Record<string, string>>, issues: IssueCollector, file: string, at: IssuePath): void {
+/** Warning for literal values of secret-looking env names. */
+export function checkLiteralSecrets(env: Readonly<Record<string, string>>, issues: IssueCollector, file: string, at: IssuePath): void {
   for (const [name, value] of Object.entries(env)) {
     if (value !== '' && isSecretKey(name)) {
       issues.warning(

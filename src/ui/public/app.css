@@ -208,6 +208,34 @@ pre.yaml { max-height: 70vh; white-space: pre; word-break: normal; }
 details > summary { cursor: pointer; }
 details.file { border-bottom: 1px solid var(--border); padding: 6px 0; }
 
+/* ---------- dashboard info tiles, conditions (WI-24) ---------- */
+.info-tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.info-tile {
+  border: 1px solid var(--border); border-left: 4px solid var(--muted); border-radius: 6px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 6px; min-width: 0; background: var(--surface);
+}
+.info-tile-ok { border-left-color: var(--ok); }
+.info-tile-warn { border-left-color: var(--warn); }
+.info-tile-error { border-left-color: var(--error); }
+.info-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.info-title { font-weight: 600; overflow-wrap: anywhere; }
+.info-value { font-size: 22px; font-weight: 600; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.info-value.info-stale { color: var(--muted); }
+.info-meta { font-size: 12px; }
+.info-actions { margin-top: auto; }
+progress.info-bar { width: 100%; height: 10px; appearance: none; border: none; border-radius: 5px; background: var(--muted-bg); overflow: hidden; }
+progress.info-bar::-webkit-progress-bar { background: var(--muted-bg); border-radius: 5px; }
+progress.info-bar::-webkit-progress-value { background: var(--accent); border-radius: 5px; }
+progress.info-bar::-moz-progress-bar { background: var(--accent); border-radius: 5px; }
+progress.info-bar-ok::-webkit-progress-value { background: var(--ok); }
+progress.info-bar-ok::-moz-progress-bar { background: var(--ok); }
+progress.info-bar-warn::-webkit-progress-value { background: var(--warn); }
+progress.info-bar-warn::-moz-progress-bar { background: var(--warn); }
+progress.info-bar-error::-webkit-progress-value { background: var(--error); }
+progress.info-bar-error::-moz-progress-bar { background: var(--error); }
+.cond-badges { display: inline-flex; flex-wrap: wrap; gap: 3px; }
+.cond-detail { font-size: 12.5px; }
+
 /* ---------- dialog ---------- */
 .dialog {
   border: 1px solid var(--border); border-radius: 10px; padding: 18px; width: min(520px, calc(100vw - 24px));

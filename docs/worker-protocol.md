@@ -224,8 +224,13 @@ aufgelöster Pfad im erwarteten Verzeichnis): Symlink, FIFO oder ein ausgetausch
 |---|---|---|
 | `shell`-Action in Hooks | Exit 0 (Ergebnisdatei wird ignoriert); sonst Retry gemäß `lifecycle.action_retry` | `ADISPATCH_CONTEXT_FILE` mit `kind: lifecycle_action`, Run, Hook (z. B. `on_result.approved`, `on_error`), Action, `result` (außer `on_start`; inkl. `outcome`), Minimal-Env + `env` + `ADISPATCH_*`; Secrets **nur**, wenn die Action `secrets` deklariert (seit 0.3.0, wie `execute.secrets`; in allen Hooks inkl. `on_result.*` und `on_error`) |
 | `conditions.*`, `shell_filter` | Exit 0 = passt, 1 = passt nicht, ≥ 2/Timeout/Signal = Prüffehler (`unknown`, kein Start) | `ADISPATCH_CHECK_CONTEXT_FILE` (Workflow bzw. Item) |
+| Info-Skripte (`dashboard.yaml`, seit 0.3.1) | Exit 0 **und** ein lesbarer Wert auf der ersten nicht-leeren stdout-Zeile (`text`; `number` mit Punkt, optional + `unit`; `percent` 0–100, optional `%`). Jeder andere Exit-Code (auch 1), Timeout, Signal oder ein unlesbarer Wert = Fehler (letzter gültiger Wert bleibt sichtbar) | `ADISPATCH_CHECK_CONTEXT_FILE` mit `{schema_version: 1, kind: "dashboard_info", info: {id, type}, config_dir, data_dir}`, dazu `ADISPATCH_INFO_ID`, `ADISPATCH_CONFIG_DIR`, `ADISPATCH_DATA_DIR`; Minimal-Env + `env`; Arbeitsverzeichnis = config-dir; keine Secrets |
 
-Die Exit-Code-Semantik 0/1/≥2 gilt **nur** für Prüfskripte, nicht für den Haupt-Worker. Dry-Runs führen Prüfskripte nie aus.
+Die Exit-Code-Semantik 0/1/≥2 gilt **nur** für Conditions und `shell_filter`, nicht für den Haupt-Worker und nicht für
+Info-Skripte. Dry-Runs führen Prüfskripte nie aus. Info-Skripte laufen nur im Hintergrund (Start, Ablauf von `cache`,
+Reload, gedrosselter „Refresh“), nie durch einen Seitenaufruf; Ausgabe bis 4 KiB je Stream, Timeout beendet die ganze
+Prozessgruppe. stderr dient der Diagnose: die erste Zeile erscheint (redigiert, gekürzt) in der Fehlermeldung der
+Kachel bzw. – bei Workflow-Conditions – im angezeigten letzten Status.
 
 **Secrets für Shell-Actions** (seit 0.3.0): `secrets: { GH_TOKEN: { identity: maintainer, delivery: env|file } }` an
 der Action. Tokens werden pro Versuch geholt; bei `file` liegt die Datei unter

@@ -23,6 +23,46 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   `scheduler.polling_interval`, 5 s … 60 s), `retention` (`6h`, 10 … 20 000 Intervalle), `top_processes` (`5`),
   `min_cpu_percent` (`2`). Die Konfigurationsseite zeigt die Werte.
 - **API:** `GET /api/v1/system/metrics?since=<ISO>` und SSE-Event `system.metrics`.
+- **Conditions sichtbar (WI-24):** Shell-Prüfungen in `conditions.workflow[]`, `conditions.item[]` und `shell_filter`
+  haben ein optionales Feld `name` (1–80 Zeichen; abwärtskompatibel). Workflows → Workflow-Detail (Bereich
+  „Conditions“) und kompakt die Workflow-Liste zeigen jede Prüfung mit Anzeigename (sonst `command` + `args`, gekürzt),
+  Timeout, Cache und dem letzten Status: Workflow-Conditions grün = ok, rot = nicht jetzt, gelb = Prüffehler, grau =
+  nicht ausgewertet/nie geprüft – mit Zeitpunkt, Dauer, Cache-Treffer, Exit-Code und erster stderr-Zeile (redigiert);
+  Item-Conditions und `shell_filter` als Zusammenfassung des letzten Planungsschritts (ok / nicht jetzt / Fehler).
+  Der Scheduler hält den Status im Speicher und verwirft ihn beim Reload für geänderte Workflows. Dry-Run (CLI, API,
+  UI) und Ablehnungsgründe nennen den Anzeigenamen. SSE-Event `workflow.conditions` bei Statusänderungen.
+- **Info-Kacheln im Dashboard (WI-24):** neue optionale Datei `dashboard.yaml` mit `info: [{id, title, type: text |
+  number | percent, command, args, env, timeout, cache, unit, warn_above, critical_above, warn_below,
+  critical_below}]`. Der Daemon führt die Skripte nur im Hintergrund aus (beim Start, nach Ablauf von `cache`, nach
+  Reload für neue/geänderte Kacheln), nie durch einen Seitenaufruf; höchstens eine Ausführung je Kachel und zwei
+  insgesamt; Mechanik wie Conditions (keine Shell, Minimalumgebung + `env`, Timeout mit Prozessgruppen-Kill,
+  Ausgabelimit, Arbeitsverzeichnis config-dir). Wert = erste stdout-Zeile; Fehler zeigen eine kurze Meldung (`exit code 2: …`) und behalten
+  den letzten gültigen Wert; Werte, Meldungen und stderr-Zeilen werden von ANSI-/Steuer-/Bidi-Zeichen bereinigt,
+  redigiert und erst dann gekürzt; `nextAttemptAt` zeigt den nächsten (Wiederholungs-)Abruf. Dashboard-Bereich „Information“ mit Wert, Einheit, Prozentbalken,
+  Farbe nach Schwellwerten, Zeitpunkt und gedrosseltem „Refresh“-Knopf. API `GET /api/v1/dashboard/info`,
+  `POST /api/v1/dashboard/info/:id/refresh` (CSRF-/Host-/Origin-Schutz, 429 bei Drosselung), SSE `dashboard.info`.
+  Validierung beim Laden und bei `config reload` (Schema mit „did you mean …“, eindeutige IDs, Schwellwerte nur bei
+  `number`/`percent`, `cache` ≥ 10 s, `timeout` ≤ 5 min und ≤ `cache`, Skript existiert); Teil des Konfigurations-Hashs und der Dateiliste.
+  `init` und `examples/config` legen eine Kachel „Plattenbelegung des data-dir“ an.
+- **Externe Tools in der Toolbar (`ui.external_links`):** Weitere lokale Werkzeuge – z. B. das Dashboard
+  [claude-inspect](https://github.com/brokoskokoli/claude_inspect) – erscheinen als Eintrag in der Navigation der
+  Weboberfläche: `embed: false` (Default) öffnet sie in einem neuen Tab, `embed: true` zeigt sie auf einer eigenen Seite
+  `#/tools/<id>` in einem `iframe` (Sandbox, kein Referrer) mit „Open in new tab“ und Hinweis, falls nichts erscheint.
+  Schlüssel `id`, `label` (1–40 Zeichen), `url` (absolut, `http`/`https`, ohne Zugangsdaten), `enabled`, `embed`;
+  die URLs aktiver Einträge sieht jeder, der UI/API erreicht – Token-ähnliche Query-Parameter (`t`, `token`, …) ergeben
+  deshalb eine Warnung; `embed: true` verlangt einen in der CSP ausdrückbaren Host (Hostname/IPv4). Deaktivierte Einträge
+  erscheinen nirgends in API/UI. Kein Proxy – der Browser spricht das Tool
+  direkt an. `GET /api/v1/config` liefert die aktiven Einträge als `externalLinks`. Betrieb neben adispatchd (lokal
+  und auf dem Server hinter dem Reverse Proxy): `docs/operations.md`.
+
+### Geändert
+
+- `GET /api/v1/workflows[/:id]`: `conditions` enthält jetzt die Definitionen samt letztem Status
+  (`{workflow: [...], item: [...], shellFilter}`) statt nur der Anzahlen (`{workflow: <n>, item: <n>}`); die Anzahl
+  ist die Länge der Listen.
+- Die Content-Security-Policy der Weboberfläche kommt als HTTP-Header statt als `<meta>`-Tag (Inhalt unverändert) und
+  erlaubt `frame-src` genau für die Origins der aktivierten eingebetteten Tools; ein Reload der Konfiguration wirkt sofort
+  für neu geladene Seiten.
 
 ### Hinweis
 

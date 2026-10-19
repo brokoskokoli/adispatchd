@@ -1,0 +1,11 @@
+# dashboard.yaml - info tiles on the dashboard (optional, WI-24; docs/configuration-reference.md section 3.7).
+# Scripts run in the background only (start, cache expiry, reload), never on page views.
+info:
+  - id: data-disk
+    title: Disk usage of the data dir
+    type: percent
+    command: scripts/info/data-disk.sh   # relative to this config dir
+    timeout: 10s
+    cache: 5m
+    warn_above: 80
+    critical_above: 95

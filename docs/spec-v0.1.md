@@ -2,7 +2,7 @@
 
 > **Name:** Agent Dispatch Daemon – npm-Paket, Repository, systemd-Unit und Standardpfade `adispatchd`, CLI-Befehl `adispatch`. Ursprünglicher Arbeitsname: „Agent Orchestrator“ (`agent-orchestrator`); alle Bezeichner wurden entsprechend umbenannt (z. B. Umgebungsvariablen `ADISPATCH_*` statt `ORCH_*`, Kommentar-Marker `adispatchd:` statt `orch:`).
 
-**Status:** Umgesetzt bis Version 0.3.0 (npm `adispatchd`). Ursprünglich technischer Entwurf v0.1; spätere Erweiterungen stehen als „Nachtrag 0.2.0/0.3.0 (WI-NN)“ an der jeweiligen Stelle, verbindliche Dateiformate in [configuration-reference.md](configuration-reference.md)  
+**Status:** Umgesetzt bis Version 0.3.1 (npm `adispatchd`). Ursprünglich technischer Entwurf v0.1; spätere Erweiterungen stehen als „Nachtrag 0.2.0/0.3.0/0.3.1 (WI-NN)“ an der jeweiligen Stelle, verbindliche Dateiformate in [configuration-reference.md](configuration-reference.md)  
 **Ziel:** Eigenständig installierbarer, konfigurationsgetriebener Orchestrator für Shell-Prozesse und KI-Agenten  
 **Technologie:** TypeScript, Node.js (unterstützte LTS-Version), SQLite, YAML, HTTP/SSE  
 **Betrieb:** Linux (Produktion, systemd), macOS (lokal)  
@@ -73,9 +73,11 @@ config-dir/
     needs-maintainer.yaml
   filters/                  # Nachtrag 0.2.0 (WI-15): benannte Filter
     needs-maintainer.yaml
+  dashboard.yaml            # Nachtrag 0.3.1 (WI-24): Info-Kacheln, optional
   scripts/
     coder.sh
     check-credits.sh
+    info/data-disk.sh
 
 data-dir/
   adispatchd.sqlite
@@ -318,6 +320,8 @@ execute:
 ```
 
 Parametertypen: `string`, `number`, `boolean`, `enum`; dazu `required` und `default`. Validierung erfolgt vor dem Start. Schedule-/Manual-Workflows haben kein Source-Item und daher keine implizite Source-URL. Für Cron gilt zunächst: versäumte oder durch Conditions/Limits verhinderte Zeitpunkte werden **übersprungen**, nicht nachgeholt; gleiche Cron-Instanzen werden nicht aufgestaut. Zeitzonen und Sommerzeitfälle müssen getestet werden.
+
+**Nachtrag 0.3.1 (WI-24) – Namen für Prüfungen, `dashboard.yaml`:** Jede Condition (`conditions.workflow[]`, `conditions.item[]`) und der `shell_filter` haben ein optionales Feld `name` (1–80 Zeichen) als Anzeigename in UI, Dry-Run und Ablehnungsgründen; ohne `name` wird `command` + `args` (gekürzt) angezeigt. Neue optionale Datei `dashboard.yaml` im config-dir mit einer Liste `info` von Info-Kacheln: `id` (eindeutig), `title`, `type` (`text` | `number` | `percent`), `command`, `args`, `env`, `timeout` (Default 15 s), `cache` (Default 5 min, mindestens 10 s), `unit` (nur `number`), Schwellwerte `warn_above`/`critical_above` bzw. `warn_below`/`critical_below` (nur `number`/`percent`). Die Skripte sind vertrauenswürdige Konfiguration wie Conditions, laufen aber **nur im Hintergrund** (Start, Ablauf von `cache`, Reload, gedrosselter manueller Abruf) mit derselben Mechanik (keine Shell, Minimalumgebung + `env`, Timeout mit Prozessgruppen-Kill, begrenzte Ausgabe, Arbeitsverzeichnis config-dir), höchstens eine Ausführung je Kachel und zwei insgesamt. Wert = erste nicht-leere stdout-Zeile; Exit ≠ 0, Timeout oder unlesbare Ausgabe ergeben einen Fehlerzustand, der letzte gültige Wert bleibt sichtbar. Die Datei wird beim Start und bei `config reload` geladen und validiert (Schema, IDs, Schwellwerte, Skript existiert) und ist Teil des Konfigurations-Hashs. Keine Secrets in V1. Details: [configuration-reference.md](configuration-reference.md) §3.4.6, §3.7.
 
 ## 6. Filter und Abhängigkeiten
 
@@ -616,9 +620,9 @@ SSE-Ereignisse tragen `id`, `type`, Zeitstempel und Payload. Nach Verbindungsabb
 
 **Navigation:** Dashboard; Runs (aktiv + historisch); Workflows; Blocked; Failed Actions; Views (bei wenigen Einträgen direkt als Untermenü, zusätzlich „All Views“); Configuration/System.
 
-- **Dashboard:** Scheduler-Status, globales Limit und Auslastung, Pause/Resume, Drain, Cancel All, aktive Runs und letzte Agent-Statusmeldungen.
+- **Dashboard:** Scheduler-Status, globales Limit und Auslastung, Pause/Resume, Drain, Cancel All, aktive Runs und letzte Agent-Statusmeldungen. **Nachtrag 0.3.1 (WI-24):** Bereich „Information“ mit den Kacheln aus `dashboard.yaml` (Titel, Wert, Einheit, Balken bei Prozent, Farbe nach Schwellwerten, Zeitpunkt, Fehlerhinweis mit veraltetem Wert, gedrosselter „Refresh“-Knopf); Werte kommen per REST (`GET /api/v1/dashboard/info`) und live per SSE (`dashboard.info`); ein Seitenaufruf startet nie ein Skript.
 - **Runs:** Name, Run-ID, Workflow, Agenten-/Rollenidentität, Trigger, Start/Ende/Dauer, Arbeitsverzeichnis, Startkommando, Exit-Code, Source-URL, Input-JSON, Ergebnis-JSON, Rohlogs, Events, Lifecycle-Aktionen; bei aktiven Runs `Cancel`.
-- **Workflows:** aktiv/inaktiv, Priorität, Max-Parallelität, aktueller Verbrauch, manuelle Starts (Source-URL + optionale Parameter), Dry-Run; Runtime-Overrides für `enabled`, `priority`, Limits.
+- **Workflows:** aktiv/inaktiv, Priorität, Max-Parallelität, aktueller Verbrauch, manuelle Starts (Source-URL + optionale Parameter), Dry-Run; Runtime-Overrides für `enabled`, `priority`, Limits. **Nachtrag 0.3.1 (WI-24):** Conditions sichtbar – in der Liste kompakt, im Detail mit Anzeigename, Timeout, Cache und letztem Status (Workflow-Conditions: ok / nicht jetzt / Prüffehler / nicht ausgewertet bzw. nie geprüft, mit Zeitpunkt, Dauer, Cache-Treffer und erster stderr-Zeile; Item-Conditions und `shell_filter`: Zusammenfassung des letzten Planungsschritts). Der Status liegt im Speicher des Schedulers; API-Feld `conditions` der Workflow-Ansicht, SSE `workflow.conditions`.
 - **Blocked:** Blockschlüssel, Fehlversuche, Run-Links, Source-URL, Remove Block. Nicht mit GitHub-„blocked by“ oder einem GitHub-Label verwechseln.
 - **Failed Actions:** Fehler, Versuche, manuelle Wiederholung.
 - **Configuration:** YAML nur lesend anzeigen, Validierung, Fehler und manueller Reload. Runtime-Overrides bleiben **nicht** nach Neustart erhalten; Reload setzt betroffene Overrides auf YAML-Werte zurück.
@@ -627,6 +631,7 @@ SSE-Ereignisse tragen `id`, `type`, Zeitstempel und Payload. Nach Verbindungsabb
 Die GUI muss bei komplexen Logs nur benötigte Bereiche laden (Paging/Tailing), keine 100-MB-Datei auf einmal in den Browser senden.
 
 **Nachtrag 0.3.1 (WI-23) – Server-Ressourcen im Dashboard:** Bereich „Server“ mit gestapeltem CPU-Diagramm über die Zeit (Daemon, jeder Run mit stabiler Farbe je Workflow und Link zum Run-Detail, Hooks/Checks, die größten fremden Prozesse nach Namen, „Others“, Rest bis zur Gesamtauslastung als „System / unattributed“; Skala 0–100 % der Gesamtkapazität), RAM belegt/verfügbar und freier Plattenplatz je überwachtem Pfad, aktuelle Werte als Zahlen und Tabelle (Text-Alternative), Tooltip je Zeitpunkt, Zeitraum-Auswahl (begrenzt durch `monitoring.retention`), Live-Aktualisierung per SSE `system.metrics`. Eigenes SVG ohne Bibliotheken, Prozessnamen nur als Text. `monitoring.enabled: false` → Hinweis statt Diagramm. Details: [configuration-reference.md](configuration-reference.md) §3.1, [api.md](api.md).
+**Nachtrag 0.3.1 (WI-25) – Externe Tools in der Toolbar:** `config.yaml` kann unter `ui.external_links` beliebige lokale Werkzeuge (z. B. ein Agenten-Dashboard wie claude-inspect) in die Navigation aufnehmen: `id` (Konfigurations-ID, eindeutig), `label` (1–40 Zeichen, nur als Text dargestellt), `url` (absolut, `http`/`https`, ohne Zugangsdaten; so, wie der **Browser** das Tool erreicht), `enabled` (Default `true`), `embed` (Default `false`). `embed: false` → Link in neuem Tab (`noopener noreferrer`, Symbol „extern“); `embed: true` → eigene Seite `#/tools/<id>` mit dem Tool in einem `iframe` (`sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-downloads"`, `referrerpolicy="no-referrer"`), Kopfzeile mit „Open in new tab“ und Hinweis auf typische Ursachen, falls nichts erscheint. Die Content-Security-Policy der UI kommt seitdem als HTTP-Header (vorher `<meta>`, inhaltlich gleich) und erlaubt `frame-src` genau für die Origins der aktivierten `embed`-Einträge (nach einem Reload sofort für neu geladene Seiten). Kein Proxy: Der Browser spricht das Tool direkt an. `GET /api/v1/config` liefert die aktiven Einträge als `externalLinks`; die Konfigurationsansicht (`config.global.ui`) enthält nur aktive Einträge mit redigiertem Query-String/Fragment. Die URLs aktiver Einträge (auch Tokens darin) sieht jeder, der UI/API erreicht (gleiche Vertrauensgrenze, §20.1); Query-Parameter, die wie ein Token aussehen (`t`, `token`, …), ergeben deshalb eine Warnung. Bei `embed: true` muss der Host in der CSP ausdrückbar sein (Hostname/IPv4 aus `[a-z0-9.-]`), sonst Fehler. Empfehlung: UI und Tool mit gleichem Hostnamen und Schema öffnen (`SameSite`-Cookies im Frame). Details: [configuration-reference.md](configuration-reference.md) §3.1, [operations.md](operations.md).
 
 ## 17. Views
 

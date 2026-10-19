@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,6 +78,11 @@ describe('cli init', () => {
     expect(Object.values(loaded.config.workflows).filter((w) => w.enabled).map((w) => w.id)).toEqual(['hello']);
     expect(loaded.config.workflows.hello?.execute.command).toBe(path.join(configDir, 'scripts/hello.sh'));
     expect(loaded.config.global.workspace.baseDir).toBe(path.join(dataDir, 'workspaces'));
+    // WI-24: named condition, info tile with a working example script.
+    expect(loaded.config.workflows.coder?.conditions.workflow[0]?.name).toBe('Credits available');
+    expect(loaded.config.dashboard?.info.map((t) => [t.id, t.type, t.command])).toEqual([['data-disk', 'percent', path.join(configDir, 'scripts/info/data-disk.sh')]]);
+    const out = execFileSync(path.join(configDir, 'scripts/info/data-disk.sh'), { env: { PATH: process.env.PATH ?? '', ADISPATCH_DATA_DIR: dataDir }, encoding: 'utf8' });
+    expect(out.trim()).toMatch(/^\d{1,3}$/);
   });
 
   it('never overwrites existing files', async () => {

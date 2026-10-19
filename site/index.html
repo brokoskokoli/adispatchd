@@ -7,6 +7,7 @@
 <meta name="description" content="Configuration-driven daemon that turns GitHub issues into supervised runs of shell scripts and AI agents: filters, priorities, cron, lifecycle hooks, containers and a live web UI.">
 <link rel="canonical" href="https://brokoskokoli.github.io/adispatchd/">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <meta name="theme-color" content="#2563eb" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0b1120" media="(prefers-color-scheme: dark)">
 <meta name="color-scheme" content="light dark">
@@ -17,9 +18,16 @@
 <meta property="og:url" content="https://brokoskokoli.github.io/adispatchd/">
 <meta property="og:locale" content="en_US">
 <meta property="og:locale:alternate" content="de_DE">
-<meta name="twitter:card" content="summary">
+<meta property="og:image" content="https://brokoskokoli.github.io/adispatchd/assets/og-image.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="adispatchd – Agent Dispatch Daemon: GitHub issue → filter and priority → worker or AI agent → labels and project fields">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="adispatchd – Agent Dispatch Daemon">
 <meta name="twitter:description" content="Turn GitHub issues into supervised runs of your shell scripts and AI agents – declaratively, observably, on your own machine.">
+<meta name="twitter:image" content="https://brokoskokoli.github.io/adispatchd/assets/og-image.png">
+<meta name="twitter:image:alt" content="adispatchd – Agent Dispatch Daemon: GitHub issue → filter and priority → worker or AI agent → labels and project fields">
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -32,6 +40,7 @@
   "softwareVersion": "0.3.1",
   "license": "https://opensource.org/licenses/MIT",
   "url": "https://brokoskokoli.github.io/adispatchd/",
+  "image": "https://brokoskokoli.github.io/adispatchd/assets/og-image.png",
   "codeRepository": "https://github.com/brokoskokoli/adispatchd",
   "downloadUrl": "https://www.npmjs.com/package/adispatchd",
   "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
@@ -290,6 +299,11 @@
           <p data-l="de" lang="de">Erst Workflow-Priorität, dann Item-Prioritätsregeln. Globale, workflow- und sourcebezogene Limits, ein Lock je Item und Retry-Blocks.</p>
         </article>
         <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 12l2 2 4-4"/><rect x="3" y="3" width="18" height="18" rx="2"/></svg></span><span data-l="en">Visible conditions &amp; info tiles</span><span data-l="de" lang="de">Sichtbare Bedingungen &amp; Info-Kacheln</span></h3>
+          <p data-l="en">Named start conditions with their last result in the UI, and dashboard tiles from <code>dashboard.yaml</code> – small scripts run in the background (text, number or percent with thresholds).</p>
+          <p data-l="de" lang="de">Benannte Startbedingungen mit ihrem letzten Ergebnis in der UI und Dashboard-Kacheln aus <code>dashboard.yaml</code> – kleine Skripte, im Hintergrund ausgeführt (Text, Zahl oder Prozent mit Schwellwerten).</p>
+        </article>
+        <article class="card">
           <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span data-l="en">Source, cron &amp; manual triggers</span><span data-l="de" lang="de">Source-, Cron- &amp; manuelle Trigger</span></h3>
           <p data-l="en">Poll GitHub, run on a cron schedule with time zone, or start manually from the UI/API with typed parameters. One workflow can serve several repositories.</p>
           <p data-l="de" lang="de">GitHub abfragen, per Cron mit Zeitzone laufen oder manuell aus UI/API mit typisierten Parametern starten. Ein Workflow kann mehrere Repositories bedienen.</p>
@@ -321,8 +335,8 @@
         </article>
         <article class="card">
           <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 14l3-3 3 2 4-5"/></svg></span><span data-l="en">Live web UI &amp; API</span><span data-l="de" lang="de">Live-Weboberfläche &amp; API</span></h3>
-          <p data-l="en">Workflows, runs with live output, events, kept files and read-only views across repositories, streamed via Server-Sent Events – plus a JSON HTTP API.</p>
-          <p data-l="de" lang="de">Workflows, Runs mit Live-Output, Events, gesicherte Dateien und read-only Views über mehrere Repositories, live per Server-Sent Events – dazu eine JSON-HTTP-API.</p>
+          <p data-l="en">Workflows, runs with live output, events, kept files and read-only views across repositories, streamed via Server-Sent Events – plus a JSON HTTP API. Optional toolbar links to other local tools such as claude-inspect, in a new tab or embedded.</p>
+          <p data-l="de" lang="de">Workflows, Runs mit Live-Output, Events, gesicherte Dateien und read-only Views über mehrere Repositories, live per Server-Sent Events – dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools wie claude-inspect in der Toolbar, im neuen Tab oder eingebettet.</p>
         </article>
         <article class="card">
           <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 20h18"/><path d="M6 16V10M10 16V6M14 16v-4M18 16V8"/></svg></span><span data-l="en">Server resources</span><span data-l="de" lang="de">Server-Ressourcen</span></h3>

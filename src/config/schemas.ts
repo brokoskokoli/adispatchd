@@ -157,6 +157,19 @@ const webhookChannelSchema = z.strictObject({
   on: z.array(notificationEvent).optional(),
 });
 
+/** Entry of `ui.external_links` (WI-25); URL rules are checked semantically (validate.ts). */
+const externalLinkSchema = z.strictObject({
+  id: configId,
+  label: z
+    .string()
+    .min(1, 'Must not be empty')
+    .max(40, 'Must be at most 40 characters')
+    .refine((v) => v.trim().length > 0, 'Must not be empty'),
+  url: z.string().min(1, 'Must not be empty'),
+  enabled: z.boolean().default(true),
+  embed: z.boolean().default(false),
+});
+
 /** Schema of `config.yaml`. */
 export const globalConfigSchema = z.strictObject({
   server: z
@@ -215,6 +228,12 @@ export const globalConfigSchema = z.strictObject({
       retention: positiveDuration.default(parseDuration(DEFAULTS.monitoringRetention)),
       top_processes: z.number().int('Must be an integer').min(0, 'Must be 0 or greater').max(50, 'Must be at most 50').default(DEFAULTS.monitoringTopProcesses),
       min_cpu_percent: z.number().finite().min(0, 'Must be 0 or greater').default(DEFAULTS.monitoringMinCpuPercent),
+    })
+    .prefault({}),
+  /** Web UI settings (WI-25). */
+  ui: z
+    .strictObject({
+      external_links: z.array(externalLinkSchema).default([]),
     })
     .prefault({}),
 });
@@ -361,7 +380,11 @@ const triggerSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('manual') }),
 ]);
 
+/** Optional display name of a shell check (WI-24). */
+const checkName = z.string().trim().min(1, 'Must not be empty').max(80, 'At most 80 characters');
+
 const shellCheckSchema = z.strictObject({
+  name: checkName.optional(),
   type: z.literal('shell'),
   command: nonEmpty,
   args: stringList,
@@ -370,6 +393,7 @@ const shellCheckSchema = z.strictObject({
 });
 
 const shellFilterSchema = z.strictObject({
+  name: checkName.optional(),
   command: nonEmpty,
   timeout: positiveDuration.default(parseDuration(DEFAULTS.checkTimeout)),
 });
@@ -629,3 +653,44 @@ export const namedFilterSchema = z.strictObject({
 
 /** Parsed named filter file. */
 export type RawNamedFilter = z.output<typeof namedFilterSchema>;
+
+// ---------------------------------------------------------------------------
+// dashboard.yaml (WI-24)
+// ---------------------------------------------------------------------------
+
+/** Kinds of dashboard info tiles. */
+export const DASHBOARD_INFO_TYPES = ['text', 'number', 'percent'] as const;
+
+/** Lower bound of `cache` of an info tile (scripts must not run in a tight loop). */
+export const MIN_INFO_CACHE_MS = 10_000;
+
+/** Max. number of info tiles. */
+export const MAX_INFO_TILES = 50;
+
+const threshold = z.number().finite('Must be a finite number').optional();
+
+const infoTileSchema = z.strictObject({
+  id: configId,
+  title: nonEmpty.max(80, 'At most 80 characters').optional(),
+  type: z.enum(DASHBOARD_INFO_TYPES),
+  command: nonEmpty,
+  args: stringList,
+  env: envMap,
+  timeout: positiveDuration.default(parseDuration('15s')),
+  cache: durationSchema
+    .default(parseDuration('5m'))
+    .refine((ms) => ms >= MIN_INFO_CACHE_MS, `Duration must be at least ${MIN_INFO_CACHE_MS / 1000}s`),
+  unit: z.string().trim().max(20, 'At most 20 characters').optional(),
+  warn_above: threshold,
+  critical_above: threshold,
+  warn_below: threshold,
+  critical_below: threshold,
+});
+
+/** Schema of `dashboard.yaml`. */
+export const dashboardFileSchema = z.strictObject({
+  info: z.array(infoTileSchema).max(MAX_INFO_TILES, `At most ${MAX_INFO_TILES} info tiles`).default([]),
+});
+
+/** Parsed `dashboard.yaml`. */
+export type RawDashboardFile = z.output<typeof dashboardFileSchema>;

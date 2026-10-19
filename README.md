@@ -36,6 +36,11 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   `contains`, `in`, `greater_than`, `less_than`; define a filter once in `filters/<id>.yaml` and reuse it in
   workflows and views.
 - **Priorities** – workflow priority first, then item priority rules; global, per-workflow and per-source limits.
+- **Visible start conditions** – shell checks (`conditions`, `shell_filter`) get optional names; the UI shows each
+  check with its last result (ok / not now / check error, time, cache hit, first stderr line) and per planning step
+  how many items passed the item checks.
+- **Dashboard info tiles** – `dashboard.yaml` defines small scripts (text, number or percent with warn/critical
+  thresholds) that the daemon runs in the background on a cache schedule – e.g. disk usage, open PRs, credits.
 - **Triggers** – `source` (polling GitHub), `schedule` (cron with time zone) or `manual` (UI/API, with typed
   parameters).
 - **Multi-source workflows** – one workflow can serve several repositories (`sources: [...]`), with per-repository
@@ -57,6 +62,9 @@ who picks which issue, what happens when an agent crashes, how do labels get res
 - **Server resources on the dashboard** – CPU over time stacked by the daemon, each run (click through to the run),
   hooks/checks and the busiest foreign processes, plus memory, load and free disk space; sampled in memory
   (`monitoring` in `config.yaml`), only command names are shown, never arguments.
+  repositories), streamed via Server-Sent Events; plus a JSON HTTP API. Optional toolbar links to other local tools
+  (e.g. the [claude-inspect](https://github.com/brokoskokoli/claude_inspect) dashboard), opened in a new tab or embedded
+  (`ui.external_links`).
 - **Dry-run** – `adispatch workflow dry-run <id>` shows which items would start and why the others would not,
   without starting anything.
 - **Robust operations** – retry blocks, action retries, cancel/timeout per process group, drain, crash recovery,
@@ -146,7 +154,7 @@ item_priority:
     - when: { field: project.Priority, operator: in, value: [P0, P1] }
       value: 100
 conditions:
-  workflow: [ { type: shell, command: scripts/check-credits.sh, cache: 60s } ]
+  workflow: [ { name: Credits available, type: shell, command: scripts/check-credits.sh, cache: 60s } ]
 execute:
   type: shell
   command: scripts/coder.sh          # relative to the config dir; no shell, args as a list
