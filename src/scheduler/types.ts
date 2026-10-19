@@ -241,6 +241,11 @@ export interface DryRunResult {
   summary: { candidates: number; wouldStart: number; pendingChecks: number; notStartable: number };
   /** Completion hook routing (WI-17); missing in results of instances before 0.3.0. */
   hooks?: HookRouting;
+  /**
+   * Container workflows (WI-19): the engine command line a run would spawn, with unresolved
+   * templates and `<run-id>`; secrets appear by name only (`-e NAME`), never with values.
+   */
+  container?: { engine: string; image: string; command: string; args: string[] };
 }
 
 /** Which completion hook runs for which outcome (WI-17). */

@@ -6,11 +6,17 @@
  */
 import path from 'node:path';
 import {
+  CONTAINER_LABELS,
+  CONTAINER_PATHS,
   WORKER_PROTOCOL_VERSION,
+  containerInstanceId,
+  containerName,
+  defaultContainerUser,
   buildTemplateValues,
   dataPaths,
   isWithin,
   renderTemplate,
+  type ContainerExecution,
   type CredentialProvider,
   type ExecutionSpec,
   type SourceItem,
@@ -18,7 +24,7 @@ import {
   type TemplateValues,
   type WorkerContext,
 } from '../core/index.js';
-import type { WorkflowSnapshot } from '../config/index.js';
+import type { ContainerExecuteConfig, WorkflowSnapshot } from '../config/index.js';
 import type { TokenFileRequest } from '../executors/index.js';
 import type { RunRecord } from '../persistence/index.js';
 import { RunControllerError } from './errors.js';
@@ -131,8 +137,12 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
     source: sourceBound,
     parameters: Object.keys(workflow.parameters),
   };
-  const values = executionTemplateValues(input, rendered);
-  const args = execute.args.map((a) => renderTemplate(a, values, { mode: 'text', scope: textScope }));
+  // Container (WI-19): `{workspace.path}` in `command`/`env` is the path inside the container.
+  const workspaceTarget = execute.type === 'container' ? containerWorkspaceTarget(execute) : null;
+  const values = executionTemplateValues(input, workspaceTarget ?? rendered);
+  const args = (execute.type === 'shell' ? execute.args : execute.command).map((a) =>
+    renderTemplate(a, values, { mode: 'text', scope: textScope }),
+  );
   const env: Record<string, string> = {};
   for (const [name, template] of Object.entries(execute.env)) {
     env[name] = renderTemplate(template, values, { mode: 'text', scope: textScope });
@@ -177,14 +187,25 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
         }
       : {}),
     parameters: scalarParameters(run),
-    workspace: { path: rendered },
+    workspace: { path: workspaceTarget ?? rendered },
   };
 
   const files = dataPaths(input.dataDir).run(run.id);
+  const container =
+    execute.type === 'container'
+      ? containerExecution(execute, {
+          runId: run.id,
+          workflowId: workflow.id,
+          dataDir: input.dataDir,
+          workspace: rendered,
+          workspaceTarget: workspaceTarget as string,
+          hostValues: executionTemplateValues(input, rendered),
+        })
+      : undefined;
   const spec: ExecutionSpec = {
     runId: run.id,
     workflowId: workflow.id,
-    command: execute.command,
+    command: execute.type === 'shell' ? execute.command : execute.engine,
     args,
     workingDirectory: rendered,
     createDirectory: execute.createDirectory,
@@ -193,7 +214,8 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
     context,
     files: {
       contextFile: files.contextFile,
-      resultFile: files.resultFile,
+      // Container runs write into their own output directory (the only writable daemon mount).
+      resultFile: container ? path.join(files.outDir, 'result.json') : files.resultFile,
       stdoutLog: files.stdoutLog,
       stderrLog: files.stderrLog,
     },
@@ -203,6 +225,55 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
     },
     cancelGraceMs: execute.cancelGraceMs,
     ...(input.maxLogBytes !== undefined ? { maxLogBytes: input.maxLogBytes } : {}),
+    ...(container ? { container } : {}),
   };
   return { spec, workspaceBaseDir, tokenFiles };
+}
+
+/** Mount source that is the workspace itself (`{workspace.path}`, optionally with a trailing `/`). */
+const WORKSPACE_ITSELF = /^\{\s*workspace\.path\s*\}\/?$/;
+
+/** Target of the workspace mount: the first mount of `{workspace.path}`, else the automatic `/work`. */
+export function containerWorkspaceTarget(execute: ContainerExecuteConfig): string {
+  return execute.mounts.find((m) => WORKSPACE_ITSELF.test(m.source))?.target ?? CONTAINER_PATHS.workspace;
+}
+
+/**
+ * Resolve the container part of the spec: render mount sources (host
+ * workspace), add the automatic workspace mount, default user and workdir.
+ *
+ * @throws RunControllerError if a `{workspace.path}/<sub>` source escapes the workspace
+ */
+export function containerExecution(
+  execute: ContainerExecuteConfig,
+  input: { runId: string; workflowId: string; dataDir: string; workspace: string; workspaceTarget: string; hostValues: TemplateValues },
+): ContainerExecution {
+  const mounts = execute.mounts.map((m) => {
+    if (!m.source.includes('{')) return { source: m.source, target: m.target, mode: m.mode };
+    const source = path.resolve(renderTemplate(m.source, input.hostValues, { mode: 'text', scope: { workspace: true } }));
+    if (!isWithin(input.workspace, source)) {
+      throw new RunControllerError('run_invalid_mount', `mount source must stay inside the workspace: ${m.source}`);
+    }
+    return { source, target: m.target, mode: m.mode };
+  });
+  if (!execute.mounts.some((m) => WORKSPACE_ITSELF.test(m.source))) {
+    mounts.unshift({ source: input.workspace, target: CONTAINER_PATHS.workspace, mode: 'rw' });
+  }
+  return {
+    engine: execute.engine,
+    image: execute.image,
+    name: containerName(input.runId),
+    labels: {
+      [CONTAINER_LABELS.run]: input.runId,
+      [CONTAINER_LABELS.workflow]: input.workflowId,
+      [CONTAINER_LABELS.instance]: containerInstanceId(input.dataDir),
+    },
+    mounts,
+    workspaceTarget: input.workspaceTarget,
+    workdir: execute.workdir ?? input.workspaceTarget,
+    resources: { ...execute.resources },
+    user: execute.user ?? defaultContainerUser(),
+    network: execute.network,
+    pull: execute.pull,
+  };
 }

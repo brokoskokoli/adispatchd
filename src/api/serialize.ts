@@ -5,6 +5,7 @@
  */
 import { ACTIVE_STATUSES, isTerminalStatus, type TechnicalStatus } from '../core/index.js';
 import { workflowSecrets, type EffectiveWorkflow, type ParameterDefinition, type WorkflowConfig } from '../config/index.js';
+import { describeContainerExecute } from '../executors/index.js';
 import type { ActionAttemptRecord, BlockRecord, RunActionRecord, RunRecord } from '../persistence/index.js';
 import type { CronWorkflowStatus, WorkflowPlanningDiagnosis } from '../scheduler/index.js';
 
@@ -173,8 +174,25 @@ export function toWorkflowView(
     parameters: Object.fromEntries(Object.entries(c.parameters).map(([k, v]) => [k, parameterView(v)])),
     execute: {
       type: c.execute.type,
-      command: c.execute.command,
-      args: c.execute.args,
+      // Container (WI-19): the engine command line with unresolved templates (secrets by name only).
+      ...(c.execute.type === 'shell'
+        ? { command: c.execute.command, args: c.execute.args }
+        : describeContainerExecute(c.execute, { workflowId: c.id })),
+      ...(c.execute.type === 'container'
+        ? {
+            container: {
+              engine: c.execute.engine,
+              image: c.execute.image,
+              command: c.execute.command,
+              workdir: c.execute.workdir,
+              mounts: c.execute.mounts,
+              resources: c.execute.resources,
+              user: c.execute.user,
+              network: c.execute.network,
+              pull: c.execute.pull,
+            },
+          }
+        : {}),
       workingDirectory: c.execute.workingDirectory,
       timeout: c.execute.timeout,
       secrets: Object.keys(c.execute.secrets),

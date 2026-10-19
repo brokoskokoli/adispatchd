@@ -145,6 +145,13 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
   );
   if (r.conditions.length) parts.push(h('h3', null, 'Workflow conditions'), h('ul', { class: 'checks' }, r.conditions.map(checkRow)));
   if (r.secrets?.length) parts.push(h('h3', null, 'Secrets'), secretsTable(r.secrets));
+  if (r.container) {
+    parts.push(
+      h('h3', null, `Container (${r.container.engine}, image ${r.container.image})`),
+      h('p', { class: 'hint' }, 'Engine command line of a run: templates unresolved, secrets by name only (values are passed via the engine environment).'),
+      h('code', { class: 'wrap' }, [r.container.command, ...r.container.args].join(' ')),
+    );
+  }
   if (r.source) {
     parts.push(h('h3', null, `Source ${r.source.sourceId}: ${r.source.polled} item(s) polled`));
     if (r.source.error) parts.push(h('div', { class: 'alert alert-error' }, `Source error: ${r.source.error}`));
@@ -358,6 +365,12 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
             ['Current usage', `${wf.activeRuns} active`],
             ['Active blocks', wf.activeBlocks > 0 ? routeLink(['blocked'], badge(String(wf.activeBlocks), 'warn')) : '0'],
             ['Identity', text(wf.identity)],
+            ...(wf.execute.container
+              ? ([
+                  ['Container', h('span', null, h('code', null, wf.execute.container.image), h('small', { class: 'muted' }, ` (${wf.execute.container.engine}, pull ${wf.execute.container.pull}, network ${wf.execute.container.network})`))],
+                  ['Mounts', h('ul', { class: 'plain' }, wf.execute.container.mounts.map((m) => h('li', null, h('code', null, `${m.source} → ${m.target}`), ` (${m.mode})`)))],
+                ] as Array<[string, HTMLElement]>)
+              : []),
             ['Command', h('code', { class: 'wrap' }, [wf.execute.command, ...wf.execute.args.map(String)].join(' '))],
             ['Timeout', timeoutText(wf.execute.timeout)],
             [

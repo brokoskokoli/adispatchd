@@ -25,6 +25,7 @@ import {
   systemTimers,
   type AccessToken,
   type Clock,
+  type ContainerEngine,
   type CredentialProvider,
   type FetchLike,
   type IdentityDescription,
@@ -43,6 +44,7 @@ import {
   type GitHubAppIdentityConfig,
   type GitHubTokenIdentityConfig,
 } from './identities/index.js';
+import { ContainerEngineClient } from './executors/index.js';
 import { LifecycleEngine } from './lifecycle/index.js';
 import { NotificationService } from './notifications/index.js';
 import { acquireInstanceLock, openPersistence, type InstanceLock, type Persistence } from './persistence/index.js';
@@ -200,6 +202,30 @@ export class SourceRegistry implements CredentialProvider {
       ...Object.fromEntries(Object.keys(apps).map((id) => [id, appProvider])),
       ...Object.fromEntries(Object.keys(tokens).map((id) => [id, tokenProvider])),
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Container engines (WI-19)
+
+/** Engines used by container workflows of a configuration. */
+export function containerEngines(config: LoadedConfig): ContainerEngine[] {
+  const engines = new Set<ContainerEngine>();
+  for (const workflow of Object.values(config.workflows)) {
+    if (workflow.execute.type === 'container') engines.add(workflow.execute.engine);
+  }
+  return [...engines].sort();
+}
+
+/**
+ * Check at startup that the engine binaries of container workflows can be run
+ * (`<engine> --version`). Only warns: runs of a missing engine end with `start_error`.
+ */
+export async function checkContainerEngines(client: ContainerEngineClient, engines: readonly ContainerEngine[], log: Logger): Promise<void> {
+  for (const engine of engines) {
+    const result = await client.check(engine);
+    if (result.ok) log.info('container engine available', { engine, version: result.version });
+    else log.warn('container engine not available: container runs will end with start_error', { engine, error: result.error });
   }
 }
 
@@ -374,11 +400,14 @@ export async function createApp(options: AppOptions): Promise<App> {
     redact: redactor.asRedactor,
     credentials: sources,
   });
+  const containers = options.controller?.containers ?? new ContainerEngineClient({ logger });
   const controller = new RunController({
     clock,
     timers,
     logger,
     ...(options.controller ?? {}),
+    containers,
+    containerEngines: () => containerEngines(config.current),
     repositories: repos,
     lifecycle,
     sources: sourceLookup,
@@ -600,6 +629,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     notifications.start();
     void (async () => {
       try {
+        await checkContainerEngines(containers, containerEngines(config.current), log);
         const report = await controller.recover();
         log.info('recovery finished', {
           finalized: report.finalized.length,

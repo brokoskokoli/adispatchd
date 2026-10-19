@@ -18,6 +18,9 @@
  */
 import path from 'node:path';
 import {
+  containerInstanceId,
+  containerName,
+  runIdOfContainer,
   dataPaths,
   errorMessage,
   isOrchestratorError,
@@ -30,6 +33,7 @@ import {
   systemTimers,
   type BusinessResult,
   type Clock,
+  type ContainerEngine,
   type CredentialProvider,
   type ExecutionOutcome,
   type ExecutionSpec,
@@ -47,6 +51,8 @@ import {
 } from '../core/index.js';
 import type { WorkflowSnapshot } from '../config/index.js';
 import {
+  ContainerEngineClient,
+  ContainerExecutor,
   ShellExecutor,
   TOKEN_DIR_NAME,
   TokenFileSession,
@@ -100,6 +106,8 @@ export const RUN_EVENTS = {
   outcomeWarning: 'run.outcome_warning',
   /** Files kept from the workspace (`execute.keep`, WI-22): a {@link KeepReport}. */
   keptFiles: 'run.kept_files',
+  /** Recovery stopped a left-over container of the run (WI-19): `{engine, container, result}`. */
+  containerStopped: 'recovery.container_stopped',
 } as const;
 
 /** Optional per-start settings. */
@@ -178,8 +186,18 @@ export interface RunControllerOptions {
   tokenFiles?: { renewBeforeMs?: number; retryDelayMs?: number; maxRetryDelayMs?: number };
   /** Receives `retry_block_created` and `recovery_failed` after commit. Must not block/throw. */
   notifier?: Notifier;
-  /** Executor per run; default `new ShellExecutor({clock, logger, workspaceBaseDir})`. */
-  createExecutor?: (options: { workspaceBaseDir: string | undefined }) => Executor;
+  /**
+   * Executor per run; default by `execute.type`: `new ShellExecutor({clock, logger, workspaceBaseDir})`
+   * or `new ContainerExecutor({…, engines: containers})` (WI-19).
+   */
+  createExecutor?: (options: { workspaceBaseDir: string | undefined; type: 'shell' | 'container' }) => Executor;
+  /** Container engine client (WI-19): executor and recovery (default: engines on the daemon PATH). */
+  containers?: ContainerEngineClient;
+  /**
+   * Engines used by container workflows of the live configuration (WI-19). Recovery stops left-over
+   * containers of this instance on these engines and on the engines of active container runs.
+   */
+  containerEngines?: () => readonly ContainerEngine[];
   /**
    * Currently registered secret values of the shared redactor (issued tokens,
    * keys); redacted in kept files together with the run's own secrets (WI-22).
@@ -272,6 +290,9 @@ export class RunController {
   private stopping = false;
   private recovering: Promise<RecoveryReport> | undefined;
   private shuttingDown: Promise<ShutdownResult> | undefined;
+  private readonly containers: ContainerEngineClient;
+  /** Result of the container sweep per engine during `recover()` (WI-19); `undefined` outside recovery. */
+  private containerSweep: Map<ContainerEngine, { ok: true } | { ok: false; error: string }> | undefined;
 
   constructor(private readonly options: RunControllerOptions) {
     this.repos = options.repositories;
@@ -281,6 +302,7 @@ export class RunController {
     this.logger = (options.logger ?? noopLogger).child({ component: 'run-controller' });
     this.bus = options.publisher?.bus ?? options.bus ?? new RunEventBus(this.logger);
     this.publisher = options.publisher ?? new PersistedEventPublisher(this.repos, this.bus);
+    this.containers = options.containers ?? new ContainerEngineClient({ logger: this.logger });
   }
 
   // ---------------------------------------------------------------------------
@@ -661,6 +683,8 @@ export class RunController {
     this.logger.info('recovery started', { activeRuns: activeRuns.length });
     // Token files (WI-18) of the previous process are no longer renewed: delete them first.
     await this.sweepTokenDirs([...activeRuns.map((r) => r.id), ...this.repos.actions.runIdsWithIncompleteActions()]);
+    // Containers (WI-19) are never adopted: stop every container of this instance first.
+    this.containerSweep = await this.sweepContainers(activeRuns);
     await Promise.all(
       activeRuns.map(async (run) => {
         try {
@@ -691,6 +715,7 @@ export class RunController {
       }
     }
     this.publisher.flush();
+    this.containerSweep = undefined;
     this.ready = true;
     this.logger.info('recovery finished', {
       finalized: report.finalized.length,
@@ -711,6 +736,82 @@ export class RunController {
       } catch (err) {
         this.logger.error('left-over token files could not be removed', { runId, error: errorMessage(err) });
       }
+    }
+  }
+
+  /**
+   * Stop all containers of this instance (label `adispatch.instance`) on the
+   * engines of the live configuration and of active container runs: none of
+   * them can belong to a supervised run after a restart (WI-19). Errors of an
+   * engine are remembered; its active container runs become `recovery_pending`.
+   */
+  private async sweepContainers(activeRuns: readonly RunRecord[]): Promise<Map<ContainerEngine, { ok: true } | { ok: false; error: string }>> {
+    const result = new Map<ContainerEngine, { ok: true } | { ok: false; error: string }>();
+    const engines = new Set<ContainerEngine>(this.options.containerEngines?.() ?? []);
+    const runEngine = new Map<string, ContainerEngine>();
+    for (const run of activeRuns) {
+      const execute = tryParseSnapshot(run)?.workflow.execute;
+      if (execute?.type === 'container') {
+        engines.add(execute.engine);
+        runEngine.set(run.id, execute.engine);
+      }
+    }
+    if (engines.size === 0) return result;
+    const instance = containerInstanceId(this.options.dataDir);
+    for (const engine of engines) {
+      let names: string[];
+      try {
+        names = await this.containers.list(engine, instance);
+      } catch (err) {
+        const error = errorMessage(err);
+        result.set(engine, { ok: false, error });
+        const affected = [...runEngine.values()].includes(engine);
+        this.logger[affected ? 'error' : 'warn']('container engine not reachable during recovery', { engine, error });
+        continue;
+      }
+      const failures: string[] = [];
+      await Promise.all(
+        names.map(async (name) => {
+          const runId = runIdOfContainer(name);
+          const run = runId !== null ? this.repos.runs.get(runId) : null;
+          const grace = this.options.recoveryGraceMs ?? (run ? tryParseSnapshot(run)?.workflow.execute.cancelGraceMs : undefined) ?? 10_000;
+          try {
+            const stopped = await this.containers.stop(engine, name, grace);
+            await this.containers.remove(engine, name);
+            this.logger.warn('stopped left-over container', { engine, container: name, runId });
+            if (run) this.appendEvent(run.id, RUN_EVENTS.containerStopped, { engine, container: name, result: stopped });
+          } catch (err) {
+            failures.push(`${name}: ${errorMessage(err)}`);
+          }
+        }),
+      );
+      result.set(engine, failures.length > 0 ? { ok: false, error: failures.join('; ') } : { ok: true });
+    }
+    return result;
+  }
+
+  /**
+   * Container part of the process check of a container run (WI-19): `null`
+   * when its container is gone (stopped by the sweep or now), else the reason
+   * why the run must stay `recovery_pending`.
+   */
+  private async checkContainer(run: RunRecord, snapshot: WorkflowSnapshot | null): Promise<string | null> {
+    const execute = snapshot?.workflow.execute;
+    // No spawn intent persisted → no container can have been created.
+    if (execute?.type !== 'container' || !this.spawnAttempted(run.id)) return null;
+    const name = containerName(run.id);
+    const swept = this.containerSweep?.get(execute.engine);
+    if (swept) {
+      return swept.ok ? null : `container ${name} may still be running: container engine '${execute.engine}' failed (${swept.error})`;
+    }
+    try {
+      const grace = this.options.recoveryGraceMs ?? execute.cancelGraceMs;
+      const stopped = await this.containers.stop(execute.engine, name, grace);
+      await this.containers.remove(execute.engine, name);
+      if (stopped === 'stopped') this.appendEvent(run.id, RUN_EVENTS.containerStopped, { engine: execute.engine, container: name, result: stopped });
+      return null;
+    } catch (err) {
+      return `container ${name} may still be running: container engine '${execute.engine}' failed (${errorMessage(err)})`;
     }
   }
 
@@ -739,7 +840,8 @@ export class RunController {
   private async recoverProcessRun(run: RunRecord, forced?: ProcessCheck): Promise<void> {
     const snapshot = tryParseSnapshot(run);
     const previous = previousStatus(run);
-    const check = forced ?? (await this.checkProcess(run, snapshot));
+    const containerProblem = forced ? null : await this.checkContainer(run, snapshot);
+    const check: ProcessCheck = containerProblem !== null ? { gone: false, reason: containerProblem } : (forced ?? (await this.checkProcess(run, snapshot)));
     if (!check.gone) {
       this.markRecoveryPending(run, previous, check.reason);
       return;
@@ -993,22 +1095,19 @@ export class RunController {
     // Secret values of this run stay known until the run is finished (kept files are redacted with them);
     // token-file tokens (WI-18) are added when the token files are closed (renewals).
     this.runSecrets.set(runId, [...Object.values(spec.secrets), ...(spec.redactSecrets?.values() ?? [])]);
+    const executor = this.createExecutor(spec, prepared.workspaceBaseDir);
+    // The exact command line (container: the engine call; secrets by name only, never values).
+    const invocation = executor.describe ? executor.describe(spec) : { command: spec.command, args: [...spec.args] };
     this.repos.transaction(() => {
-      this.repos.runs.update(runId, { workspacePath: spec.workingDirectory, command: { command: spec.command, args: spec.args } });
+      this.repos.runs.update(runId, { workspacePath: spec.workingDirectory, command: { command: invocation.command, args: invocation.args } });
       this.repos.events.append(runId, RUN_EVENTS.spawn, {
-        command: spec.command,
-        args: [...spec.args],
+        command: invocation.command,
+        args: [...invocation.args],
         workingDirectory: spec.workingDirectory,
+        ...(spec.container ? { container: spec.container.name, image: spec.container.image } : {}),
       });
     });
     this.publisher.flush();
-    const executor = this.options.createExecutor
-      ? this.options.createExecutor({ workspaceBaseDir: prepared.workspaceBaseDir })
-      : new ShellExecutor({
-          clock: this.clock,
-          logger: this.logger,
-          ...(prepared.workspaceBaseDir !== undefined ? { workspaceBaseDir: prepared.workspaceBaseDir } : {}),
-        });
     let proc: RunningProcess;
     try {
       proc = await executor.start(spec);
@@ -1078,6 +1177,18 @@ export class RunController {
     });
   }
 
+  /** Executor of a run by its execution type (shell or container, WI-19). */
+  private createExecutor(spec: ExecutionSpec, workspaceBaseDir: string | undefined): Executor {
+    const type = spec.container ? 'container' : 'shell';
+    if (this.options.createExecutor) return this.options.createExecutor({ workspaceBaseDir, type });
+    const common = {
+      clock: this.clock,
+      logger: this.logger,
+      ...(workspaceBaseDir !== undefined ? { workspaceBaseDir } : {}),
+    };
+    return type === 'container' ? new ContainerExecutor({ ...common, engines: this.containers }) : new ShellExecutor(common);
+  }
+
   /** Write the token files of the main worker and add `<NAME>_FILE` + redaction to the spec. */
   private async openTokenFiles(
     entry: ActiveRun,
@@ -1103,7 +1214,7 @@ export class RunController {
     });
     entry.tokenFiles = session;
     const fileEnv = await session.open(entry.cancel.signal);
-    return { ...spec, env: { ...spec.env, ...fileEnv }, redactSecrets: session };
+    return { ...spec, env: { ...spec.env, ...fileEnv }, redactSecrets: session, tokenFiles: { dir, env: fileEnv } };
   }
 
   private async closeTokenFiles(entry: ActiveRun): Promise<void> {

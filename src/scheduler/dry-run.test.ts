@@ -190,4 +190,37 @@ item_priority:
     expect(text).toContain('secret execute: GH_TOKEN ← identity coder, delivery file (GH_TOKEN_FILE)');
     expect(text).toContain('secret on_success.notify: NOTIFY_TOKEN ← identity maintainer, delivery file (NOTIFY_TOKEN_FILE)');
   });
+
+  it('shows the engine call of a container workflow with secrets by name only (WI-19)', async () => {
+    s.workflow(
+      'boxed',
+      [
+        'id: boxed',
+        'trigger: { type: manual }',
+        'execute:',
+        '  type: container',
+        '  engine: podman',
+        '  image: localhost/worker:current',
+        "  command: [claude, -p, 'run {run.id}']",
+        "  user: '1000:1000'",
+        '  env: { MODE: review }',
+        '  secrets:',
+        '    GH_TOKEN: { identity: coder, delivery: file }',
+        '    API_TOKEN: { identity: maintainer }',
+        '',
+      ].join('\n'),
+    );
+    const config = await ConfigManager.create({ configDir: s.env.configDir, dataDir: s.env.dataDir });
+    const result = await dryRunWorkflow({ config, sources: () => undefined, state: emptyState() }, 'boxed');
+    expect(result.container).toMatchObject({ engine: 'podman', image: 'localhost/worker:current', command: 'podman' });
+    const line = result.container!.args.join(' ');
+    expect(line).toContain('run --rm --init --name adispatch-<run-id>');
+    expect(line).toContain('--userns keep-id --user 1000:1000');
+    expect(line).toContain('type=bind,source={workspace.path},target=/work');
+    expect(line).toContain(`target=/adispatch/secrets,readonly`);
+    expect(line).toContain('-e MODE -e GH_TOKEN_FILE=/adispatch/secrets/GH_TOKEN -e API_TOKEN');
+    const text = formatDryRun(result);
+    expect(text).toContain("container (podman, image localhost/worker:current): podman run --rm --init");
+    expect(text).toContain("claude -p 'run {run.id}'");
+  });
 });

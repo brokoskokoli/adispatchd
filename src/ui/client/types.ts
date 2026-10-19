@@ -216,6 +216,18 @@ export interface Workflow {
     /** `execute.keep` patterns (WI-22). */
     keep?: string[];
     keepMaxSizeBytes?: number;
+    /** `execute.type: container` (WI-19); `command`/`args` are then the engine command line. */
+    container?: {
+      engine: string;
+      image: string;
+      command: string[];
+      workdir: string | null;
+      mounts: Array<{ source: string; target: string; mode: string }>;
+      resources: { memory: string | null; cpus: number | null; pids: number | null };
+      user: string | null;
+      network: string;
+      pull: string;
+    };
   };
   /** All declared secrets (execute + shell actions), WI-18; missing on older instances. */
   secrets?: SecretInfo[];
@@ -298,6 +310,8 @@ export interface DryRunResult {
   summary: { candidates: number; wouldStart: number; pendingChecks: number; notStartable: number };
   /** Completion hook routing (WI-17; missing before 0.3.0). */
   hooks?: { onResult: string[]; technical: Record<string, string> };
+  /** Container workflows (WI-19): engine command line (templates unresolved, secrets by name only). */
+  container?: { engine: string; image: string; command: string; args: string[] };
 }
 
 export interface ViewDef {

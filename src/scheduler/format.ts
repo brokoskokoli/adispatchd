@@ -48,6 +48,11 @@ function candidateLines(c: CandidateDiagnosis, n: number): string[] {
   return lines;
 }
 
+/** Quote a command-line word for display (POSIX shell style) when it contains special characters. */
+export function shellQuote(word: string): string {
+  return /^[A-Za-z0-9_/.,:=@%+<>{}-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`;
+}
+
 /** Render a dry-run result as plain text. */
 export function formatDryRun(r: DryRunResult): string {
   const t = r.trigger;
@@ -65,6 +70,8 @@ export function formatDryRun(r: DryRunResult): string {
     lines.push(`  on_result: ${r.hooks.onResult.length > 0 ? r.hooks.onResult.join(', ') : '(none)'}`);
     lines.push(`  technical outcomes: ${Object.entries(r.hooks.technical).map(([status, hook]) => `${status} → ${hook}`).join(', ')}`);
   }
+  // Container workflows (WI-19): the engine call; secrets by name only.
+  if (r.container) lines.push(`  container (${r.container.engine}, image ${r.container.image}): ${[r.container.command, ...r.container.args].map(shellQuote).join(' ')}`);
   // `secrets` is missing in results of older instances (before 0.3.0); values are never part of a dry-run.
   for (const x of r.secrets ?? []) {
     lines.push(`  secret ${x.where}: ${x.name} ← identity ${x.identity}, delivery ${x.delivery} (${x.variable})`);

@@ -16,6 +16,7 @@
  */
 import { selectCompletionHook, systemClock, TECHNICAL_OUTCOME_HOOKS, type Clock } from '../core/index.js';
 import { resultHookOutcomes, UnknownWorkflowError, workflowSecrets, type ConfigManager, type WorkflowConfig } from '../config/index.js';
+import { describeContainerExecute } from '../executors/index.js';
 import { sortCandidates } from '../filters/index.js';
 import { notEvaluatedConditions } from './checks.js';
 import { nextSlots, parseCron } from './cron.js';
@@ -84,6 +85,15 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
     notes,
     summary: { candidates: 0, wouldStart: 0, pendingChecks: 0, notStartable: 0 },
     hooks: hookRouting(workflow),
+    ...(workflow.execute.type === 'container'
+      ? {
+          container: {
+            engine: workflow.execute.engine,
+            image: workflow.execute.image,
+            ...describeContainerExecute(workflow.execute, { workflowId, dataDir: deps.config.dataDir }),
+          },
+        }
+      : {}),
   };
 
   const trigger = workflow.trigger;
