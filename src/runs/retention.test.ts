@@ -156,6 +156,10 @@ describe('RetentionService', () => {
       timers: clock,
       isBusy: (id) => id === busy.id,
     });
+    // Token dirs younger than 60 s are kept (an attempt may just have started).
+    clock.set(Date.now() + 30_000);
+    expect((await svc.runOnce()).tokenDirsRemoved).toBe(0);
+    clock.set(Date.now() + 120_000);
     const report = await svc.runOnce();
     expect(report.tokenDirsRemoved).toBe(2);
     expect(report.deletedRunIds).toEqual([]);
@@ -163,5 +167,29 @@ describe('RetentionService', () => {
     for (const d of [...tokenDirs(busy.id), ...tokenDirs(active.id)]) expect(existsSync(d)).toBe(true);
     // The rest of the run directory is untouched.
     expect(existsSync(dataPaths(dir).run(finished.id).contextFile)).toBe(true);
+  });
+
+  it('re-checks busy/terminal right before each token dir removal (WI-18)', async () => {
+    const run = completeRun(p, withFiles('coder', 'a:1').id, SUCCESS);
+    const runDir = dataPaths(dir).run(run.id).runDir;
+    const dirs = [path.join(runDir, 'secrets'), path.join(runDir, 'actions', '1', 'attempt-1', 'secrets')];
+    for (const d of dirs) {
+      mkdirSync(d, { recursive: true });
+      writeFileSync(path.join(d, 'GH_TOKEN'), 'ghs_leftover');
+    }
+    let calls = 0;
+    const svc = new RetentionService({
+      repositories: p,
+      dataDir: dir,
+      settings: () => ({ ...settings, completedRunsMs: null }),
+      clock,
+      timers: clock,
+      // Idle at the first check, busy from the second on (a manual retry started meanwhile).
+      isBusy: () => ++calls > 1,
+    });
+    clock.set(Date.now() + 120_000);
+    const report = await svc.runOnce();
+    expect(report.tokenDirsRemoved).toBe(0);
+    for (const d of dirs) expect(existsSync(d)).toBe(true);
   });
 });

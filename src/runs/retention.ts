@@ -37,6 +37,8 @@ import { removeWorkspace } from './workspace.js';
 
 /** Fallback age of cron firings when `completed_runs` is `never`. */
 const CRON_FIRINGS_FALLBACK_MS = 30 * 24 * 60 * 60_000;
+/** Token directories younger than this are never removed by retention (a just-started action attempt, WI-18). */
+const TOKEN_DIR_MIN_AGE_MS = 60_000;
 /** Directories in `runs/`/`logs/` without a DB row are removed only after this age. */
 const DEFAULT_ORPHAN_MIN_AGE_MS = 24 * 60 * 60_000;
 
@@ -166,8 +168,9 @@ export class RetentionService {
     if (notificationsBefore) report.deletedNotifications = retention.deleteNotifications(notificationsBefore);
     const firingsBefore = cutoff(settings.completedRunsMs ?? CRON_FIRINGS_FALLBACK_MS);
     if (firingsBefore) report.deletedCronFirings = retention.deleteCronFirings(firingsBefore);
-    if (!this.stopped) await this.removeOrphans(report);
-    if (!this.stopped) await this.removeTokenFiles(report);
+    const runDirNames = await readdir(dataPaths(this.options.dataDir).runsDir).catch(() => [] as string[]);
+    if (!this.stopped) await this.removeOrphans(report, runDirNames);
+    if (!this.stopped) await this.removeTokenFiles(report, runDirNames);
     report.finishedAt = this.clock.now().toISOString();
     this.last = report;
     const total = report.deletedRuns.successful + report.deletedRuns.failed + report.deletedRuns.blocked;
@@ -242,21 +245,20 @@ export class RetentionService {
   }
 
   /** Remove left-over token directories of finished (or deleted) runs that are not busy (WI-18). */
-  private async removeTokenFiles(report: RetentionReport): Promise<void> {
+  private async removeTokenFiles(report: RetentionReport, names: readonly string[]): Promise<void> {
     const { runsDir } = dataPaths(this.options.dataDir);
-    let names: string[];
-    try {
-      names = await readdir(runsDir);
-    } catch {
-      return;
-    }
+    const idle = (runId: string): boolean => {
+      const run = this.options.repositories.runs.get(runId);
+      return !(run && !isTerminalStatus(run.status)) && !this.options.isBusy?.(runId);
+    };
     for (const name of names) {
       if (this.stopped) return;
-      if (!isValidRunId(name)) continue;
-      const run = this.options.repositories.runs.get(name);
-      if ((run && !isTerminalStatus(run.status)) || this.options.isBusy?.(name)) continue;
+      if (!isValidRunId(name) || !idle(name)) continue;
       try {
-        report.tokenDirsRemoved += await removeTokenDirs(resolveStrictlyWithin(runsDir, name));
+        // Re-checked right before each removal: a manual action retry may have started meanwhile.
+        const recheck = (_dir: string, st: { mtimeMs: number }): boolean =>
+          this.clock.now().getTime() - st.mtimeMs >= TOKEN_DIR_MIN_AGE_MS && idle(name);
+        report.tokenDirsRemoved += await removeTokenDirs(resolveStrictlyWithin(runsDir, name), recheck);
       } catch (err) {
         report.errors.push({ runId: name, message: `token files: ${errorMessage(err)}` });
       }
@@ -264,14 +266,14 @@ export class RetentionService {
   }
 
   /** Remove `runs/<id>` / `logs/<id>` directories whose run row no longer exists (e.g. after a failed delete). */
-  private async removeOrphans(report: RetentionReport): Promise<void> {
+  private async removeOrphans(report: RetentionReport, runDirNames: readonly string[]): Promise<void> {
     const paths = dataPaths(this.options.dataDir);
     const minAge = this.options.orphanMinAgeMs ?? DEFAULT_ORPHAN_MIN_AGE_MS;
     const now = this.clock.now().getTime();
     for (const parent of [paths.runsDir, paths.logsDir]) {
-      let names: string[];
+      let names: readonly string[];
       try {
-        names = await readdir(parent);
+        names = parent === paths.runsDir ? runDirNames : await readdir(parent);
       } catch {
         continue;
       }
