@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { REPO_A, startAppEnv, type AppEnv } from './testing/helpers.js';
@@ -56,6 +56,7 @@ beforeAll(async () => {
         ].join('\n'),
       );
       wf('slow', '{ type: source, source: repo_a }', slow, 'enabled: false\n');
+      wf('multi', '{ type: source, sources: [repo_a, repo_b] }', ok, 'enabled: false\nmax_concurrent: 2\nmax_concurrent_per_source: 1\n');
       wf('crasher', '{ type: manual }', crash, 'retry: { max_technical_failures: 1 }\n');
       wf(
         'deploy',
@@ -63,6 +64,11 @@ beforeAll(async () => {
         ok,
         ['parameters:', '  environment: { type: enum, values: [staging, production], required: true }', ''].join('\n'),
       );
+      const keeper = e.script(
+        'keeper.sh',
+        `mkdir -p .agent/gate && echo '{"t":1}' > .agent/transcript.jsonl && echo gate > .agent/gate/unit.log && echo '<script>x</script>' > page.html && : > empty.log && printf 'ü' > "grün.log" && echo "token=$GH_TOKEN" > .agent/token.txt`,
+      );
+      wf('keeper', '{ type: manual }', keeper, "  keep: ['.agent/**/*', '*.html', '*.log']\n  secrets: { GH_TOKEN: { identity: coder } }\n");
       e.github.createIssue(REPO_A, { number: 7, title: 'Issue seven', labels: ['ready'] });
       e.github.createIssue(REPO_A, { number: 8, title: 'Issue eight', labels: [] });
     },
@@ -199,7 +205,9 @@ describe('scheduler control', () => {
 describe('workflows', () => {
   it('lists workflows, shows details and applies / resets runtime overrides', async () => {
     const list = await env.request('GET', '/api/v1/workflows');
-    expect(list.json.workflows.map((w: { id: string }) => w.id)).toEqual(['coder', 'crasher', 'deploy', 'slow']);
+    expect(list.json.workflows.map((w: { id: string }) => w.id)).toEqual(['coder', 'crasher', 'deploy', 'keeper', 'multi', 'slow']);
+    const keeper = list.json.workflows.find((w: { id: string }) => w.id === 'keeper');
+    expect(keeper.execute).toMatchObject({ keep: ['.agent/**/*', '*.html', '*.log'], keepMaxSizeBytes: 100 * 1024 * 1024 });
     const deploy = list.json.workflows.find((w: { id: string }) => w.id === 'deploy');
     expect(deploy.parameters.environment).toMatchObject({ type: 'enum', values: ['staging', 'production'], required: true });
     const detail = await env.request('GET', '/api/v1/workflows/coder');
@@ -222,6 +230,27 @@ describe('workflows', () => {
     expect(res.json.workflowId).toBe('coder');
     expect(res.json.candidates.map((c: { itemKey: string }) => c.itemKey)).toContain('repo_a:7');
     expect((await env.request('POST', '/api/v1/workflows/nope/dry-run')).status).toBe(404);
+  });
+
+  it('shows all sources of a multi-source workflow (WI-20)', async () => {
+    await env.app.scheduler.planOnce();
+    const detail = await env.request('GET', '/api/v1/workflows/multi');
+    expect(detail.json).toMatchObject({
+      trigger: { type: 'source', source: 'repo_a', sources: ['repo_a', 'repo_b'] },
+      maxConcurrent: 2,
+      maxConcurrentPerSource: 1,
+      lastPlanning: { status: 'disabled', sources: [{ sourceId: 'repo_a' }, { sourceId: 'repo_b' }] },
+    });
+    expect((await env.request('GET', '/api/v1/workflows/coder')).json.maxConcurrentPerSource).toBeNull();
+    const dry = await env.request('POST', '/api/v1/workflows/multi/dry-run');
+    // The fake has no repository example/b: that source fails, repo_a is still polled.
+    expect(dry.json.source.sources.map((x: { sourceId: string; status: string }) => [x.sourceId, x.status])).toEqual([
+      ['repo_a', 'ok'],
+      ['repo_b', 'source_error'],
+    ]);
+    expect(dry.json.source.error).toContain("polling source 'repo_b' failed");
+    expect(dry.json.candidates.map((c: { itemKey: string }) => c.itemKey)).toContain('repo_a:7');
+    expect(dry.json.capacity.perSource).toEqual({ max: 1, active: { repo_a: 0, repo_b: 0 } });
   });
 });
 
@@ -249,6 +278,8 @@ describe('runs', () => {
       exitCode: 0,
       sourceUrl: ITEM_URL,
       resultMessage: 'done 7',
+      resultOutcome: null,
+      completionHook: 'on_success',
       statusMessage: 'working',
       lifecycleStatus: 'succeeded',
       lifecycleFailed: false,
@@ -329,6 +360,102 @@ describe('runs', () => {
     const res = await env.request('POST', `/api/v1/runs/${run.id}/recovery/retry`, { assumeGone: true });
     expect(res.status).toBe(202);
     expect((await env.waitTerminal(run.id)).status).toBe('crashed');
+  });
+});
+
+describe('kept files (WI-22)', () => {
+  let runId: string;
+  let keptDir: string;
+
+  beforeAll(async () => {
+    const res = await env.request('POST', '/api/v1/workflows/keeper/start', {});
+    expect(res.status).toBe(202);
+    runId = res.json.run.id;
+    expect((await env.waitTerminal(runId)).status).toBe('completed');
+    keptDir = path.join(env.dataDir, 'runs', runId, 'kept');
+  });
+
+  it('lists the kept files with size and the report; run detail has a summary', async () => {
+    const res = await env.request('GET', `/api/v1/runs/${runId}/kept`);
+    expect(res.status).toBe(200);
+    expect(res.json.files).toEqual([
+      { path: '.agent/gate/unit.log', size: 5 },
+      { path: '.agent/token.txt', size: 17 },
+      { path: '.agent/transcript.jsonl', size: 8 },
+      { path: 'empty.log', size: 0 },
+      { path: 'grün.log', size: 2 },
+      { path: 'page.html', size: 19 },
+    ]);
+    expect(res.json).toMatchObject({ runId, totalBytes: 51, truncated: false, report: { files: 6, bytes: 51, skippedCount: 0 } });
+    const detail = (await env.request('GET', `/api/v1/runs/${runId}`)).json;
+    expect(detail.kept).toMatchObject({ files: 6, bytes: 51, skippedCount: 0, error: null });
+    // Runs without keep: empty listing, no summary.
+    const other = (await env.request('GET', '/api/v1/runs?workflow=coder&limit=1')).json.runs[0];
+    if (other) {
+      expect((await env.request('GET', `/api/v1/runs/${other.id}/kept`)).json).toMatchObject({ files: [], report: null });
+      expect((await env.request('GET', `/api/v1/runs/${other.id}`)).json.kept).toBeNull();
+    }
+    expect((await env.request('GET', '/api/v1/runs/unknown-run/kept')).status).toBe(404);
+  });
+
+  it('redacts the run\'s secrets in kept files (token written by the worker)', async () => {
+    const res = await env.app.http.inject({ method: 'GET', url: `/api/v1/runs/${runId}/kept/.agent/token.txt` });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('token=[REDACTED]\n');
+    const raw = readFileSync(path.join(keptDir, '.agent', 'token.txt'), 'utf8');
+    expect(raw).toBe('token=[REDACTED]\n');
+  });
+
+  it('downloads a kept file as attachment with a fitting content type', async () => {
+    const res = await env.app.http.inject({ method: 'GET', url: `/api/v1/runs/${runId}/kept/.agent/transcript.jsonl` });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('{"t":1}\n');
+    expect(res.headers['content-type']).toBe('application/x-ndjson; charset=utf-8');
+    expect(res.headers['content-disposition']).toBe(`attachment; filename="transcript.jsonl"; filename*=UTF-8''transcript.jsonl`);
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    const html = await env.app.http.inject({ method: 'GET', url: `/api/v1/runs/${runId}/kept/page.html` });
+    expect(html.statusCode).toBe(200);
+    expect(html.headers['content-type']).toBe('application/octet-stream');
+    expect(html.headers['content-security-policy']).toContain('sandbox');
+    const empty = await env.app.http.inject({ method: 'GET', url: `/api/v1/runs/${runId}/kept/empty.log` });
+    expect(empty.statusCode).toBe(200);
+    expect(empty.body).toBe('');
+    const umlaut = await env.app.http.inject({ method: 'GET', url: `/api/v1/runs/${runId}/kept/${encodeURIComponent('grün.log')}` });
+    expect(umlaut.statusCode).toBe(200);
+    expect(umlaut.body).toBe('ü');
+    expect(umlaut.headers['content-disposition']).toBe(`attachment; filename="gr_n.log"; filename*=UTF-8''gr%C3%BCn.log`);
+  });
+
+  it('refuses path traversal, directories, symlinks and missing files', async () => {
+    const outside = path.join(env.dataDir, 'outside-secret.txt');
+    writeFileSync(outside, 'SECRET');
+    symlinkSync(outside, path.join(keptDir, 'link.log'));
+    symlinkSync(path.dirname(outside), path.join(keptDir, 'linkdir'));
+    const urls = [
+      `/api/v1/runs/${runId}/kept/../result.json`,
+      `/api/v1/runs/${runId}/kept/..%2Fresult.json`,
+      `/api/v1/runs/${runId}/kept/%2e%2e/%2e%2e/adispatchd.sqlite`,
+      `/api/v1/runs/${runId}/kept/.agent/../../context.json`,
+      `/api/v1/runs/${runId}/kept/%2Fetc%2Fpasswd`,
+      `/api/v1/runs/${runId}/kept//etc/passwd`,
+      `/api/v1/runs/${runId}/kept/.agent%5C..%5C..%5Ccontext.json`,
+      `/api/v1/runs/${runId}/kept/a%00b`,
+      `/api/v1/runs/${runId}/kept/link.log`,
+      `/api/v1/runs/${runId}/kept/linkdir/outside-secret.txt`,
+      `/api/v1/runs/${runId}/kept/.agent`,
+      `/api/v1/runs/${runId}/kept/`,
+      `/api/v1/runs/${runId}/kept/missing.log`,
+      `/api/v1/runs/..%2F..%2Fetc/kept/passwd`,
+    ];
+    for (const url of urls) {
+      const res = await env.app.http.inject({ method: 'GET', url });
+      expect([400, 404], url).toContain(res.statusCode);
+      expect(res.body, url).not.toContain('SECRET');
+      expect(res.headers['content-disposition'], url).toBeUndefined();
+    }
+    // The listing ignores symlinks.
+    const list = await env.request('GET', `/api/v1/runs/${runId}/kept`);
+    expect(list.json.files.map((f: { path: string }) => f.path)).not.toContain('link.log');
   });
 });
 

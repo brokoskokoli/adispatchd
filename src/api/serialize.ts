@@ -4,7 +4,7 @@
  * are redacted by the executor, error details pass `redactValue`.
  */
 import { ACTIVE_STATUSES, isTerminalStatus, type TechnicalStatus } from '../core/index.js';
-import type { EffectiveWorkflow, ParameterDefinition, WorkflowConfig } from '../config/index.js';
+import { workflowSecrets, type EffectiveWorkflow, type ParameterDefinition, type WorkflowConfig } from '../config/index.js';
 import type { ActionAttemptRecord, BlockRecord, RunActionRecord, RunRecord } from '../persistence/index.js';
 import type { CronWorkflowStatus, WorkflowPlanningDiagnosis } from '../scheduler/index.js';
 
@@ -33,6 +33,13 @@ export interface RunSummary {
   finalReason: string | null;
   /** `result.message` of the worker result file, if any. */
   resultMessage: string | null;
+  /**
+   * Named outcome of the result file (`outcome`, WI-17), e.g. `approved`. Called
+   * `resultOutcome` because `outcome` is the UI classification above.
+   */
+  resultOutcome: string | null;
+  /** Completion hook selected at finalization (WI-17), e.g. `on_result.approved`, `on_error`. */
+  completionHook: RunRecord['completionHook'];
   statusMessage: string | null;
   exitCode: number | null;
   lifecycleStatus: RunRecord['lifecycleStatus'];
@@ -96,6 +103,8 @@ export function toRunSummary(run: RunRecord): RunSummary {
     businessResult: run.businessResult,
     finalReason: run.finalReason,
     resultMessage: result && typeof result === 'object' ? str(result.message) : null,
+    resultOutcome: run.outcome,
+    completionHook: run.completionHook,
     statusMessage: run.statusMessage,
     exitCode: run.exitCode,
     lifecycleStatus: run.lifecycleStatus,
@@ -155,6 +164,8 @@ export function toWorkflowView(
     enabled: wf.enabled,
     priority: wf.priority,
     maxConcurrent: wf.maxConcurrent,
+    /** `max_concurrent_per_source` (WI-20), `null` = not configured. */
+    maxConcurrentPerSource: c.maxConcurrentPerSource ?? null,
     configured: { enabled: c.enabled, priority: c.priority, maxConcurrent: c.maxConcurrent },
     overrides: wf.overrides,
     trigger: c.trigger,
@@ -169,7 +180,13 @@ export function toWorkflowView(
       workingDirectory: c.execute.workingDirectory,
       timeout: c.execute.timeout,
       secrets: Object.keys(c.execute.secrets),
+      // WI-18: how each secret is delivered (`env` | `file`); no values, identity IDs only via the config view.
+      secretDelivery: Object.fromEntries(Object.entries(c.execute.secrets).map(([name, ref]) => [name, ref.delivery ?? 'env'])),
+      keep: c.execute.keep,
+      keepMaxSizeBytes: c.execute.keepMaxSizeBytes,
     },
+    // WI-18: every declared secret (execute + shell actions) with identity and delivery; never values.
+    secrets: workflowSecrets(c),
     hasFilter: c.filter !== null,
     hasShellFilter: c.shellFilter !== null,
     conditions: { workflow: c.conditions.workflow.length, item: c.conditions.item.length },
@@ -183,6 +200,8 @@ export function toWorkflowView(
           polled: extra.diagnosis.polled,
           candidates: extra.diagnosis.candidates.length,
           started: extra.diagnosis.candidates.filter((x) => x.decision === 'started').length,
+          // Per source (WI-20).
+          sources: extra.diagnosis.sources.map((x) => ({ sourceId: x.sourceId, status: x.status, error: x.error, polled: x.polled })),
         }
       : null,
   };

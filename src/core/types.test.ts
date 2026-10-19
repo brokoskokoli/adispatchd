@@ -4,6 +4,9 @@ import {
   canTransition,
   hookForOutcome,
   isFilterAll,
+  isHookName,
+  outcomeOfHook,
+  selectCompletionHook,
   isFilterNot,
   isFilterPredicate,
   isTechnicalFailure,
@@ -65,6 +68,40 @@ describe('run status model', () => {
     expect(hookForOutcome('start_error', null)).toBe('on_start_error');
     expect(hookForOutcome('timed_out', null)).toBe('on_timeout');
     expect(hookForOutcome('cancelled', null)).toBe('on_cancel');
+  });
+
+  it('selects on_result.<outcome> for completed runs if defined (WI-17)', () => {
+    const hooks = { on_success: [], on_failure: [], 'on_result.approved': [], 'on_result.quiet': [] };
+    expect(selectCompletionHook(hooks, 'completed', 'success', 'approved')).toBe('on_result.approved');
+    expect(selectCompletionHook(hooks, 'completed', 'failure', 'approved')).toBe('on_result.approved');
+    expect(selectCompletionHook(hooks, 'completed', 'failure', 'other')).toBe('on_failure');
+    expect(selectCompletionHook(hooks, 'completed', 'success', null)).toBe('on_success');
+    // Outcomes only apply to completed runs.
+    expect(selectCompletionHook(hooks, 'crashed', null, 'approved')).toBe('on_crash');
+  });
+
+  it('falls back to on_error for technical outcomes without a defined specific hook (WI-17)', () => {
+    const onlyError = { on_error: [] };
+    expect(selectCompletionHook(onlyError, 'crashed', null)).toBe('on_error');
+    expect(selectCompletionHook(onlyError, 'start_error', null)).toBe('on_error');
+    expect(selectCompletionHook(onlyError, 'timed_out', null)).toBe('on_error');
+    expect(selectCompletionHook(onlyError, 'cancelled', null)).toBe('on_error');
+    // A defined specific hook wins, even when empty.
+    expect(selectCompletionHook({ on_error: [], on_timeout: [] }, 'timed_out', null)).toBe('on_timeout');
+    // Neither defined: the specific hook (without actions).
+    expect(selectCompletionHook({}, 'cancelled', null)).toBe('on_cancel');
+    // on_error never applies to completed runs.
+    expect(selectCompletionHook(onlyError, 'completed', 'failure')).toBe('on_failure');
+  });
+
+  it('recognizes journal hook names', () => {
+    expect(isHookName('on_error')).toBe(true);
+    expect(isHookName('on_result.needs_maintainer')).toBe(true);
+    expect(isHookName('on_result.')).toBe(false);
+    expect(isHookName('on_result.a b')).toBe(false);
+    expect(isHookName('on_whatever')).toBe(false);
+    expect(outcomeOfHook('on_result.approved')).toBe('approved');
+    expect(outcomeOfHook('on_success')).toBeNull();
   });
 });
 

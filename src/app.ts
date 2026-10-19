@@ -29,6 +29,7 @@ import {
   type FetchLike,
   type IdentityDescription,
   type IdentityRef,
+  type TokenRequestOptions,
   type Logger,
   type LogLevel,
   type SourceAdapter,
@@ -161,7 +162,7 @@ export class SourceRegistry implements CredentialProvider {
     this.adapters = next;
   }
 
-  getToken(identity: IdentityRef, options?: { signal?: AbortSignal }): Promise<AccessToken> {
+  getToken(identity: IdentityRef, options?: TokenRequestOptions): Promise<AccessToken> {
     return this.provider.getToken(identity, options);
   }
 
@@ -371,6 +372,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     timers,
     logger,
     redact: redactor.asRedactor,
+    credentials: sources,
   });
   const controller = new RunController({
     clock,
@@ -385,6 +387,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     credentials: sources,
     notifier: notifications,
     maxLogBytesPerRun: () => config.current.global.retention.maxLogSizePerRunBytes,
+    secretValues: () => redactor.values(),
   });
   const scheduler = new Scheduler({ config, repositories: repos, controller, sources: sourceLookup, clock, timers, logger });
   const views = new ViewService({ config, sources: sourceLookup, runs: repos.runs, clock, logger, redact: redactor.asRedactor, ...(options.viewCacheTtlMs !== undefined ? { cacheTtlMs: options.viewCacheTtlMs } : {}) });
@@ -395,6 +398,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     clock,
     timers,
     logger,
+    isBusy: (runId) => lifecycle.isBusy(runId) || controller.activeRunIds().includes(runId),
     onReport: (r) =>
       events.publish('retention.finished', { finishedAt: r.finishedAt, deletedRuns: r.deletedRuns, errors: r.errors.length }),
   });

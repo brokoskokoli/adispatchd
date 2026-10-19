@@ -58,20 +58,46 @@ function candidateLines(c: CandidateDiagnosis, n: number): string[] {
 /** Render a dry-run result as plain text. */
 export function formatDryRun(r: DryRunResult): string {
   const t = r.trigger;
-  const trigger = t.type === 'source' ? `source ${t.source}` : t.type === 'schedule' ? `schedule '${t.cron}' (${t.timezone})` : 'manual';
+  const trigger =
+    t.type === 'source'
+      ? t.sources !== undefined
+        ? `sources ${t.sources.join(', ')}`
+        : `source ${t.source}`
+      : t.type === 'schedule'
+        ? `schedule '${t.cron}' (${t.timezone})`
+        : 'manual';
   const lines = [
     `Dry-run of workflow '${r.workflowId}' (${r.name}) at ${r.generatedAt}`,
     `  trigger: ${trigger}`,
     `  enabled: ${r.enabled ? 'yes' : 'no'}, workflow priority: ${r.workflowPriority}`,
     `  capacity: workflow ${r.capacity.workflow.active}/${r.capacity.workflow.max} active, global ${r.capacity.global.active}/${r.capacity.global.max} active`,
   ];
+  if (r.capacity.perSource) {
+    const per = Object.entries(r.capacity.perSource.active).map(([id, n]) => `${id} ${n}/${r.capacity.perSource?.max ?? 0}`);
+    lines.push(`  capacity per source: ${per.join(', ')}`);
+  }
   if (r.gate) lines.push(`  automatic starts: ${r.gate.canStartAutomatically ? 'possible' : `not possible (${r.gate.reason ?? 'unknown'})`}`);
   for (const c of r.conditions) lines.push(`  ${checkLine(c)}`);
+  // `hooks` is missing in results of older instances (before 0.3.0).
+  if (r.hooks) {
+    lines.push(`  on_result: ${r.hooks.onResult.length > 0 ? r.hooks.onResult.join(', ') : '(none)'}`);
+    lines.push(`  technical outcomes: ${Object.entries(r.hooks.technical).map(([status, hook]) => `${status} → ${hook}`).join(', ')}`);
+  }
+  // `secrets` is missing in results of older instances (before 0.3.0); values are never part of a dry-run.
+  for (const x of r.secrets ?? []) {
+    lines.push(`  secret ${x.where}: ${x.name} ← identity ${x.identity}, delivery ${x.delivery} (${x.variable})`);
+  }
   if (r.source) {
     // `filter` is missing in results of older instances (before 0.2.0).
     if (r.source.filter !== undefined) lines.push(`  filter: ${r.source.filter ? JSON.stringify(r.source.filter) : '(none)'}`);
-    lines.push(`  source ${r.source.sourceId}: ${r.source.polled} item(s) polled${r.source.pushdown ? `, pushdown ${JSON.stringify(r.source.pushdown)}` : ''}`);
-    if (r.source.error) lines.push(`  SOURCE ERROR: ${r.source.error}`);
+    // `sources` is missing in results of older instances (before 0.3.0).
+    const perSource = r.source.sources ?? [
+      { sourceId: r.source.sourceId, polled: r.source.polled, pushdown: r.source.pushdown, error: r.source.error, status: r.source.error ? 'source_error' : 'ok' },
+    ];
+    for (const s of perSource) {
+      lines.push(`  source ${s.sourceId}: ${s.polled} item(s) polled${s.pushdown ? `, pushdown ${JSON.stringify(s.pushdown)}` : ''}`);
+      if (s.error) lines.push(`  SOURCE ERROR: ${s.error}`);
+    }
     lines.push('', `Candidates (${r.summary.candidates}): ${r.summary.wouldStart} would start, ${r.summary.pendingChecks} pending checks, ${r.summary.notStartable} not startable`);
     r.candidates.forEach((c, i) => lines.push(...candidateLines(c, i + 1)));
   }

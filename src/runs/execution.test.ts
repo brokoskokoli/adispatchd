@@ -93,6 +93,36 @@ ${executeYaml}
     await expect(buildExecutionSpec(base)).rejects.toMatchObject({ code: 'run_invalid_workspace' });
   });
 
+  it('leaves secrets with delivery file to the controller (token files, WI-18); old snapshots default to env', async () => {
+    const calls: string[] = [];
+    const credentials: CredentialProvider = {
+      getToken: async (identity) => {
+        calls.push(identity);
+        return { token: `ghs_${identity}_token`, expiresAt: new Date('2027-01-01T00:00:00Z') };
+      },
+    };
+    const i = await input(
+      `  type: shell
+  command: /bin/true
+  secrets:
+    GH_TOKEN: { identity: coder, delivery: file }
+    OTHER: { identity: maintainer }`,
+      { credentials },
+    );
+    const prepared = await buildExecutionSpec(i);
+    expect(prepared.tokenFiles).toEqual([{ name: 'GH_TOKEN', identity: 'coder' }]);
+    expect(prepared.spec.secrets).toEqual({ OTHER: 'ghs_maintainer_token' });
+    expect(prepared.spec.env).toEqual({});
+    expect(calls).toEqual(['maintainer']);
+
+    // A snapshot written before WI-18 has no `delivery`.
+    const old = await input(`  type: shell\n  command: /bin/true\n  secrets: { GH_TOKEN: { identity: coder } }`, { credentials });
+    delete (old.snapshot.workflow.execute.secrets.GH_TOKEN as { delivery?: string }).delivery;
+    const oldPrepared = await buildExecutionSpec(old);
+    expect(oldPrepared.spec.secrets).toEqual({ GH_TOKEN: 'ghs_coder_token' });
+    expect(oldPrepared.tokenFiles).toEqual([]);
+  });
+
   it('fails (→ start_error) on secrets without credential provider and on missing items', async () => {
     const secrets = await input(`  type: shell\n  command: /bin/true\n  secrets: { GH_TOKEN: { identity: coder } }`);
     await expect(buildExecutionSpec(secrets)).rejects.toMatchObject({ code: 'run_no_credentials' });

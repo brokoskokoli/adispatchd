@@ -120,9 +120,16 @@ export function migrate(db: DatabaseSync, options: MigrateOptions): MigrationRes
     options.logger.info('database backup written before migration', { backupPath, fromVersion });
   }
   for (const migration of pending) {
+    // PRAGMA foreign_keys is a no-op inside a transaction: switch it before.
+    const restoreForeignKeys = migration.disableForeignKeys === true && Number(get(db, 'PRAGMA foreign_keys')?.foreign_keys) === 1;
+    if (restoreForeignKeys) db.exec('PRAGMA foreign_keys = OFF');
     try {
       transaction(db, () => {
         migration.up(db);
+        if (migration.disableForeignKeys) {
+          const violations = all(db, 'PRAGMA foreign_key_check');
+          if (violations.length > 0) throw new Error(`foreign key violations after migration: ${JSON.stringify(violations.slice(0, 5))}`);
+        }
         run(db, 'INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)', [
           migration.version,
           migration.name,
@@ -135,6 +142,8 @@ export function migrate(db: DatabaseSync, options: MigrateOptions): MigrationRes
         { version: migration.version, backupPath },
         err,
       );
+    } finally {
+      if (restoreForeignKeys) db.exec('PRAGMA foreign_keys = ON');
     }
     options.logger.info('database migration applied', { version: migration.version, name: migration.name });
   }

@@ -325,11 +325,14 @@ sources:
     owner: example           # GitHub-Owner/Organisation
     repository: project-a    # Repository-Name
     identity: maintainer     # Identity für lesende Aufrufe (und Fallback für Schreiben)
+    vars:                    # optional (seit 0.3.0): freie Variablen, {source.vars.<Name>}
+      base_branch: main
   project_b:
     type: github
     owner: example
     repository: project-b
     identity: maintainer
+    vars: { base_branch: develop }
     project:                 # optional: Felder eines GitHub-Projects-(v2)-Boards als project.<Name>
       owner: example         # User- oder Org-Login des Projekts (Default: owner der Source)
       number: 3              # Projektnummer aus der URL …/projects/3
@@ -355,6 +358,13 @@ sources:
 | `<id>.project.number` | Integer | ja | > 0 | Projektnummer aus `https://github.com/orgs/<org>/projects/<n>` bzw. `…/users/<user>/projects/<n>` |
 | `<id>.project.identity` | Identity-ID | nein | muss existieren; Default = `<id>.identity` | Identity für die Projekt-Abfragen (z. B. eine `github_token`-Identity für User-Projekte, §3.3); **wenn gesetzt**, schreibt sie auch die Projektfelder von `source.update` (§3.4.11, §6.10) |
 | `<id>.project.fields` | Map Feldname → Art | ja | mind. ein Eintrag; Name nicht leer, ohne führende/abschließende Leerzeichen und ohne Steuerzeichen; Art `single_select`, `text`, `number`, `date`, `iteration` | Felder, auf die gefiltert/sortiert werden soll |
+| `<id>.vars` | Map Name → String | nein (Default `{}`) | Name wie Parameternamen (`[A-Za-z_][A-Za-z0-9_-]*`); Werte String, Zahlen/Booleans werden zu Text (`port: 8080` → `"8080"`) | freie Variablen der Source, als `{source.vars.<Name>}` überall dort nutzbar, wo `{source.*}` erlaubt ist (§5) |
+
+**Source-Variablen (`vars`, seit 0.3.0).** Werte, die sich je Repository unterscheiden (Basis-Branch,
+Build-Kommando, Zielumgebung …), stehen an der Source statt in jedem Workflow: `{source.vars.base_branch}` in
+`execute.args`/`env`/`working_directory`, Hook-Templates und `conditions.item[].args`. Die Prüfung beim Laden
+verlangt die Variable in **jeder** Source des Workflows (bei mehreren Sources §3.4.2) und nennt sonst die Sources,
+in denen sie fehlt. Variablen sind keine Secrets (sie stehen in API und Run-Snapshot) – Tokens gehören in `secrets`.
 
 Nur `github.com` wird unterstützt (keine Einstellung für GitHub Enterprise). Gelesen werden Issues **und** Pull
 Requests des Repositories über `GET /repos/{owner}/{repo}/issues`, standardmäßig **nur offene** (siehe §4.5).
@@ -468,7 +478,7 @@ identity: coder                  # Default: Identity der Source; Schreib-Identit
 
 trigger:
   type: source                   # source | schedule | manual
-  source: project_a
+  source: project_a              # oder (seit 0.3.0) sources: [project_a, project_b] – §3.4.2
 
 filter:                          # deklarativ, nur bei trigger.type: source
   all:
@@ -513,12 +523,18 @@ execute:
   env:
     NODE_ENV: production
     ISSUE_URL: '{item.url}'
+    BASE_BRANCH: '{source.vars.base_branch}'   # Variable der Source (§3.2)
   secrets:
-    GH_TOKEN: { identity: coder }  # kurzlebiges Installation-Token der Identity
+    GH_TOKEN: { identity: coder }  # kurzlebiges Installation-Token der Identity (delivery: env, Default)
+    REVIEW_TOKEN: { identity: maintainer, delivery: file }  # Token-Datei, Pfad in REVIEW_TOKEN_FILE, wird erneuert
   timeout:
     max_duration: 6h
     idle_timeout: 45m
   cancel_grace: 30s
+  keep:                            # vor dem Cleanup nach data-dir/runs/<run-id>/kept/ kopieren
+    - .agent/transcript.jsonl
+    - .agent/gate/*.log
+  keep_max_size: 50MB              # Summe pro Run; Default 100MB
 
 retry:
   max_technical_failures: 3
@@ -539,6 +555,8 @@ on_success:
     command: scripts/notify.sh
     args: ['{workflow.id}', '{run.id}', '{result.status}']
     env: { CHANNEL: '#agents' }
+    secrets:
+      GH_TOKEN: { identity: maintainer, delivery: file }  # seit 0.3.0 (WI-18)
     timeout: 1m
 on_failure:
   - type: source.update
@@ -555,7 +573,16 @@ on_cancel:
 on_timeout:
   - type: source.update
     labels: { add: [ready], remove: [in-progress] }
+on_result:                       # benannte Ergebnisse (Ergebnisdatei "outcome"), statt on_success/on_failure
+  needs_maintainer:
+    - type: source.update
+      labels: { add: [needs-maintainer], remove: [in-progress] }
+    - type: source.comment
+      message: 'Rückfrage ({result.outcome}): {result.message}'
+  wont_fix: []                   # definiert, aber ohne Actions: es läuft nichts
 ```
+
+`on_error` fehlt hier bewusst: alle vier technischen Hooks sind definiert, `on_error` liefe nie (Warnung, §3.4.10).
 
 #### 3.4.1 Oberste Ebene
 
@@ -566,6 +593,7 @@ on_timeout:
 | `enabled` | Boolean | nein | `true` | | `false`: keine automatischen Starts (Source/Cron); **manuelle Starts bleiben möglich** |
 | `priority` | Zahl | nein | `0` | | Workflow-Priorität, wird vor der Item-Priorität sortiert (§6.2) |
 | `max_concurrent` | Integer | nein | `1` | ≥ 1 | Limit gleichzeitig aktiver Runs dieses Workflows für automatische Starts |
+| `max_concurrent_per_source` | Integer | nein | (kein Limit) | ≥ 1; nur `trigger.type: source` | zusätzliches Limit je Source (seit 0.3.0, §3.4.2, §6.3); `max_concurrent` bleibt das Limit des Workflows insgesamt |
 | `identity` | Identity-ID | nein | Source-Identity | muss existieren | Schreib-Identity für `source.update`/`source.comment` (§6.10) |
 | `trigger` | Objekt | ja | | §3.4.2 | |
 | `filter` | Filter-AST | nein | (alles passt) | nur `trigger.type: source` | §4 |
@@ -575,15 +603,40 @@ on_timeout:
 | `parameters` | Map | nein | `{}` | §3.4.7 | Parameter für manuelle Starts |
 | `execute` | Objekt | ja | | §3.4.8 | Haupt-Worker |
 | `retry.max_technical_failures` | Integer | nein | `3` | ≥ 1 | aufeinanderfolgende technische Fehler bis zum Retry-Block (§6.4) |
-| `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` | Liste Actions | nein | `[]` | §3.4.10 | Lifecycle-Hooks |
+| `on_start`, `on_success`, `on_failure` | Liste Actions | nein | `[]` | §3.4.10 | Lifecycle-Hooks |
+| `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` | Liste Actions | nein | nicht definiert | §3.4.10 | technische Hooks; definiert (auch als `[]`) haben sie Vorrang vor `on_error` |
+| `on_error` | Liste Actions | nein | nicht definiert | §3.4.10 | Sammel-Hook für `crashed`, `start_error`, `timed_out`, `cancelled` ohne eigenen Hook |
+| `on_result` | Map Ergebnis-ID → Liste Actions | nein | `{}` | Schlüssel sind Konfigurations-IDs; nur mit Ergebnisdatei (`execute.type: shell`); leere Listen erlaubt | benannte Ergebnisse (`outcome` der Ergebnisdatei), §3.4.10 |
 
 #### 3.4.2 `trigger`
 
 | `type` | weitere Schlüssel | Bedeutung |
 |---|---|---|
-| `source` | `source` (Pflicht, Source-ID, muss existieren) | Items der Source werden jeden Planungsschritt gepollt; ein Run ist an genau ein Item gebunden. |
+| `source` | **entweder** `source` (Source-ID, muss existieren) **oder** (seit 0.3.0) `sources` (Liste von Source-IDs: nicht leer, ohne Duplikate, alle existieren, alle mit demselben Adaptertyp) | Items der Source(s) werden jeden Planungsschritt gepollt; ein Run ist an genau ein Item gebunden. |
 | `schedule` | `cron` (Pflicht, nicht leer), `timezone` (Default `UTC`, IANA-Name wie `Europe/Berlin`) | höchstens ein Run pro Cron-Slot, ohne Item (§6.7). |
 | `manual` | – | nur manuelle Starts (UI/API), ohne Item. |
+
+**Mehrere Sources (`sources`, seit 0.3.0).** Ein Workflow für mehrere Repositories statt fast gleicher Kopien:
+
+- Jede Source wird im Planungsschritt abgefragt (parallel, Pushdown je Source); die Kandidaten aller Sources
+  konkurrieren nach Item-Priorität. Bei gleicher Item-Priorität entscheidet die **Reihenfolge der Liste**, danach die
+  bisherigen Tie-Breaker (§6.2).
+- Lock, Retry-Block, Fehlerzähler und Historie bleiben pro globalem Item-Schlüssel `<source>:<nr>` – gleiche
+  Nummern in zwei Repositories sind zwei Items.
+- `max_concurrent` gilt für den Workflow insgesamt; `max_concurrent_per_source` begrenzt zusätzlich je Source
+  (Entscheidung `source_limit`).
+- Fällt eine Source beim Pollen aus, laufen die anderen weiter; die Diagnose (API, Dry-Run, UI) zeigt Status und
+  Fehler **je Source**.
+- Felder: `project.*` in `filter`, `item_priority` und `source.update.project` nur, wenn **alle** Sources das Feld
+  mit gleicher Art deklarieren (Regel wie bei Views, §4.7.1); die `state`-Regel (§4.5) und der Pushdown gelten je
+  Source. `{source.vars.<Name>}` muss in allen Sources definiert sein.
+- Ein Run kennt nur seine Source: `{source.*}`, `{item.*}`, Lifecycle-Actions, Identity-Fallback und Run-Snapshot
+  beziehen sich auf die Source des Items. Ein eigenes `execute.working_directory` sollte `{source.id}` oder
+  `{item.key}` enthalten (oder beim Default `{workflow.id}/{run.id}` bleiben), damit sich gleiche Nummern aus
+  verschiedenen Repositories nicht dasselbe Verzeichnis teilen.
+- Manueller Start: die Source folgt aus der Item-Referenz (URL, `owner/repo#nr` oder `<source>:<nr>`); eine bloße
+  Nummer ist bei mehreren Sources mehrdeutig und wird mit Hinweis abgelehnt (§6.6).
+- `sources: [x]` mit einem Eintrag verhält sich wie `source: x`.
 
 Cron-Syntax: [croner](https://github.com/hexagon/croner) – 5 Felder (`min std tag monat wochentag`) oder 6 mit
 führenden Sekunden; Listen, Bereiche, Schritte (`*/15`), Namen (`MON`, `JAN`) und croner-Erweiterungen (`L`, `#`)
@@ -669,15 +722,67 @@ Regeln der Konfigurationsprüfung:
 | `working_directory` | String | nein | `{workspace.base_dir}/{workflow.id}/{run.id}` | Modus `path`; beginnt mit `/` oder `{workspace.base_dir}` | Arbeitsverzeichnis = Workspace (`ADISPATCH_WORKSPACE`) |
 | `create_directory` | Boolean | nein | `true` | | Verzeichnis anlegen; bei `false` muss es existieren (sonst `start_error`) |
 | `env` | Map Name → String/Zahl/Boolean | nein | `{}` | Templates; kein `ADISPATCH_`-Präfix | zusätzliche Umgebungsvariablen |
-| `secrets` | Map Name → `{ identity: <id> }` | nein | `{}` | Identity muss existieren; Name nicht zugleich in `env`; kein `ADISPATCH_` | Installation-Token der Identity als Env-Variable (nur im Speicher) |
+| `secrets` | Map Name → `{ identity: <id>, delivery?: env\|file }` | nein | `{}` | Identity muss existieren; Name nicht zugleich in `env`; kein `ADISPATCH_`; bei `file` darf `<NAME>_FILE` weder in `env` noch als anderer Secret-Name vorkommen | Token der Identity für den Worker, s. u. „Secrets und Token-Dateien“ |
 | `timeout.max_duration` | Dauer | nein | unbegrenzt | > 0 | Gesamtlaufzeit → `timed_out` |
 | `timeout.idle_timeout` | Dauer | nein | unbegrenzt | > 0 | Zeit ohne Ausgabe auf stdout/stderr → `timed_out` (Warnung, wenn > `max_duration`) |
 | `cancel_grace` | Dauer | nein | `30s` | | Wartezeit zwischen `SIGTERM` und `SIGKILL` an die Prozessgruppe bei Cancel/Timeout |
+| `keep` | Liste String | nein | `[]` | relative Glob-Muster (`*`, `?`, `**`); nicht leer, nicht absolut, kein `..`, keine leeren Segmente, nicht auf `**` endend | Dateien, die nach dem Run nach `data-dir/runs/<run-id>/kept/` gesichert werden (s. u.) |
+| `keep_max_size` | Größe | nein | `100MB` | > 0 (§2.2) | Obergrenze für die Summe der gesicherten Dateien pro Run |
 
 Workspace-Regeln: Liegt der gerenderte Pfad strikt unter `workspace.base_dir`, wird er sicher angelegt
 (Symlink-geprüft) und gemäß `workspace.cleanup` gelöscht. Liegt er außerhalb, wird er wie konfiguriert angelegt,
 aber **nie** automatisch gelöscht. Der Pfad darf nicht `base_dir` selbst sein. Eine Warnung erscheint, wenn ein
 `env`-Schlüssel nach Secret aussieht (`…_TOKEN`, `…PASSWORD`, `API_KEY`, …) und einen nicht-leeren Literalwert hat.
+
+**Secrets und Token-Dateien** (`delivery`, seit 0.3.0): Jeder Eintrag unter `secrets` übergibt ein Token der
+angegebenen Identity (GitHub App: Installation-Token, ca. 1 h gültig; `github_token`: der Token selbst).
+
+| `delivery` | Variable(n) beim Prozess | Verhalten |
+|---|---|---|
+| `env` (Default, wie bis 0.2.0) | `<NAME>` = Token | Token wird beim Start einmal geholt und nur im Speicher gehalten; läuft der Prozess länger als das Token gilt, muss er sich selbst ein neues besorgen. |
+| `file` | `<NAME>_FILE` = absoluter Pfad der Token-Datei; `<NAME>` selbst wird **nicht** gesetzt | Der Daemon schreibt das Token nach `data-dir/runs/<run-id>/secrets/<NAME>` (Verzeichnis `0700`, Datei `0600`, **außerhalb** des Workspaces) und ersetzt die Datei, solange der Prozess läuft, **atomar** (temporäre Datei + `rename` im selben Verzeichnis) spätestens **10 Minuten vor Ablauf** des Tokens. Identities ohne Ablauf (`github_token`) werden einmal geschrieben. |
+
+Bei `file` gilt außerdem: Die Datei enthält nur das Token (ohne Zeilenumbruch). Scheitert das Erneuern (z. B.
+GitHub nicht erreichbar), wird das ohne Token geloggt und mit Backoff (30 s, verdoppelt bis 5 min) erneut versucht;
+der Worker läuft weiter, die alte Datei bleibt bis zum Ablauf des alten Tokens gültig. Scheitert schon das erste
+Schreiben, endet der Run mit `start_error` (`on_start_error`). Nach dem Prozessende (jeder Endstatus) wird das
+Verzeichnis gelöscht, nach einem Neustart räumt die Recovery Reste weg, die Retention entfernt bei jedem Lauf
+übrig gebliebene Token-Verzeichnisse beendeter Runs. Jedes ausgegebene Token wird beim Redactor registriert, bevor
+es in der Datei steht (stdout/stderr-Logs, Live-Output, Events, Ergebnis, Dienst-Log). Liegt der Workspace so, dass
+das Token-Verzeichnis darin läge (Vergleich der aufgelösten Pfade, Symlinks werden verfolgt; z. B. Workspace unter
+`<data-dir>/runs/`), endet der Run mit `start_error`. Wird das Verzeichnis während des Runs ersetzt (Symlink, anderes
+Inode), enden die Erneuerungen; der Worker behält das alte Token.
+
+**Isolation:** Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
+
+Mit der GitHub CLI liest man das Token pro Aufruf aus der Datei:
+
+```sh
+GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh pr create --fill
+```
+
+**Dateien sichern (`keep`):** Nach dem Abschluss-Hook und **vor** dem Workspace-Cleanup kopiert der Daemon alle
+regulären Dateien, die auf ein Muster passen, mit ihrer relativen Struktur nach `data-dir/runs/<run-id>/kept/` – bei
+**jedem** Endstatus (`completed`, `crashed`, `timed_out`, `cancelled`, `start_error` mit Workspace), auch wenn gar
+nicht aufgeräumt wird. Muster sind relativ zum Workspace: `*` = beliebige Zeichen außer `/`, `?` = ein Zeichen außer
+`/`, `**` als ganzes Segment = beliebig viele Verzeichnisebenen (auch keine); alles andere ist literal. Wildcards
+passen auch auf Namen mit führendem Punkt (`**/*.log` findet `.agent/gate/unit.log`). Ein Muster ohne Treffer ist kein
+Fehler. Ein Muster, das genau ein Verzeichnis benennt (`.agent/gate`), kopiert nichts und wird als übersprungen
+(`directory`, Hinweis `.agent/gate/**/*`) vermerkt; Verzeichnisse, die nur über Wildcards passen, werden ignoriert.
+Symlinks werden **nie** verfolgt (weder Datei- noch Verzeichnis-Links; passende Links werden als übersprungen
+vermerkt), nur reguläre Dateien werden kopiert, und jede Datei wird vor dem Kopieren zusätzlich über ihren
+aufgelösten Pfad geprüft. **Secrets werden beim Kopieren redigiert** – best effort, wie Logs: dieselbe
+byteweise Ersetzung wie für stdout/stderr (auch über Lesegrenzen hinweg) mit den Secrets des Runs
+(`execute.secrets`, bei `delivery: file` alle Tokens, die die Token-Datei je enthielt) und allen dem Daemon bekannten Tokens/Schlüsseln; umgewandelte Werte (base64, URL-kodiert …)
+werden nicht erkannt, nach einem Neustart sind bereits abgelaufene Tokens nicht mehr bekannt. Was die Summe
+`keep_max_size` überschreiten würde (gezählt werden die **geschriebenen** Bytes nach dem Redigieren), wird
+übersprungen (kleinere spätere Dateien passen ggf. noch). Ergebnis als Run-Event `run.kept_files` (Anzahl, Bytes,
+übersprungene Einträge mit Grund `size_limit`/`symlink`/`directory`/`not_regular_file`/…, Muster ohne Treffer,
+Muster, die wegen der Grenze nicht durchsucht wurden), sichtbar in der UI (Run → **Files**) und über
+`GET /api/v1/runs/:id/kept` ([api.md](api.md)). Die Dateien gehören zum Run und werden mit ihm von der Retention
+gelöscht. Grenzen: höchstens 10 000 Dateien und 100 000 untersuchte Verzeichniseinträge pro Run; Muster ohne
+Wildcards werden zuerst und ohne Verzeichnisauflistung geprüft und zählen nicht zur Grenze. Wildcard-Muster, die
+nach Erreichen der Grenze nichts gefunden haben, gelten als „nicht durchsucht“ (`notSearched`), nicht als ohne Treffer.
 
 #### 3.4.9 `retry`
 
@@ -686,19 +791,38 @@ Fehlern (`crashed`, `start_error`, `timed_out`) derselben Workflow/Item-Kombinat
 
 #### 3.4.10 Hooks
 
-Sieben Hooks, jeder eine Liste von Actions, die **sequentiell** ausgeführt werden:
+Acht Hooks als Listen von Actions plus die Map `on_result`; die Actions eines Hooks laufen **sequentiell**:
 
 | Hook | läuft … |
 |---|---|
 | `on_start` | vor dem Start des Workers (nach Re-Read des Items). Scheitert die Kette, startet der Worker **nicht** (→ `start_error`). |
-| `on_success` | nach `completed` + `success` |
-| `on_failure` | nach `completed` + `failure` (fachlich, gültige Ergebnisdatei) |
+| `on_success` | nach `completed` + `success` (ohne passendes `on_result.<outcome>`) |
+| `on_failure` | nach `completed` + `failure` (fachlich, gültige Ergebnisdatei; ohne passendes `on_result.<outcome>`) |
+| `on_result.<outcome>` | nach `completed`, wenn die Ergebnisdatei `"outcome": "<outcome>"` enthält und der Eintrag existiert – **statt** `on_success`/`on_failure` |
 | `on_crash` | nach `crashed` |
 | `on_start_error` | nach `start_error` (sofern der Run `starting` erreicht hat) |
 | `on_cancel` | nach `cancelled` (sofern der Run `starting` erreicht hat) |
 | `on_timeout` | nach `timed_out` |
+| `on_error` | nach `crashed`, `start_error`, `timed_out` oder `cancelled`, wenn der jeweilige Hook oben **nicht definiert** ist |
 
 Genau ein Abschluss-Hook pro Run; Details in §6.8. `source.update`/`source.comment` nur in Source-Workflows.
+
+**Benannte Ergebnisse (`on_result`).** Für Workflows mit mehr als zwei fachlichen Ausgängen (z. B. `approved`,
+`changes_requested`, `needs_maintainer`). Der Worker schreibt zusätzlich zu `result` ein `outcome` in die
+Ergebnisdatei ([worker-protocol.md](worker-protocol.md)); `result` bleibt Pflicht und steuert weiter Statistik und
+Retry-Zähler (`success` setzt zurück, `failure` lässt unverändert). Ohne `outcome` oder ohne passenden Eintrag gilt
+das bisherige Verhalten (`on_success`/`on_failure`); ein `outcome` ohne Eintrag ist kein Fehler, der Run bekommt
+eine Warnung (Event `run.outcome_warning`). Ein `outcome` im falschen Format wird ignoriert (ebenfalls Warnung).
+Ein leerer Eintrag (`wont_fix: []`) ist definiert: dann läuft gar nichts. Das Journal nennt die Kette
+`on_result.<outcome>`, generierte Action-IDs lauten `on_result.<outcome>.<index>`.
+
+**Sammel-Hook (`on_error`).** Für einen technischen Ausgang läuft der spezifische Hook (`on_crash`, `on_start_error`,
+`on_timeout`, `on_cancel`), wenn er **definiert** ist – auch eine leere Liste zählt als definiert –, sonst
+`on_error`. Nie beides. Sind alle vier spezifischen Hooks definiert, warnt die Validierung, dass `on_error` nie
+läuft. Typisch: eine gemeinsame Aufräum-Kette in `on_error` und nur Abweichungen (z. B. `on_timeout`) separat.
+
+Der gewählte Abschluss-Hook wird beim Übergang nach `finalizing` am Run gespeichert (`completionHook` in API/UI);
+nach einem Neustart setzt die Recovery genau diese Kette fort.
 
 #### 3.4.11 Actions
 
@@ -707,7 +831,7 @@ Gemeinsame Schlüssel aller Actions:
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
 | `type` | Enum | ja | | `source.update`, `source.comment`, `shell` |
-| `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`) | stabiler Name im Journal; **workflowweit** eindeutig |
+| `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`, `on_result.approved.0`) | stabiler Name im Journal; **workflowweit** eindeutig |
 | `continue_on_error` | Boolean | nein | `false` | nach endgültigem Scheitern trotzdem mit der nächsten Action weitermachen |
 | `retry.max_attempts` | Integer ≥ 1 | nein | `lifecycle.action_retry.max_attempts` | Versuche insgesamt |
 | `retry.delay` | Dauer | nein | `lifecycle.action_retry.delay` | Pause zwischen Versuchen (`0s` erlaubt) |
@@ -788,11 +912,20 @@ on_success:
 | `command` | String | ja | | §2.4 |
 | `args` | Liste String | nein | `[]` | Templates |
 | `env` | Map | nein | `{}` | Templates, kein `ADISPATCH_`-Präfix |
+| `secrets` | Map Name → `{ identity, delivery? }` | nein | `{}` | wie `execute.secrets` (seit 0.3.0), dieselben Regeln |
 | `timeout` | Dauer | nein | `5m` | Laufzeitlimit pro Versuch (> 0) |
 
 Erfolg = Exit 0; alles andere (Exit ≠ 0, Signal, Timeout, Startfehler) = gescheiterter, wiederholbarer Versuch.
-Keine Secrets. Arbeitsverzeichnis: der Run-Workspace, falls er existiert, sonst ein eigenes Verzeichnis pro Versuch
+Arbeitsverzeichnis: der Run-Workspace, falls er existiert, sonst ein eigenes Verzeichnis pro Versuch
 unter `data-dir/runs/<run>/actions/…`. SIGTERM→SIGKILL-Frist fest 5 s, Log-Limit fest 10 MiB pro Versuch.
+
+**Secrets für Shell-Actions** (seit 0.3.0): `secrets` wie bei `execute` (§3.4.8), in allen Hooks einschließlich
+`on_result.<outcome>` und `on_error`. Tokens werden **pro Versuch**
+geholt. Bei `delivery: file` liegt die Datei in einem action-eigenen Verzeichnis
+`data-dir/runs/<run>/actions/<action>/attempt-<n>/secrets/<NAME>`, wird bei langen Actions ebenso erneuert und
+nach dem Versuch gelöscht. Werte werden im Action-Log redigiert. Scheitert das Holen des Tokens, scheitert der
+Versuch (wiederholbar je nach Fehlerart, z. B. `transient` ja, `auth` nein); die Action startet dann nicht. Ohne
+deklarierte `secrets` bekommt eine Shell-Action wie bisher keine Tokens.
 
 ### 3.5 views/*.yaml
 
@@ -1163,6 +1296,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `run.last_status` | string | technischer Status (`running`, `completed`, `crashed`, …) |
 | `run.last_result` | string | fachliches Ergebnis `success`/`failure` (sonst `null`) |
 | `run.last_result.message` | string | `message` der Ergebnisdatei |
+| `run.last_outcome` | string | benanntes Ergebnis (`outcome` der Ergebnisdatei, sonst `null`) |
 | `run.last_status_message` | string | letzte Status-Meldung des Workers (`@@ADISPATCH_EVENT` `status`) |
 | `run.last_started_at` | date | Start |
 | `run.last_finished_at` | date | Ende |
@@ -1186,6 +1320,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{source.id}` | Source-ID | Run ohne Item |
 | `{source.type}` | `github` | Run ohne Item |
 | `{source.repository}` | `owner/repository` | Run ohne Item |
+| `{source.vars.<name>}` | Variable `vars.<name>` der Source des Items (§3.2, seit 0.3.0) | Run ohne Item |
 | `{item.id}` | Item-ID (GitHub: Nummer als String) | Run ohne Item |
 | `{item.number}` | Nummer (nur bei numerischer Item-ID) | Run ohne Item |
 | `{item.key}` | globaler Schlüssel `<source>:<id>` | Run ohne Item |
@@ -1196,6 +1331,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{result.status}` | technischer Endstatus (`completed`, `crashed`, `start_error`, `timed_out`, `cancelled`) | – |
 | `{result.result}` | `success` \| `failure` | bei technischem Fehler/Cancel |
 | `{result.message}` | `message` der Ergebnisdatei | keine/ungültige Ergebnisdatei oder ohne `message` |
+| `{result.outcome}` | benanntes Ergebnis (`outcome` der Ergebnisdatei, z. B. `approved`) | ohne/ungültiges `outcome`, bei technischem Fehler/Cancel |
 | `{parameters.<name>}` | Parameterwert (`true`, `5`, Text) | optionaler Parameter ohne Wert und ohne Default |
 
 Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_error`).
@@ -1210,16 +1346,21 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 | `run.id`, `run.trigger` | ✓ | ✓ | ✓ | ✓ | – | – |
 | `run.started_at` | ✓ | ✓ | ✓ (leer) | ✓ | – | – |
 | `workspace.path` | – | ✓ | ✓ (leer) | ✓ | – | – |
-| `source.*`, `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | – | ✓ |
+| `source.*` (inkl. `source.vars.<name>`), `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | – | ✓ |
 | `result.*` | – | – | – | ✓ | – | – |
 | `parameters.<name>` | ✓ nur `required` oder mit `default` | ✓ | ✓ | ✓ | – | – |
 | `item.work_branch`, `item.work_pr` | ✓ (s, GitHub; `null` → Fehler) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | – | – |
 
+`{source.vars.<name>}` muss zusätzlich in `vars` **jeder** Source des Workflows stehen (sonst Fehler mit der Liste
+der Sources, in denen sie fehlt); im Pfadmodus wird der Wert wie jeder Platzhalter zu genau einem sicheren
+Pfadsegment.
+
 Nicht als Template ausgewertet (Platzhalter bleiben wörtlich stehen): alle `command`, `source.update.labels`,
 `source.update.project`, `shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
 
-`{item.work_branch}`/`{item.work_pr}` außerhalb dieser Stellen (z. B. in `conditions.item[].args`) oder in
-Workflows ohne GitHub-Source-Trigger: `Placeholder "{item.work_branch}" is only available in "execute" and lifecycle
+„Übrige Hooks“ schließt `on_result.<outcome>` und `on_error` ein. `{item.work_branch}`/`{item.work_pr}` gelten auch in
+Workflows mit mehreren Sources (`trigger.sources`, alle GitHub); gelesen wird jeweils in der Source des Items.
+Außerhalb dieser Stellen (z. B. in `conditions.item[].args`) oder in Workflows ohne GitHub-Source-Trigger: `Placeholder "{item.work_branch}" is only available in "execute" and lifecycle
 actions of workflows triggered by a GitHub source`.
 
 ### 5.3 Teure Platzhalter `{item.work_branch}`, `{item.work_pr}`
@@ -1261,15 +1402,17 @@ nach jedem erfolgreichen Reload. Schritte überlappen nie; es gibt keine persist
 
 0. **Gate:** Ist der Controller nicht bereit (Recovery läuft), pausiert oder im Drain/Shutdown, wird der ganze
    Schritt übersprungen.
-1. **Pollen** (alle aktiven Source-Workflows parallel; deaktivierte erscheinen nur als `disabled`): Liste der Source
-   mit dem pushbaren Filterteil (gleiche Source + gleicher Pushdown = ein API-Aufruf pro Schritt). Fehler einer
-   Source betreffen nur deren Workflows (`source_error`).
+1. **Pollen** (alle aktiven Source-Workflows parallel; deaktivierte erscheinen nur als `disabled`): Liste jeder
+   Source des Workflows mit dem pushbaren Filterteil (gleiche Source + gleicher Pushdown = ein API-Aufruf pro
+   Schritt). Fehler einer Source betreffen nur deren Workflows bzw. bei mehreren Sources nur deren Items
+   (`source_error` am Workflow und an der Source; die übrigen Sources werden normal geplant).
 2. **Deduplizieren** pro `(Source, Item, Workflow)`.
 3. **Billiger Filter** (teure Felder = unknown): `false` → verworfen. **Item-Priorität** bestimmen (darf teure
    Felder laden).
 4. **Sortieren** aller Kandidaten aller Workflows (§6.2).
 5. Pro Kandidat **sequentiell** in dieser Reihenfolge:
-   1. freie Kapazität global und für den Workflow? (zuerst, damit volle Limits keine API-Aufrufe kosten)
+   1. freie Kapazität global, für den Workflow und ggf. je Source (`max_concurrent_per_source`)? (zuerst, damit
+      volle Limits keine API-Aufrufe kosten)
    2. aktiver Run desselben Workflows für dieses Item (Lock) → `locked`
    3. aktiver Retry-Block → `blocked`
    4. Workflow-Conditions (einmal pro Schritt und Workflow, ggf. aus dem `cache`)
@@ -1286,14 +1429,23 @@ Diagnose je Workflow (letzter Schritt, max. 500 Kandidaten) unter `GET /api/v1/w
 ### 6.2 Priorität und Tie-Breaker
 
 Totale Ordnung über alle Kandidaten: (1) **Workflow-Priorität** absteigend (effektiv, inkl. Override),
-(2) **Item-Priorität** absteigend, (3) Erstellungszeit des Items aufsteigend (fehlend/ungültig zuletzt),
-(4) Item-Schlüssel natürlich aufsteigend (`repo:9` < `repo:10`), (5) Workflow-ID aufsteigend. Ein Item mit hoher
+(2) **Item-Priorität** absteigend, (3) Position der Source in `trigger.sources` aufsteigend (seit 0.3.0; bei
+`source: <id>` immer 0), (4) Erstellungszeit des Items aufsteigend (fehlend/ungültig zuletzt),
+(5) Item-Schlüssel natürlich aufsteigend (`repo:9` < `repo:10`), (6) Workflow-ID aufsteigend.
+
+Die Source-Position (3) gilt über alle Workflows hinweg, nicht nur innerhalb eines Workflows (sonst wäre die Ordnung
+nicht eindeutig). Nebeneffekt: Bei gleicher Workflow- **und** Item-Priorität verliert ein Item einer späteren Source
+eines Multi-Source-Workflows einen knappen globalen Slot auch gegen gleichrangige Items anderer Workflows (deren
+Items haben Position 0 bzw. eine frühere Position) – unabhängig von der Erstellungszeit. Wer das nicht will, gibt dem
+Workflow bzw. den Items eine passende Priorität. Ein Item mit hoher
 Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität. Kein Aging.
 
 ### 6.3 Limits
 
-- Global `scheduler.max_concurrent` und pro Workflow `max_concurrent` gelten nur für **automatische** Starts
-  (Source, Cron). Aktive Runs **aller** Trigger zählen (inkl. manueller und `recovery_pending`).
+- Global `scheduler.max_concurrent`, pro Workflow `max_concurrent` und (seit 0.3.0) pro Source des Workflows
+  `max_concurrent_per_source` gelten nur für **automatische** Starts (Source, Cron). Aktive Runs **aller** Trigger
+  zählen (inkl. manueller und `recovery_pending`; für das Source-Limit die Runs des Workflows mit Items dieser
+  Source).
 - Aktiv = `reserved`, `starting`, `running`, `cancelling`, `finalizing`, `recovery_pending` (also auch während
   Abschluss-Hooks laufen).
 - Overrides wirken sofort.
@@ -1330,9 +1482,12 @@ UI oder `POST /api/v1/workflows/:id/start` `{"item"?: "…", "parameters"?: {…
   den Filter-Recheck vor `on_start`.
 - **Umgeht nicht:** den Lock pro Workflow+Item (HTTP 409 `lock_conflict`), Drain/Shutdown, laufende Recovery,
   Parametervalidierung.
-- Source-Workflow: Item-Referenz Pflicht – `123`, `#123`, `owner/repo#123` oder
+- Source-Workflow: Item-Referenz Pflicht – `123`, `#123`, `owner/repo#123`,
   `https://github.com/owner/repo/issues/123` bzw. `/pull/123` (Owner/Repo ohne Groß-/Kleinschreibung, muss zur
-  Source passen); das Item muss existieren. Andere Trigger: Item verboten.
+  Source passen) oder (seit 0.3.0) `<source>:<ref>` wie `project_a:123`; das Item muss existieren. Bei mehreren
+  Sources wird die Source aus der Referenz abgeleitet (URL, `owner/repo#123`, `<source>:123`); passt keine oder –
+  bei einer bloßen Nummer – mehr als eine Source, folgt `400 manual_item_invalid_ref` mit Hinweis. Andere Trigger:
+  Item verboten.
 - Manuelle Runs zählen zu den Limits automatischer Starts und zum Fehlerzähler.
 
 ### 6.7 Cron
@@ -1368,11 +1523,16 @@ UI oder `POST /api/v1/workflows/:id/start` `{"item"?: "…", "parameters"?: {…
 | Exit 0 + keine Ergebnisdatei | `completed` | `success` | `on_success` | nein (setzt Zähler zurück) |
 | Exit 0 + `"result": "success"` | `completed` | `success` | `on_success` | nein (setzt Zähler zurück) |
 | Exit 0 + `"result": "failure"` | `completed` | `failure` | `on_failure` | nein (Zähler unverändert) |
+| Exit 0 + gültiges `"outcome": "x"` und `on_result.x` definiert | `completed` | laut `result` | `on_result.x` (statt `on_success`/`on_failure`) | laut `result` |
 | Controller-Neustart, Worker nachweislich weg | `crashed` (bzw. `cancelled`, wenn Cancel lief) | – | `on_crash` / `on_cancel` | `crashed`: ja |
 | Controller-Neustart, Prozess nicht sicher zuordenbar | `recovery_pending` (hält Lock) | – | – | – |
 
 Eine fachliche `failure` gibt es nur über eine gültige Ergebnisdatei; ein Exit-Code allein ist nie „failure“.
 Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
+
+Die Spalte „Hook“ nennt den spezifischen Hook. Für `crashed`, `start_error`, `timed_out` und `cancelled` läuft
+stattdessen `on_error`, wenn der spezifische Hook nicht definiert ist (§3.4.10). Der gewählte Hook wird mit
+`→ finalizing` gespeichert; die Recovery nach einem Neustart setzt genau ihn fort.
 
 ### 6.9 Action-Ketten
 
@@ -1405,15 +1565,16 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
 | `source.update` (inkl. Re-Read vor dem Schreiben) | Workflow-`identity` → Source-`identity` |
 | `source.update` → `project` (Metadaten, Item lesen, Mutationen) | `sources.<id>.project.identity`, **wenn ausdrücklich gesetzt** → Workflow-`identity` → Source-`identity` |
 | `source.comment` (inkl. Marker-Suche) | Action-`identity` → Workflow-`identity` → Source-`identity` |
-| `execute.secrets.<NAME>` | die angegebene Identity (Installation-Token, ca. 1 h gültig, beim Start geholt; bei `github_token` der Token selbst) |
-| `shell`-Actions, Conditions, `shell_filter` | keine (keine Secrets) |
+| `execute.secrets.<NAME>` | die angegebene Identity (Installation-Token, ca. 1 h gültig, beim Start geholt; bei `delivery: file` bis zum Prozessende erneuert; bei `github_token` der Token selbst) |
+| `shell`-Action `secrets.<NAME>` | die angegebene Identity (pro Versuch geholt; bei `delivery: file` während der Action erneuert) |
+| `shell`-Actions ohne `secrets`, Conditions, `shell_filter` | keine (keine Secrets) |
 
 ### 6.11 Umgebung von Worker, Actions und Prüfskripten
 
 | | Haupt-Worker | `shell`-Action | Conditions / `shell_filter` |
 |---|---|---|---|
 | Basis | `PATH`, `HOME`, `LANG`, `TZ`, `USER`, `LOGNAME`, `TMPDIR` aus der Controller-Umgebung (PATH-Fallback `/usr/local/bin:/usr/bin:/bin`) | wie Worker | dieselben Variablen (ohne PATH-Fallback) |
-| Konfiguriert | `execute.env`, dann `execute.secrets` | Action-`env` | – |
+| Konfiguriert | `execute.env`, dann `execute.secrets` (`<NAME>` bzw. bei `delivery: file` `<NAME>_FILE`) | Action-`env`, dann Action-`secrets` (ebenso) | – |
 | Orchestrator | `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`, `ADISPATCH_CONTEXT_FILE`, `ADISPATCH_RESULT_FILE`, `ADISPATCH_WORKSPACE`; bei Item zusätzlich `ADISPATCH_SOURCE_TYPE`, `ADISPATCH_SOURCE_ID`, `ADISPATCH_SOURCE_ITEM_ID`, `ADISPATCH_SOURCE_URL` | dieselben (`ADISPATCH_WORKSPACE` = Arbeitsverzeichnis der Action; Kontext `kind: lifecycle_action` mit Hook, Action, `result`) | `ADISPATCH_CHECK_CONTEXT_FILE` (JSON: `kind`, `workflow.id`, bei Item `source{id,type,item_id,item_key,url,item_type,created_at,attributes}`) |
 | Arbeitsverzeichnis | Workspace | Workspace, falls vorhanden, sonst Versuchsverzeichnis | temporäres Verzeichnis |
 
@@ -1422,7 +1583,7 @@ vererbt. Details zu Kontextdatei, Ergebnisdatei, Events und Cancel: [worker-prot
 
 ### 6.12 Workspace-Cleanup
 
-Nach dem Abschluss-Hook: `always` = immer, `on_success` = nur `completed`+`success`, `never` = nie. Gelöscht wird nur
+Nach dem Abschluss-Hook werden zuerst die `execute.keep`-Dateien gesichert (§3.4.8), dann gilt: `always` = immer, `on_success` = nur `completed`+`success`, `never` = nie. Gelöscht wird nur
 ein Workspace strikt unter `workspace.base_dir` (auch nach Auflösen von Symlinks; ein Workspace, der selbst ein
 Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verbliebene Workspaces gelöschter Runs.
 
@@ -1434,8 +1595,15 @@ Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die 
 `project.*`-Felder (`projectFields`), die Werte der im Filter verwendeten teuren Felder (z. B.
 `work_pr not_equals null: true (actual 12)`) im Filter-Trace, je Kandidat die verknüpften Branches/PRs
 (`linkedFields`, Textausgabe `linked fields:`), wenn der Workflow sie irgendwo verwendet (Filter, `item_priority`,
-`execute`, Actions; nicht für Items, die schon der billige Filterteil verwirft), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
-Textausgabe `filter:`). Reserviert nichts, startet keine Worker oder Actions
+`execute`, Actions; nicht für Items, die schon der billige Filterteil verwirft), den ausgewerteten Filter mit
+eingesetzten benannten Filtern (`source.filter`,
+Textausgabe `filter:`), bei `execute.keep` die Muster samt Größenlimit (unter `notes`), das Hook-Routing
+(`hooks`: die `on_result`-Schlüssel und je technischem Ausgang der Hook, der liefe, z. B. `timed_out → on_error`) sowie
+seit 0.3.0 alle deklarierten Secrets von `execute` und `shell`-Actions mit Ort, Identity, Übergabeart und Variable
+(`secrets`, Textausgabe `secret execute: GH_TOKEN ← identity coder, delivery file (GH_TOKEN_FILE)`; nie Werte, es wird
+kein Token geholt). Bei mehreren Sources (seit 0.3.0) je Source eine Zeile mit gepollten Items, Pushdown und
+ggf. Fehler (`source.sources`), je Kandidat `sourceId`, bei `max_concurrent_per_source` die Auslastung je Source
+(`capacity.perSource`, Textzeile `capacity per source:`). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 
@@ -1536,7 +1704,7 @@ execute:
   command: scripts/coder.sh
   args: ['{item.url}']
   secrets:
-    GH_TOKEN: { identity: coder }
+    GH_TOKEN: { identity: coder, delivery: file }   # lange Runs: $GH_TOKEN_FILE, wird erneuert (§3.4.8)
   timeout: { max_duration: 6h, idle_timeout: 45m }
 retry: { max_technical_failures: 3 }
 on_start:
@@ -1589,11 +1757,20 @@ on_failure:                                  # Änderungen nötig → zurück an
     labels: { add: [ready-for-coding], remove: [reviewing] }
   - type: source.comment
     message: 'Review: {result.message}'
-on_crash:       [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
-on_start_error: [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
-on_timeout:     [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
-on_cancel:      [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+on_result:                                   # dritter fachlicher Ausgang: {"result": "failure", "outcome": "needs_maintainer"}
+  needs_maintainer:
+    - type: source.update
+      labels: { add: [needs-maintainer], remove: [reviewing] }
+    - type: source.comment
+      message: 'Review braucht eine Entscheidung: {result.message}'
+on_error:                                    # crashed, start_error, timed_out, cancelled: zurück in die Warteschlange
+  - type: source.update
+    labels: { add: [ready-for-review], remove: [reviewing] }
 ```
+
+Der Reviewer kennt drei fachliche Ausgänge: ohne `outcome` gelten `on_success`/`on_failure`, mit
+`"outcome": "needs_maintainer"` läuft nur `on_result.needs_maintainer` (das Review-Skript braucht dafür keine
+eigenen Schreibrechte). Alle technischen Ausgänge teilen sich `on_error`, weil keiner einen eigenen Hook hat.
 
 ### 7.3 View über zwei Repositories
 
@@ -1882,7 +2059,77 @@ Der geladene Workflow enthält den eingesetzten Baum
 zu `labels=ready-for-coding,backend` ab. Eine Änderung an `filters/ready-for-coding.yaml` wirkt nach
 `config reload` auf Coder und View zugleich.
 
-### 7.9 Review auf dem Arbeits-Branch (verknüpfte PRs)
+### 7.9 Ein Workflow für mehrere Repositories
+
+Ein Coder für zwei Repositories mit unterschiedlichem Basis-Branch. Je Repository läuft höchstens ein Run, zusammen
+höchstens zwei; bei gleicher Item-Priorität wird `project_a` vor `project_b` bedient.
+
+```yaml
+# example: multi-source
+# extends: github
+# file: sources.yaml
+sources:
+  project_a:
+    type: github
+    owner: example
+    repository: project-a
+    identity: maintainer
+    vars: { base_branch: main, test_command: npm test }
+  project_b:
+    type: github
+    owner: example
+    repository: project-b
+    identity: maintainer
+    vars: { base_branch: develop, test_command: make check }
+```
+
+```yaml
+# example: multi-source
+# file: workflows/coder-all.yaml
+id: coder-all
+identity: coder
+max_concurrent: 2
+max_concurrent_per_source: 1
+trigger: { type: source, sources: [project_a, project_b] }
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-coding }
+    - { field: is_pull_request, operator: equals, value: false }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  args: ['{item.url}']
+  env:
+    BASE_BRANCH: '{source.vars.base_branch}'
+    TEST_COMMAND: '{source.vars.test_command}'
+  secrets:
+    GH_TOKEN: { identity: coder }
+on_start:
+  - type: source.update
+    labels: { add: [coding], remove: [ready-for-coding] }
+on_success:
+  - type: source.update
+    labels: { add: [ready-for-review], remove: [coding] }
+  - type: source.comment
+    message: 'Fertig für {source.repository} (Basis {source.vars.base_branch}): {result.message}'
+on_failure:     [ { type: source.update, labels: { add: [needs-maintainer], remove: [coding] } } ]
+on_crash:       [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+on_start_error: [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+on_timeout:     [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+on_cancel:      [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+```
+
+Labels, Kommentare und `{source.*}` beziehen sich immer auf das Repository des Items. Manuell gestartet wird mit
+URL oder `project_b:12`. Der Dry-Run zeigt je Source die gepollten Items:
+
+```text
+  trigger: sources project_a, project_b
+  capacity per source: project_a 0/1, project_b 0/1
+  source project_a: 3 item(s) polled, pushdown {…}
+  source project_b: 1 item(s) polled, pushdown {…}
+```
+
+### 7.10 Review auf dem Arbeits-Branch (verknüpfte PRs)
 
 Der Reviewer nimmt Issues mit Label `ready-for-review`, die einen offenen PR haben, und bekommt Branch und PR-Nummer
 direkt als Argumente – ohne eigene GraphQL-Abfrage im Worker. Die View zeigt den Arbeitsstand aller Items (§4.7.2).
@@ -1947,13 +2194,33 @@ ungültig und werden vom Test gegen die angegebene Meldung geprüft.
 # example: err-unknown-key
 # extends: minimal
 # invalid
-# expect: config.yaml: scheduler: Unknown key(s): "max_concurent"
+# expect: config.yaml: scheduler: Unknown key(s): "max_concurent" (did you mean "max_concurrent"?)
 # file: config.yaml
 scheduler:
   max_concurent: 2
 ```
 
-Lösung: Schreibweise laut §3 korrigieren.
+Lösung: Schreibweise laut §3 korrigieren (der Vorschlag nennt den nächstliegenden erlaubten Schlüssel).
+
+**Hooks `on_error`/`on_result`** – Tippfehler im Hook-Namen und Ergebnis-Schlüssel, die keine IDs sind.
+
+```yaml
+# example: err-result-hooks
+# extends: github
+# invalid
+# expect: workflows/reviewer.yaml: Unknown key(s): "on_errors" (did you mean "on_error"?)
+# expect: workflows/reviewer.yaml: on_result.needs maintainer: Invalid key "needs maintainer": Invalid ID (allowed: letters, digits, "_" and "-", must start with a letter or digit, max. 64)
+# file: workflows/reviewer.yaml
+id: reviewer
+trigger: { type: source, source: project_a }
+execute: { type: shell, command: scripts/reviewer.sh }
+on_errors: []
+on_result:
+  "needs maintainer": []
+```
+
+Lösung: `on_error` (Singular); Ergebnis-Schlüssel wie Konfigurations-IDs schreiben (`needs_maintainer`) – genauso
+muss der Worker sie als `outcome` liefern.
 
 **Falsches Dauerformat** – keine zusammengesetzten Dauern, keine Leerzeichen.
 
@@ -1987,6 +2254,51 @@ identity: codr
 trigger: { type: source, source: project_x }
 execute: { type: shell, command: scripts/coder.sh }
 ```
+
+**Secrets: `delivery` und `<NAME>_FILE`** (seit 0.3.0) – `delivery` ist `env` oder `file`; bei `file` setzt der
+Daemon `<NAME>_FILE`, das weder in `env` noch als anderer Secret-Name vorkommen darf.
+
+```yaml
+# example: err-secret-delivery
+# extends: github
+# invalid
+# expect: workflows/coder.yaml: execute.secrets.GH_TOKEN.delivery: Invalid option: expected one of "env"|"file" (did you mean "file"?)
+# file: workflows/coder.yaml
+id: coder
+trigger: { type: source, source: project_a }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  secrets:
+    GH_TOKEN: { identity: coder, delivery: fiel }
+```
+
+Ein Schemafehler wie dieser verhindert die weiteren Prüfungen der Datei; Kollisionen und Identities prüft erst die
+semantische Validierung:
+
+```yaml
+# example: err-secret-file-name
+# extends: github
+# invalid
+# expect: workflows/coder.yaml: execute.secrets.API_TOKEN.delivery: "delivery: file" sets "API_TOKEN_FILE", which is also defined in "env"
+# expect: workflows/coder.yaml: on_success[0].secrets.GH_TOKEN.identity: Unknown identity "revewer" (did you mean "reviewer"?)
+# file: workflows/coder.yaml
+id: coder
+trigger: { type: source, source: project_a }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  env: { API_TOKEN_FILE: /tmp/token }
+  secrets:
+    API_TOKEN: { identity: coder, delivery: file }
+on_success:
+  - type: shell
+    command: scripts/notify.sh
+    secrets:
+      GH_TOKEN: { identity: revewer }
+```
+
+Lösung: `delivery: file`; die Variable in `env` umbenennen (oder `delivery: env`); Identity-Namen korrigieren.
 
 **Unbekannter oder unpassender Platzhalter** – `{result.*}` gibt es in `on_start` noch nicht.
 
@@ -2483,6 +2795,49 @@ to reference a named filter write { use: x }` (Kurzform `x` gibt es nur an der W
 **Null-Intervalle und -Timeouts**
 
 ```yaml
+# example: err-multi-source
+# extends: multi-source
+# invalid
+# expect: workflows/both.yaml: trigger.sources: "source" and "sources" are mutually exclusive
+# expect: workflows/dup.yaml: trigger.sources[1]: Source "project_a" is listed more than once
+# expect: workflows/vars.yaml: trigger.sources[2]: Unknown source "project_c"
+# expect: workflows/vars.yaml: execute.env.DEPLOY: Source variable "deploy_target" is not defined in "vars" of sources "project_a", "project_b" (sources.yaml)
+# file: workflows/both.yaml
+id: both
+trigger: { type: source, source: project_a, sources: [project_b] }
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+```yaml
+# example: err-multi-source
+# file: workflows/dup.yaml
+id: dup
+trigger: { type: source, sources: [project_a, project_a] }
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+```yaml
+# example: err-multi-source
+# file: workflows/vars.yaml
+id: vars
+trigger: { type: source, sources: [project_a, project_b, project_c] }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  env:
+    BASE_BRANCH: '{source.vars.base_branch}'   # in beiden bekannten Sources definiert
+    DEPLOY: '{source.vars.deploy_target}'      # fehlt in beiden
+```
+
+`sources: []` → `"sources" must not be empty`; `max_concurrent_per_source: 0` → `Must be greater than 0`; weder `source` noch `sources` → `A source trigger needs "source:
+<id>" or "sources: [<id>, ...]"`; `max_concurrent_per_source` an einem Cron-/Manual-Workflow →
+`"max_concurrent_per_source" is only allowed for workflows with a source trigger`. Projektfelder, die nicht alle
+Sources mit gleicher Art deklarieren: im Filter `… workflows with several sources only offer project fields declared
+by all their sources (missing in "…")`, in `source.update.project` `… it is not declared in "project.fields" of all
+sources of the workflow (missing in "…")` bzw. `Project field "…" has different kinds in the sources of the
+workflow`.
+
+```yaml
 # example: err-zero-durations
 # extends: minimal
 # invalid
@@ -2519,12 +2874,47 @@ execute:
 
 ```yaml
 # example: warn-common
+# expect-warning: workflows/janitor.yaml: on_error: "on_error" never runs: "on_crash", "on_start_error", "on_timeout", "on_cancel" are all defined (a defined hook, even [], takes precedence)
+# file: workflows/janitor.yaml
+id: janitor
+trigger: { type: manual }
+execute: { type: shell, command: scripts/hello.sh }
+on_crash: []
+on_start_error: []
+on_timeout: []
+on_cancel: []
+on_error:
+  - { type: shell, command: scripts/cleanup.sh }
+```
+
+```yaml
+# example: warn-common
 # expect-warning: filters/old.yaml: id: Named filter "spare" is not used by any workflow or view
 # expect-warning: filters/old.yaml: id: Filter ID "spare" differs from file name "old.yaml"
 # file: filters/old.yaml
 id: spare
 filter: { field: labels, operator: contains, value: spare }
 ```
+
+**Sicherungsmuster außerhalb des Workspaces** – `execute.keep` darf nur Dateien im Workspace bezeichnen.
+
+```yaml
+# example: err-keep-outside
+# extends: minimal
+# invalid
+# expect: workflows/hello.yaml: execute.keep[1]: Pattern must not contain ".." (only files inside the workspace can be kept)
+# file: workflows/hello.yaml
+id: hello
+trigger: { type: manual }
+execute:
+  type: shell
+  command: scripts/hello.sh
+  keep:
+    - .agent/transcript.jsonl
+    - ../shared/report.log
+```
+
+Lösung: Die Datei im Worker in den Workspace schreiben (bzw. dorthin kopieren) und relativ angeben.
 
 Weitere häufige Meldungen (ohne eigenes Beispiel):
 
@@ -2543,6 +2933,9 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Invalid environment variable name` | z. B. `private_key_env: my-key` |
 | `Expected a size such as 100MB` | Größe als Zahl statt String (`max_log_size_per_run: 100`) |
 | `Invalid size "100" (expected e.g. 512KB, 100MB, 1GB)` | String ohne oder mit unbekannter Einheit (`'100'`, `'100MiBs'`) |
+| `Must be greater than 0` (Pfad `execute.keep_max_size`) | `keep_max_size: 0MB` |
+| `Pattern must be relative to the workspace (no absolute path)` | `keep: [/var/log/app.log]` – Pfade relativ zum Workspace angeben |
+| `Pattern must not end with "**" (use "dir/**/*" or "**/*.log")` | `keep: [logs/**]` → `logs/**/*` |
 | `config.yaml not found, using defaults` (Warnung) | `config.yaml` fehlt |
 
 Laufzeitfehler, die `config validate` **nicht** findet: fehlende Umgebungsvariablen (Keys, Tokens, Webhooks),
@@ -2554,7 +2947,9 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 
 ## 9. Checkliste „neuen Workflow anlegen“
 
-1. **Trigger wählen:** `source` (Items), `schedule` (Cron) oder `manual`.
+1. **Trigger wählen:** `source` (Items), `schedule` (Cron) oder `manual`. Gleiche Abläufe für mehrere Repositories
+   als **ein** Workflow mit `sources: [...]` (Reihenfolge = Tie-Breaker), Unterschiede je Repository als
+   `vars` an der Source (`{source.vars.<Name>}`), bei Bedarf `max_concurrent_per_source`.
 2. **Voraussetzungen:** Source in `sources.yaml`, Identities in `identities.yaml`, Private Keys/Tokens als
    Umgebungsvariablen des Dienstes (Env-Datei, danach Neustart), App-Rechte prüfen. Für Projektfelder: `project`
    an der Source mit allen benötigten Feldern und passender Art; Org-Projekt → App-Recht **Projects: Read**,
@@ -2567,17 +2962,20 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
    sollen, als benannten Filter in `filters/<id>.yaml` anlegen und mit `filter: <id>` bzw. `{ use: <id> }`
    verwenden (§3.6).
 5. **execute:** Skript ausführbar machen (`chmod +x`), Pfad relativ zum config-dir oder absolut; Argumente als
-   Liste; Timeouts setzen; Secrets nur über `secrets`.
+   Liste; Timeouts setzen; Secrets nur über `secrets`. Läuft der Worker (oder eine Shell-Action) länger als ein
+   Installation-Token gilt (ca. 1 h), `delivery: file` verwenden und das Token pro Aufruf aus `<NAME>_FILE` lesen.
+   Mitschnitte/Logs, die nach dem Cleanup erhalten bleiben sollen, unter `keep` eintragen.
 6. **Hooks:** Label-Übergänge für jeden Ausgang (`on_start`, `on_success`, `on_failure`, `on_crash`,
    `on_start_error`, `on_timeout`, `on_cancel`) so wählen, dass das Item nicht hängen bleibt und nicht sofort wieder
-   matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab). Wer per `project` einen Status setzt, der
-   im Filter vorkommt, setzt ihn in den Fehler-Hooks auch zurück; Optionsnamen genau wie im Projekt, Schreibrecht
-   der Identity (§3.2) vorher prüfen.
+   matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab). Gleiche Aufräum-Ketten der technischen
+   Ausgänge einmal in `on_error`; mehr als zwei fachliche Ausgänge über `on_result` (Worker schreibt `outcome`).
+   Wer per `project` einen Status setzt, der im Filter vorkommt, setzt ihn in den Fehler-Hooks (bzw. `on_error`)
+   auch zurück; Optionsnamen genau wie im Projekt, Schreibrecht der Identity (§3.2) vorher prüfen.
 7. **Validieren:** `adispatch config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
 8. **Trockenlauf:** `adispatch workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
    (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität; bei Projektfeldern die Zeilen
-   `project fields:` (Werte oder Unknown-Grund, z. B. fehlende Rechte); bei `work_pr`/`work_branch` im Filter den
-   Wert im Filter-Trace.
+   `project fields:` (Werte oder Unknown-Grund, z. B. fehlende Rechte); bei mehreren Sources je Source eine Zeile
+   `source <id>: … polled` (und ggf. `SOURCE ERROR`); bei `work_pr`/`work_branch` die Zeilen `linked fields:`.
 9. **Aktivieren:** `enabled: true` setzen und `adispatch config reload --config-dir <dir>` (bei Fehlern
    bleibt die alte Konfiguration aktiv). Alternativ zuerst ein manueller Start über die UI.
 10. **Beobachten:** erster Run in der UI (Status, Logs, Lifecycle-Journal), ggf. `max_concurrent` per Override

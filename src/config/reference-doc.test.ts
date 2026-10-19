@@ -26,7 +26,8 @@ import {
   PROJECT_FIELD_TYPES,
 } from '../sources/github/index.js';
 import { VIEW_RUN_FIELDS } from '../views/index.js';
-import { DEFAULT_WORKING_DIRECTORY, loadConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
+import { KEEP_MAX_ENTRIES, KEEP_MAX_FILES } from '../runs/index.js';
+import { DEFAULT_WORKING_DIRECTORY, DEFAULTS, loadConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
 import { createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
 
 const DOC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../docs/configuration-reference.md');
@@ -116,7 +117,7 @@ async function load(name: string): Promise<Awaited<ReturnType<typeof loadConfig>
 
 describe('docs/configuration-reference.md', () => {
   it('contains the documented example sets', () => {
-    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters', 'linked']) {
+    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters', 'multi-source', 'linked']) {
       expect(sets.get(name)?.invalid, name).toBe(false);
     }
     expect([...sets.values()].filter((s) => s.invalid).length).toBeGreaterThanOrEqual(10);
@@ -158,6 +159,7 @@ describe('docs/configuration-reference.md', () => {
   it('documents every placeholder', () => {
     for (const p of PLACEHOLDERS) expect(markdown, p.name).toContain(`\`{${p.name}}\``);
     expect(markdown).toContain('`{parameters.<name>}`');
+    expect(markdown).toContain('`{source.vars.<name>}`');
     expect(markdown).toContain(`\`${DEFAULT_WORKING_DIRECTORY}\``);
   });
 
@@ -203,8 +205,18 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain(`Expanded filter would exceed ${MAX_EXPANDED_FILTER_NODES} nodes`);
   });
 
+  it('documents execute.keep: keys, default, glob syntax, event, API and limits (WI-22)', () => {
+    expect(markdown).toContain('| `keep` | Liste String | nein | `[]` |');
+    expect(markdown).toContain(`| \`keep_max_size\` | Größe | nein | \`${DEFAULTS.keepMaxSize}\` |`);
+    expect(markdown).toContain('`run.kept_files`');
+    expect(markdown).toContain('**Secrets werden beim Kopieren redigiert** – best effort, wie Logs');
+    expect(markdown).toContain('GET /api/v1/runs/:id/kept');
+    const fmt = (n: number): string => String(n).replace(/\B(?=(\d{3})+$)/g, ' ');
+    expect(markdown).toContain(`höchstens ${fmt(KEEP_MAX_FILES)} Dateien und ${fmt(KEEP_MAX_ENTRIES)} untersuchte Verzeichniseinträge`);
+  });
+
   it('documents all hooks, operators and notification events', () => {
-    for (const name of [...HOOK_NAMES, ...FILTER_OPERATORS, ...NOTIFICATION_EVENT_TYPES]) {
+    for (const name of [...HOOK_NAMES, 'on_result', 'on_result.<outcome>', ...FILTER_OPERATORS, ...NOTIFICATION_EVENT_TYPES]) {
       expect(markdown, name).toContain(`\`${name}\``);
     }
   });

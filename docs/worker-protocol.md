@@ -10,6 +10,10 @@ Implementierung: `src/core/worker-protocol.ts`, `src/executors/`.
 - Das Kommando wird **ohne Shell** mit Argumentliste gestartet (`command` + `args`); Platzhalter in `args`/`env` werden vorher
   ersetzt (feste Platzhalterliste, unbekannte sind Konfigurationsfehler). Wer Shell-Syntax braucht, schreibt ein Skript.
 - Eigene Prozessgruppe/Session (`setsid`), stdin = `/dev/null`, cwd = Workspace.
+- Dateien, die nach dem Run erhalten bleiben sollen (Mitschnitte, Gate-Logs), schreibt der Worker **in den Workspace**
+  und der Workflow nennt sie unter `execute.keep` (relative Glob-Muster). Der Daemon kopiert sie nach dem Abschluss-Hook
+  und vor dem Cleanup nach `data-dir/runs/<run-id>/kept/` – nur reguläre Dateien, keine Symlinks, bis `keep_max_size`
+  ([Konfigurationsreferenz](configuration-reference.md) §3.4.8).
 
 ## Input
 
@@ -21,7 +25,8 @@ Der Worker erbt **nicht** die Umgebung des Orchestrators. Er bekommt nur:
 |---|---|
 | `PATH`, `HOME`, `LANG`, `TZ`, `USER`, `LOGNAME`, `TMPDIR` | aus der Controller-Umgebung (Fallback-`PATH` `/usr/local/bin:/usr/bin:/bin`) |
 | `execute.env` | explizite Werte aus der Workflow-YAML (keine Secrets!) |
-| `execute.secrets` | z. B. `GH_TOKEN: { identity: coder }` → kurzlebiges GitHub-App-Installation-Token, nur im Speicher |
+| `execute.secrets` (`delivery: env`, Default) | z. B. `GH_TOKEN: { identity: coder }` → kurzlebiges GitHub-App-Installation-Token in `GH_TOKEN`, nur im Speicher, beim Start einmal geholt |
+| `execute.secrets` (`delivery: file`, seit 0.3.0) | z. B. `GH_TOKEN: { identity: coder, delivery: file }` → `GH_TOKEN_FILE` = Pfad der Token-Datei (s. u.); `GH_TOKEN` selbst ist **nicht** gesetzt |
 | `ADISPATCH_RUN_ID` | stabile, eindeutige Run-ID (`run-YYYYMMDDTHHMMSSmmmZ-xxxxxxxx`) |
 | `ADISPATCH_WORKFLOW_ID` | Workflow-ID |
 | `ADISPATCH_SOURCE_TYPE`, `ADISPATCH_SOURCE_ID`, `ADISPATCH_SOURCE_ITEM_ID`, `ADISPATCH_SOURCE_URL` | nur bei Runs mit Source-Item (z. B. `github`, `project_a`, `123`, Issue-URL) |
@@ -30,6 +35,32 @@ Der Worker erbt **nicht** die Umgebung des Orchestrators. Er bekommt nur:
 | `ADISPATCH_WORKSPACE` | absoluter Workspace-Pfad |
 
 `ADISPATCH_*` kann durch `env`/`secrets` nicht überschrieben werden (reservierter Präfix).
+
+### Token-Dateien (`delivery: file`, seit 0.3.0)
+
+Ein Installation-Token gilt ca. 1 h. Damit lange Runs keine App-Schlüssel brauchen, kann der Daemon das Token als
+Datei bereitstellen und erneuern:
+
+- Pfad: `data-dir/runs/<run-id>/secrets/<NAME>` (Verzeichnis `0700`, Datei `0600`, Dienstbenutzer), **außerhalb**
+  des Workspaces; der Pfad steht in `<NAME>_FILE`. Inhalt: nur das Token, ohne Zeilenumbruch.
+- Solange der Worker läuft, ersetzt der Daemon die Datei **atomar** (temporäre Datei + `rename` im selben
+  Verzeichnis) spätestens **10 Minuten vor Ablauf** des Tokens. Wer die Datei liest, bekommt immer ein vollständiges
+  Token – nie eine halb geschriebene Datei; gültig ist es, solange die Erneuerung klappt (s. u.). Identities ohne Ablauf (`github_token`) werden einmal geschrieben.
+- **Pro Aufruf lesen**, nicht einmal am Anfang in eine Variable kopieren:
+
+  ```sh
+  GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh pr create --fill
+  ```
+
+- Scheitert das Erneuern (z. B. GitHub nicht erreichbar), loggt der Daemon das (ohne Token) und versucht es mit
+  Backoff erneut; der Worker läuft weiter, die Datei enthält bis dahin das alte, noch gültige Token.
+- Nach dem Ende des Workers (jeder Endstatus) wird das Verzeichnis gelöscht; nach einem Neustart des Daemons räumt
+  die Recovery Reste weg (Tokens werden dann nicht mehr erneuert), die Retention entfernt übrig gebliebene Verzeichnisse.
+- Jedes ausgegebene Token wird beim Redactor registriert, **bevor** es in der Datei steht (stdout/stderr, Live-Output,
+  Events, Ergebnis, Dienst-Log).
+- Wird das Verzeichnis während des Runs ersetzt oder entfernt (anderes Inode, Symlink), schreibt der Daemon nicht
+  mehr hinein: Erneuerungen enden (Fehler im Dienst-Log, ohne Token), der Worker behält das alte Token.
+- **Isolation:** Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
 
 ### Kontextdatei `ADISPATCH_CONTEXT_FILE` (`data-dir/runs/<run-id>/context.json`, Modus 0600)
 
@@ -63,6 +94,7 @@ Parameter manueller Starts (inkl. Defaults). Die Datei enthält **nie** Secrets.
 |---|---|---|
 | `0` | `"result": "success"` | `completed` / `success` → `on_success` |
 | `0` | `"result": "failure"` | `completed` / `failure` → `on_failure` (fachlich, **kein** technischer Fehler) |
+| `0` | zusätzlich `"outcome": "x"` und `on_result.x` konfiguriert | `completed` / laut `result` → `on_result.x` **statt** `on_success`/`on_failure` |
 | `0` | keine | `completed` / `success` (einfache Shell-Skripte) |
 | `0` | ungültig / zu groß / kein reguläres File | `crashed` (Protokollfehler) → `on_crash` |
 | `≠ 0` | beliebig (wird ignoriert) | `crashed` → `on_crash` |
@@ -70,6 +102,9 @@ Parameter manueller Starts (inkl. Defaults). Die Datei enthält **nie** Secrets.
 | Start unmöglich (ENOENT, kein Exec-Recht, `on_start` gescheitert) | – | `start_error` → `on_start_error` |
 | Timeout (`max_duration`, `idle_timeout`) | beliebig | `timed_out` → `on_timeout` |
 | kontrollierter Abbruch (UI/API/Cancel-All) | beliebig | `cancelled` → `on_cancel` |
+
+Ist der spezifische Hook eines technischen Ausgangs (`on_crash`, `on_start_error`, `on_timeout`, `on_cancel`) nicht
+definiert, läuft stattdessen `on_error` (falls vorhanden; ab 0.3.0).
 
 - **Ein fachliches `failure` gibt es nur mit gültiger Ergebnisdatei.** Ein Exit-Code allein ist nie „Needs Maintainer“ – ein
   versehentliches `exit 1` (z. B. `git clone` scheitert) ist ein technischer Fehler.
@@ -96,6 +131,16 @@ Ergebnisdatei (max. 1 MiB, **atomar schreiben**: temporäre Datei + `mv`):
 | `message` | nein | ≤ 10 000 Zeichen; als `{result.message}` in Hooks verfügbar |
 | `details` | nein | beliebiges Objekt |
 | `artifacts` | nein | ≤ 100 Einträge `{type, name?, url?}` |
+| `outcome` | nein | benanntes Ergebnis (ab 0.3.0): Konfigurations-ID (Buchstaben, Ziffern, `_`, `-`; beginnt mit Buchstabe/Ziffer; max. 64). Wählt `on_result.<outcome>`; als `{result.outcome}` in Hooks und `run.last_outcome` in Views. Falsches Format → ignoriert (Warnung am Run), Rest wird normal ausgewertet |
+
+**Benannte Ergebnisse:** Kennt ein Workflow mehr als zwei fachliche Ausgänge, meldet der Worker sie über `outcome`;
+`result` bleibt Pflicht und steuert Statistik und Retry-Zähler (`success` setzt zurück). Die Label-/Kommentar-Arbeit
+erledigt dann `on_result.<outcome>` – der Worker braucht dafür keine eigenen Tokens. Ohne passenden Eintrag laufen
+`on_success`/`on_failure` (Warnung am Run). Bei Exit ≠ 0 wird die Ergebnisdatei – und damit auch `outcome` – ignoriert.
+
+```json
+{ "schema_version": 1, "result": "failure", "outcome": "needs_maintainer", "message": "Scope unklar" }
+```
 
 ```sh
 tmp="${ADISPATCH_RESULT_FILE}.tmp"
@@ -135,15 +180,22 @@ mv "$tmp" "$ADISPATCH_RESULT_FILE"
 ## Sicherheit
 
 Worker und Shell-Actions sind **vertrauenswürdiger Konfigurationscode** mit den OS-Rechten des Dienstes – es gibt keine
-Sandbox. Ein Worker kann ihm übergebene Secrets (z. B. `GH_TOKEN`) ausgeben; die Redaction in Logs ist best-effort
+Sandbox. Ein Worker kann ihm übergebene Secrets (z. B. `GH_TOKEN` oder den Inhalt von `GH_TOKEN_FILE`) ausgeben; die Redaction in Logs ist best-effort
 (transformierte Secrets, z. B. base64, werden nicht erkannt). Nur benötigte Secrets deklarieren, App-Rechte minimal halten.
 Event-/Result-/Log-Inhalte werden in API/UI als untrusted Text behandelt.
+
+Secrets sind nicht zwischen Runs/Actions desselben Dienstes isoliert: Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
 
 ## Shell-Lifecycle-Actions und Prüfskripte
 
 | Art | Erfolg | Kontext |
 |---|---|---|
-| `shell`-Action in Hooks | Exit 0 (Ergebnisdatei wird ignoriert); sonst Retry gemäß `lifecycle.action_retry` | `ADISPATCH_CONTEXT_FILE` mit `kind: lifecycle_action`, Run, Hook, Action, `result` (außer `on_start`), Minimal-Env + `env` + `ADISPATCH_*`, **keine Secrets** |
+| `shell`-Action in Hooks | Exit 0 (Ergebnisdatei wird ignoriert); sonst Retry gemäß `lifecycle.action_retry` | `ADISPATCH_CONTEXT_FILE` mit `kind: lifecycle_action`, Run, Hook (z. B. `on_result.approved`, `on_error`), Action, `result` (außer `on_start`; inkl. `outcome`), Minimal-Env + `env` + `ADISPATCH_*`; Secrets **nur**, wenn die Action `secrets` deklariert (seit 0.3.0, wie `execute.secrets`; in allen Hooks inkl. `on_result.*` und `on_error`) |
 | `conditions.*`, `shell_filter` | Exit 0 = passt, 1 = passt nicht, ≥ 2/Timeout/Signal = Prüffehler (`unknown`, kein Start) | `ADISPATCH_CHECK_CONTEXT_FILE` (Workflow bzw. Item) |
 
 Die Exit-Code-Semantik 0/1/≥2 gilt **nur** für Prüfskripte, nicht für den Haupt-Worker. Dry-Runs führen Prüfskripte nie aus.
+
+**Secrets für Shell-Actions** (seit 0.3.0): `secrets: { GH_TOKEN: { identity: maintainer, delivery: env|file } }` an
+der Action. Tokens werden pro Versuch geholt; bei `file` liegt die Datei unter
+`data-dir/runs/<run>/actions/<action>/attempt-<n>/secrets/<NAME>`, wird während langer Actions ebenso erneuert und
+nach dem Versuch gelöscht. Werte werden im Action-Log redigiert. Conditions und `shell_filter` bekommen nie Secrets.

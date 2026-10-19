@@ -3,10 +3,25 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
-## [0.3.0] – 2026-10-19
+## [0.3.0] – unveröffentlicht
 
 ### Hinzugefügt
 
+- **Benannte Ergebnisse (`on_result`):** Die Ergebnisdatei kann zusätzlich zu `result` ein `outcome` liefern
+  (Format der Konfigurations-IDs, z. B. `"outcome": "needs_maintainer"`). Ist `on_result.<outcome>` im Workflow
+  konfiguriert, läuft genau diese Kette **statt** `on_success`/`on_failure`; sonst bleibt alles wie bisher (ein
+  `outcome` ohne Eintrag ergibt eine Warnung am Run, ein `outcome` im falschen Format wird mit Warnung ignoriert).
+  `result` steuert weiter Statistik und Retry-Zähler. Neu: Platzhalter `{result.outcome}`, View-Feld
+  `run.last_outcome`, `outcome` im Kontext von `shell`-Actions.
+- **Sammel-Hook `on_error`:** läuft für `crashed`, `start_error`, `timed_out` und `cancelled`, wenn der jeweilige
+  spezifische Hook nicht definiert ist (eine leere Liste zählt als definiert) – nie beides. Die Validierung warnt,
+  wenn alle vier spezifischen Hooks definiert sind und `on_error` daher nie läuft.
+- Der gewählte Abschluss-Hook und das `outcome` werden am Run gespeichert (Schema-Migration v3) und in API
+  (`resultOutcome`, `completionHook`), SSE (`run.status` mit `outcome`/`hook`, Event `run.outcome_warning`) und UI
+  (Badge „outcome: …“, Run-Detail) angezeigt; die Recovery setzt nach einem Neustart genau diesen Hook fort.
+- `workflow dry-run` (CLI, API, UI) zeigt die `on_result`-Schlüssel und je technischem Ausgang den Hook, der liefe.
+- Unbekannte Schlüssel in YAML-Dateien bekommen einen „did you mean …“-Vorschlag; ungültige Schlüssel von Maps
+  (z. B. `on_result`) werden mit Grund gemeldet.
 - **Projektfelder setzen:** `source.update` hat neben `labels` einen optionalen Block `project` (Feldname aus
   `project.fields` der Trigger-Source → Wert), z. B. `project: { Status: In Progress }` in `on_start` und
   `{ Status: Review }` in `on_success`. Werte je Art: Optionsname (`single_select`), Iterationstitel (`iteration`,
@@ -22,6 +37,50 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   fassen geänderte Labels und Projektfelder zusammen.
 - Beispiele: `examples/config/workflows/reviewer-project-b.yaml` setzt den Status, Coder-Workflows in `init` und
   `examples/config` enthalten ein auskommentiertes `project:`-Beispiel; Konfigurationsreferenz §3.4.11, §7.7, §8.
+- **Dateien vor dem Workspace-Cleanup sichern (`execute.keep`):** relative Glob-Muster (`*`, `?`, `**`) für Dateien,
+  die der Daemon nach dem Abschluss-Hook und vor dem Cleanup bei jedem Endstatus nach `data-dir/runs/<run-id>/kept/`
+  kopiert (mit relativer Struktur). `execute.keep_max_size` begrenzt die Summe pro Run (Default `100MB`); zu große
+  Dateien werden übersprungen. Symlinks werden nie verfolgt, nur reguläre Dateien kopiert, aufgelöste Pfade gegen den
+  Workspace geprüft; Muster mit `..` oder absolute Muster sind Validierungsfehler. Secrets werden beim Kopieren
+  redigiert (best effort, wie Logs); das Limit zählt die geschriebenen Bytes. Ergebnis (kopiert, übersprungen mit
+  Grund, Muster ohne Treffer bzw. wegen der Grenze nicht durchsucht) als Run-Event `run.kept_files`. Die Dateien werden mit dem Run von der Retention gelöscht.
+- API: `GET /api/v1/runs/:id/kept` (Liste mit Pfad und Größe) und `GET /api/v1/runs/:id/kept/<pfad>` (Download als
+  Attachment mit sicherer Pfadauflösung); Run-Detail mit Zusammenfassung `kept`, Workflows mit `execute.keep`/
+  `keepMaxSizeBytes`. UI: Reiter **Files** am Run mit Download-Links, Workflow-Detail zeigt die Muster; der Dry-Run
+  nennt sie unter `notes`.
+- **Token-Dateien für lange Runs** (`execute.secrets.<NAME>.delivery: file`): Der Daemon schreibt das Token nach
+  `data-dir/runs/<run-id>/secrets/<NAME>` (Verzeichnis `0700`, Datei `0600`, außerhalb des Workspaces) und übergibt
+  den Pfad als `<NAME>_FILE` (`<NAME>` selbst wird nicht gesetzt). Solange der Worker läuft, wird die Datei
+  spätestens 10 Minuten vor Ablauf atomar ersetzt (temporäre Datei + `rename`); Identities ohne Ablauf
+  (`github_token`) werden einmal geschrieben. Fehler beim Erneuern werden ohne Token geloggt und mit Backoff
+  wiederholt. Nach Run-Ende (jeder Endstatus) und bei der Recovery nach einem Neustart wird die Datei gelöscht;
+  die Retention räumt Reste. Jedes ausgegebene Token wird vorher beim Redactor registriert. Default bleibt
+  `delivery: env` (bisheriges Verhalten). Mit der GitHub CLI: `GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh …`.
+- **Secrets für Shell-Actions:** `shell`-Actions in Hooks haben dasselbe Feld `secrets` wie `execute` (`env` oder
+  `file`; Datei in einem action-eigenen Verzeichnis, während langer Actions erneuert, danach gelöscht). Redaction
+  gilt auch für das Action-Log.
+- Validierung: `delivery` ∈ {`env`, `file`} (mit „did you mean …“), `<NAME>_FILE` darf weder in `env` noch als
+  anderer Secret-Name vorkommen, Identities müssen existieren (jetzt mit Vorschlag bei Tippfehlern).
+- API/UI und `workflow dry-run` (CLI/API/UI) zeigen alle deklarierten Secrets von `execute` und `shell`-Actions mit
+  Identity und Übergabeart (`secrets`, `execute.secretDelivery`) – nie Werte.
+- Hinweis zur Isolation: `0700`/`0600` schützt Token-Dateien vor anderen Systembenutzern, nicht vor anderen Runs desselben
+  Dienstes; für getrennte Berechtigungen getrennte Instanzen/Benutzer oder Container verwenden.
+- **Ein Workflow für mehrere Sources:** `trigger: { type: source, sources: [project_a, project_b] }` als Alternative zu
+  `source: <id>` (nicht leer, eindeutig, gleicher Adaptertyp). Der Planer fragt jede Source ab; Kandidaten aller
+  Sources konkurrieren nach Item-Priorität, bei Gleichstand gilt die Reihenfolge der Liste. Locks, Retry-Blocks und
+  Historie bleiben pro Item-Schlüssel `<source>:<nr>`; `max_concurrent` gilt für den Workflow insgesamt, neu ist
+  `max_concurrent_per_source` (Entscheidung `source_limit`). Fällt eine Source aus, laufen die anderen weiter.
+  `project.*` in Filter, `item_priority` und `source.update.project` nur, wenn alle Sources das Feld mit gleicher Art
+  deklarieren.
+- **Source-Variablen:** `sources.<id>.vars` (Name → String) und der Platzhalter `{source.vars.<name>}` überall, wo
+  `{source.*}` erlaubt ist (auch bei einer Source); fehlt die Variable in einer Source des Workflows, nennt die
+  Validierung diese Sources.
+- Dry-Run, Planungsdiagnose, API und Weboberfläche zeigen alle Sources: `trigger.sources`,
+  `maxConcurrentPerSource`, je Source gepollte Items, Pushdown und Fehler (`sources[]` neben den bisherigen Feldern
+  `sourceId`, `polled`, `pushdown`, `error`), `capacity.perSource`; Textausgabe mit einer Zeile je Source.
+- Manuelle Starts akzeptieren `<source>:<nr>` als Item-Referenz; bei mehreren Sources wird die Source aus URL bzw.
+  Präfix abgeleitet, eine mehrdeutige Referenz (`#7`) wird mit Hinweis abgelehnt. Konfigurationsreferenz §3.2,
+  §3.4.2, §5, §6, §7.9, §8.
 - **Verknüpfte Branches und PRs als Item-Felder (GitHub):** neue teure Felder `linked_branches` (unter „Development“
   verlinkte Branches), `closing_prs` (PRs, die das Issue schließen: `{ number, state, head_ref, is_draft, url }`,
   offen → gemergt → geschlossen), abgeleitet `work_branch` und `work_pr` sowie `work_pr_url` (Link-Ziel in Views).
@@ -34,15 +93,25 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   gelesen (beim Run-Start bzw. je Action-Versuch). Unbekannt → `start_error` vor `on_start` bzw. wiederholbarer
   Action-Fehler – nie ein leerer String; bekannt leer (`null`) → leerer String. Verwendet ein Workflow die Felder
   (Platzhalter in `execute` oder Feld in `filter`/`item_priority`), stehen sie in `source.attributes` der
-  Kontextdatei; Run-Event `run.linked_resolved`. Konfigurationsreferenz §4.7.2, §5.3, §7.9, §8; Live-Test T27.
+  Kontextdatei; Run-Event `run.linked_resolved`. Konfigurationsreferenz §4.7.2, §5.3, §7.10, §8; Live-Test T27.
 
 ### Geändert
 
+- In der normalisierten Konfiguration (Snapshots, `GET /api/v1/workflows/:id` → `hooks`) fehlen nicht angegebene
+  technische Hooks (`on_crash`, `on_start_error`, `on_cancel`, `on_timeout`) und `on_error` jetzt, statt als `[]`
+  zu erscheinen; `on_result.<outcome>`-Ketten erscheinen dort als eigene Einträge. Bestehende Konfigurationen und
+  Runs verhalten sich unverändert.
+- Beispiel `examples/config/workflows/reviewer-project-b.yaml` zeigt `on_result` und `on_error`.
+- **Datenbank-Schema v3** (Migration beim ersten Start, vorher automatisches Backup unter `backups/`). Das Upgrade
+  ist nur in eine Richtung möglich: 0.2.x lehnt eine v3-Datenbank ab. Zurück auf 0.2.x nur durch Wiederherstellen
+  des Backups von vor der Migration (Runs danach fehlen dann in der Historie), siehe `docs/operations.md` „Update“.
 - `source.update.labels` ist optional, wenn `project` gesetzt ist; die Meldung ohne beides lautet jetzt
   `"source.update" must add or remove at least one label or set a project field`.
 - Ein ausdrücklich gesetztes `project.identity` der Source schreibt auch die Projektfelder; ohne schreibt die
   Identity der Action (Workflow → Source). Schreibrechte: App **Organization → Projects: Read and write**,
   klassischer PAT mit Scope `project` (statt `read:project`) plus `repo`.
+- Worker-Protokoll: Die Regel „Shell-Actions bekommen keine Secrets“ gilt nur noch, solange die Action keine
+  `secrets` deklariert.
 
 ## [0.2.0] – 2026-10-19
 

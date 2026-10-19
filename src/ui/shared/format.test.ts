@@ -11,8 +11,18 @@ import {
   prettyJson,
   runBadges,
   safeHttpUrl,
+  triggerSummary,
   truncate,
 } from './format.js';
+
+describe('triggerSummary', () => {
+  it('lists all sources of a multi-source workflow (WI-20)', () => {
+    expect(triggerSummary({ type: 'source', source: 'repo_a' })).toBe('source: repo_a');
+    expect(triggerSummary({ type: 'source', source: 'repo_a', sources: ['repo_a', 'repo_b'] })).toBe('sources: repo_a, repo_b');
+    expect(triggerSummary({ type: 'schedule', cron: '0 3 * * *' })).toBe('schedule: 0 3 * * * (UTC)');
+    expect(triggerSummary({ type: 'manual' })).toBe('manual');
+  });
+});
 
 describe('formatting', () => {
   it('formatDuration', () => {
@@ -86,6 +96,11 @@ describe('run outcome badges (Spec §21)', () => {
   });
   it('active runs show their technical state', () => {
     expect(runBadges({ status: 'running', outcome: 'active', lifecycleStatus: null })[0]).toMatchObject({ label: 'running', tone: 'info' });
+    // WI-17: the named outcome is an extra badge next to the business result.
+    expect(runBadges({ ...base, outcome: 'failure', resultOutcome: 'needs_maintainer', completionHook: 'on_result.needs_maintainer' })).toEqual([
+      expect.objectContaining({ label: 'failure (business)' }),
+      { label: 'outcome: needs_maintainer', tone: 'info', title: 'Named outcome reported by the worker; completion hook on_result.needs_maintainer' },
+    ]);
     expect(runBadges({ status: 'recovery_pending', outcome: 'active' })[0]).toMatchObject({ label: 'recovery pending', tone: 'warn' });
   });
 });

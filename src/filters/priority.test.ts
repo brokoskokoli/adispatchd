@@ -114,6 +114,14 @@ describe('sortCandidates', () => {
     expect(sortCandidates([junk, iso, noOffset])).toEqual([noOffset, iso, junk]);
   });
 
+  it('source rank (position in "sources", WI-20) breaks ties after the item priority, before creation time', () => {
+    const fromB = { ...c('w', 1, 5, 'repo_b:1', '2025-01-01T00:00:00Z'), sourceRank: 1 };
+    const fromA = c('w', 1, 5, 'repo_a:9', '2026-01-01T00:00:00Z');
+    const fromAExplicit = { ...c('w', 1, 5, 'repo_a:8', '2026-06-01T00:00:00Z'), sourceRank: 0 };
+    const higherFromB = { ...c('w', 1, 6, 'repo_b:2', '2026-09-01T00:00:00Z'), sourceRank: 1 };
+    expect(sortCandidates([fromB, fromAExplicit, higherFromB, fromA])).toEqual([higherFromB, fromA, fromAExplicit, fromB]);
+  });
+
   it('does not mutate the input', () => {
     const list = [c('a', 1, 0), c('b', 2, 0)];
     sortCandidates(list);

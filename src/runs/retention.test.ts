@@ -75,6 +75,23 @@ describe('RetentionService', () => {
     expect(svc.lastReport).toBe(later);
   });
 
+  it('deletes kept files (runs/<id>/kept, WI-22) together with the run', async () => {
+    const old = completeRun(p, withFiles('coder', 'a:1').id, SUCCESS);
+    const recentReserved = withFiles('coder', 'a:2');
+    for (const id of [old.id, recentReserved.id]) {
+      const keptDir = dataPaths(dir).run(id).keptDir;
+      mkdirSync(path.join(keptDir, '.agent'), { recursive: true });
+      writeFileSync(path.join(keptDir, '.agent', 'transcript.jsonl'), '{}');
+    }
+    clock.advance(31 * DAY);
+    const recent = completeRun(p, recentReserved.id, SUCCESS);
+    const svc = new RetentionService({ repositories: p, dataDir: dir, settings: () => settings, clock, timers: clock });
+    const report = await svc.runOnce();
+    expect(report.deletedRunIds).toEqual([old.id]);
+    expect(existsSync(dataPaths(dir).run(old.id).keptDir)).toBe(false);
+    expect(existsSync(path.join(dataPaths(dir).run(recent.id).keptDir, '.agent', 'transcript.jsonl'))).toBe(true);
+  });
+
   it('applies blocked_runs to runs of a cleared block and removes old orphan directories', async () => {
     settings = { ...settings, blockedRunsMs: 10 * DAY };
     const crash = completeRun(p, withFiles('coder', 'a:1').id, CRASH, { maxTechnicalFailures: 1 });
@@ -131,5 +148,65 @@ describe('RetentionService', () => {
     expect(reports).toEqual([1, 0]);
     await svc.stop();
     expect(clock.pendingTimers()).toBe(0);
+  });
+
+  it('removes left-over token files of finished runs, keeps those of active or busy runs (WI-18)', async () => {
+    const finished = completeRun(p, withFiles('coder', 'a:1').id, SUCCESS);
+    const busy = completeRun(p, withFiles('coder', 'a:2').id, SUCCESS);
+    const active = withFiles('coder', 'a:3');
+    p.runs.transition(active.id, 'starting');
+    const tokenDirs = (id: string) => {
+      const runDir = dataPaths(dir).run(id).runDir;
+      return [path.join(runDir, 'secrets'), path.join(runDir, 'actions', '1', 'attempt-1', 'secrets')];
+    };
+    for (const id of [finished.id, busy.id, active.id]) {
+      for (const d of tokenDirs(id)) {
+        mkdirSync(d, { recursive: true });
+        writeFileSync(path.join(d, 'GH_TOKEN'), 'ghs_leftover');
+      }
+    }
+    const svc = new RetentionService({
+      repositories: p,
+      dataDir: dir,
+      settings: () => ({ ...settings, completedRunsMs: null }),
+      clock,
+      timers: clock,
+      isBusy: (id) => id === busy.id,
+    });
+    // Token dirs younger than 60 s are kept (an attempt may just have started).
+    clock.set(Date.now() + 30_000);
+    expect((await svc.runOnce()).tokenDirsRemoved).toBe(0);
+    clock.set(Date.now() + 120_000);
+    const report = await svc.runOnce();
+    expect(report.tokenDirsRemoved).toBe(2);
+    expect(report.deletedRunIds).toEqual([]);
+    for (const d of tokenDirs(finished.id)) expect(existsSync(d)).toBe(false);
+    for (const d of [...tokenDirs(busy.id), ...tokenDirs(active.id)]) expect(existsSync(d)).toBe(true);
+    // The rest of the run directory is untouched.
+    expect(existsSync(dataPaths(dir).run(finished.id).contextFile)).toBe(true);
+  });
+
+  it('re-checks busy/terminal right before each token dir removal (WI-18)', async () => {
+    const run = completeRun(p, withFiles('coder', 'a:1').id, SUCCESS);
+    const runDir = dataPaths(dir).run(run.id).runDir;
+    const dirs = [path.join(runDir, 'secrets'), path.join(runDir, 'actions', '1', 'attempt-1', 'secrets')];
+    for (const d of dirs) {
+      mkdirSync(d, { recursive: true });
+      writeFileSync(path.join(d, 'GH_TOKEN'), 'ghs_leftover');
+    }
+    let calls = 0;
+    const svc = new RetentionService({
+      repositories: p,
+      dataDir: dir,
+      settings: () => ({ ...settings, completedRunsMs: null }),
+      clock,
+      timers: clock,
+      // Idle at the first check, busy from the second on (a manual retry started meanwhile).
+      isBusy: () => ++calls > 1,
+    });
+    clock.set(Date.now() + 120_000);
+    const report = await svc.runOnce();
+    expect(report.tokenDirsRemoved).toBe(0);
+    for (const d of dirs) expect(existsSync(d)).toBe(true);
   });
 });

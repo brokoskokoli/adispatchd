@@ -7,7 +7,15 @@
  * deeply frozen. No secret values are ever part of this model — identities
  * and notification headers only carry the *names* of environment variables.
  */
-import type { FilterNode, HookName, NotificationEventType, ProjectFieldUpdateValue } from '../core/index.js';
+import {
+  outcomeOfHook,
+  type FilterNode,
+  type HookName,
+  type ListHookName,
+  type NotificationEventType,
+  type ProjectFieldUpdateValue,
+  type ResultHookName,
+} from '../core/index.js';
 import type { ProjectFieldKind } from '../sources/index.js';
 
 // ---------------------------------------------------------------------------
@@ -117,6 +125,11 @@ export interface GithubSourceConfig {
   identity: string;
   /** GitHub Projects (v2) project whose declared fields are available as `project.<name>`; `null` = none. */
   project: GithubProjectConfig | null;
+  /**
+   * Free variables of the source (WI-20), available as `{source.vars.<name>}`;
+   * empty when not configured. Missing in run snapshots written before 0.3.0.
+   */
+  vars: Readonly<Record<string, string>>;
 }
 
 /** Project settings of a GitHub source (defaults resolved). */
@@ -163,10 +176,25 @@ export type IdentityConfig = GithubAppIdentityConfig | GithubTokenIdentityConfig
 // Workflows (Spec §5.4, §5.5, §6, §10)
 // ---------------------------------------------------------------------------
 
-/** Source trigger: polls one source. */
+/**
+ * Source trigger: polls one source (`source: <id>`) or several (WI-20,
+ * `sources: [<id>, ...]`). Use {@link triggerSourceIds} to read the list.
+ */
 export interface SourceTriggerConfig {
   type: 'source';
+  /** The (first) source; for multi-source workflows the first entry of `sources`. */
   source: string;
+  /**
+   * All sources in the configured order (the order is the tie-breaker between
+   * equally prioritized items). Present only when configured as `sources:`
+   * (also with a single entry); absent for `source: <id>`.
+   */
+  sources?: readonly string[];
+}
+
+/** Sources of a source trigger in configured order (`[source]` for `source: <id>`). */
+export function triggerSourceIds(trigger: SourceTriggerConfig): readonly string[] {
+  return trigger.sources ?? [trigger.source];
 }
 
 /** Cron trigger. */
@@ -252,9 +280,21 @@ export type ParameterDefinition = StringParameter | NumberParameter | BooleanPar
 /** Value of a parameter after validation. */
 export type ParameterValue = string | number | boolean;
 
-/** Reference to an identity whose short-lived token is exposed as env variable. */
+/** How a secret reaches the process (WI-18). */
+export type SecretDelivery = 'env' | 'file';
+
+/**
+ * Reference to an identity whose short-lived token is handed to a process:
+ * `env` = token in the variable itself; `file` = token in a private file
+ * (renewed before expiry), its path in `<NAME>_FILE`.
+ */
 export interface SecretRef {
   identity: string;
+  /**
+   * Default `env`. Snapshots written before WI-18 lack the field: readers
+   * must treat `undefined` as `env`.
+   */
+  delivery: SecretDelivery;
 }
 
 /** Main worker execution (Spec §5.4, §8.3, §9). */
@@ -269,7 +309,7 @@ export interface ShellExecuteConfig {
   createDirectory: boolean;
   /** Env variable → value template (text mode). */
   env: Readonly<Record<string, string>>;
-  /** Env variable → identity whose token is injected (only in memory). */
+  /** Env variable → identity whose token is injected (in memory or as token file, WI-18). */
   secrets: Readonly<Record<string, SecretRef>>;
   timeout: {
     maxDurationMs: number | null;
@@ -277,6 +317,14 @@ export interface ShellExecuteConfig {
   };
   /** Grace period between SIGTERM and SIGKILL on cancel/timeout (default 30s). */
   cancelGraceMs: number;
+  /**
+   * Workspace files copied to `runs/<run-id>/kept/` after the completion hook
+   * and before the workspace cleanup (WI-22): relative glob patterns
+   * (`*`, `?`, `**`). Empty = nothing is kept.
+   */
+  keep: readonly string[];
+  /** Max. total size of kept files per run in bytes (`keep_max_size`, default 100MB). */
+  keepMaxSizeBytes: number;
 }
 
 /** Execution configuration (V1: shell only). */
@@ -322,13 +370,51 @@ export interface ShellActionConfig extends ActionBase {
   /** Default 5m. */
   timeoutMs: number;
   env: Readonly<Record<string, string>>;
+  /**
+   * Secrets like `execute.secrets` (WI-18). Journal entries written before
+   * WI-18 lack the field: readers must treat `undefined` as `{}`.
+   */
+  secrets: Readonly<Record<string, SecretRef>>;
 }
 
 /** A lifecycle action. */
 export type LifecycleActionConfig = SourceUpdateActionConfig | SourceCommentActionConfig | ShellActionConfig;
 
-/** All seven hooks; missing hooks are empty lists. */
-export type HooksConfig = Readonly<Record<HookName, readonly LifecycleActionConfig[]>>;
+/** Actions of one hook, in order. */
+export type ActionList = readonly LifecycleActionConfig[];
+
+/**
+ * Hooks of a workflow by journal hook name (WI-17):
+ * - `on_start`, `on_success`, `on_failure`: always present (`[]` if not configured).
+ * - `on_crash`, `on_start_error`, `on_cancel`, `on_timeout`, `on_error`: absent
+ *   (`undefined`) if not configured; a present list – even `[]` – is "defined"
+ *   and takes precedence over `on_error` (see `selectCompletionHook`).
+ * - `on_result.<outcome>`: one entry per configured named outcome.
+ *
+ * Snapshots of older versions contain every list hook (empty lists), which
+ * keeps their behaviour (no `on_error`, no `on_result`).
+ */
+export type HooksConfig = Readonly<
+  Record<'on_start' | 'on_success' | 'on_failure', ActionList> &
+    Partial<Record<Exclude<ListHookName, 'on_start' | 'on_success' | 'on_failure'>, ActionList>> &
+    Partial<Record<ResultHookName, ActionList>>
+>;
+
+/** Configured hooks (absent ones skipped) in configuration order: list hooks, then `on_result.*`. */
+export function configuredHooks(hooks: HooksConfig): Array<[HookName, ActionList]> {
+  const out: Array<[HookName, ActionList]> = [];
+  for (const [hook, actions] of Object.entries(hooks) as Array<[HookName, ActionList | undefined]>) {
+    if (actions !== undefined) out.push([hook, actions]);
+  }
+  return out;
+}
+
+/** Named outcomes with a configured `on_result.<outcome>` hook, in configuration order. */
+export function resultHookOutcomes(hooks: HooksConfig): string[] {
+  return configuredHooks(hooks)
+    .map(([hook]) => outcomeOfHook(hook))
+    .filter((o): o is string => o !== null);
+}
 
 /** A validated workflow. */
 export interface WorkflowConfig {
@@ -340,6 +426,12 @@ export interface WorkflowConfig {
   priority: number;
   /** Per-workflow limit for automatic starts (default 1). */
   maxConcurrent: number;
+  /**
+   * Limit of active runs per source of a source workflow (WI-20); absent =
+   * none (only `maxConcurrent`). Absent rather than `null` so the hashes of
+   * existing workflows stay unchanged.
+   */
+  maxConcurrentPerSource?: number;
   /** Default write identity of the workflow; `null` = source identity. */
   identity: string | null;
   trigger: TriggerConfig;

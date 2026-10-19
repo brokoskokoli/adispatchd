@@ -4,6 +4,7 @@
  * (writes context, parses result/events), lifecycle (shell actions), API and UI.
  */
 import { z } from 'zod';
+import { CONFIG_ID_PATTERN } from './ids.js';
 import type { TriggerType } from './types.js';
 
 /** Current `schema_version` of context and result files. */
@@ -72,6 +73,12 @@ export const workerResultSchema = z.object({
   message: z.string().max(10_000).optional(),
   details: z.record(z.string(), z.unknown()).optional(),
   artifacts: z.array(workerArtifactSchema).max(100).optional(),
+  /**
+   * Named business outcome (WI-17), e.g. `approved`; selects the hook
+   * `on_result.<outcome>`. Values not in config-ID format are dropped by
+   * {@link parseWorkerResult} with a warning (never a protocol error).
+   */
+  outcome: z.string().regex(CONFIG_ID_PATTERN).optional(),
 });
 
 /** Validated worker result. */
@@ -84,7 +91,9 @@ export type WorkerArtifact = z.infer<typeof workerArtifactSchema>;
  * Parse and validate result-file content. Returns a discriminated result
  * instead of throwing; any problem means a technical protocol error (Spec §8.2 rule 4).
  */
-export function parseWorkerResult(content: string): { ok: true; result: WorkerResult } | { ok: false; error: string } {
+export function parseWorkerResult(
+  content: string,
+): { ok: true; result: WorkerResult; warnings: string[] } | { ok: false; error: string } {
   if (Buffer.byteLength(content, 'utf8') > MAX_RESULT_FILE_BYTES) {
     return { ok: false, error: `result file exceeds ${MAX_RESULT_FILE_BYTES} bytes` };
   }
@@ -94,12 +103,38 @@ export function parseWorkerResult(content: string): { ok: true; result: WorkerRe
   } catch (err) {
     return { ok: false, error: `result file is not valid JSON: ${(err as Error).message}` };
   }
+  const warnings: string[] = [];
+  json = dropInvalidOutcome(json, warnings);
   const parsed = workerResultSchema.safeParse(json);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`).join('; ');
     return { ok: false, error: `result file does not match schema: ${issues}` };
   }
-  return { ok: true, result: parsed.data };
+  return { ok: true, result: parsed.data, warnings };
+}
+
+/**
+ * An `outcome` that is not a config ID is ignored (WI-17): the rest of the
+ * result is evaluated normally and the run gets a warning.
+ */
+function dropInvalidOutcome(json: unknown, warnings: string[]): unknown {
+  if (typeof json !== 'object' || json === null || Array.isArray(json) || !Object.hasOwn(json, 'outcome')) return json;
+  const { outcome, ...rest } = json as Record<string, unknown>;
+  if (typeof outcome === 'string' && CONFIG_ID_PATTERN.test(outcome)) return json;
+  warnings.push(
+    `outcome ignored: expected an ID (letters, digits, "_" and "-", starting with a letter or digit, max. 64), got ${previewValue(outcome)}`,
+  );
+  return rest;
+}
+
+/** Short description of an untrusted JSON value; never serializes more than a bounded prefix. */
+function previewValue(value: unknown, max = 80): string {
+  if (typeof value === 'string') {
+    return value.length > max ? `${JSON.stringify(value.slice(0, max))}…` : JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `an array (${value.length} entries)`;
+  if (typeof value === 'object' && value !== null) return 'an object';
+  return String(value);
 }
 
 /** Reserved line prefix for structured worker events (Spec §9.3). */

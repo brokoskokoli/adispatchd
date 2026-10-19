@@ -7,10 +7,10 @@ import { ApiError, api, qs, seg } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { buildRuntimeBody, buildStartBody } from '../../shared/params.js';
-import { checkValueLabel, decisionTone, formatDuration } from '../../shared/format.js';
+import { checkValueLabel, decisionTone, formatBytes, formatDuration, triggerSummary } from '../../shared/format.js';
 import { buildHash } from '../../shared/route.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
-import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, Workflow } from '../types.js';
+import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, SecretInfo, SourcePoll, Workflow } from '../types.js';
 import { act, badge, button, errorBox, externalLink, isEditing, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, toast } from '../ui.js';
 
 function timeoutText(t: unknown): string {
@@ -20,10 +20,14 @@ function timeoutText(t: unknown): string {
 }
 
 function triggerText(wf: Workflow): string {
-  const t = wf.trigger;
-  if (t.type === 'source') return `source: ${t.source ?? '?'}`;
-  if (t.type === 'schedule') return `schedule: ${t.cron ?? '?'} (${t.timezone ?? 'UTC'})`;
-  return t.type;
+  return triggerSummary(wf.trigger);
+}
+
+/** One line per source with a problem (WI-20: the other sources were still planned). */
+function sourceErrors(sources: readonly SourcePoll[] | undefined, fallback: string | null): HTMLElement | null {
+  const failed = (sources ?? []).filter((x) => x.error);
+  if (failed.length === 0) return fallback ? h('div', { class: 'error-text' }, fallback) : null;
+  return h('div', null, failed.map((x) => h('div', { class: 'error-text' }, `${x.sourceId}: ${x.error ?? ''}`)));
 }
 
 function overridden(wf: Workflow, key: 'enabled' | 'priority' | 'maxConcurrent'): HTMLElement | null {
@@ -56,7 +60,7 @@ export const workflowsPage = (ctx: PageContext): Page => {
             wf.cron
               ? h('span', null, 'next ', time(wf.cron.nextSlot))
               : wf.lastPlanning
-                ? h('span', null, time(wf.lastPlanning.at), ` ${wf.lastPlanning.status}`, wf.lastPlanning.error ? h('div', { class: 'error-text' }, wf.lastPlanning.error) : ` · ${wf.lastPlanning.polled} polled, ${wf.lastPlanning.started} started`)
+                ? h('span', null, time(wf.lastPlanning.at), ` ${wf.lastPlanning.status}`, wf.lastPlanning.error ? sourceErrors(wf.lastPlanning.sources, wf.lastPlanning.error) : ` · ${wf.lastPlanning.polled} polled, ${wf.lastPlanning.started} started`)
                 : text(null),
           ]),
           { empty: 'No workflows configured.' },
@@ -110,6 +114,15 @@ export function traceNode(t: FilterTrace): HTMLElement {
   }
 }
 
+/** Table of declared secrets (WI-18): where, name, identity, delivery, variable – never values. */
+function secretsTable(secrets: readonly SecretInfo[]): HTMLElement {
+  return table(
+    ['Where', 'Secret', 'Identity', 'Delivery', 'Variable'],
+    secrets.map((x) => [h('code', null, x.where), h('code', null, x.name), x.identity, x.delivery, h('code', null, x.variable)]),
+    { empty: 'No secrets.' },
+  );
+}
+
 export function renderDryRun(r: DryRunResult): HTMLElement {
   const parts: HTMLElement[] = [];
   parts.push(
@@ -118,7 +131,16 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
       ['Enabled', r.enabled ? badge('yes', 'ok') : badge('no', 'muted')],
       ['Workflow priority', String(r.workflowPriority)],
       ['Capacity', `workflow ${r.capacity.workflow.active}/${r.capacity.workflow.max} · global ${r.capacity.global.active}/${r.capacity.global.max}`],
+      ...(r.capacity.perSource
+        ? ([['Per source', Object.entries(r.capacity.perSource.active).map(([sid, n]) => `${sid} ${n}/${r.capacity.perSource?.max ?? 0}`).join(' · ')]] as Array<[string, string]>)
+        : []),
       ['Automatic starts', r.gate ? (r.gate.canStartAutomatically ? badge('possible', 'ok') : badge(`not possible (${r.gate.reason ?? 'unknown'})`, 'warn')) : text(null)],
+      ...(r.hooks
+        ? ([
+            ['Named outcomes (on_result)', r.hooks.onResult.length ? h('span', null, r.hooks.onResult.map((o) => badge(o, 'info'))) : text(null)],
+            ['Technical outcomes', h('ul', { class: 'plain' }, Object.entries(r.hooks.technical).map(([status, hook]) => h('li', null, `${status} → `, h('code', null, hook))))],
+          ] as Array<[string, HTMLElement]>)
+        : []),
     ]),
   );
   parts.push(
@@ -129,9 +151,17 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
     ),
   );
   if (r.conditions.length) parts.push(h('h3', null, 'Workflow conditions'), h('ul', { class: 'checks' }, r.conditions.map(checkRow)));
+  if (r.secrets?.length) parts.push(h('h3', null, 'Secrets'), secretsTable(r.secrets));
   if (r.source) {
-    parts.push(h('h3', null, `Source ${r.source.sourceId}: ${r.source.polled} item(s) polled`));
-    if (r.source.error) parts.push(h('div', { class: 'alert alert-error' }, `Source error: ${r.source.error}`));
+    const polls: SourcePoll[] = r.source.sources ?? [{ sourceId: r.source.sourceId, status: r.source.error ? 'source_error' : 'ok', error: r.source.error, polled: r.source.polled }];
+    if (polls.length === 1) parts.push(h('h3', null, `Source ${r.source.sourceId}: ${r.source.polled} item(s) polled`));
+    else {
+      parts.push(
+        h('h3', null, `Sources: ${r.source.polled} item(s) polled`),
+        h('ul', { class: 'plain' }, polls.map((x) => h('li', null, `${x.sourceId}: ${x.polled} item(s) `, x.error ? badge('source error', 'warn') : badge('ok', 'ok')))),
+      );
+    }
+    for (const x of polls) if (x.error) parts.push(h('div', { class: 'alert alert-error' }, `Source error${polls.length > 1 ? ` (${x.sourceId})` : ''}: ${x.error}`));
     parts.push(
       h('p', null, `${r.summary.candidates} candidate(s): ${r.summary.wouldStart} would start, ${r.summary.pendingChecks} pending checks, ${r.summary.notStartable} not startable`),
       table(
@@ -260,7 +290,11 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
 
   const buildStart = (wf: Workflow): void => {
     const fields: Record<string, HTMLInputElement | HTMLSelectElement> = {};
-    const item = h('input', { class: 'input', type: 'text', id: 'start-item', placeholder: 'https://github.com/owner/repo/issues/7 or #7', maxlength: 2000 }) as HTMLInputElement;
+    const multi = (wf.trigger.sources?.length ?? 0) > 1;
+    const placeholder = multi
+      ? `https://github.com/owner/repo/issues/7 or ${wf.trigger.sources?.[0] ?? 'source'}:7`
+      : 'https://github.com/owner/repo/issues/7 or #7';
+    const item = h('input', { class: 'input', type: 'text', id: 'start-item', placeholder, maxlength: 2000 }) as HTMLInputElement;
     const rows: HTMLElement[] = [];
     if (wf.trigger.type === 'source') rows.push(h('label', { class: 'field' }, h('span', null, 'Source item (required)'), item));
     for (const [name, def] of Object.entries(wf.parameters)) {
@@ -348,12 +382,24 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
             ['Trigger', triggerText(wf)],
             ['Priority', h('span', null, String(wf.priority), overridden(wf, 'priority'))],
             ['Max parallel', h('span', null, String(wf.maxConcurrent), overridden(wf, 'maxConcurrent'))],
+            ...(typeof wf.maxConcurrentPerSource === 'number' ? ([['Max parallel per source', String(wf.maxConcurrentPerSource)]] as Array<[string, string]>) : []),
             ['Current usage', `${wf.activeRuns} active`],
             ['Active blocks', wf.activeBlocks > 0 ? routeLink(['blocked'], badge(String(wf.activeBlocks), 'warn')) : '0'],
             ['Identity', text(wf.identity)],
             ['Command', h('code', { class: 'wrap' }, [wf.execute.command, ...wf.execute.args.map(String)].join(' '))],
             ['Timeout', timeoutText(wf.execute.timeout)],
-            ['Secrets', wf.execute.secrets.length ? wf.execute.secrets.join(', ') : text(null)],
+            [
+              'Secrets',
+              // `secrets` (execute + shell actions, WI-18) is missing on older instances.
+              wf.secrets
+                ? wf.secrets.length
+                  ? secretsTable(wf.secrets)
+                  : text(null)
+                : wf.execute.secrets.length
+                  ? wf.execute.secrets.join(', ')
+                  : text(null),
+            ],
+            ['Kept files', wf.execute.keep?.length ? h('span', null, h('code', { class: 'wrap' }, wf.execute.keep.join(', ')), h('small', { class: 'muted' }, ` (max ${formatBytes(wf.execute.keepMaxSizeBytes ?? null)} per run)`)) : text(null)],
             ['Filter', `${wf.hasFilter ? 'declarative' : 'none'}${wf.hasShellFilter ? ' + shell filter' : ''}; conditions: ${wf.conditions.workflow} workflow, ${wf.conditions.item} item`],
             ['Max technical failures', String(wf.maxTechnicalFailures)],
             ['File', h('code', null, wf.file)],
@@ -364,7 +410,21 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
                 ] as Array<[string, HTMLElement]>)
               : []),
             ...(wf.lastPlanning
-              ? ([['Last planning', h('span', null, time(wf.lastPlanning.at), ` ${wf.lastPlanning.status} · ${wf.lastPlanning.polled} polled · ${wf.lastPlanning.candidates} candidates · ${wf.lastPlanning.started} started`, wf.lastPlanning.error ? h('div', { class: 'error-text' }, wf.lastPlanning.error) : null)]] as Array<[string, HTMLElement]>)
+              ? ([
+                  [
+                    'Last planning',
+                    h(
+                      'span',
+                      null,
+                      time(wf.lastPlanning.at),
+                      ` ${wf.lastPlanning.status} · ${wf.lastPlanning.polled} polled · ${wf.lastPlanning.candidates} candidates · ${wf.lastPlanning.started} started`,
+                      (wf.lastPlanning.sources?.length ?? 0) > 1
+                        ? h('div', { class: 'muted' }, (wf.lastPlanning.sources ?? []).map((x) => `${x.sourceId}: ${x.status === 'ok' ? `${x.polled} polled` : x.status}`).join(' · '))
+                        : null,
+                      wf.lastPlanning.error ? sourceErrors(wf.lastPlanning.sources, wf.lastPlanning.error) : null,
+                    ),
+                  ],
+                ] as Array<[string, HTMLElement]>)
               : []),
           ]),
         ),

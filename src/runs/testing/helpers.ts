@@ -45,6 +45,8 @@ export interface RunsTestEnv {
   adapter: SourceAdapter;
   notifications: RecordedNotification[];
   notifier: Notifier;
+  /** Make another source adapter known to controllers/lifecycle created afterwards (multi-source tests, WI-20). */
+  addSource(id: string, adapter: SourceAdapter): void;
   /** Write an executable shell script and return its absolute path. */
   script(name: string, body: string): string;
   /** Write `workflows/<id>.yaml` (+ optional config.yaml) and return the workflow snapshot. */
@@ -96,6 +98,7 @@ export function createRunsEnv(): RunsTestEnv {
   const notifications: RecordedNotification[] = [];
   const notifier: Notifier = { notify: (type, payload) => notifications.push({ type, payload }) };
   const controllers: RunController[] = [];
+  const extraSources = new Map<string, SourceAdapter>();
 
   return {
     root,
@@ -108,6 +111,9 @@ export function createRunsEnv(): RunsTestEnv {
     adapter,
     notifications,
     notifier,
+    addSource(id, source) {
+      extraSources.set(id, source);
+    },
     script(name, body) {
       const file = path.join(scripts, name);
       writeFileSync(file, `#!/bin/sh\n${body}\n`);
@@ -127,7 +133,7 @@ export function createRunsEnv(): RunsTestEnv {
       const publisher = new PersistedEventPublisher(p, bus);
       const events: BusEvent[] = [];
       bus.subscribe((e) => events.push(e));
-      const sources = (id: string): SourceAdapter | undefined => (id === 'repo_a' ? adapter : undefined);
+      const sources = (id: string): SourceAdapter | undefined => (id === 'repo_a' ? adapter : extraSources.get(id));
       const lifecycle = new LifecycleEngine({
         repositories: p,
         sources,

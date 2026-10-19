@@ -17,6 +17,7 @@ import {
   systemClock,
   systemTimers,
   type Clock,
+  type CredentialProvider,
   type Executor,
   type HookName,
   type LifecycleStatus,
@@ -122,6 +123,10 @@ export interface LifecycleEngineOptions {
   shellCancelGraceMs?: number;
   /** Log limit per `shell` action attempt (stdout + stderr). Default 10 MiB. */
   maxShellLogBytes?: number;
+  /** Token source for `secrets` of `shell` actions (WI-18). */
+  credentials?: CredentialProvider;
+  /** Tuning of token files of `shell` actions (`delivery: file`, WI-18); tests only. */
+  tokenFiles?: { renewBeforeMs?: number; retryDelayMs?: number; maxRetryDelayMs?: number };
 }
 
 interface ChainOptions {
@@ -155,6 +160,11 @@ export class LifecycleEngine {
       dataDir: options.dataDir,
       shellCancelGraceMs: options.shellCancelGraceMs ?? 5_000,
       maxShellLogBytes: options.maxShellLogBytes ?? 10 * 1024 * 1024,
+      credentials: options.credentials,
+      clock: this.clock,
+      timers: this.timers,
+      logger: this.logger,
+      tokenFiles: options.tokenFiles ?? {},
     };
   }
 

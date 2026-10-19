@@ -43,9 +43,15 @@ execute:
   secrets:
     GH_TOKEN:
       identity: coder
+      # delivery: file   # instead of GH_TOKEN: path in GH_TOKEN_FILE, renewed while the worker runs (0.3.0)
   timeout:
     max_duration: 6h
     idle_timeout: 45m
+  # Copied to data-dir/runs/<run-id>/kept/ before the workspace cleanup (relative globs: *, ?, **).
+  keep:
+    - .agent/transcript.jsonl
+    - .agent/gate/*.log
+  keep_max_size: 50MB
 
 retry:
   max_technical_failures: 3

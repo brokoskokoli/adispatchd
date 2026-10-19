@@ -7,7 +7,9 @@ Shell-Workflows in eigenen Workspaces aus, überwacht und protokolliert jeden Ru
 Live-Updates.
 
 - **GitHub bleibt Source of Truth** – kein eigener Ticketstore; SQLite hält nur Runs, Locks, Events, Blocks, Aktionsjournale.
-- **Unabhängige Workflows** mit Source-, Cron- oder manuellem Trigger, globalen und workflowbezogenen Limits.
+- **Unabhängige Workflows** mit Source-, Cron- oder manuellem Trigger, globalen und workflowbezogenen Limits; ein
+  Workflow kann **mehrere Repositories** bedienen (`sources: [...]`, optional Limit je Source), Unterschiede je
+  Repository stehen als Variablen an der Source (`{source.vars.base_branch}`).
 - **Deklarative Filter und Prioritäten** auf Labels, Zustand, Milestone, Issue-Typ, native Abhängigkeiten („blocked by“)
   und Felder aus **GitHub Projects** (Status, Priorität, eigene Felder; „A oder B“ per `in`) – fehlender Zugriff ergibt
   `unknown` statt eines falschen Starts.
@@ -19,6 +21,13 @@ Live-Updates.
   idempotent (erst lesen, dann schreiben) mit Journal und Retries.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per
   Prozessgruppe, Drain, Crash-Recovery, systemd-Integration.
+- **Mehr als zwei Ausgänge:** benannte Ergebnisse (`outcome` in der Ergebnisdatei → `on_result.<outcome>`) und ein
+  Sammel-Hook `on_error` für alle technischen Ausgänge.
+- **Dateien sichern:** `execute.keep` kopiert Mitschnitte und Logs (Glob-Muster) vor dem Workspace-Cleanup nach
+  `runs/<run-id>/kept/` – mit Größenlimit, ohne Symlinks zu folgen; Download in UI und API, gelöscht mit dem Run.
+- **Tokens für lange Runs:** Secrets per Umgebungsvariable oder als **Token-Datei** (`delivery: file` →
+  `<NAME>_FILE`), die der Daemon vor Ablauf atomar erneuert und nach dem Run löscht – Worker brauchen keine
+  App-Schlüssel. Shell-Actions in Hooks können ebenfalls Tokens anfordern.
 
 Dokumentation: [Änderungen](CHANGELOG.md) · [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-protocol.md) · [HTTP-API/SSE](docs/api.md) ·
 [Cron-Semantik](docs/cron-semantics.md) · [Spezifikation](docs/spec-v0.1.md) · Manuelle Tests:
@@ -128,13 +137,20 @@ on_failure: [ { type: source.update, labels: { add: [needs-maintainer], remove: 
 on_crash:   [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
 ```
 
-- Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`, `on_cancel`; Actions
-  `source.update`, `source.comment`, `shell`; Retry 3 × 30 s (`lifecycle.action_retry`), `continue_on_error`.
+- Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`, `on_cancel`, `on_error`
+  (Sammel-Hook, wenn der spezifische technische Hook fehlt) und `on_result.<outcome>` (benannte Ergebnisse statt
+  `on_success`/`on_failure`); Actions `source.update`, `source.comment`, `shell`; Retry 3 × 30 s
+  (`lifecycle.action_retry`), `continue_on_error`.
 - Platzhalter (feste Liste): `{run.id}`, `{workflow.id}`, `{item.number}`, `{item.url}`, `{result.message}`,
-  `{parameters.<name>}`, `{workspace.base_dir}`, `{item.work_branch}`, `{item.work_pr}` … – unbekannte Platzhalter
-  sind Konfigurationsfehler.
+  `{parameters.<name>}`, `{source.vars.<name>}`, `{workspace.base_dir}`, `{item.work_branch}`, `{item.work_pr}` … –
+  unbekannte Platzhalter sind Konfigurationsfehler.
 - Manuelle Starts (UI/API) umgehen Filter, Conditions, Limits und Retry-Blocks, nie aber den aktiven Lock pro Workflow+Item.
 - Views (`views/*.yaml`) sind read-only Tabellen über mehrere Sources inkl. `run.last_*`-Feldern.
+- Ein Workflow für mehrere Repositories: `trigger: { type: source, sources: [project_a, project_b] }` – Kandidaten
+  aller Sources konkurrieren nach Item-Priorität (bei Gleichstand gilt die Listenreihenfolge), Locks bleiben pro
+  Item, `max_concurrent_per_source` begrenzt je Source, eine ausgefallene Source hält die anderen nicht auf.
+  Werte je Repository als `vars` in `sources.yaml` und `{source.vars.<name>}` in `execute`/Hooks
+  ([Konfigurationsreferenz §3.4.2](docs/configuration-reference.md#342-trigger)).
 - Benannte Filter (`filters/<id>.yaml`) einmal definieren und in Workflows/Views mit `filter: <id>` oder
   `{ use: <id> }` an beliebiger Stelle im Filterbaum verwenden – alle sehen dieselben Items
   ([Konfigurationsreferenz §3.6](docs/configuration-reference.md#36-filtersyaml)).
@@ -146,13 +162,17 @@ on_crash:   [ { type: source.update, labels: { add: [ready-for-coding], remove: 
 
 Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
-- **Input:** Minimalumgebung (`PATH`, `HOME`, …) + `execute.env` + deklarierte Secrets + `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`,
+- **Input:** Minimalumgebung (`PATH`, `HOME`, …) + `execute.env` + deklarierte Secrets (`GH_TOKEN` bzw. bei `delivery: file`
+  `GH_TOKEN_FILE`, z. B. `GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh …`) + `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`,
   `ADISPATCH_SOURCE_*`, `ADISPATCH_WORKSPACE`, `ADISPATCH_CONTEXT_FILE` (JSON-Kontext), `ADISPATCH_RESULT_FILE`. Keine Controller-Umgebung.
 - **Exit-Code = technischer Status:** `0` = ok, alles andere = `crashed` (technischer Fehler, zählt zum Retry-Block).
 - **Fachliches Ergebnis** nur über die Ergebnisdatei (atomar schreiben):
   `{"schema_version":1,"result":"failure","message":"Requirements unclear"}` + `exit 0` → `on_failure` („Needs Maintainer“),
-  kein technischer Fehler. Ohne Datei gilt Exit 0 als `success`.
+  kein technischer Fehler. Ohne Datei gilt Exit 0 als `success`. Optional `"outcome": "needs_maintainer"` wählt
+  `on_result.needs_maintainer`.
 - **Events:** Zeilen `@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}` auf stdout/stderr – nur informativ.
+- **Dateien behalten:** Was im Workspace unter `execute.keep` passt (z. B. `.agent/transcript.jsonl`, `.agent/gate/*.log`),
+  sichert der Daemon nach dem Run – auch wenn der Workspace danach gelöscht wird.
 - **Cancel/Timeout:** SIGTERM an die Prozessgruppe, nach `cancel_grace` (30 s) SIGKILL. Eigene Sessions/Container räumt das
   Skript selbst auf.
 
@@ -165,9 +185,14 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **Skripte und YAML sind vertrauenswürdiger Code** mit den Rechten des Dienstes – keine Sandbox. Schreibrecht auf das
   config-dir ist gleichbedeutend mit Codeausführung; `service install` legt es `root`-eigen an und lässt den Dienst unter einem
   eigenen Benutzer laufen.
-- Worker erhalten nur ausdrücklich deklarierte Secrets (z. B. kurzlebiges `GH_TOKEN`); Secrets werden nie in Kontext-/
-  Ergebnisdateien, API-Antworten oder Logs persistiert, Redaction in Prozesslogs ist best-effort. Ein Worker kann ihm
-  übergebene Secrets dennoch ausgeben.
+- Worker und Shell-Actions erhalten nur ausdrücklich deklarierte Secrets (z. B. kurzlebiges `GH_TOKEN`); Secrets werden
+  nie in Kontext-/Ergebnisdateien, API-Antworten oder Logs persistiert, Redaction in Prozesslogs ist best-effort. Einzige
+  Ausnahme ist die Token-Datei bei `delivery: file` (`data-dir/runs/<run>/secrets/`, `0600`, außerhalb des Workspaces,
+  nach dem Run gelöscht). Ein Worker kann ihm übergebene Secrets dennoch ausgeben.
+- **Keine Isolation zwischen Runs desselben Dienstes:** `0700`/`0600` schützt nur vor anderen Systembenutzern. Alle
+  Worker laufen als derselbe Dienstbenutzer und können Token-Dateien (vorhersagbare Pfade) bzw. unter Linux die Umgebung
+  (`/proc/<pid>/environ`) paralleler Runs lesen. Hoch- und niedrig-privilegierte Workflows in getrennten Instanzen unter
+  getrennten Benutzern oder in Containern (WI-19) betreiben.
 - GitHub-Apps mit minimalen Rechten; fehlende Rechte bei Cross-Repo-Abhängigkeiten führen zu `unknown` (kein Start), nicht zu „0“.
 - Event-, Result- und Log-Inhalte werden in der UI nur als Text dargestellt.
 

@@ -3,8 +3,8 @@
  * workflow (kept in memory for GUI/API), dry-run results and cron status.
  * All types are plain JSON-serializable data.
  */
-import type { FieldResolution, FilterNode } from '../core/index.js';
-import type { TriggerConfig } from '../config/index.js';
+import type { FieldResolution, FilterNode, HookName, TECHNICAL_OUTCOME_HOOKS } from '../core/index.js';
+import type { TriggerConfig, WorkflowSecretInfo } from '../config/index.js';
 import type { CronFiringRecord } from '../persistence/index.js';
 import type { FilterTrace, TraceValue } from '../filters/index.js';
 
@@ -22,6 +22,7 @@ import type { FilterTrace, TraceValue } from '../filters/index.js';
  * - `locked` – an active run of the same workflow holds the item lock.
  * - `blocked` – an active retry block exists for the workflow/item.
  * - `workflow_limit` / `global_limit` – no free slot.
+ * - `source_limit` – `max_concurrent_per_source` reached for the item's source (WI-20).
  * - `workflow_unavailable` – the workflow was disabled/removed/changed during the planning step.
  * - `gate_closed` – automatic starts were paused/stopped during the planning step.
  * - `start_failed` – reservation or controller start failed unexpectedly.
@@ -39,6 +40,7 @@ export type CandidateDecision =
   | 'locked'
   | 'blocked'
   | 'workflow_limit'
+  | 'source_limit'
   | 'global_limit'
   | 'workflow_unavailable'
   | 'gate_closed'
@@ -103,19 +105,35 @@ export interface CandidateDiagnosis {
 /** Status of a workflow in the last planning step. */
 export type WorkflowPlanningStatus = 'ok' | 'disabled' | 'source_error';
 
+/** Poll result of one source of a source workflow (WI-20: one entry per source). */
+export interface SourcePollDiagnosis {
+  sourceId: string;
+  status: 'ok' | 'source_error';
+  /** Source problem, e.g. API failure or missing adapter. */
+  error: string | null;
+  /** Number of items returned by the source (after de-duplication). */
+  polled: number;
+  /** Pushed-down part of the filter for this source (informational). */
+  pushdown: FilterNode | null;
+}
+
 /** Last planning diagnosis of one source workflow (in memory, Spec §7). */
 export interface WorkflowPlanningDiagnosis {
   workflowId: string;
   /** Planning step start (ISO-8601). */
   at: string;
+  /** `source_error` if at least one source failed (the others are still planned, WI-20). */
   status: WorkflowPlanningStatus;
-  /** Source problem (`source_error`), e.g. API failure or missing adapter. */
+  /** Source problem(s) (`source_error`), e.g. API failure or missing adapter; several joined with "; ". */
   error: string | null;
+  /** The (first) source; see `sources` for multi-source workflows. */
   sourceId: string;
-  /** Number of items returned by the source (after de-duplication). */
+  /** Number of items returned by all sources (after de-duplication). */
   polled: number;
-  /** Pushed-down part of the filter (informational). */
+  /** Pushed-down part of the filter of the first source (informational). */
   pushdown: FilterNode | null;
+  /** Per source in configured order (WI-20; one entry for single-source workflows). */
+  sources: SourcePollDiagnosis[];
   /** Workflow conditions, evaluated at most once per planning step (`not_evaluated` if no candidate needed them). */
   conditions: CheckDiagnosis[];
   /** Candidates in planning order (startable order first, rejected-by-cheap-filter last). */
@@ -187,6 +205,8 @@ export interface CronWorkflowStatus {
 export interface CapacityInfo {
   global: { active: number; max: number };
   workflow: { active: number; max: number };
+  /** `max_concurrent_per_source` (WI-20): active runs per source; absent when not configured. */
+  perSource?: { max: number; active: Record<string, number> };
 }
 
 /** Controller gate as seen by a dry-run (`null` when no controller is available, e.g. CLI). */
@@ -223,7 +243,19 @@ export interface DryRunResult {
    * Source workflows only. `filter` is the declarative filter as evaluated: references to named
    * filters (WI-15) are already expanded.
    */
-  source: { sourceId: string; polled: number; filter: FilterNode | null; pushdown: FilterNode | null; error: string | null } | null;
+  source: {
+    /** The (first) source; per source see `sources` (WI-20). */
+    sourceId: string;
+    /** Items of all sources. */
+    polled: number;
+    filter: FilterNode | null;
+    /** Pushdown of the first source. */
+    pushdown: FilterNode | null;
+    /** Source problem(s), several joined with "; "; `null` if all sources were polled. */
+    error: string | null;
+    /** Per source in configured order (WI-20; one entry for single-source workflows). */
+    sources: SourcePollDiagnosis[];
+  } | null;
   /** Source workflows only; planning order, cheap-filter rejections last. */
   candidates: CandidateDiagnosis[];
   /** Schedule workflows only. */
@@ -236,9 +268,24 @@ export interface DryRunResult {
     recentFirings: CronFiringRecord[];
     blockId: number | null;
   } | null;
+  /**
+   * Declared secrets of `execute` and `shell` actions (WI-18): names, identity, delivery – never values.
+   * Missing in results of older instances.
+   */
+  secrets?: WorkflowSecretInfo[];
   /** Notes about the limits of this dry-run (e.g. no database, no controller). */
   notes: string[];
   summary: { candidates: number; wouldStart: number; pendingChecks: number; notStartable: number };
+  /** Completion hook routing (WI-17); missing in results of instances before 0.3.0. */
+  hooks?: HookRouting;
+}
+
+/** Which completion hook runs for which outcome (WI-17). */
+export interface HookRouting {
+  /** Named outcomes with an `on_result.<outcome>` chain (result file `outcome`). */
+  onResult: string[];
+  /** Hook per technical outcome: the specific hook if defined, else `on_error` if defined, else the specific one. */
+  technical: Record<keyof typeof TECHNICAL_OUTCOME_HOOKS, HookName>;
 }
 
 /** Upper bound of candidate entries kept per workflow diagnosis. */

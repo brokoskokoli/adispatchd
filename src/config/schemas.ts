@@ -48,6 +48,7 @@ export const DEFAULTS = {
   checkTimeout: '30s',
   shellActionTimeout: '5m',
   cancelGrace: '30s',
+  keepMaxSize: '100MB',
   scheduleTimezone: 'UTC',
 } as const;
 
@@ -96,6 +97,8 @@ const sizeSchema = z.string('Expected a size such as 100MB').transform((value, c
   }
 });
 
+const positiveSize = sizeSchema.refine((bytes) => bytes > 0, 'Must be greater than 0');
+
 const positiveInt = z.number().int('Must be an integer').positive('Must be greater than 0');
 const nonNegativeInt = z.number().int('Must be an integer').min(0, 'Must not be negative');
 
@@ -107,6 +110,14 @@ const envMap = z
   .default({});
 
 const stringList = z.array(z.string()).default([]);
+
+/** How a secret reaches the process (WI-18): `env` = value in the variable, `file` = path in `<NAME>_FILE`. */
+export const SECRET_DELIVERIES = ['env', 'file'] as const;
+
+/** `secrets` of `execute` and `shell` actions: env name → identity whose token is handed over. */
+const secretsMap = z
+  .record(envName, z.strictObject({ identity: configId, delivery: z.enum(SECRET_DELIVERIES).default('env') }))
+  .default({});
 
 const notificationEvent = z.enum(NOTIFICATION_EVENT_TYPES);
 
@@ -210,12 +221,38 @@ const githubProjectSchema = z.strictObject({
     }),
 });
 
+/** Pattern for source variable names (usable as `{source.vars.<name>}`, WI-20). */
+export const SOURCE_VAR_NAME_PATTERN = PARAMETER_NAME_PATTERN;
+
+/**
+ * Free per-source variables (WI-20): name → string. YAML scalars are
+ * stringified like `env` values (`version: 2` → `"2"`).
+ */
+const sourceVarsSchema = z
+  .record(
+    z.string(),
+    z.union([z.string(), z.number(), z.boolean()], { error: 'Expected a string (numbers and booleans are converted)' }).transform((v) => String(v)),
+  )
+  .superRefine((vars, ctx) => {
+    // Checked here (not as record key schema) to keep the precise message and path.
+    for (const name of Object.keys(vars)) {
+      if (!SOURCE_VAR_NAME_PATTERN.test(name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [name],
+          message: 'Invalid variable name (allowed: letters, digits, "_" and "-", must start with a letter or "_")',
+        });
+      }
+    }
+  });
+
 const githubSourceSchema = z.strictObject({
   type: z.literal('github'),
   owner: nonEmpty,
   repository: nonEmpty,
   identity: configId,
   project: githubProjectSchema.optional(),
+  vars: sourceVarsSchema.optional(),
 });
 
 /** Schema of `sources.yaml`. */
@@ -251,8 +288,36 @@ export type RawIdentitiesFile = z.output<typeof identitiesFileSchema>;
 // workflows/*.yaml
 // ---------------------------------------------------------------------------
 
+/**
+ * Source trigger: exactly one of `source: <id>` or (WI-20) `sources: [<id>, ...]`
+ * (non-empty, unique; the list order is the tie-breaker between sources).
+ */
+const sourceTriggerSchema = z
+  .strictObject({ type: z.literal('source'), source: configId.optional(), sources: z.array(configId).optional() })
+  .superRefine((trigger, ctx) => {
+    if (trigger.source !== undefined && trigger.sources !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['sources'],
+        message: '"source" and "sources" are mutually exclusive: use "source: <id>" for one source or "sources: [<id>, ...]" for several',
+      });
+      return;
+    }
+    if (trigger.source === undefined && trigger.sources === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'A source trigger needs "source: <id>" or "sources: [<id>, ...]"' });
+      return;
+    }
+    if (trigger.sources === undefined) return;
+    if (trigger.sources.length === 0) ctx.addIssue({ code: 'custom', path: ['sources'], message: '"sources" must not be empty' });
+    const seen = new Set<string>();
+    trigger.sources.forEach((id, i) => {
+      if (seen.has(id)) ctx.addIssue({ code: 'custom', path: ['sources', i], message: `Source "${id}" is listed more than once` });
+      seen.add(id);
+    });
+  });
+
 const triggerSchema = z.discriminatedUnion('type', [
-  z.strictObject({ type: z.literal('source'), source: configId }),
+  sourceTriggerSchema,
   z.strictObject({
     type: z.literal('schedule'),
     cron: nonEmpty,
@@ -311,7 +376,7 @@ const executeSchema = z.discriminatedUnion('type', [
     working_directory: nonEmpty.default(DEFAULT_WORKING_DIRECTORY),
     create_directory: z.boolean().default(true),
     env: envMap,
-    secrets: z.record(envName, z.strictObject({ identity: configId })).default({}),
+    secrets: secretsMap,
     timeout: z
       .strictObject({
         max_duration: positiveDuration.optional(),
@@ -319,6 +384,9 @@ const executeSchema = z.discriminatedUnion('type', [
       })
       .default({}),
     cancel_grace: durationSchema.default(parseDuration(DEFAULTS.cancelGrace)),
+    // Patterns are checked in validate.ts (path + message per entry).
+    keep: z.array(z.string('Expected a pattern such as .agent/*.log')).default([]),
+    keep_max_size: positiveSize.optional(),
   }),
 ]);
 
@@ -367,6 +435,7 @@ const actionSchema = z.discriminatedUnion('type', [
     args: stringList,
     timeout: positiveDuration.default(parseDuration(DEFAULTS.shellActionTimeout)),
     env: envMap,
+    secrets: secretsMap,
   }),
 ]);
 
@@ -374,11 +443,20 @@ const actionSchema = z.discriminatedUnion('type', [
 export type RawAction = z.output<typeof actionSchema>;
 
 const hookList = z.array(actionSchema).default([]);
+/**
+ * Hooks whose presence matters (WI-17): a technical hook that is configured –
+ * even as `[]` – takes precedence over `on_error`, so "not given" must stay
+ * distinguishable from an empty list.
+ */
+const optionalHookList = z.array(actionSchema).optional();
 
-const hookShape = Object.fromEntries(HOOK_NAMES.map((h) => [h, hookList])) as Record<
-  (typeof HOOK_NAMES)[number],
-  typeof hookList
->;
+/** Hooks that always resolve to a list (`[]` if not given). */
+const ALWAYS_LIST_HOOKS = ['on_start', 'on_success', 'on_failure'] as const satisfies readonly (typeof HOOK_NAMES)[number][];
+
+const hookShape = Object.fromEntries(
+  HOOK_NAMES.map((h) => [h, (ALWAYS_LIST_HOOKS as readonly string[]).includes(h) ? hookList : optionalHookList]),
+) as Record<(typeof ALWAYS_LIST_HOOKS)[number], typeof hookList> &
+  Record<Exclude<(typeof HOOK_NAMES)[number], (typeof ALWAYS_LIST_HOOKS)[number]>, typeof optionalHookList>;
 
 /** Schema of one `workflows/*.yaml` file. */
 export const workflowSchema = z.strictObject({
@@ -387,6 +465,8 @@ export const workflowSchema = z.strictObject({
   enabled: z.boolean().default(true),
   priority: z.number().default(DEFAULTS.workflowPriority),
   max_concurrent: positiveInt.default(DEFAULTS.workflowMaxConcurrent),
+  /** Optional limit per source of a source workflow (WI-20); `max_concurrent` stays the overall limit. */
+  max_concurrent_per_source: positiveInt.optional(),
   identity: configId.optional(),
   trigger: triggerSchema,
   filter: filterNodeSchema.optional(),
@@ -404,6 +484,8 @@ export const workflowSchema = z.strictObject({
     .strictObject({ max_technical_failures: positiveInt.default(DEFAULTS.maxTechnicalFailures) })
     .prefault({}),
   ...hookShape,
+  /** Named outcomes (WI-17): `on_result.<outcome>` replaces `on_success`/`on_failure`. */
+  on_result: z.record(configId, z.array(actionSchema)).optional(),
 });
 
 /** Parsed workflow file. */

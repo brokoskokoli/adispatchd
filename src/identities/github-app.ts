@@ -19,6 +19,7 @@ import {
   type IdentityRef,
   type Logger,
   type SecretRedactor,
+  type TokenRequestOptions,
   type Timers,
 } from '../core/index.js';
 import { GitHubHttpClient } from '../sources/index.js';
@@ -95,9 +96,11 @@ export class GitHubAppCredentialProvider implements CredentialProvider {
     return [...this.identities.keys()];
   }
 
-  async getToken(identity: IdentityRef, options: { signal?: AbortSignal } = {}): Promise<AccessToken> {
+  async getToken(identity: IdentityRef, options: TokenRequestOptions = {}): Promise<AccessToken> {
     const cached = this.cache.get(identity);
-    if (cached && cached.expiresAt.getTime() - this.refreshMarginMs > this.clock.now().getTime()) return cached;
+    // `minValidityMs` (token files, WI-18) may demand more remaining lifetime than the refresh margin.
+    const margin = Math.max(this.refreshMarginMs, options.minValidityMs ?? 0);
+    if (cached && cached.expiresAt.getTime() - margin > this.clock.now().getTime()) return cached;
     let shared = this.inflight.get(identity);
     if (!shared) {
       const generation = this.generation.get(identity) ?? 0;

@@ -196,3 +196,31 @@ describe('linked placeholders (WI-21)', () => {
     expect(unknownLinkedField(['work_pr'], { work_pr: { known: true, value: 3 } })).toBeUndefined();
   });
 });
+
+describe('source variables {source.vars.<name>} (WI-20)', () => {
+  const withVars = buildTemplateValues({
+    workflow: { id: 'wf' },
+    source: { id: 'repo_a', type: 'github', vars: { base_branch: 'main', 'deploy-env': 'a/b' } },
+    now: new Date('2026-10-16T19:00:00Z'),
+  });
+
+  it('renders in text mode and as one safe segment in path mode', () => {
+    expect(renderTemplate('{source.vars.base_branch}:{source.vars.deploy-env}', withVars, { mode: 'text' })).toBe('main:a/b');
+    expect(renderTemplate('/w/{source.vars.deploy-env}', withVars, { mode: 'path' })).toBe('/w/a_b');
+    expect(renderTemplate('[{source.vars.missing}]', withVars, { mode: 'text' })).toBe('[]');
+    expect(() => renderTemplate('/w/{source.vars.missing}', withVars, { mode: 'path' })).toThrow(/No value/);
+  });
+
+  it('belongs to the source group and is checked by the scope', () => {
+    expect(validateTemplate('{source.vars.base_branch}', { mode: 'text', scope: {} })).toEqual([
+      expect.objectContaining({ code: 'unavailable_placeholder', placeholder: 'source.vars.base_branch' }),
+    ]);
+    expect(validateTemplate('{source.vars.base_branch}', { mode: 'text', scope: { source: true } })).toEqual([]);
+    const sourceVar = (name: string): string | undefined => (name === 'base_branch' ? undefined : `"${name}" is missing`);
+    expect(validateTemplate('{source.vars.base_branch} {source.vars.x}', { mode: 'text', scope: { source: true, sourceVar } })).toEqual([
+      { code: 'unavailable_placeholder', message: '"x" is missing', placeholder: 'source.vars.x' },
+    ]);
+    expect(validateTemplate('{source.vars.}', { mode: 'text', scope: { source: true } })[0]?.code).toBe('syntax');
+    expect(validateTemplate('{source.vars.a.b}', { mode: 'text', scope: { source: true } })[0]?.code).toBe('unknown_placeholder');
+  });
+});

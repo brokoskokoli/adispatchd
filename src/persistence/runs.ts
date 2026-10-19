@@ -14,11 +14,13 @@ import {
   ACTIVE_STATUSES,
   canTransition,
   createRunId,
+  isHookName,
   isTechnicalFailure,
   isTerminalStatus,
   type BusinessResult,
   type Clock,
   type FinalizationTarget,
+  type HookName,
   type LifecycleStatus,
   type ProcessStartIdentity,
   type TechnicalStatus,
@@ -63,6 +65,17 @@ export interface RunRecord {
   statusMessage: string | null;
   /** Parsed worker result file (if valid). */
   result: unknown;
+  /**
+   * Named business outcome from the result file (WI-17, `result.outcome`);
+   * set with `→ finalizing` for `completed` runs only.
+   */
+  outcome: string | null;
+  /**
+   * Completion hook selected at `→ finalizing` (WI-17, e.g. `on_result.approved`,
+   * `on_error`); recovery resumes exactly this hook. `null` if no hook runs
+   * (run never reached `starting`) or for runs finalized before 0.3.0.
+   */
+  completionHook: HookName | null;
   /** Technical error diagnostics (no secrets). */
   error: unknown;
   lifecycleStatus: LifecycleStatus | null;
@@ -110,6 +123,8 @@ export interface RunUpdate {
   lifecycleStatus?: LifecycleStatus | null;
   exitCode?: number | null;
   result?: unknown;
+  outcome?: string | null;
+  completionHook?: HookName | null;
   error?: unknown;
   configSnapshot?: unknown;
   identity?: string | null;
@@ -326,6 +341,8 @@ export class RunRepository {
         from: current.status,
         to: 'finalizing',
         target: { status: target.status, businessResult: target.businessResult, reason: target.reason },
+        ...(options.update?.outcome ? { outcome: options.update.outcome } : {}),
+        ...(options.update?.completionHook ? { hook: options.update.completionHook } : {}),
         ...(blockCreated ? { blockId: blockCreated.id } : {}),
       });
       return {
@@ -395,11 +412,16 @@ export class RunRepository {
   }
 
   /** Number of active runs (all triggers incl. manual), optionally per workflow (Spec §7 concurrency). */
-  countActive(workflowId?: string): number {
+  countActive(workflowId?: string, sourceId?: string): number {
     const row =
       workflowId === undefined
         ? get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL}`)
-        : get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND workflow_id = ?`, [workflowId]);
+        : sourceId === undefined
+          ? get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND workflow_id = ?`, [workflowId])
+          : get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND workflow_id = ? AND source_id = ?`, [
+              workflowId,
+              sourceId,
+            ]);
     return Number(row?.n ?? 0);
   }
 
@@ -520,6 +542,8 @@ export class RunRepository {
     if (update.lifecycleStatus !== undefined) set.lifecycle_status = update.lifecycleStatus;
     if (update.exitCode !== undefined) set.exit_code = update.exitCode;
     if (update.result !== undefined) set.result_json = toJson(update.result ?? undefined);
+    if (update.outcome !== undefined) set.outcome = update.outcome;
+    if (update.completionHook !== undefined) set.completion_hook = update.completionHook;
     if (update.error !== undefined) set.error_json = toJson(update.error ?? undefined);
     if (update.configSnapshot !== undefined) set.config_snapshot = JSON.stringify(update.configSnapshot);
     if (update.identity !== undefined) set.identity = update.identity;
@@ -577,6 +601,8 @@ function toRun(row: Row): RunRecord {
     workspacePath: str(row.workspace_path),
     statusMessage: str(row.status_message),
     result: fromJson(row.result_json),
+    outcome: str(row.outcome),
+    completionHook: completionHookOf(row.completion_hook),
     error: fromJson(row.error_json),
     lifecycleStatus: (str(row.lifecycle_status) as LifecycleStatus | null) ?? null,
     blockGeneration: num(row.block_generation),
@@ -587,6 +613,12 @@ function toRun(row: Row): RunRecord {
     finishedAt: str(row.finished_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+/** Persisted completion hook; a value that is no valid hook name (should not happen) reads as `null`. */
+function completionHookOf(value: unknown): HookName | null {
+  const hook = str(value);
+  return hook !== null && isHookName(hook) ? hook : null;
 }
 
 function toLock(row: Row): LockRecord {

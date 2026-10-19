@@ -6,6 +6,13 @@
 /** Visual tone of a badge / message. */
 export type Tone = 'ok' | 'warn' | 'error' | 'info' | 'muted';
 
+/** Workflow trigger as shown in lists: `source: a`, `sources: a, b` (WI-20), `schedule: … (tz)`, `manual`. */
+export function triggerSummary(t: { type: string; source?: string; sources?: readonly string[]; cron?: string; timezone?: string }): string {
+  if (t.type === 'source') return t.sources ? `sources: ${t.sources.join(', ')}` : `source: ${t.source ?? '?'}`;
+  if (t.type === 'schedule') return `schedule: ${t.cron ?? '?'} (${t.timezone ?? 'UTC'})`;
+  return t.type;
+}
+
 /** Duration as `850 ms`, `12s`, `3m 05s`, `2h 04m`, `3d 02h`; `—` for null/invalid. */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return '—';
@@ -111,6 +118,10 @@ export interface RunOutcomeLike {
   finalStatus?: string | null;
   lifecycleStatus?: string | null;
   lifecycleFailed?: boolean;
+  /** Named outcome from the result file (WI-17). */
+  resultOutcome?: string | null;
+  /** Completion hook selected at finalization (WI-17). */
+  completionHook?: string | null;
 }
 
 /** Badge description. */
@@ -156,6 +167,13 @@ export function runBadges(run: RunOutcomeLike): BadgeInfo[] {
       break;
     default:
       badges.push({ label: String(run.outcome), tone: 'muted', title: '' });
+  }
+  if (run.resultOutcome) {
+    badges.push({
+      label: `outcome: ${run.resultOutcome}`,
+      tone: 'info',
+      title: `Named outcome reported by the worker${run.completionHook ? `; completion hook ${run.completionHook}` : ''}`,
+    });
   }
   if (run.lifecycleFailed || run.lifecycleStatus === 'failed') {
     badges.push({ label: 'lifecycle failed', tone: 'error', title: 'A lifecycle action failed; see Failed Actions' });

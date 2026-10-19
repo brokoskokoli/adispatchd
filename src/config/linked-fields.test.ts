@@ -104,6 +104,27 @@ describe('config: linked branches and PRs (WI-21)', () => {
     ).toEqual([]);
   });
 
+  it('allows them in on_result / on_error actions and in multi-source workflows (all GitHub)', async () => {
+    expect(
+      await errors({
+        'workflows/w.yaml': [
+          'id: w',
+          'trigger: { type: source, sources: [repo_a, repo_b] }',
+          'filter: { field: work_pr, operator: not_equals, value: null }',
+          'execute:',
+          '  type: shell',
+          '  command: /bin/true',
+          "  args: ['{item.work_branch}', '{source.id}']",
+          'on_result:',
+          "  approved: [ { type: source.comment, message: 'Approved PR #{item.work_pr}' } ]",
+          'on_error:',
+          "  - { type: shell, command: /bin/true, args: ['{item.work_branch}'] }",
+          '',
+        ].join('\n'),
+      }),
+    ).toEqual([]);
+  });
+
   it('rejects the placeholders in item conditions and in workflows without a source', async () => {
     const found = await errors({
       'workflows/w.yaml': sourceWorkflow(

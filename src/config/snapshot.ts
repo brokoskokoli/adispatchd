@@ -5,7 +5,7 @@
  * referenced by ID only, notification channels are not included.
  */
 import { OrchestratorError } from '../core/index.js';
-import type { LoadedConfig, SourceConfig, WorkflowConfig, WorkspaceConfig } from './model.js';
+import { configuredHooks, triggerSourceIds, type LoadedConfig, type SourceConfig, type WorkflowConfig, type WorkspaceConfig } from './model.js';
 
 /** Current snapshot format version. */
 export const WORKFLOW_SNAPSHOT_VERSION = 1;
@@ -18,7 +18,10 @@ export interface WorkflowSnapshot {
   workflowHash: string;
   /** Workflow as configured (runtime overrides are not part of the snapshot). */
   workflow: WorkflowConfig;
-  /** Source of a source-triggered workflow, otherwise `null`. */
+  /**
+   * Source of a source-triggered workflow, otherwise `null`. Multi-source
+   * workflows (WI-20): the source of the run's item.
+   */
   source: SourceConfig | null;
   workspace: WorkspaceConfig;
   /** IDs of all identities the workflow can use (workflow, source, secrets, actions). */
@@ -32,6 +35,36 @@ export class UnknownWorkflowError extends OrchestratorError {
   }
 }
 
+/** One declared secret (names and identity only – never a value), see {@link workflowSecrets}. */
+export interface WorkflowSecretInfo {
+  /** `execute` or the action, e.g. `on_success.notify` / `on_success.1` (default ID). */
+  where: string;
+  name: string;
+  identity: string;
+  delivery: 'env' | 'file';
+  /** Variable the process sees: `<NAME>` (env) or `<NAME>_FILE` (file). */
+  variable: string;
+}
+
+/** All secrets a workflow declares (`execute.secrets` and `shell` action `secrets`, WI-18), in config order. */
+export function workflowSecrets(workflow: WorkflowConfig): WorkflowSecretInfo[] {
+  const out: WorkflowSecretInfo[] = [];
+  const add = (where: string, secrets: WorkflowConfig['execute']['secrets'] | undefined): void => {
+    for (const [name, ref] of Object.entries(secrets ?? {})) {
+      // Snapshots/configs from before WI-18 have no `delivery`.
+      const delivery = ref.delivery ?? 'env';
+      out.push({ where, name, identity: ref.identity, delivery, variable: delivery === 'file' ? `${name}_FILE` : name });
+    }
+  };
+  add('execute', workflow.execute.secrets);
+  for (const [hook, actions] of configuredHooks(workflow.hooks)) {
+    for (const action of actions) {
+      if (action.type === 'shell') add(action.id.startsWith(`${hook}.`) ? action.id : `${hook}.${action.id}`, action.secrets);
+    }
+  }
+  return out;
+}
+
 /** Identities a workflow may use, sorted. */
 export function workflowIdentityRefs(workflow: WorkflowConfig, source: SourceConfig | null): string[] {
   const refs = new Set<string>();
@@ -39,22 +72,36 @@ export function workflowIdentityRefs(workflow: WorkflowConfig, source: SourceCon
   if (source) refs.add(source.identity);
   if (source?.project) refs.add(source.project.identity);
   for (const ref of Object.values(workflow.execute.secrets)) refs.add(ref.identity);
-  for (const actions of Object.values(workflow.hooks)) {
-    for (const action of actions) if (action.type === 'source.comment' && action.identity) refs.add(action.identity);
+  for (const [, actions] of configuredHooks(workflow.hooks)) {
+    for (const action of actions) {
+      if (action.type === 'source.comment' && action.identity) refs.add(action.identity);
+      if (action.type === 'shell') for (const ref of Object.values(action.secrets ?? {})) refs.add(ref.identity);
+    }
   }
   return [...refs].sort();
 }
 
 /**
  * Build a JSON-serializable snapshot of `workflowId`. The result is a deep
- * copy (mutable, independent of the frozen config).
+ * copy (mutable, independent of the frozen config). `sourceId` selects the
+ * source of the run's item for multi-source workflows (WI-20); it must be one
+ * of the trigger sources (default: the first).
  *
- * @throws UnknownWorkflowError
+ * @throws UnknownWorkflowError, OrchestratorError (`config_unknown_source`)
  */
-export function snapshotWorkflow(config: LoadedConfig, workflowId: string): WorkflowSnapshot {
+export function snapshotWorkflow(config: LoadedConfig, workflowId: string, sourceId?: string): WorkflowSnapshot {
   const workflow = Object.hasOwn(config.workflows, workflowId) ? config.workflows[workflowId] : undefined;
   if (!workflow) throw new UnknownWorkflowError(workflowId);
-  const source = workflow.trigger.type === 'source' ? (config.sources[workflow.trigger.source] ?? null) : null;
+  let source: SourceConfig | null = null;
+  if (workflow.trigger.type === 'source') {
+    const id = sourceId ?? workflow.trigger.source;
+    if (!triggerSourceIds(workflow.trigger).includes(id)) {
+      throw new OrchestratorError('config_unknown_source', `Source "${id}" is not a source of workflow "${workflowId}"`, {
+        details: { workflowId, sourceId: id },
+      });
+    }
+    source = config.sources[id] ?? null;
+  }
   const snapshot: WorkflowSnapshot = {
     schemaVersion: WORKFLOW_SNAPSHOT_VERSION,
     configHash: config.hash,

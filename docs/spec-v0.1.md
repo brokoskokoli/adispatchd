@@ -186,6 +186,8 @@ Die Secrets liegen nicht in YAML oder Run-Kontexten. Der Credential-Provider erz
 
 **Nachtrag 0.2.0 (WI-14):** Zweiter Identity-Typ `github_token` mit `token_env` (Name der Env-Variable mit einem langlebigen Token, z. B. fine-grained PAT), vor allem für user-eigene GitHub Projects, die Installation-Tokens nicht lesen können. Der Token wird beim Start gelesen und redigiert; ein Composite-Provider leitet je Identity an den Provider ihrer Art. Marker-Kommentare solcher Identities werden am Login des Token-Users erkannt (`GET /user`). Eine GitHub-Source kann zusätzlich `project: { owner, number, identity, fields }` deklarieren (Details: [configuration-reference.md](configuration-reference.md) §3.2, §3.3).
 
+**Nachtrag 0.3.0 (WI-18):** Tokens können statt als Env-Variable als **erneuerte Token-Datei** übergeben werden (`delivery: file` → `<NAME>_FILE`), damit lange Runs keine Private Keys brauchen; auch Shell-Actions können `secrets` deklarieren (siehe §20, Nachtrag).
+
 ### 5.4 Source-Workflow
 
 ```yaml
@@ -278,6 +280,8 @@ on_timeout:
 ```
 
 Der im Beispiel enthaltene `on_start`-Kommentar ist optional. `source.update` und `source.comment` müssen über den Adapter typisiert implementiert werden. Bei einem GitHub-PR können Issue-Kommentare und Code-Reviews unterschiedliche API-Aktionen sein; für V1 ist `source.comment` als allgemeiner Issue-/PR-Konversationskommentar definiert, **kein Review-Submission-Ersatz**.
+
+**Nachtrag 0.3.0 (WI-20) – Mehrere Sources und Source-Variablen:** Statt `trigger.source` darf `trigger.sources: [<id>, …]` stehen (nicht leer, eindeutig, alle Sources existieren und haben denselben Adaptertyp; `source` und `sources` schließen sich aus). Der Planer fragt jede Source ab; die Kandidaten aller Sources konkurrieren nach Item-Priorität, bei Gleichstand entscheidet die Reihenfolge der Liste, danach die bisherigen Tie-Breaker. Lock, Retry-Block und Historie bleiben pro globalem Item-Schlüssel `<source>:<nr>`. `max_concurrent` gilt für den Workflow insgesamt, optional begrenzt `max_concurrent_per_source` je Source. Fällt eine Source beim Pollen aus, laufen die anderen weiter (Diagnose je Source in API, Dry-Run und UI). `project.*` in Filter, `item_priority` und `source.update.project` nur, wenn alle Sources das Feld mit gleicher Art deklarieren (Regel wie bei Views); Pushdown und `state`-Regel je Source. Ein Run ist an die Source seines Items gebunden (Snapshot, `{source.*}`, Actions). Neu ist außerdem `sources.<id>.vars` (Map Name → String) mit dem Platzhalter `{source.vars.<name>}` überall, wo `{source.*}` verfügbar ist (auch bei einer Source); die Variable muss in allen Sources des Workflows definiert sein. Manuelle Starts leiten die Source aus der Item-Referenz ab (URL, `owner/repo#nr`, `<source>:<nr>`), eine mehrdeutige Referenz ist ein Fehler mit Hinweis. Details: [configuration-reference.md](configuration-reference.md) §3.2, §3.4.2, §5, §6.
 
 ### 5.5 Zeit- und manuell ausgelöste Workflows
 
@@ -429,6 +433,8 @@ Der Orchestrator interpretiert dies als technischen Fehler (`crashed`), erhöht 
 
 Jeder Run bekommt einen **eindeutigen Workspace** (Standard mit `{workflow.id}/{run.id}`); `{run.id}` ist stabil und eindeutig. Zusätzliche Platzhalter: `{source.id}`, `{source.repository}`, `{item.number}`, `{timestamp}`. Alle interpolierten Pfadbestandteile werden sicher normalisiert/escaped. Das Verzeichnis wird vom Orchestrator erzeugt; Klonen, Git-Worktrees, Node-Installationen und gegebenenfalls Docker werden vom Skript selbst erledigt.
 
+**Nachtrag 0.3.0 (WI-22) – Dateien sichern (`execute.keep`):** Eine Liste relativer Glob-Muster (`*`, `?`, `**`) plus optional `keep_max_size` (Größe, Default `100MB`, Summe pro Run). Nach dem Abschluss-Hook und vor dem Workspace-Cleanup kopiert der Daemon bei **jedem** Endstatus die passenden regulären Dateien mit relativer Struktur nach `data-dir/runs/<run-id>/kept/` (erst nach `kept.tmp/`, dann Rename; ein vorhandenes `kept/` wird bei fortgesetzter Finalisierung nicht überschrieben). Symlinks werden nie verfolgt, jede Datei wird mit `O_NOFOLLOW` geöffnet und über Inode und aufgelösten Pfad gegen den Workspace geprüft; Muster mit `..` oder absolute Muster sind Validierungsfehler. Secrets werden beim Kopieren redigiert – best effort, wie Logs (§20, §24.8): dieselbe byteweise Ersetzung wie für stdout/stderr mit den Secrets des Runs und den dem Daemon bekannten Tokens/Schlüsseln. Das Größenlimit zählt die geschriebenen Bytes; was es überschreitet, wird übersprungen; Treffer, Übersprungenes (mit Grund) und Muster ohne Treffer stehen im Run-Event `run.kept_files`. Die Dateien unterliegen der Run-Retention (§21). API: `GET /api/v1/runs/:id/kept` (Liste) und `GET /api/v1/runs/:id/kept/<pfad>` (Download als Attachment, sichere Pfadauflösung); UI: Run → Files. Gilt für jeden Executor, dessen Workspace auf dem Host liegt (heute `shell`). Details: [configuration-reference.md](configuration-reference.md) §3.4.8, [api.md](api.md).
+
 ### 9.1 Input
 
 Umgebungsvariablen (Mindestmenge):
@@ -485,6 +491,8 @@ Optional schreibt der Worker atomar eine JSON-Ergebnisdatei an `ADISPATCH_RESULT
 
 Vorgeschlagene Limits: Ergebnisgröße begrenzen, JSON-Schema validieren, Strings in GUI escapen, sensible Felder redigieren. Ergebnisdatei ergänzt Exit-Code und Log; sie ersetzt nicht den technischen Prozessstatus.
 
+**Nachtrag 0.3.0 (WI-17):** Optionales Feld `outcome` (benanntes Ergebnis im Format der Konfigurations-IDs, z. B. `"outcome": "needs_maintainer"`). `result` bleibt Pflicht und steuert Statistik und Retry-Zähler. Ein `outcome` im falschen Format wird ignoriert (Warnung am Run, Event `run.outcome_warning`), der Rest der Datei normal ausgewertet. Siehe §10 (Nachtrag) und [worker-protocol.md](worker-protocol.md).
+
 ### 9.3 Logs und Events
 
 stdout und stderr werden als unveränderte Logs persistiert. Optional kann eine Zeile mit reserviertem Präfix ein Event transportieren:
@@ -512,6 +520,13 @@ Aktionstypen V1:
 - `source.comment`: Kommentar über Adapter, mit optionaler Action-Identity.
 - `shell`: beliebiges Shell-Skript mit Run-/Result-Kontext, isolierter Umgebung und konfigurierbarem Timeout.
 
+**Nachtrag 0.3.0 (WI-17) – benannte Ergebnisse und Sammel-Hook:**
+
+- `on_result: { <outcome>: [Actions] }` (Workflow-Ebene, Schlüssel sind Konfigurations-IDs, leere Listen erlaubt, nur mit Ergebnisdatei – heute `execute.type: shell`). Nach `completed` läuft `on_result.<outcome>` **statt** `on_success`/`on_failure`, wenn die Ergebnisdatei dieses `outcome` liefert und der Eintrag existiert; sonst das bisherige Verhalten (ein `outcome` ohne Eintrag ergibt nur eine Warnung). Platzhalter `{result.outcome}`, View-Feld `run.last_outcome`.
+- `on_error: [Actions]` läuft für `crashed`, `start_error`, `timed_out` und `cancelled`, wenn der spezifische Hook (`on_crash`, `on_start_error`, `on_timeout`, `on_cancel`) **nicht definiert** ist; eine leere Liste zählt als definiert. Nie beides. Die normalisierte Konfiguration unterscheidet deshalb „nicht angegeben“ (fehlt) von `[]`.
+- Der gewählte Abschluss-Hook (`on_success`, `on_result.approved`, `on_error`, …) und das `outcome` werden mit dem Übergang nach `finalizing` persistiert (`runs.completion_hook`, `runs.outcome`, Schema v3); das Action-Journal führt die Kette unter diesem Namen. Recovery nach einem Neustart setzt genau diesen Hook fort. Runs aus älteren Versionen ohne gespeicherten Hook wählen ihn wie bisher (ihre Snapshots definieren alle Listen-Hooks).
+- Dry-Run, API (`resultOutcome`, `completionHook`), SSE (`run.status` mit `outcome`/`hook`) und UI zeigen die Werte. Details: [configuration-reference.md](configuration-reference.md) §3.4.10, §6.8.
+
 Hooks bestehen aus sequenziellen Actions. Standardmäßig wird eine fehlgeschlagene Action 3-mal (30 s Pause) versucht; danach bleibt die Kette an dieser Position stehen und wird als fehlerhaft angezeigt. `continue_on_error: true` lässt nach erschöpften Versuchen die nächsten Actions zu. Einzelne Actions können Retry-Vorgaben überschreiben. GUI unterstützt **Retry Action** und Wiederaufnahme der Kette, ohne den Haupt-Worker neu zu starten.
 
 **Action-Journal:** Jede Action hat stabile ID/Ordinalposition und persistierte Zustände `pending`, `running`, `succeeded`, `failed`, `skipped`; jeder Versuch bekommt Zeit, Fehler und ggf. externe Referenz. Neustart darf erfolgreich bestätigte Actions nicht neu ausführen.
@@ -532,7 +547,7 @@ Die Tabellen unten sind konzeptionell; DDL, Indizes, Fremdschlüssel und Migrati
 
 | Tabelle | Relevante Spalten | Zweck |
 |---|---|---|
-| `runs` | `id`, `workflow_id`, `trigger_type`, `source_id`, `source_item_key`, `source_url`, `config_snapshot`, `parameters_json`, `status`, `business_result`, `exit_code`, `pid`, `process_start_identity`, `workspace_path`, `started_at`, `finished_at`, `lifecycle_status` | Versuche und Ausführungshistorie |
+| `runs` | `id`, `workflow_id`, `trigger_type`, `source_id`, `source_item_key`, `source_url`, `config_snapshot`, `parameters_json`, `status`, `business_result`, `exit_code`, `pid`, `process_start_identity`, `workspace_path`, `started_at`, `finished_at`, `lifecycle_status`; ab 0.3.0 `outcome`, `completion_hook` (WI-17) | Versuche und Ausführungshistorie |
 | `run_events` | `id`, `run_id`, `sequence`, `timestamp`, `type`, `payload_json` | Strukturierte Events |
 | `run_actions` | `id`, `run_id`, `hook`, `ordinal`, `action_config_json`, `status`, `external_key` | Action-Journal |
 | `action_attempts` | `id`, `run_action_id`, `attempt`, `started_at`, `finished_at`, `error_json` | Retry-/Fehlerdiagnose |
@@ -656,11 +671,13 @@ Konfigurationsänderungen werden **nur manuell** per GUI/CLI übernommen. Reload
 7. Source-Updates nur mit erlaubten App-Rechten; keine automatische Berechtigungseskalation. Cross-Repo-Abhängigkeiten bei fehlenden Rechten fail-closed.
 8. Externe Lifecycle-Aktionen können nicht global atomar sein: Fehlersichtbarkeit, Precondition-Checks und Idempotenzmechanismen sind Pflicht.
 
+**Nachtrag 0.3.0 (WI-18) – Token-Dateien und Secrets für Shell-Actions:** `execute.secrets.<NAME>` erhält `delivery: env | file` (Default `env` = bisheriges Verhalten). Bei `file` schreibt der Daemon das Token in eine Datei im Run-Verzeichnis **außerhalb** des Workspaces (`data-dir/runs/<run-id>/secrets/<NAME>`, Verzeichnis 0700, Datei 0600) und übergibt nur den Pfad als `<NAME>_FILE`; `<NAME>` wird nicht gesetzt. Solange der Prozess läuft, ersetzt er die Datei atomar (temporäre Datei + `rename` im selben Verzeichnis) spätestens 10 Minuten vor Ablauf; Identities ohne Ablauf (`github_token`) werden einmal geschrieben. Fehler beim Erneuern werden ohne Token geloggt und mit Backoff wiederholt, der Run läuft weiter, bis das alte Token abläuft. Nach Run-Ende (jeder Endstatus) und bei der Recovery nach einem Neustart wird die Datei gelöscht, die Retention räumt Reste. Diese Datei ist die **einzige** Stelle, an der ein Token persistiert wird (Ausnahme zu Punkt 4); jedes ausgegebene Token wird vor dem Schreiben beim Redactor registriert (stdout/stderr, Events, Logs, Action-Logs). `shell`-Actions erhalten dasselbe Feld `secrets` (`env` oder `file`, Datei in einem action-eigenen Verzeichnis, nach dem Versuch gelöscht, bei langen Actions ebenfalls erneuert); ohne `secrets` bekommen sie weiterhin keine Tokens. Validierung: `delivery` ∈ {`env`, `file`}; `<NAME>_FILE` kollidiert weder mit `env` noch mit anderen Secret-Namen; Identities müssen existieren. **Grenze der Isolation:** Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19). Details: [configuration-reference.md](configuration-reference.md) §3.4.8, §3.4.11, [worker-protocol.md](worker-protocol.md).
+
 ## 21. Betrieb, Observability und Aufbewahrung
 
 - Health: `/health`; Readiness: `/ready` (Recovery abgeschlossen, DB verfügbar, Konfiguration gültig). Optional später `/metrics`.
 - Logs: pro Run stdout/stderr als Dateien; Status-/Events in SQLite; interne Fehler separat im Dienstlog; SSE als Live-Transport.
-- Default-Retention-Vorschlag: erfolgreiche Runs 30 Tage, fehlgeschlagene/abgebrochene 90 Tage, offene Blocks und unvollständige Lifecycle-Ketten nicht löschen. `never` pro Kategorie möglich. Maximale Logs 100 MB/Run, Overflow klar markieren. Tägliche Cleanup-Prüfung.
+- Default-Retention-Vorschlag: erfolgreiche Runs 30 Tage, fehlgeschlagene/abgebrochene 90 Tage, offene Blocks und unvollständige Lifecycle-Ketten nicht löschen. `never` pro Kategorie möglich. Maximale Logs 100 MB/Run, Overflow klar markieren. Tägliche Cleanup-Prüfung. Gesicherte Dateien (`runs/<run-id>/kept/`, WI-22) werden mit dem Run gelöscht.
 - Unterscheidung `failed` als **fachliches Ergebnis** gegenüber **technischem** `crashed` und separat `lifecycle failed` in API und UI eindeutig darstellen.
 - Nur eine Instanz pro Data-Dir durch OS-weite exklusive Sperre; Stale-Lock-Erkennung darf nicht versehentlich zwei Instanzen erlauben. Mehrere getrennte Data-Dirs koordinieren sich **nicht** gegenseitig.
 

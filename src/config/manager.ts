@@ -333,8 +333,8 @@ export class ConfigManager {
   }
 
   /** Snapshot of a workflow of the active configuration (see {@link snapshotWorkflow}). */
-  snapshotWorkflow(workflowId: string): WorkflowSnapshot {
-    return snapshotWorkflow(this.active, workflowId);
+  snapshotWorkflow(workflowId: string, sourceId?: string): WorkflowSnapshot {
+    return snapshotWorkflow(this.active, workflowId, sourceId);
   }
 
   /**

@@ -29,7 +29,8 @@ export type TemplateMode = 'text' | 'path';
  * - `always`: every workflow context
  * - `run`: once a run exists (not in filters/conditions before reservation)
  * - `workspace`: after the workspace path is known (not in `working_directory` itself)
- * - `source`: only for source-bound runs (source trigger or manual with item)
+ * - `source`: only for source-bound runs (source trigger or manual with item);
+ *   includes the source variables `{source.vars.<name>}` (WI-20)
  * - `result`: only in completion hooks (`on_success`, `on_failure`, ...)
  * - `parameters`: declared manual-start parameters, `{parameters.<name>}`
  * - `linked`: work branch / PR of the item (WI-21, GitHub). Expensive: the
@@ -70,6 +71,7 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'result.status', group: 'result', description: 'Technical final status' },
   { name: 'result.result', group: 'result', description: 'Business result (success|failure|empty)' },
   { name: 'result.message', group: 'result', description: 'Message from the worker result file' },
+  { name: 'result.outcome', group: 'result', description: 'Named outcome from the worker result file (empty if none)' },
 ];
 
 /**
@@ -144,6 +146,9 @@ export function linkedTemplateItem(resolved: Readonly<Record<string, FieldResolu
 
 /** Prefix of parameter placeholders: `{parameters.<name>}`. */
 export const PARAMETER_PLACEHOLDER_PREFIX = 'parameters.';
+
+/** Prefix of source variable placeholders: `{source.vars.<name>}` (WI-20, group `source`). */
+export const SOURCE_VAR_PLACEHOLDER_PREFIX = 'source.vars.';
 
 const PLACEHOLDER_BY_NAME = new Map(PLACEHOLDERS.map((p) => [p.name, p]));
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_-]+)*$/;
@@ -240,6 +245,12 @@ export interface TemplateScope {
   linked?: boolean;
   /** Declared parameter names usable as `{parameters.<name>}`. */
   parameters?: readonly string[];
+  /**
+   * Check of a source variable `{source.vars.<name>}` (WI-20, needs `source`):
+   * returns a problem (e.g. "not defined in source b") or `undefined`.
+   * Omitted = every syntactically valid name is accepted (render time).
+   */
+  sourceVar?: (name: string) => string | undefined;
 }
 
 /** Scope with every group enabled (parameters: none). */
@@ -247,7 +258,12 @@ export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspa
 
 /** True if `name` is on the whitelist (parameters: any syntactically valid name). */
 export function isKnownPlaceholder(name: string): boolean {
-  return PLACEHOLDER_BY_NAME.has(name) || isParameterPlaceholder(name);
+  return PLACEHOLDER_BY_NAME.has(name) || isParameterPlaceholder(name) || isSourceVarPlaceholder(name);
+}
+
+function isSourceVarPlaceholder(name: string): boolean {
+  const rest = name.startsWith(SOURCE_VAR_PLACEHOLDER_PREFIX) ? name.slice(SOURCE_VAR_PLACEHOLDER_PREFIX.length) : '';
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(rest);
 }
 
 function isParameterPlaceholder(name: string): boolean {
@@ -256,6 +272,13 @@ function isParameterPlaceholder(name: string): boolean {
 }
 
 function checkAvailability(name: string, scope: TemplateScope): TemplateIssue | undefined {
+  if (isSourceVarPlaceholder(name)) {
+    if (!scope.source) {
+      return { code: 'unavailable_placeholder', message: `Placeholder "{${name}}" is not available in this context`, placeholder: name };
+    }
+    const problem = scope.sourceVar?.(name.slice(SOURCE_VAR_PLACEHOLDER_PREFIX.length));
+    return problem ? { code: 'unavailable_placeholder', message: problem, placeholder: name } : undefined;
+  }
   if (isParameterPlaceholder(name)) {
     const param = name.slice(PARAMETER_PLACEHOLDER_PREFIX.length);
     return scope.parameters?.includes(param)
@@ -402,7 +425,7 @@ export interface TemplateInput {
   workflow: { id: string; name?: string };
   workspace?: { baseDir?: string; path?: string };
   run?: { id: string; trigger?: TriggerType; startedAt?: Date };
-  source?: { id: string; type: string; repository?: string };
+  source?: { id: string; type: string; repository?: string; vars?: Readonly<Record<string, string>> };
   item?: {
     id: string;
     key?: string;
@@ -414,7 +437,7 @@ export interface TemplateInput {
     /** Resolved `work_pr` (`null` = none); omit when not resolved. */
     workPr?: number | null;
   };
-  result?: { status?: TerminalStatus; result?: BusinessResult; message?: string };
+  result?: { status?: TerminalStatus; result?: BusinessResult; message?: string; outcome?: string };
   parameters?: Readonly<Record<string, string | number | boolean>>;
   /** Time used for `{timestamp}`. */
   now: Date;
@@ -444,9 +467,13 @@ export function buildTemplateValues(input: TemplateInput): TemplateValues {
     'result.status': input.result?.status,
     'result.result': input.result?.result ?? undefined,
     'result.message': input.result?.message,
+    'result.outcome': input.result?.outcome,
   };
   for (const [name, value] of Object.entries(input.parameters ?? {})) {
     values[`${PARAMETER_PLACEHOLDER_PREFIX}${name}`] = value;
+  }
+  for (const [name, value] of Object.entries(input.source?.vars ?? {})) {
+    values[`${SOURCE_VAR_PLACEHOLDER_PREFIX}${name}`] = value;
   }
   return values;
 }

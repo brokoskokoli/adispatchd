@@ -7,7 +7,8 @@
  *
  * The catalogue is extended per source by the declared GitHub Projects
  * fields `project.<name>` (WI-14): a workflow sees the fields of its trigger
- * source, a view only the fields that ALL its sources declare with the same kind.
+ * source, a view (and a multi-source workflow, WI-20) only the fields that ALL
+ * its sources declare with the same kind.
  */
 import {
   VIEW_RUN_FIELDS,
@@ -60,6 +61,12 @@ export interface FieldContext {
   extra?: readonly FieldDefinition[];
   /** Explanation for an undeclared `project.*` field (e.g. which view sources lack it). */
   projectHint?: (field: string) => string | undefined;
+  /**
+   * True if some source declares `project.<name>` (only not with the same kind
+   * everywhere): then no other field is suggested ("did you mean"), the hint
+   * explains what is missing or differs.
+   */
+  projectDeclared?: (field: string) => boolean;
 }
 
 function definitions(ctx: FieldContext): readonly FieldDefinition[] | undefined {
@@ -83,33 +90,68 @@ export function sourceFieldContext(source: SourceConfig): FieldContext {
 }
 
 /**
- * Field context of a view over `sources` (all of the same type): only
- * `project.*` fields declared by every source with the same kind.
+ * `project.*` field definitions declared by every source with the same kind
+ * (rule of views, also used by multi-source workflows, WI-20).
  */
-export function viewFieldContext(sources: readonly SourceConfig[]): FieldContext {
+function commonProjectFields(sources: readonly SourceConfig[]): FieldDefinition[] {
   const first = sources[0];
-  const common = (first?.project ? projectFieldDefinitions(first.project.fields) : []).filter((def) => {
+  return (first?.project ? projectFieldDefinitions(first.project.fields) : []).filter((def) => {
     const name = def.name.slice(PROJECT_FIELD_PREFIX.length);
     const kind = first?.project?.fields[name];
     return sources.every((s) => s.project !== null && Object.hasOwn(s.project.fields, name) && s.project.fields[name] === kind);
   });
+}
+
+/** Why `project.<name>` is not common to `sources` (`owner`: "the view" / "the workflow"). */
+function commonProjectHint(sources: readonly SourceConfig[], field: string, owner: 'view' | 'workflow'): string {
+  const name = field.slice(PROJECT_FIELD_PREFIX.length);
+  const declaring = sources.filter((s) => s.project && Object.hasOwn(s.project.fields, name));
+  if (declaring.length === 0) return `no source of the ${owner} declares it in "project.fields"`;
+  const missing = sources.filter((s) => !declaring.includes(s)).map((s) => `"${s.id}"`);
+  const who = owner === 'view' ? 'views' : 'workflows with several sources';
+  if (missing.length > 0) return `${who} only offer project fields declared by all their sources (missing in ${missing.join(', ')})`;
+  const kinds = declaring.map((s) => `"${s.id}": ${s.project?.fields[name] ?? '?'}`);
+  return `its kind differs between the sources of the ${owner} (${kinds.join(', ')}); declare it with the same kind everywhere`;
+}
+
+function declaredBySome(sources: readonly SourceConfig[], field: string): boolean {
+  const name = field.slice(PROJECT_FIELD_PREFIX.length);
+  return sources.some((s) => s.project !== null && Object.hasOwn(s.project.fields, name));
+}
+
+/**
+ * Field context of a view over `sources` (all of the same type): only
+ * `project.*` fields declared by every source with the same kind.
+ */
+export function viewFieldContext(sources: readonly SourceConfig[]): FieldContext {
   return {
-    sourceType: first?.type ?? '',
+    sourceType: sources[0]?.type ?? '',
     view: true,
-    extra: common,
-    projectHint: (field) => {
-      const name = field.slice(PROJECT_FIELD_PREFIX.length);
-      const declaring = sources.filter((s) => s.project && Object.hasOwn(s.project.fields, name));
-      if (declaring.length === 0) return `no source of the view declares it in "project.fields"`;
-      const missing = sources.filter((s) => !declaring.includes(s)).map((s) => `"${s.id}"`);
-      if (missing.length > 0) return `views only offer project fields declared by all their sources (missing in ${missing.join(', ')})`;
-      const kinds = declaring.map((s) => `"${s.id}": ${s.project?.fields[name] ?? '?'}`);
-      return `its kind differs between the sources of the view (${kinds.join(', ')}); declare it with the same kind everywhere`;
-    },
+    extra: commonProjectFields(sources),
+    projectHint: (field) => commonProjectHint(sources, field, 'view'),
+    projectDeclared: (field) => declaredBySome(sources, field),
   };
 }
 
-function distance(a: string, b: string): number {
+/**
+ * Field context of a source workflow over `sources` (all of the same type,
+ * WI-20). One source: exactly {@link sourceFieldContext}; several: like
+ * views, only `project.*` fields declared by every source with the same kind.
+ */
+export function workflowFieldContext(sources: readonly SourceConfig[]): FieldContext {
+  const only = sources.length === 1 ? sources[0] : undefined;
+  if (only) return sourceFieldContext(only);
+  return {
+    sourceType: sources[0]?.type ?? '',
+    view: false,
+    extra: commonProjectFields(sources),
+    projectHint: (field) => commonProjectHint(sources, field, 'workflow'),
+    projectDeclared: (field) => declaredBySome(sources, field),
+  };
+}
+
+/** Levenshtein distance of two strings. */
+export function editDistance(a: string, b: string): number {
   const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
   for (let i = 1; i <= a.length; i++) {
     let diag = prev[0] as number;
@@ -128,7 +170,7 @@ export function suggestField(name: string, names: readonly string[]): string | u
   let best: string | undefined;
   let bestDistance = Infinity;
   for (const candidate of names) {
-    const d = distance(name.toLowerCase(), candidate.toLowerCase());
+    const d = editDistance(name.toLowerCase(), candidate.toLowerCase());
     if (d < bestDistance) {
       best = candidate;
       bestDistance = d;
@@ -143,7 +185,8 @@ function unknownFieldMessage(field: string, ctx: FieldContext, defs: readonly Fi
   if (!ctx.view && VIEW_RUN_FIELDS.some((d) => d.name === field)) {
     return `Field "${field}" is only available in views, not in workflows`;
   }
-  const suggestion = suggestField(field, defs.map((d) => d.name));
+  const declared = field.startsWith(PROJECT_FIELD_PREFIX) && (ctx.projectDeclared?.(field) ?? false);
+  const suggestion = declared ? undefined : suggestField(field, defs.map((d) => d.name));
   const hint = suggestion ? ` (did you mean "${suggestion}"?)` : '';
   if (field.startsWith(PROJECT_FIELD_PREFIX) && ctx.projectHint) {
     const why = ctx.projectHint(field);

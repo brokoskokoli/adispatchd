@@ -21,6 +21,10 @@ export interface RunSummary {
   businessResult: string | null;
   finalReason: string | null;
   resultMessage: string | null;
+  /** Named outcome from the result file (WI-17). */
+  resultOutcome?: string | null;
+  /** Completion hook that ran / runs (WI-17). */
+  completionHook?: string | null;
   statusMessage: string | null;
   exitCode: number | null;
   lifecycleStatus: string | null;
@@ -105,10 +109,42 @@ export interface RunDetail extends RunSummary {
   eventsTruncated: boolean;
   logs: { stdout: { size: number | null; truncated: boolean }; stderr: { size: number | null; truncated: boolean } };
   block: Block | null;
+  /** Summary of the `run.kept_files` event (WI-22), `null` if nothing was kept. */
+  kept: { files: number; bytes: number; skippedCount: number; message: string | null; error: string | null } | null;
   supervised: boolean;
   configVersion: number | null;
   configHash: string | null;
   updatedAt: string;
+}
+
+/** One kept file (`GET /api/v1/runs/:id/kept`). */
+export interface KeptFile {
+  path: string;
+  size: number;
+}
+
+export interface KeptSkip {
+  path: string;
+  reason: string;
+  size?: number;
+  message?: string;
+}
+
+export interface KeptListing {
+  runId: string;
+  files: KeptFile[];
+  totalBytes: number;
+  truncated: boolean;
+  report: {
+    message?: string;
+    patterns?: string[];
+    maxBytes?: number;
+    unmatched?: string[];
+    notSearched?: string[];
+    skipped?: KeptSkip[];
+    skippedCount?: number;
+    error?: string;
+  } | null;
 }
 
 export interface LogPage {
@@ -150,6 +186,8 @@ export interface Status {
 export interface Trigger {
   type: string;
   source?: string;
+  /** Multi-source workflows (WI-20): all sources in configured order. */
+  sources?: string[];
   cron?: string;
   timezone?: string;
 }
@@ -161,6 +199,8 @@ export interface Workflow {
   enabled: boolean;
   priority: number;
   maxConcurrent: number;
+  /** WI-20; absent from older instances. */
+  maxConcurrentPerSource?: number | null;
   configured: { enabled: boolean; priority: number; maxConcurrent: number };
   overrides: { enabled?: boolean; priority?: number; maxConcurrent?: number };
   trigger: Trigger;
@@ -168,16 +208,48 @@ export interface Workflow {
   activeRuns: number;
   activeBlocks: number;
   parameters: Record<string, ParameterDef>;
-  execute: { type: string; command: string; args: unknown[]; workingDirectory: string | null; timeout: unknown; secrets: string[] };
+  execute: {
+    type: string;
+    command: string;
+    args: unknown[];
+    workingDirectory: string | null;
+    timeout: unknown;
+    secrets: string[];
+    /** Delivery per secret name (WI-18). */
+    secretDelivery?: Record<string, string>;
+    /** `execute.keep` patterns (WI-22). */
+    keep?: string[];
+    keepMaxSizeBytes?: number;
+  };
+  /** All declared secrets (execute + shell actions), WI-18; missing on older instances. */
+  secrets?: SecretInfo[];
   hasFilter: boolean;
   hasShellFilter: boolean;
   conditions: { workflow: number; item: number };
   maxTechnicalFailures: number;
   cron: { nextSlot: string | null; lastFiring: { scheduledFor: string; decision: string; runId: string | null; reason: string | null } | null } | null;
-  lastPlanning: { at: string; status: string; error: string | null; polled: number; candidates: number; started: number } | null;
+  lastPlanning: {
+    at: string;
+    status: string;
+    error: string | null;
+    polled: number;
+    candidates: number;
+    started: number;
+    /** Per source (WI-20); absent from older instances. */
+    sources?: SourcePoll[];
+  } | null;
   diagnosis?: unknown;
   filter?: unknown;
   hooks?: Record<string, unknown[]>;
+}
+
+/** Poll result of one source (WI-20). */
+export interface SourcePoll {
+  sourceId: string;
+  status: string;
+  error: string | null;
+  polled: number;
+  pushdown?: unknown;
 }
 
 export interface CheckDiagnosis {
@@ -198,6 +270,8 @@ export type FilterTrace =
   | { kind: 'invalid'; value: unknown; reason: string };
 
 export interface Candidate {
+  /** Absent from very old instances only. */
+  sourceId?: string;
   itemKey: string;
   url: string;
   title: string | null;
@@ -223,20 +297,37 @@ export interface CronFiring {
   reason: string | null;
 }
 
+/** Declared secret (WI-18): names and identity only, never a value. */
+export interface SecretInfo {
+  where: string;
+  name: string;
+  identity: string;
+  delivery: string;
+  variable: string;
+}
+
 export interface DryRunResult {
   workflowId: string;
   name: string;
   generatedAt: string;
   enabled: boolean;
   workflowPriority: number;
-  capacity: { global: { active: number; max: number }; workflow: { active: number; max: number } };
+  capacity: {
+    global: { active: number; max: number };
+    workflow: { active: number; max: number };
+    /** `max_concurrent_per_source` (WI-20). */
+    perSource?: { max: number; active: Record<string, number> };
+  };
   gate: { canStartAutomatically: boolean; reason: string | null } | null;
   conditions: CheckDiagnosis[];
-  source: { sourceId: string; polled: number; filter?: unknown; pushdown: unknown; error: string | null } | null;
+  source: { sourceId: string; polled: number; filter?: unknown; pushdown: unknown; error: string | null; sources?: SourcePoll[] } | null;
   candidates: Candidate[];
   cron: { cron: string; timezone: string; nextSlots: string[]; nextSlotForecast: string; forecastReason: string | null; recentFirings: CronFiring[]; blockId: number | null } | null;
+  secrets?: SecretInfo[];
   notes: string[];
   summary: { candidates: number; wouldStart: number; pendingChecks: number; notStartable: number };
+  /** Completion hook routing (WI-17; missing before 0.3.0). */
+  hooks?: { onResult: string[]; technical: Record<string, string> };
 }
 
 export interface ViewDef {

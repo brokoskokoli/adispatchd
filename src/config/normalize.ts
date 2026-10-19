@@ -3,7 +3,7 @@
  * normalized model (`model.ts`). Pure; semantic checks live in `validate.ts`.
  */
 import path from 'node:path';
-import { dataPaths, HOOK_NAMES, type FilterNode, type HookName } from '../core/index.js';
+import { dataPaths, HOOK_NAMES, parseSize, resultHookName, type FilterNode, type HookName } from '../core/index.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssuePath } from './issues.js';
 import type {
@@ -13,6 +13,8 @@ import type {
   LifecycleActionConfig,
   ParameterDefinition,
   RetryPolicy,
+  SecretDelivery,
+  SecretRef,
   SourceConfig,
   ViewConfig,
   WorkflowConfig,
@@ -26,6 +28,7 @@ import type {
   RawView,
   RawWorkflow,
 } from './schemas.js';
+import { DEFAULTS } from './schemas.js';
 
 /**
  * Expands references to named filters in a filter tree used at `at` of the
@@ -106,6 +109,7 @@ export function normalizeSources(raw: RawSourcesFile): Record<string, SourceConf
             fields: { ...source.project.fields },
           }
         : null,
+      vars: { ...(source.vars ?? {}) },
     };
   }
   return out;
@@ -183,8 +187,14 @@ function normalizeAction(
         args: [...raw.args],
         timeoutMs: raw.timeout,
         env: { ...raw.env },
+        secrets: normalizeSecrets(raw.secrets),
       };
   }
+}
+
+/** Normalize `secrets` of `execute` / `shell` actions (WI-18: `delivery` defaults to `env`). */
+function normalizeSecrets(raw: Readonly<Record<string, { identity: string; delivery: SecretDelivery }>>): Record<string, SecretRef> {
+  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, { identity: v.identity, delivery: v.delivery }]));
 }
 
 /** Normalize one workflow file. */
@@ -195,12 +205,18 @@ export function normalizeWorkflow(
   configDir: string,
   expand: FilterExpander,
 ): WorkflowConfig {
-  const hooks = Object.fromEntries(
-    HOOK_NAMES.map((hook) => [
-      hook,
-      raw[hook].map((action, i) => normalizeAction(action, hook, i, global.lifecycle.actionRetry, configDir)),
-    ]),
-  ) as unknown as HooksConfig;
+  const normalizeList = (hook: HookName, actions: readonly RawAction[]): LifecycleActionConfig[] =>
+    actions.map((action, i) => normalizeAction(action, hook, i, global.lifecycle.actionRetry, configDir));
+  const hooks: Record<string, LifecycleActionConfig[]> = {};
+  // Hooks that are not configured stay absent (WI-17: "defined" vs. "not given").
+  for (const hook of HOOK_NAMES) {
+    const actions = raw[hook];
+    if (actions !== undefined) hooks[hook] = normalizeList(hook, actions);
+  }
+  for (const [outcome, actions] of Object.entries(raw.on_result ?? {})) {
+    const hook = resultHookName(outcome);
+    hooks[hook] = normalizeList(hook, actions);
+  }
   const parameters: Record<string, ParameterDefinition> = {};
   for (const [name, def] of Object.entries(raw.parameters)) parameters[name] = normalizeParameter(def);
   const exec = raw.execute;
@@ -211,12 +227,15 @@ export function normalizeWorkflow(
     enabled: raw.enabled,
     priority: raw.priority,
     maxConcurrent: raw.max_concurrent,
+    ...(raw.max_concurrent_per_source !== undefined ? { maxConcurrentPerSource: raw.max_concurrent_per_source } : {}),
     identity: raw.identity ?? null,
     trigger:
       raw.trigger.type === 'schedule'
         ? { type: 'schedule', cron: raw.trigger.cron, timezone: raw.trigger.timezone }
         : raw.trigger.type === 'source'
-          ? { type: 'source', source: raw.trigger.source }
+          ? raw.trigger.sources !== undefined
+            ? { type: 'source', source: raw.trigger.sources[0] ?? '', sources: [...raw.trigger.sources] }
+            : { type: 'source', source: raw.trigger.source ?? '' }
           : { type: 'manual' },
     filter: raw.filter ? expand(raw.filter, ['filter']) : null,
     shellFilter: raw.shell_filter ? { command: resolveCommand(configDir, raw.shell_filter.command), timeoutMs: raw.shell_filter.timeout } : null,
@@ -250,15 +269,17 @@ export function normalizeWorkflow(
       workingDirectory: exec.working_directory,
       createDirectory: exec.create_directory,
       env: { ...exec.env },
-      secrets: Object.fromEntries(Object.entries(exec.secrets).map(([k, v]) => [k, { identity: v.identity }])),
+      secrets: normalizeSecrets(exec.secrets),
       timeout: {
         maxDurationMs: exec.timeout.max_duration ?? null,
         idleTimeoutMs: exec.timeout.idle_timeout ?? null,
       },
       cancelGraceMs: exec.cancel_grace,
+      keep: [...exec.keep],
+      keepMaxSizeBytes: exec.keep_max_size ?? parseSize(DEFAULTS.keepMaxSize),
     },
     retry: { maxTechnicalFailures: raw.retry.max_technical_failures },
-    hooks,
+    hooks: hooks as unknown as HooksConfig,
   };
 }
 
