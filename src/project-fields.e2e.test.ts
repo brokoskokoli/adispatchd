@@ -150,8 +150,12 @@ describe('project fields end-to-end', () => {
       (c) => c.itemKey === 'repo_a:4',
     );
     expect(c4?.decision).toBe('filter_unknown');
-    expect(c4?.projectFields['project.Status']).toMatchObject({ known: false, reason: expect.stringMatching(/GitHub project octo-user\/5 unavailable/) });
-    expect(formatDryRun(dry.json)).toMatch(/project\.Status: unknown – GitHub project octo-user\/5 unavailable/);
+    // Metadata is still shared from the previous listing (< 30 s): the values query reports the lost access.
+    expect(c4?.projectFields['project.Status']).toMatchObject({
+      known: false,
+      reason: expect.stringMatching(/GitHub project octo-user\/5( unavailable|: Resource not accessible)/),
+    });
+    expect(formatDryRun(dry.json)).toMatch(/project\.Status: unknown – .*GitHub project octo-user\/5/);
     const report = await env.app.scheduler.planOnce();
     expect(report.startedRunIds).toEqual([]);
   });

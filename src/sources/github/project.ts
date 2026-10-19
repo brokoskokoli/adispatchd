@@ -15,7 +15,13 @@
  *
  * Fail closed: every lookup problem makes the affected `project.*` fields
  * unknown (with a reason) instead of empty; the listing itself never fails
- * because of the project (only an aborted signal propagates).
+ * because of the project (only an aborted signal propagates). Partial
+ * GraphQL errors anywhere below an item make all of that item's fields
+ * unknown.
+ *
+ * Rate limits never stall the planning step: project reads wait at most
+ * {@link PROJECT_MAX_RETRY_WAIT_MS} for a retry, and after a rate limit the
+ * reader answers "unknown" without calling GitHub until the limit resets.
  */
 import { SourceError, type Clock, type FieldValue, type IdentityRef, type Logger } from '../../core/index.js';
 import { PROJECT_FIELD_DATA_TYPES, PROJECT_FIELD_PREFIX, type ProjectFieldKind } from './fields.js';
@@ -23,6 +29,12 @@ import type { GitHubHttpClient, GraphQLErrorJson, GraphQLResponse } from './http
 
 /** Metadata may be reused this long by single-item reads (`getItem`). */
 export const PROJECT_METADATA_TTL_MS = 5 * 60_000;
+/** Metadata is shared between listings this long (N workflows on one source → one lookup per poll). */
+export const PROJECT_METADATA_LISTING_TTL_MS = 30_000;
+/** Longest retry wait of a project read (a longer rate-limit wait gives up immediately). */
+export const PROJECT_MAX_RETRY_WAIT_MS = 5_000;
+/** Rate-limit pause when GitHub gives no reset time. */
+export const PROJECT_RATE_LIMIT_FALLBACK_MS = 60_000;
 /** Max node IDs per values query. */
 export const PROJECT_NODES_CHUNK = 50;
 /** Project items read per issue/PR; with more memberships an absent match is unknown. */
@@ -136,6 +148,8 @@ export class GitHubProjectReader {
   private readonly lastReasons = new Map<string, string | undefined>();
   /** Last logged failure of the values query (warn only on changes). */
   private lastValuesFailure: string | undefined;
+  /** No GraphQL calls before this time (epoch ms) after a rate limit. */
+  private rateLimitedUntil = 0;
   private readonly label: string;
 
   constructor(
@@ -152,17 +166,24 @@ export class GitHubProjectReader {
 
   /**
    * Add `project.*` values (or unknown reasons) to `items` in place.
-   * `freshMetadata: false` allows a cached metadata lookup (single-item reads).
-   * Never throws except when `signal` is aborted.
+   * Metadata is reused for {@link PROJECT_METADATA_LISTING_TTL_MS} by listings
+   * (`freshMetadata: true`) and {@link PROJECT_METADATA_TTL_MS} by single-item
+   * reads. Never throws except when `signal` is aborted.
    */
   async annotate(items: readonly ProjectLookupItem[], options: { signal?: AbortSignal; freshMetadata: boolean }): Promise<void> {
     if (items.length === 0) return;
     const { signal } = options;
+    const limited = this.rateLimitReason();
+    if (limited) {
+      for (const { item } of items) this.markAll(item, limited);
+      return;
+    }
     let metadata: ProjectMetadata;
     try {
       metadata = await this.metadata(options.freshMetadata, signal);
     } catch (err) {
       if (signal?.aborted) throw err;
+      this.noteRateLimit(err);
       const reason = `GitHub project ${this.label} unavailable: ${describeError(err)}`;
       this.note('', reason);
       for (const { item } of items) this.markAll(item, reason);
@@ -189,6 +210,7 @@ export class GitHubProjectReader {
           continue;
         } catch (err) {
           if (signal?.aborted) throw err;
+          this.noteRateLimit(err);
           failure = `reading GitHub project ${this.label} failed: ${describeError(err)}`;
         }
       }
@@ -200,12 +222,13 @@ export class GitHubProjectReader {
 
   private async metadata(fresh: boolean, signal: AbortSignal | undefined): Promise<ProjectMetadata> {
     const now = this.deps.clock.now().getTime();
-    if (!fresh && this.cached && now - this.cached.at < PROJECT_METADATA_TTL_MS) return this.cached.metadata;
+    const ttl = fresh ? PROJECT_METADATA_LISTING_TTL_MS : PROJECT_METADATA_TTL_MS;
+    if (this.cached && now - this.cached.at < ttl) return this.cached.metadata;
     const res = await this.deps.withToken(this.settings.identity, signal, (token) =>
       this.deps.http.graphql<MetadataJson>(
         METADATA_QUERY,
         { owner: this.settings.owner, number: this.settings.number },
-        { token, ...(signal ? { signal } : {}) },
+        { token, maxRetryWaitMs: PROJECT_MAX_RETRY_WAIT_MS, ...(signal ? { signal } : {}) },
       ),
     );
     const metadata = this.parseMetadata(res);
@@ -223,7 +246,7 @@ export class GitHubProjectReader {
           : owner
             ? 'project not found or not accessible to the identity'
             : 'project owner not found or not accessible';
-      throw new SourceError('not_found', detail, { retryable: false });
+      throw new SourceError(errorKind(res.errors), detail);
     }
     const available = (project.fields?.nodes ?? [])
       .filter((n): n is { name: string; dataType: unknown } => n !== null && typeof n.name === 'string')
@@ -258,6 +281,7 @@ export class GitHubProjectReader {
     const res = await this.deps.withToken(this.settings.identity, signal, (token) =>
       this.deps.http.graphql<{ nodes?: Array<NodeJson | null> | null }>(projectValuesQuery(metadata.fields.length), variables, {
         token,
+        maxRetryWaitMs: PROJECT_MAX_RETRY_WAIT_MS,
         ...(signal ? { signal } : {}),
       }),
     );
@@ -266,14 +290,17 @@ export class GitHubProjectReader {
       throw new SourceError('invalid', res.errors.length > 0 ? errorsText(res.errors) : 'response without nodes', { retryable: false });
     }
     chunk.forEach(({ item }, index) => {
+      // Any error below this node (e.g. at nodes[i].projectItems.nodes[k].f0) makes its data incomplete: fail closed.
+      const nodeError = res.errors.find((e) => e.path?.[0] === 'nodes' && e.path[1] === index);
+      if (nodeError) {
+        const reason = `item not readable via GitHub project ${this.label}: ${nodeError.message ?? nodeError.type ?? 'GraphQL error'}`;
+        for (const f of metadata.fields) setUnknown(item, f.name, reason);
+        return;
+      }
       const node = nodes[index];
       const values = node ? this.nodeValues(node, metadata) : undefined;
       if (!values || 'reason' in values) {
-        const nodeError = res.errors.find((e) => e.path?.[0] === 'nodes' && e.path[1] === index);
-        const reason =
-          values && 'reason' in values
-            ? values.reason
-            : `item not readable via GitHub project ${this.label}${nodeError?.message ? `: ${nodeError.message}` : ' (not visible to the identity)'}`;
+        const reason = values && 'reason' in values ? values.reason : `item not readable via GitHub project ${this.label} (not visible to the identity)`;
         for (const f of metadata.fields) setUnknown(item, f.name, reason);
         return;
       }
@@ -297,6 +324,10 @@ export class GitHubProjectReader {
     const entry = items.nodes.find((n) => n?.project?.id === metadata.projectId);
     const out = new Map<string, FieldValue | { reason: string }>();
     if (!entry) {
+      if (items.nodes.some((n) => n === null || typeof n?.project?.id !== 'string')) {
+        // An unreadable membership could be the configured project: absence is not proven.
+        return { reason: `project memberships of the item not fully readable; GitHub project ${this.label} may be among them` };
+      }
       if (total > items.nodes.length || total > PROJECT_ITEMS_PER_NODE) {
         return { reason: `item belongs to more than ${PROJECT_ITEMS_PER_NODE} projects; GitHub project ${this.label} not among those read` };
       }
@@ -306,6 +337,23 @@ export class GitHubProjectReader {
     }
     metadata.fields.forEach((f, i) => out.set(f.name, fieldValue(entry[`f${i}`], f)));
     return out;
+  }
+
+  /** Reason while a rate limit is in effect, otherwise `undefined`. */
+  private rateLimitReason(): string | undefined {
+    if (this.deps.clock.now().getTime() >= this.rateLimitedUntil) return undefined;
+    return `GitHub GraphQL rate limit until ${new Date(this.rateLimitedUntil).toISOString()}`;
+  }
+
+  /** Remember a rate limit (reset time from the error, fallback {@link PROJECT_RATE_LIMIT_FALLBACK_MS}). */
+  private noteRateLimit(err: unknown): void {
+    if (!(err instanceof SourceError) || err.kind !== 'rate_limited') return;
+    const wait = err.retryAfterMs ?? PROJECT_RATE_LIMIT_FALLBACK_MS;
+    this.rateLimitedUntil = this.deps.clock.now().getTime() + Math.max(wait, 1_000);
+    this.deps.logger.warn('GitHub GraphQL rate limit: project fields unknown until reset', {
+      project: this.label,
+      until: new Date(this.rateLimitedUntil).toISOString(),
+    });
   }
 
   private markAll(item: ProjectTarget, reason: string): void {
@@ -364,6 +412,15 @@ function setValue(item: ProjectTarget, name: string, value: FieldValue): void {
 function setUnknown(item: ProjectTarget, name: string, reason: string): void {
   delete item.fields[name];
   item.unknownFields = { ...(item.unknownFields ?? {}), [name]: reason };
+}
+
+/** Error kind for a failed metadata lookup, from the GraphQL error types. */
+function errorKind(errors: readonly GraphQLErrorJson[]): SourceError['kind'] {
+  const types = new Set(errors.map((e) => e.type));
+  if (types.has('RATE_LIMITED')) return 'rate_limited';
+  if (types.has('FORBIDDEN')) return 'forbidden';
+  if (types.has('NOT_FOUND') || errors.length === 0) return 'not_found';
+  return 'transient';
 }
 
 function errorsText(errors: readonly GraphQLErrorJson[]): string {

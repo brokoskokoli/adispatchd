@@ -81,6 +81,12 @@ export interface GitHubRequestOptions {
    * reported with HTTP 200), so retries and rate-limit waits apply.
    */
   checkBody?: (data: unknown, headers: Headers) => SourceError | undefined;
+  /**
+   * Longest retry wait for THIS request (overrides the client's
+   * `maxRetryWaitMs`); a longer wait throws immediately. Used e.g. by
+   * project reads so a rate limit never stalls the planning step.
+   */
+  maxRetryWaitMs?: number;
 }
 
 /** One entry of a GraphQL `errors` array (only the fields the orchestrator uses). */
@@ -163,7 +169,7 @@ export class GitHubHttpClient {
   async graphql<T = unknown>(
     query: string,
     variables: Record<string, unknown>,
-    options: Pick<GitHubRequestOptions, 'token' | 'signal'> = {},
+    options: Pick<GitHubRequestOptions, 'token' | 'signal' | 'maxRetryWaitMs'> = {},
   ): Promise<GraphQLResponse<T>> {
     const url = new URL(graphqlUrlFor(this.baseUrl));
     const label = `POST ${describePath(url)}`;
@@ -255,7 +261,7 @@ export class GitHubHttpClient {
           err.kind === 'rate_limited'
             ? (err.retryAfterMs ?? this.retryBaseDelayMs)
             : (err.retryAfterMs ?? this.retryBaseDelayMs * 2 ** attempt);
-        if (delay > this.maxRetryWaitMs) throw err;
+        if (delay > (options.maxRetryWaitMs ?? this.maxRetryWaitMs)) throw err;
         this.logger.warn('GitHub request failed, retrying', {
           method,
           path: describePath(url),

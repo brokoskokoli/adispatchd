@@ -415,7 +415,10 @@ export class GitHubSourceAdapter implements SourceAdapter {
     try {
       return await fn(first.token);
     } catch (err) {
-      if (!(err instanceof SourceError) || err.kind !== 'auth' || !this.credentials.invalidate) throw err;
+      if (!(err instanceof SourceError) || err.kind !== 'auth') throw err;
+      // The credentials may have changed (e.g. a rotated token of another user): forget the cached login.
+      this.userLogins.delete(identity);
+      if (!this.credentials.invalidate) throw err;
       this.credentials.invalidate(identity);
       const second = await this.credentials.getToken(identity, signal ? { signal } : {});
       return fn(second.token);

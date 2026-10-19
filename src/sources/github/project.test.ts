@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { FakeClock, MemoryLogger, SecretRedactor, type FilterNode, type SourceItem } from '../../core/index.js';
 import { createItemFieldSource, evaluateFilter } from '../../filters/index.js';
 import { GitHubAppCredentialProvider } from '../../identities/index.js';
-import { PROJECT_METADATA_TTL_MS, graphqlUrlFor, projectValuesQuery, type GitHubSourceProjectConfig } from './index.js';
+import { PROJECT_METADATA_LISTING_TTL_MS, PROJECT_METADATA_TTL_MS, graphqlUrlFor, projectValuesQuery, type GitHubSourceProjectConfig } from './index.js';
 import { FakeGitHub, createFakeGitHubSource, type FakeProject } from './testing/index.js';
 
 const REPO = 'example/project-a';
@@ -133,6 +133,17 @@ describe('listCandidates with project fields', () => {
     expect(graphqlRequests('meta')[0]?.graphql?.variables.owner).toBe('other-org');
   });
 
+  it('N listings of one source within 30 s share one metadata lookup', async () => {
+    createProject();
+    github.createIssue(REPO);
+    const adapter = source();
+    await adapter.listCandidates();
+    await adapter.listCandidates({ filter: { field: 'labels', operator: 'contains', value: 'x' } });
+    await adapter.listCandidates();
+    expect(graphqlRequests('meta')).toHaveLength(1);
+    expect(graphqlRequests('values')).toHaveLength(2); // the label listing is empty
+  });
+
   it('splits more than 50 items into several values queries', async () => {
     const project = createProject();
     for (let n = 1; n <= 120; n++) {
@@ -162,7 +173,8 @@ describe('listCandidates with project fields', () => {
     const denied = createProject('example');
     github.denyProject(denied);
     const [again] = await source().listCandidates();
-    expect(again?.unknownFields?.['project.Status']).toMatch(/FORBIDDEN: Resource not accessible by integration/);
+    expect(again?.unknownFields?.['project.Status']).toMatch(/unavailable: forbidden: FORBIDDEN: Resource not accessible by integration/);
+    expect(it1?.unknownFields?.['project.Status']).toMatch(/unavailable: not_found: NOT_FOUND: /);
     expect(graphqlRequests('values')).toHaveLength(0);
   });
 
@@ -218,8 +230,9 @@ describe('listCandidates with project fields', () => {
     const warnings = logger.records.filter((r) => r.level === 'warn' && r.msg === 'GitHub project field unavailable');
     expect(warnings.map((w) => w.fields.field)).toEqual(['project.Estimate', 'project.Sprint']);
 
-    // Fixed in the project → info once, values come back.
+    // Fixed in the project → info once, values come back (after the shared listing metadata expired).
     project.fields.push({ name: 'Sprint', dataType: 'ITERATION' });
+    clock.advance(PROJECT_METADATA_LISTING_TTL_MS);
     github.setProjectValue(project, REPO, 1, 'Sprint', 'S1');
     const [fixed] = await adapter.listCandidates();
     expect(fixed?.fields['project.Sprint']).toBe('S1');
@@ -233,7 +246,7 @@ describe('listCandidates with project fields', () => {
 
     github.failNext({ path: '/graphql' }, { status: 200, body: { errors: [{ type: 'INTERNAL', message: 'Something went wrong' }] } });
     let [it1] = await adapter.listCandidates();
-    expect(it1?.unknownFields?.['project.Status']).toMatch(/unavailable: not_found: INTERNAL: Something went wrong/);
+    expect(it1?.unknownFields?.['project.Status']).toMatch(/unavailable: transient: INTERNAL: Something went wrong/);
 
     github.failNext({ path: '/graphql' }, { status: 502 });
     [it1] = await adapter.listCandidates();
@@ -242,7 +255,86 @@ describe('listCandidates with project fields', () => {
     github.failNext({ path: '/graphql' }, { status: 200, body: { data: null, errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }] } });
     [it1] = await adapter.listCandidates();
     expect(it1?.unknownFields?.['project.Status']).toMatch(/rate_limited: POST \/graphql failed: GraphQL rate limit exceeded/);
+  });
 
+  it('a rate limit never stalls the listing and pauses project reads until the reset', async () => {
+    const project = createProject();
+    github.createIssue(REPO);
+    github.addProjectItem(project, REPO, 1, { Status: 'Ready' });
+    // Retries enabled: a sleeping client would hang here (fake timers never advance).
+    const adapter = source(DECLARED, { maxRetries: 2 });
+    github.failNext({ path: '/graphql' }, { status: 403, headers: { 'retry-after': '30' }, body: { message: 'You have exceeded a secondary rate limit' } });
+    let [it1] = await adapter.listCandidates();
+    expect(it1?.unknownFields?.['project.Status']).toMatch(/rate_limited/);
+    const calls = graphqlRequests('meta').length + graphqlRequests('values').length;
+    expect(calls).toBe(1);
+
+    clock.advance(10_000);
+    [it1] = await adapter.listCandidates();
+    expect(it1?.unknownFields?.['project.Status']).toBe('GitHub GraphQL rate limit until 2026-10-19T12:00:30.000Z');
+    expect(graphqlRequests('meta').length + graphqlRequests('values').length).toBe(calls);
+    expect(it1?.fields).toHaveProperty('title');
+
+    clock.advance(20_000);
+    [it1] = await adapter.listCandidates();
+    expect(it1?.fields['project.Status']).toBe('Ready');
+
+    // GraphQL RATE_LIMITED without reset headers: fallback 60 s; also from the values query.
+    clock.advance(PROJECT_METADATA_LISTING_TTL_MS - 1);
+    github.failNext({ path: '/graphql' }, { status: 200, body: { data: null, errors: [{ type: 'RATE_LIMITED', message: 'limit' }] } });
+    [it1] = await adapter.listCandidates();
+    expect(it1?.unknownFields?.['project.Status']).toMatch(/reading GitHub project example\/3 failed: rate_limited/);
+    clock.advance(59_000);
+    [it1] = await adapter.listCandidates();
+    expect(it1?.unknownFields?.['project.Status']).toMatch(/^GitHub GraphQL rate limit until /);
+    clock.advance(2_000);
+    [it1] = await adapter.listCandidates();
+    expect(it1?.fields['project.Status']).toBe('Ready');
+  });
+
+  it('partial GraphQL errors below an item make all its project fields unknown (fail closed)', async () => {
+    const project = createProject();
+    for (let n = 1; n <= 5; n++) {
+      github.createIssue(REPO);
+      github.addProjectItem(project, REPO, n, { Status: 'Ready' });
+    }
+    const adapter = source();
+    await adapter.listCandidates(); // caches the metadata for the next listing
+    const projectId = project.id;
+    const okNode = { __typename: 'Issue', projectItems: { totalCount: 1, nodes: [{ project: { id: projectId }, f0: { __typename: 'ProjectV2ItemFieldSingleSelectValue', name: 'Ready' } }] } };
+    const nodes = [okNode, okNode, okNode, okNode, okNode].map((n) => structuredClone(n)) as Array<Record<string, unknown>>;
+    // Item 4: the value is null because resolving it failed.
+    (nodes[3] as { projectItems: { nodes: Array<Record<string, unknown>> } }).projectItems.nodes[0]!.f0 = null;
+    // Item 5: its project item was nulled by an error (absence of the project not proven).
+    (nodes[4] as { projectItems: { totalCount: number; nodes: unknown[] } }).projectItems = { totalCount: 1, nodes: [null] };
+    github.failNext(
+      { path: '/graphql' },
+      {
+        status: 200,
+        body: {
+          data: { nodes },
+          errors: [
+            { type: 'INTERNAL', path: ['nodes', 3, 'projectItems', 'nodes', 0, 'f0'], message: 'value failed' },
+            { type: 'FORBIDDEN', path: ['nodes', 4, 'projectItems', 'nodes', 0], message: 'item hidden' },
+          ],
+        },
+      },
+    );
+    const items = await adapter.listCandidates();
+    expect(graphqlRequests('meta')).toHaveLength(1);
+    expect(items.slice(0, 3).map((i) => i.fields['project.Status'])).toEqual(['Ready', 'Ready', 'Ready']);
+    for (const name of Object.keys(DECLARED.fields)) {
+      expect(items[3]?.unknownFields?.[`project.${name}`]).toBe('item not readable via GitHub project example/3: value failed');
+      expect(items[4]?.unknownFields?.[`project.${name}`]).toBe('item not readable via GitHub project example/3: item hidden');
+      expect(items[3]?.fields).not.toHaveProperty(`project.${name}`);
+    }
+
+    // A nulled membership without an error entry: still not proven absent.
+    const hidden = { __typename: 'Issue', projectItems: { totalCount: 2, nodes: [null, { project: { id: 'PVT_other' } }] } };
+    github.failNext({ path: '/graphql' }, { status: 200, body: { data: { nodes: [hidden, okNode, okNode, okNode, okNode] } } });
+    const again = await adapter.listCandidates();
+    expect(again[0]?.unknownFields?.['project.Status']).toMatch(/project memberships of the item not fully readable/);
+    expect(again[1]?.fields['project.Status']).toBe('Ready');
   });
 
   it('values query failures after a good metadata lookup make the fields unknown', async () => {
@@ -333,7 +425,10 @@ describe('getItem with project fields', () => {
     clock.advance(2000);
     await adapter.getItem('1');
     expect(graphqlRequests('meta')).toHaveLength(2);
-    // A listing always refreshes the metadata.
+    // Listings share metadata only for 30 s; this one is younger → reused, an older one is refetched.
+    await adapter.listCandidates();
+    expect(graphqlRequests('meta')).toHaveLength(2);
+    clock.advance(PROJECT_METADATA_LISTING_TTL_MS);
     await adapter.listCandidates();
     expect(graphqlRequests('meta')).toHaveLength(3);
   });
@@ -366,6 +461,7 @@ describe('filter evaluation on project fields', () => {
     expect(await evaluate(c)).toBe(false); // not in the project: null is not in the list
 
     github.denyProject(project);
+    clock.advance(PROJECT_METADATA_LISTING_TTL_MS);
     const [unknownItem] = (await adapter.listCandidates()) as [SourceItem];
     const evaluation = await evaluateFilter(filter, createItemFieldSource(unknownItem, { definitions: adapter.fieldDefinitions() }));
     expect(evaluation.value).toBe('unknown');
