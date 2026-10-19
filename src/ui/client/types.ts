@@ -211,6 +211,8 @@ export interface Candidate {
   itemConditions: CheckDiagnosis[];
   runId: string | null;
   blockId: number | null;
+  /** GitHub Projects fields of the item: value or unknown reason. */
+  projectFields?: Record<string, { known: true; value: unknown } | { known: false; reason: string }>;
 }
 
 export interface CronFiring {

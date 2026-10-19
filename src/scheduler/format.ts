@@ -35,6 +35,13 @@ function candidateLines(c: CandidateDiagnosis, n: number): string[] {
     `     priority ${c.workflowPriority}/${c.itemPriority}${c.matchedPriorityRule !== null ? ` (rule ${c.matchedPriorityRule})` : ''}  →  ${c.decision}${c.reason ? `: ${c.reason}` : ''}`,
     `     ${c.url}`,
   ];
+  const project = Object.entries(c.projectFields ?? {});
+  if (project.length > 0) {
+    lines.push(
+      '     project fields:',
+      ...project.map(([name, r]) => `       ${name}: ${r.known ? JSON.stringify(r.value) : `unknown – ${r.reason}`}`),
+    );
+  }
   if (c.filter) lines.push('     filter:', ...traceLines(c.filter, '       '));
   if (c.shellFilter) lines.push(`     ${checkLine(c.shellFilter)}`);
   for (const ic of c.itemConditions) lines.push(`     ${checkLine(ic)}`);

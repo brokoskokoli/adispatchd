@@ -21,6 +21,7 @@ import {
   type SourceItem,
 } from '../core/index.js';
 import type { WorkflowConfig } from '../config/index.js';
+import { PROJECT_FIELD_PREFIX } from '../sources/index.js';
 import {
   collectFields,
   createItemFieldSource,
@@ -143,6 +144,7 @@ export async function prepareSourceWorkflow(
   const wanted = new Set<string>(filter ? collectFields(filter) : []);
   for (const rule of workflow.itemPriority?.rules ?? []) for (const f of collectFields(rule.when)) wanted.add(f);
   const wantedFields = [...wanted];
+  const projectFieldNames = definitions.filter((d) => d.name.startsWith(PROJECT_FIELD_PREFIX)).map((d) => d.name);
 
   const candidates: PreparedCandidate[] = [];
   const rejected: CandidateDiagnosis[] = [];
@@ -173,6 +175,7 @@ export async function prepareSourceWorkflow(
       runId: null,
       blockId: null,
     };
+    if (projectFieldNames.length > 0) diag.projectFields = projectFieldValues(item, projectFieldNames);
     if (cheap?.value === false) {
       diag.reason = 'declarative filter does not match';
       rejected.push(diag);
@@ -197,6 +200,17 @@ export async function prepareSourceWorkflow(
     });
   }
   return { diagnosis, candidates, rejected };
+}
+
+/** Diagnosis view of the `project.*` fields of an item (value or unknown reason). */
+function projectFieldValues(item: SourceItem, names: readonly string[]): Record<string, FieldResolution> {
+  const out: Record<string, FieldResolution> = {};
+  for (const name of names) {
+    const reason = item.unknownFields?.[name];
+    if (Object.hasOwn(item.fields, name)) out[name] = { known: true, value: item.fields[name] ?? null };
+    else out[name] = { known: false, reason: reason ?? 'not provided by source' };
+  }
+  return out;
 }
 
 /** Outcome of {@link checkEligibility}. */

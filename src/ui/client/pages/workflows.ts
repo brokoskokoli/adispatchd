@@ -140,11 +140,20 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
           h('span', null, externalLink(c.url, c.itemKey), c.title ? h('div', null, c.title) : null),
           `${c.workflowPriority} / ${c.itemPriority}${c.matchedPriorityRule !== null ? ` (rule ${c.matchedPriorityRule + 1})` : ''}`,
           h('span', null, badge(c.decision, decisionTone(c.decision)), c.reason ? h('div', { class: 'muted' }, c.reason) : null, c.runId ? h('div', null, runLink(c.runId)) : null),
-          c.filter || c.shellFilter || c.itemConditions.length
+          c.filter || c.shellFilter || c.itemConditions.length || c.projectFields
             ? h(
                 'details',
                 null,
                 h('summary', null, 'checks'),
+                c.projectFields
+                  ? h(
+                      'ul',
+                      { class: 'plain' },
+                      Object.entries(c.projectFields).map(([name, r]) =>
+                        h('li', null, `${name}: `, r.known ? JSON.stringify(r.value) : h('span', { class: 'muted' }, `unknown – ${r.reason}`)),
+                      ),
+                    )
+                  : null,
                 c.filter ? h('ul', { class: 'trace' }, traceNode(c.filter)) : null,
                 c.shellFilter || c.itemConditions.length ? h('ul', { class: 'checks' }, c.shellFilter ? checkRow(c.shellFilter) : null, c.itemConditions.map(checkRow)) : null,
               )

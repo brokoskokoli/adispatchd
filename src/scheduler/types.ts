@@ -3,7 +3,7 @@
  * workflow (kept in memory for GUI/API), dry-run results and cron status.
  * All types are plain JSON-serializable data.
  */
-import type { FilterNode } from '../core/index.js';
+import type { FieldResolution, FilterNode } from '../core/index.js';
 import type { TriggerConfig } from '../config/index.js';
 import type { CronFiringRecord } from '../persistence/index.js';
 import type { FilterTrace, TraceValue } from '../filters/index.js';
@@ -88,6 +88,11 @@ export interface CandidateDiagnosis {
   runId: string | null;
   /** Active block (`blocked`). */
   blockId: number | null;
+  /**
+   * Values (or unknown reasons) of the source's GitHub Projects fields
+   * `project.*` for this item; absent when the source declares none.
+   */
+  projectFields?: Record<string, FieldResolution>;
 }
 
 /** Status of a workflow in the last planning step. */
