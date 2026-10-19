@@ -18,6 +18,9 @@ import { blockedPage } from './pages/blocked.js';
 import { failedActionsPage } from './pages/actions.js';
 import { viewPage, viewsListPage } from './pages/views.js';
 import { configPage } from './pages/config.js';
+import { toolPage } from './pages/tools.js';
+import { externalLinks, reloadExternalLinks } from './external-links.js';
+import { externalNavItem, TOOLS_ROUTE } from '../shared/external-links.js';
 
 /** Views listed directly in the menu up to this count (more → only "All Views"). */
 const MAX_DIRECT_VIEWS = 8;
@@ -46,6 +49,15 @@ replaceChildren(
     navItem('config', '#/config', 'Configuration'),
   ),
 );
+
+/** External tools (WI-25, `ui.external_links`): appended to the menu, replaced after every config reload. */
+const renderExternalLinks = async (): Promise<void> => {
+  const links = await externalLinks();
+  const menu = $('ul.menu', nav);
+  menu.querySelectorAll('li.ext-link').forEach((li) => li.remove());
+  for (const link of links) menu.appendChild(externalNavItem(h, link));
+  markActiveNav();
+};
 
 const renderCount = (el: HTMLElement, n: number, tone: 'warn' | 'error'): void => {
   replaceChildren(el, n > 0 ? badge(String(n), tone) : null);
@@ -114,6 +126,8 @@ function pageFor(route: Route, ctx: PageContext): Page {
       return b ? viewPage(ctx, b) : viewsListPage(ctx);
     case 'config':
       return configPage(ctx);
+    case TOOLS_ROUTE:
+      return toolPage(ctx, b ?? '');
     default:
       return { el: h('div', { class: 'page' }, h('h1', null, 'Not found'), h('p', null, 'Unknown page. ', h('a', { href: '#/' }, 'Go to the dashboard'))) };
   }
@@ -146,6 +160,10 @@ const live = new LiveConnection({
   // The DOM EventSource is structurally compatible (handler parameter types differ only nominally).
   create: (url) => new EventSource(url) as unknown as EventSourceLike,
   onMessage: (msg) => {
+    if (msg.type === 'config.reloaded') {
+      void reloadExternalLinks();
+      void renderExternalLinks();
+    }
     if (msg.type === 'block.created' || msg.type === 'block.cleared' || msg.type === 'run.action' || msg.type === 'config.reloaded' || msg.type === 'system.status') navRefresher.trigger();
     try {
       current?.onLive?.(msg);
@@ -165,6 +183,8 @@ const live = new LiveConnection({
 });
 window.addEventListener('online', () => live.reconnectNow());
 
+void reloadExternalLinks();
 render();
 void loadNav();
+void renderExternalLinks();
 live.start();
