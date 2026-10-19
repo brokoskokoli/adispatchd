@@ -3,6 +3,8 @@ import {
   appendSample,
   areaPath,
   buildCpuChart,
+  chartDomain,
+  formatVisibleSpan,
   formatPercent,
   legendEntries,
   linePaths,
@@ -169,5 +171,33 @@ describe('long ranges', () => {
     const restSeries = chart.series.find((s) => s.kind === 'rest')!;
     expect(restSeries.values[0]).toBe(1 + 10 / 4); // Others (4 % of a core) + folded p0 (10 %), each / 4 cores
     expect(chart.series.map((s) => s.kind).slice(-2)).toEqual(['rest', 'system']);
+  });
+});
+
+describe('chart domain (x-axis span)', () => {
+  const at = (ms: number) => ({ at: new Date(ms).toISOString() });
+  const end = Date.parse('2026-10-19T10:30:00Z');
+
+  it('starts at the first sample when there is less data than the range', () => {
+    const samples = [at(end - 4 * 60_000), at(end - 2 * 60_000), at(end)];
+    expect(chartDomain(samples, end, 3_600_000)).toEqual({ from: end - 4 * 60_000, to: end, partial: true, label: 'last 4 min of 1 h' });
+  });
+
+  it('uses the full range when data covers it (older samples are cut off)', () => {
+    const samples = [at(end - 2 * 3_600_000), at(end - 30 * 60_000), at(end)];
+    expect(chartDomain(samples, end, 3_600_000)).toEqual({ from: end - 3_600_000, to: end, partial: false, label: 'last 1 h' });
+  });
+
+  it('keeps a minimum width for a single sample, never wider than the range', () => {
+    expect(chartDomain([at(end)], end, 3_600_000)).toMatchObject({ from: end - 60_000, partial: true, label: 'last 1 min of 1 h' });
+    expect(chartDomain([at(end)], end, 30_000)).toMatchObject({ from: end - 30_000, partial: false });
+    expect(chartDomain([], end, 900_000)).toMatchObject({ from: end - 60_000, to: end });
+  });
+
+  it('formats the visible span', () => {
+    expect(formatVisibleSpan(12_000)).toBe('12 s');
+    expect(formatVisibleSpan(4 * 60_000 + 20_000)).toBe('4 min');
+    expect(formatVisibleSpan(80 * 60_000)).toBe('1 h 20 min');
+    expect(formatVisibleSpan(120 * 60_000)).toBe('2 h');
   });
 });

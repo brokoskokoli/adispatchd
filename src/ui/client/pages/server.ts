@@ -17,6 +17,7 @@ import {
   appendSample,
   areaPath,
   buildCpuChart,
+  chartDomain,
   formatPercent,
   legendEntries,
   linePaths,
@@ -279,13 +280,16 @@ export function serverSection(): ServerSection {
     );
     const latest = data.samples[data.samples.length - 1];
     const head = h('div', { class: 'server-head' }, title, rangeButtons);
+    const spanLabel = (): HTMLElement => h('span', { class: 'muted span-label' }, ` · ${domain.label}`);
     if (!latest) {
       replaceChildren(el, head, h('p', { class: 'empty' }, `Collecting the first measurement (every ${Math.round(data.intervalMs / 1000)} s)…`));
       return;
     }
     const to = Date.parse(latest.at);
-    const from = to - rangeMs;
     const samples = samplesInRange(data.samples, to, rangeMs);
+    // Less data than the range: the axis starts at the first sample so the data fills the width.
+    const domain = chartDomain(samples, to, rangeMs);
+    const from = domain.from;
     const gapMs = Math.max(data.intervalMs, data.bucketMs ?? 0) * 2.5;
     const plotW = width - MARGIN.left - MARGIN.right;
     const axis: Axis = { from, to, width, ticks: timeTicks(from, to, Math.max(2, Math.floor(plotW / 90)), -new Date(to).getTimezoneOffset()) };
@@ -479,7 +483,7 @@ export function serverSection(): ServerSection {
       el,
       head,
       summary,
-      h('h3', null, 'CPU by process group'),
+      h('h3', null, 'CPU by process group', spanLabel()),
       cpuChart.el,
       legend,
       h('h3', null, 'Memory'),

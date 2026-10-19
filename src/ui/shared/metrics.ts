@@ -353,6 +353,39 @@ export function rangeOptions(retentionMs: number): Array<{ label: string; ms: nu
   return fitting;
 }
 
+/** Minimum visible span of the time axis (a single sample still gets some width). */
+export const MIN_DOMAIN_MS = 60_000;
+
+/**
+ * Time-axis domain: `[max(end − range, first sample), end]`, so the available
+ * data fills the width when there is less data than the selected range. At
+ * least {@link MIN_DOMAIN_MS} wide (never wider than the range). `partial`
+ * and `label` describe the visible span, e.g. "last 4 min of 1 h".
+ */
+export function chartDomain(
+  samples: readonly { at: string }[],
+  endMs: number,
+  rangeMs: number,
+): { from: number; to: number; partial: boolean; label: string } {
+  const rangeStart = endMs - rangeMs;
+  const first = samples.length > 0 ? Date.parse(samples[0]!.at) : endMs;
+  let from = Math.max(rangeStart, first);
+  if (endMs - from < MIN_DOMAIN_MS) from = Math.max(rangeStart, endMs - MIN_DOMAIN_MS);
+  const partial = from > rangeStart;
+  const rangeLabel = formatSpan(rangeMs);
+  return { from, to: endMs, partial, label: partial ? `last ${formatVisibleSpan(endMs - from)} of ${rangeLabel}` : `last ${rangeLabel}` };
+}
+
+/** Rounded span for labels: `45 s`, `4 min`, `1 h 20 min`. */
+export function formatVisibleSpan(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))} s`;
+  const min = Math.round(ms / 60_000);
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const rest = min % 60;
+  return rest === 0 ? `${h} h` : `${h} h ${rest} min`;
+}
+
 function formatSpan(ms: number): string {
   if (ms % 3_600_000 === 0) return `${ms / 3_600_000} h`;
   if (ms % 60_000 === 0) return `${ms / 60_000} min`;
