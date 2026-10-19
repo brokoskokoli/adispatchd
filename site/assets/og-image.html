@@ -1,0 +1,124 @@
+<!doctype html>
+<!--
+  Source of og-image.png (1200x630) and github-social-preview.png (1280x640).
+  Rendered with headless Chrome, e.g.:
+    chrome --headless=new --disable-gpu --hide-scrollbars --window-size=1200,630 \
+      --screenshot=og-image.png "file://$PWD/og-image.html"
+    chrome --headless=new --disable-gpu --hide-scrollbars --window-size=1280,640 \
+      --screenshot=github-social-preview.png "file://$PWD/og-image.html"
+  The layout adapts to the viewport; keep content inside the 60px safe margin.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>adispatchd social image</title>
+<style>
+  :root {
+    --bg: #0b1120;
+    --bg-alt: #111a2e;
+    --card: #131d33;
+    --text: #f1f5f9;
+    --muted: #a3b1c6;
+    --border: #24324d;
+    --accent: #60a5fa;
+    --brand: #2563eb;
+    --ok: #4ade80;
+    --warn: #fcd34d;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100vw; height: 100vh; overflow: hidden; }
+  body {
+    background:
+      radial-gradient(900px 500px at 100% 0%, rgba(37, 99, 235, .28), transparent 60%),
+      radial-gradient(700px 420px at 0% 100%, rgba(96, 165, 250, .12), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    -webkit-font-smoothing: antialiased;
+  }
+  .frame {
+    position: absolute; inset: 60px;
+    display: flex; flex-direction: column; justify-content: space-between;
+  }
+  .head { display: flex; align-items: center; gap: 28px; }
+  .logo { width: 104px; height: 104px; flex: none; filter: drop-shadow(0 8px 24px rgba(37, 99, 235, .45)); }
+  h1 { font-size: 88px; line-height: 1; font-weight: 800; letter-spacing: -.035em; }
+  .sub { margin-top: 10px; font-size: 32px; font-weight: 600; color: var(--accent); letter-spacing: -.01em; }
+  .tagline { margin-top: 30px; font-size: 31px; line-height: 1.32; color: var(--muted); max-width: 980px; }
+  .tagline b { color: var(--text); font-weight: 600; }
+
+  .flow { display: flex; align-items: stretch; gap: 0; }
+  .step {
+    flex: 1 1 0;
+    background: var(--card);
+    border: 2px solid var(--border);
+    border-radius: 16px;
+    padding: 16px 20px;
+    min-width: 0;
+  }
+  .step .k { font-size: 16px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--accent); }
+  .step .v { margin-top: 6px; font-size: 25px; font-weight: 700; white-space: nowrap; }
+  .step .d { margin-top: 4px; font-family: var(--mono); font-size: 17px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .step.hl { border-color: var(--brand); background: linear-gradient(180deg, #17264a, #131d33); }
+  .arrow { flex: 0 0 44px; display: flex; align-items: center; justify-content: center; }
+  .arrow svg { width: 30px; height: 30px; }
+
+  .foot { display: flex; align-items: center; justify-content: space-between; font-size: 22px; }
+  .cmd {
+    font-family: var(--mono); font-size: 22px;
+    background: #070c18; border: 2px solid var(--border); border-radius: 10px;
+    padding: 8px 16px; color: #e2e8f0;
+  }
+  .cmd .p { color: var(--ok); }
+  .url { font-family: var(--mono); color: var(--muted); display: flex; align-items: center; gap: 10px; }
+  .url svg { width: 26px; height: 26px; fill: var(--muted); }
+</style>
+</head>
+<body>
+<div class="frame">
+  <div>
+    <div class="head">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="#2563eb"/><circle cx="10" cy="16" r="4" fill="#fff"/><circle cx="22" cy="9" r="3" fill="#fff"/><circle cx="22" cy="23" r="3" fill="#fff"/><path d="M13 14l6-4M13 18l6 4" stroke="#fff" stroke-width="2"/></svg>
+      <div>
+        <h1>adispatchd</h1>
+        <div class="sub">Agent Dispatch Daemon</div>
+      </div>
+    </div>
+    <p class="tagline">Turn <b>GitHub issues</b> into runs of your <b>shell scripts and AI agents</b> – declaratively, observably, on your own machine.</p>
+  </div>
+
+  <div class="flow">
+    <div class="step">
+      <div class="k">Source</div>
+      <div class="v">GitHub issue</div>
+      <div class="d">#42 label:ready</div>
+    </div>
+    <div class="arrow"><svg viewBox="0 0 24 24"><path d="M4 12h14M13 6l6 6-6 6" fill="none" stroke="#60a5fa" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="step">
+      <div class="k">Select</div>
+      <div class="v">Filter · priority</div>
+      <div class="d">prio: P1 &gt; P2</div>
+    </div>
+    <div class="arrow"><svg viewBox="0 0 24 24"><path d="M4 12h14M13 6l6 6-6 6" fill="none" stroke="#60a5fa" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="step hl">
+      <div class="k">Run</div>
+      <div class="v">Worker / agent</div>
+      <div class="d">claude, sh, docker</div>
+    </div>
+    <div class="arrow"><svg viewBox="0 0 24 24"><path d="M4 12h14M13 6l6 6-6 6" fill="none" stroke="#60a5fa" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <div class="step">
+      <div class="k">Report</div>
+      <div class="v">Labels · fields</div>
+      <div class="d">status: done</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <div class="cmd"><span class="p">$</span> npm i -g adispatchd</div>
+    <div class="url"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>github.com/brokoskokoli/adispatchd</div>
+  </div>
+</div>
+</body>
+</html>
