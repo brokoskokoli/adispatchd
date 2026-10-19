@@ -7,7 +7,7 @@
  * deeply frozen. No secret values are ever part of this model — identities
  * and notification headers only carry the *names* of environment variables.
  */
-import type { FilterNode, HookName, NotificationEventType } from '../core/index.js';
+import type { FilterNode, HookName, NotificationEventType, ProjectFieldUpdateValue } from '../core/index.js';
 import type { ProjectFieldKind } from '../sources/index.js';
 
 // ---------------------------------------------------------------------------
@@ -126,6 +126,8 @@ export interface GithubProjectConfig {
   number: number;
   /** Identity reading the project (default: the source identity). */
   identity: string;
+  /** Explicitly configured `project.identity` (writes project fields, WI-16); `null` = writes use the action identity. */
+  writeIdentity: string | null;
   /** Declared field name (case as written) → kind. */
   fields: Readonly<Record<string, ProjectFieldKind>>;
 }
@@ -292,10 +294,13 @@ interface ActionBase {
   retry: RetryPolicy;
 }
 
-/** `source.update` action (V1: labels). */
+/** `source.update` action: labels and (WI-16) project fields; labels are applied first. */
 export interface SourceUpdateActionConfig extends ActionBase {
   type: 'source.update';
+  /** Empty lists when `labels` is not configured. */
   labels: { add: readonly string[]; remove: readonly string[] };
+  /** Project fields to set: declared name (without `project.`) → value, `null` = clear. Absent = none. */
+  project?: Readonly<Record<string, ProjectFieldUpdateValue>>;
 }
 
 /**

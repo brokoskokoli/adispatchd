@@ -143,6 +143,7 @@ export class SourceRegistry implements CredentialProvider {
                     owner: source.project.owner,
                     number: source.project.number,
                     identity: source.project.identity,
+                    ...(source.project.writeIdentity ? { writeIdentity: source.project.writeIdentity } : {}),
                     fields: source.project.fields,
                   },
                 }
