@@ -237,3 +237,63 @@ details.file { border-bottom: 1px solid var(--border); padding: 6px 0; }
 /* events table: keep type and payload columns compact */
 table.events td:nth-child(4) code, table.events td:nth-child(2) { white-space: nowrap; overflow-wrap: normal; }
 table.events td:last-child { white-space: nowrap; }
+
+/* ---------- server resources (WI-23): own SVG charts ---------- */
+:root {
+  --m-wf-0: #2a78d6; --m-wf-1: #eb6834; --m-wf-2: #1baf7a; --m-wf-3: #eda100;
+  --m-wf-4: #e87ba4; --m-wf-5: #008300; --m-wf-6: #6250d6; --m-wf-7: #e34948;
+  --m-daemon: #0d366b; --m-hooks: #5598e7;
+  --m-other-0: #8a8f98; --m-other-1: #a9adb4; --m-other-2: #767b84; --m-other-3: #9a9ea6;
+  --m-rest: #c4c8ce; --m-system: #e3e6ea;
+  --m-mem-used: #2a78d6; --m-mem-free: #cde2fb;
+  --m-disk-0: #2a78d6; --m-disk-1: #eb6834; --m-disk-2: #1baf7a; --m-disk-3: #6250d6;
+  --chart-grid: #e6e9ee;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --m-wf-0: #3987e5; --m-wf-1: #d95926; --m-wf-2: #199e70; --m-wf-3: #c98500;
+    --m-wf-4: #d55181; --m-wf-5: #008300; --m-wf-6: #9085e9; --m-wf-7: #e66767;
+    --m-daemon: #9ec5f4; --m-hooks: #5598e7;
+    --m-other-0: #6c717a; --m-other-1: #565b63; --m-other-2: #7d828b; --m-other-3: #61666e;
+    --m-rest: #444952; --m-system: #2e333c;
+    --m-mem-used: #3987e5; --m-mem-free: #1c3150;
+    --m-disk-0: #3987e5; --m-disk-1: #d95926; --m-disk-2: #199e70; --m-disk-3: #9085e9;
+    --chart-grid: #2a303b;
+  }
+}
+.m-wf-0 { --c: var(--m-wf-0); } .m-wf-1 { --c: var(--m-wf-1); } .m-wf-2 { --c: var(--m-wf-2); } .m-wf-3 { --c: var(--m-wf-3); }
+.m-wf-4 { --c: var(--m-wf-4); } .m-wf-5 { --c: var(--m-wf-5); } .m-wf-6 { --c: var(--m-wf-6); } .m-wf-7 { --c: var(--m-wf-7); }
+.m-daemon { --c: var(--m-daemon); } .m-hooks { --c: var(--m-hooks); }
+.m-other-0 { --c: var(--m-other-0); } .m-other-1 { --c: var(--m-other-1); } .m-other-2 { --c: var(--m-other-2); } .m-other-3 { --c: var(--m-other-3); }
+.m-rest { --c: var(--m-rest); } .m-system { --c: var(--m-system); }
+.m-mem-used { --c: var(--m-mem-used); } .m-mem-free { --c: var(--m-mem-free); }
+.m-disk-0 { --c: var(--m-disk-0); } .m-disk-1 { --c: var(--m-disk-1); } .m-disk-2 { --c: var(--m-disk-2); } .m-disk-3 { --c: var(--m-disk-3); }
+.server-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.server-head h2 { margin: 0; }
+.server h3 { margin: 14px 0 6px; }
+dl.stats { display: flex; flex-wrap: wrap; gap: 8px 28px; margin: 4px 0 6px; }
+dl.stats dt { color: var(--muted); font-size: 12px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dl.stats dd { margin: 0; font-size: 18px; font-weight: 600; }
+dl.stats dd small { font-size: 12px; font-weight: normal; }
+.chart-wrap { position: relative; max-width: 100%; }
+svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
+svg.chart .area { fill: var(--c); stroke: var(--surface); stroke-width: 1; stroke-linejoin: round; }
+svg.chart .area.clickable { cursor: pointer; }
+svg.chart .line { fill: none; stroke: var(--c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+svg.chart .grid { stroke: var(--chart-grid); stroke-width: 1; }
+svg.chart .axis { stroke: var(--border); stroke-width: 1; }
+svg.chart .tick-label { fill: var(--muted); font-size: 11px; }
+svg.chart .crosshair { stroke: var(--text); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+svg.chart .hover-target { fill: transparent; }
+.chart-tooltip {
+  position: absolute; top: 8px; z-index: 5; pointer-events: none; min-width: 180px; max-width: min(360px, 80vw);
+  padding: 8px 10px; background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18); font-size: 12.5px; overflow-wrap: anywhere;
+}
+.chart-tooltip .tip-title { font-weight: 600; margin-bottom: 4px; }
+.chart-tooltip li { margin: 2px 0; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--c); vertical-align: -1px; flex: none; }
+ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 8px 0 0; padding: 0; font-size: 12.5px; }
+ul.legend li { display: inline-flex; align-items: center; gap: 4px; overflow-wrap: anywhere; }
+.chart-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+details.current-values { margin-top: 12px; }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createH, sanitizeAttribute, type DocLike, type ElementLike, type NodeLike } from './dom.js';
+import { createH, createSvg, sanitizeAttribute, sanitizeSvgAttribute, SVG_NS, type DocLike, type ElementLike, type NodeLike, type SvgDocLike } from './dom.js';
 import { eventSummary } from './format.js';
 
 /** Minimal fake DOM that records how nodes were created (no HTML parser exists here at all). */
@@ -97,5 +97,34 @@ describe('sanitizeAttribute', () => {
     expect(sanitizeAttribute('x y', 'x')).toBeNull();
     expect(sanitizeAttribute('formaction', 'javascript:x')).toBeNull();
     expect(sanitizeAttribute('href', 'http://example.com/a?b=1')).toBe('http://example.com/a?b=1');
+  });
+});
+
+describe('createSvg (charts, WI-23)', () => {
+  const nsCreated: Array<[string, string]> = [];
+  const svgDoc: SvgDocLike<FakeElement, FakeText> = {
+    createElementNS: (ns, tag) => {
+      nsCreated.push([ns, tag]);
+      return new FakeElement(tag);
+    },
+    createTextNode: (data) => new FakeText(data),
+  };
+  const s = createSvg(svgDoc);
+
+  it('creates namespaced elements, keeps case-sensitive attributes and renders names as text only', () => {
+    const name = '<img src=x onerror=alert(1)>';
+    const el = s('svg', { viewBox: '0 0 10 10', class: 'chart', role: 'img' }, s('path', { d: 'M0,0L1,1Z', class: 'area m-wf-1' }, s('title', null, name)));
+    expect(nsCreated.every(([ns]) => ns === SVG_NS)).toBe(true);
+    expect(el.attrs).toEqual({ viewBox: '0 0 10 10', class: 'chart', role: 'img' });
+    expect(el.textContent).toBe(name);
+    expect(el.tags()).toEqual(['svg', 'path', 'title']);
+  });
+
+  it('drops event handlers, style, href and url() values; refuses unsafe tags', () => {
+    const el = s('rect', { onclick: 'x', style: 'fill:red', href: 'http://x', 'xlink:href': '#a', fill: 'url(http://evil/)', width: 5 });
+    expect(el.attrs).toEqual({ width: '5' });
+    expect(sanitizeSvgAttribute('stroke-width', '2')).toBe('2');
+    expect(sanitizeSvgAttribute('fill', 'javascript:x')).toBeNull();
+    for (const tag of ['script', 'foreignObject', 'a', 'use', 'image', 'animate']) expect(() => s(tag)).toThrow(/not allowed/);
   });
 });

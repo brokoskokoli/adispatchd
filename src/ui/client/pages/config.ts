@@ -6,7 +6,7 @@ import { ApiError, api, qs } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { buildHash } from '../../shared/route.js';
-import { stateTone } from '../../shared/format.js';
+import { formatDuration, stateTone } from '../../shared/format.js';
 import type { Page, PageContext } from '../page.js';
 import type { ConfigIssue, Notification, Status } from '../types.js';
 import { act, badge, button, confirmDialog, errorBox, jsonBlock, kv, loading, section, table, text, time, toast } from '../ui.js';
@@ -102,8 +102,12 @@ export const configPage = (ctx: PageContext): Page => {
       const [status, files, cfg] = await Promise.all([
         api.get<Status>('/api/v1/status'),
         api.get<{ files: Array<{ file: string; content: string | null; error?: string }> }>('/api/v1/config/files'),
-        api.get<{ overrides: { global: Record<string, unknown>; workflows: Record<string, Record<string, unknown>> } }>('/api/v1/config'),
+        api.get<{
+          config: { global: { monitoring?: { enabled: boolean; intervalMs: number; retentionMs: number; topProcesses: number; minCpuPercent: number } } };
+          overrides: { global: Record<string, unknown>; workflows: Record<string, Record<string, unknown>> };
+        }>('/api/v1/config'),
       ]);
+      const mon = cfg.config.global.monitoring;
       const overrideCount = Object.keys(cfg.overrides.global ?? {}).length + Object.values(cfg.overrides.workflows ?? {}).reduce((n, o) => n + Object.keys(o ?? {}).length, 0);
       rerender(
         systemBox,
@@ -132,6 +136,14 @@ export const configPage = (ctx: PageContext): Page => {
               ['Readiness', h('span', null, Object.entries(status.readiness.checks).map(([k, v]) => badge(k, (k === 'shuttingDown' ? !v : v) ? 'ok' : 'warn')))],
               ['SSE clients', String(status.sse.clients)],
               ['Notifications', Object.entries(status.counts.notifications).map(([k, v]) => `${k} ${v}`).join(', ') || '—'],
+              [
+                'Resource monitor',
+                mon
+                  ? mon.enabled
+                    ? `every ${formatDuration(mon.intervalMs)}, kept ${formatDuration(mon.retentionMs)} in memory, top ${mon.topProcesses} foreign processes ≥ ${mon.minCpuPercent} % CPU`
+                    : 'disabled'
+                  : text(null),
+              ],
               ['Retention', status.retention ? h('span', null, 'last run ', time(status.retention.lastRunAt), ` · deleted ${JSON.stringify(status.retention.deletedRuns)} · errors ${status.retention.errors}`) : text(null)],
             ]),
           ),

@@ -1,9 +1,10 @@
-/** Dashboard (Spec §16): scheduler state, limit/usage, pause/resume, drain, cancel all, active runs. */
+/** Dashboard (Spec §16): scheduler state, limit/usage, pause/resume, drain, cancel all, active runs, server resources (WI-23). */
 import { api, qs, seg } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { formatDuration, formatRelative } from '../../shared/format.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
+import { serverSection } from './server.js';
 import type { RunSummary, Status } from '../types.js';
 import { act, badge, button, confirmDialog, errorBox, isEditing, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, externalLink } from '../ui.js';
 
@@ -50,6 +51,9 @@ export const dashboardPage = (ctx: PageContext): Page => {
   const el = h('div', { class: 'page' }, h('h1', null, 'Dashboard'));
   const body = h('div', { class: 'grid' }, loading());
   el.appendChild(body);
+  // Rendered independently of the 1/s state refreshes above (own data, live via `system.metrics`).
+  const server = serverSection();
+  el.appendChild(server.el);
 
   const load = async (): Promise<void> => {
     if (isEditing(body)) {
@@ -241,9 +245,16 @@ export const dashboardPage = (ctx: PageContext): Page => {
   return {
     el,
     onLive: (msg) => {
+      server.onLive(msg);
       if (isStateChange(msg)) refresher.trigger();
     },
-    onResync: () => void refresher.now(),
-    dispose: () => refresher.dispose(),
+    onResync: () => {
+      server.onResync();
+      void refresher.now();
+    },
+    dispose: () => {
+      server.dispose();
+      refresher.dispose();
+    },
   };
 };

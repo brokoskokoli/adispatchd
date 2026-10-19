@@ -3,12 +3,15 @@
  * rendering goes through `h()`; untrusted strings therefore always end up in
  * text nodes. `innerHTML` is never used in the UI.
  */
-import { createH, type Child } from '../shared/dom.js';
+import { createH, createSvg, type Child } from '../shared/dom.js';
 
 export type { Child } from '../shared/dom.js';
 
 /** Element builder bound to `document`. */
 export const h = createH<HTMLElement, Text>(document);
+
+/** SVG element builder bound to `document` (charts, WI-23). */
+export const svg = createSvg<SVGElement, Text>(document);
 
 /** Remove all children of `el` and append `children`. */
 export function replaceChildren(el: Element, ...children: Child[]): void {
