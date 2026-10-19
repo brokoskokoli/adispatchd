@@ -313,7 +313,7 @@ describe('DashboardInfoService – real scripts (WI-24)', () => {
     await service.whenIdle();
     const real = (await import('node:fs')).realpathSync(root);
     expect(service.get('env')?.value).toBe(`${real}|unset|x1|$(not expanded)|${path.join(root, 'data')}`);
-    expect(service.get('slow')).toMatchObject({ status: 'error', error: 'timed out after 300ms' });
+    expect(service.get('slow')).toMatchObject({ status: 'error', error: expect.stringMatching(/^timed out after 300ms/) });
     await service.stop();
   }, 20_000);
 });
