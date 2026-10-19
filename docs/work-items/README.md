@@ -17,6 +17,15 @@ Zerlegung der Spec v0.1 in umsetzbare Pakete. **Status: alle Work-Items umgesetz
 | [11](WI-11-web-ui.md) | Weboberfläche | §16 | 10 | 7 |
 | [12](WI-12-cli-service.md) | CLI komplett, `init`, systemd-Service, Paketierung, Doku | §4, §14, §19 | 10 | 7 |
 | [13](WI-13-config-fixes.md) | Korrekturen aus der Konfigurationsreferenz | §5, §6, §15, §17 | Referenz | 8 |
+| [14](WI-14-project-fields.md) | Filter auf GitHub-Projects-Felder, weitere Issue-Felder, Identity `github_token` | §6, §5.3 | 13 | 9 (0.2.0) |
+| [15](WI-15-named-filters.md) | Benannte, wiederverwendbare Filter (`filters/*.yaml`) | §6, §19 | 14 | 9 (0.2.0) |
+| [16](WI-16-project-field-updates.md) | Projects-Felder per `source.update` setzen | §10 | 14, 15 | 10 (0.3.0) |
+| [17](WI-17-outcomes-on-error.md) | Benannte Ergebnisse (`on_result`), Sammel-Hook `on_error` | §8, §10 | 15 | 10 (0.3.0) |
+| [18](WI-18-token-files.md) | Erneuerbare Tokens als Datei, Secrets für Shell-Actions | §8, §20 | 15 | 10 (0.3.0) |
+| [19](WI-19-container-executor.md) | Container-Executor (docker/podman) | §8, §13, §20 | 17, 18 | 11 (0.3.0) |
+| [20](WI-20-multi-source-workflows.md) | Ein Workflow für mehrere Sources, Source-Variablen | §5.2, §7 | 16 | 11 (0.3.0) |
+| [21](WI-21-linked-branches.md) | Verknüpfte Branches und PRs als Item-Felder | §6 | 16 | 11 (0.3.0) |
+| [22](WI-22-keep-files.md) | Dateien vor dem Workspace-Cleanup sichern (`execute.keep`) | §8, §15, §21 | 15 | 10 (0.3.0) |
 
 Ablauf je Work-Item: Coder-Agent (eigener Branch/Worktree) → Reviewer-Agent (prüft gegen Acceptance Criteria + Spec) → ggf. Fix-Runde → Merge nach `main`.
 

@@ -3,7 +3,7 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
-## [0.3.0] – unveröffentlicht
+## [0.3.0] – 2026-10-19
 
 ### Hinzugefügt
 
