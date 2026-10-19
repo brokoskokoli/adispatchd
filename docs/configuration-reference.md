@@ -760,12 +760,17 @@ on_success:
   not found (available: "Todo", "In Progress", "Done")`), fehlendes Schreibrecht (`forbidden`). Vorher werden
   gecachte Metadaten einmal frisch geladen (neu angelegte Optionen werden also gefunden).
 - **Wiederholbar:** Rate-Limits (auch HTTP 200 mit `RATE_LIMITED`, mit `Retry-After`), transiente Fehler und
-  GraphQL-Fehler ohne Typ (`lifecycle.action_retry`).
+  GraphQL-Fehler ohne Typ (`lifecycle.action_retry`). Nach jeder gescheiterten Mutation werden die Metadaten beim
+  nächsten Versuch neu geladen; meldet GitHub `NOT_FOUND` für eine ID aus gecachten Metadaten (z. B. neu angelegte
+  Option), lädt der Adapter sofort einmal neu und wiederholt das Update im selben Versuch.
 - **Identity:** `project.identity` der Source, wenn dort ausdrücklich gesetzt, sonst dieselbe wie für die Labels
   (§6.10). Rechte: §3.2.
 - **Journal:** `details.applied.projectFields` (geänderte Felder → neuer Wert, `null` = geleert), sichtbar im Run
   unter *Events* (z. B. `on_start on_start.0 succeeded (+in-progress, Status=In Progress)`) und in
-  `GET /api/v1/runs/:id/events`.
+  `GET /api/v1/runs/:id/events`. Scheitert die Action mittendrin, steht das bis dahin Geänderte (Labels,
+  Projektfelder, `projectItemAdded`) im Fehler des Versuchs unter `details.applied` (auch im Event und in der
+  Zusammenfassung, z. B. `on_success on_success.0 failed (+ready-for-review, -coding)`). `projectItemAdded` wird nur
+  gemeldet, wenn das Item nachweislich fehlte (alle Projekt-Mitgliedschaften gelesen).
 
 `source.comment` – Kommentar am Issue/PR (nur Source-Workflows; Konversationskommentar, kein Review):
 
