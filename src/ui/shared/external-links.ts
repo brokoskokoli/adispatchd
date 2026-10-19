@@ -20,6 +20,9 @@ export interface ExternalLink {
 /** Sandbox of the embedded tool page (Spec §16, WI-25). */
 export const EMBED_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads';
 
+/** Permissions policy of the embedded tool page (copy buttons). */
+export const EMBED_ALLOW = 'clipboard-write';
+
 /** Route segment of embedded tools: `#/tools/<id>`. */
 export const TOOLS_ROUTE = 'tools';
 
@@ -86,9 +89,53 @@ export function embedFrame<E extends ElementLike>(doc: DocLike<E>, link: Externa
   frame.setAttribute('class', 'tool-frame');
   frame.setAttribute('sandbox', EMBED_SANDBOX);
   frame.setAttribute('referrerpolicy', 'no-referrer');
+  frame.setAttribute('allow', EMBED_ALLOW);
   frame.setAttribute('title', link.label);
   frame.setAttribute('src', src);
   return frame;
+}
+
+/** Client-side store of the links (see {@link createExternalLinkStore}). */
+export interface ExternalLinkStore {
+  /** Fetch the links (again). A failed fetch yields `[]` (no toolbar entries). */
+  reload(): Promise<ExternalLink[]>;
+  /** Current links (fetched on first use). */
+  links(): Promise<ExternalLink[]>;
+  /**
+   * False if the tool's origin was not embeddable when this document was
+   * loaded (configured afterwards → the document's CSP still blocks it).
+   * Unknown (no successful fetch yet) counts as allowed: no false warning.
+   */
+  frameAllowedByDocument(link: ExternalLink): boolean;
+}
+
+/**
+ * Store over `fetchConfig` (`GET /api/v1/config`). The embed origins of the
+ * **first successful** fetch approximate the CSP the document was served with.
+ */
+export function createExternalLinkStore(fetchConfig: () => Promise<{ externalLinks?: unknown }>): ExternalLinkStore {
+  let current: Promise<ExternalLink[]> | null = null;
+  let documentFrameOrigins: Set<string> | null = null;
+  const reload = (): Promise<ExternalLink[]> => {
+    current = fetchConfig().then(
+      (res) => {
+        const links = parseExternalLinks(res.externalLinks);
+        documentFrameOrigins ??= new Set(links.filter((l) => l.embed).map((l) => urlOrigin(l.url)).filter((o): o is string => o !== null));
+        return links;
+      },
+      () => [] as ExternalLink[],
+    );
+    return current;
+  };
+  return {
+    reload,
+    links: () => current ?? reload(),
+    frameAllowedByDocument: (link) => {
+      if (documentFrameOrigins === null) return true;
+      const origin = urlOrigin(link.url);
+      return origin !== null && documentFrameOrigins.has(origin);
+    },
+  };
 }
 
 /** Origin of an http(s) URL (`null` if invalid). */

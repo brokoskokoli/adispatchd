@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createH, type DocLike, type ElementLike, type NodeLike } from './dom.js';
-import { EMBED_SANDBOX, embedFrame, externalNavItem, parseExternalLinks, toolHash, toolNavKey, urlOrigin, type ExternalLink } from './external-links.js';
+import { createExternalLinkStore, EMBED_SANDBOX, embedFrame, externalNavItem, parseExternalLinks, toolHash, toolNavKey, urlOrigin, type ExternalLink } from './external-links.js';
 import { parseHash } from './route.js';
 
 /** Minimal fake DOM (no HTML parser): text only via createTextNode. */
@@ -101,6 +101,7 @@ describe('embedFrame', () => {
       class: 'tool-frame',
       sandbox: 'allow-scripts allow-same-origin allow-forms allow-popups allow-downloads',
       referrerpolicy: 'no-referrer',
+      allow: 'clipboard-write',
       title: 'Claude Inspect',
       src: 'http://127.0.0.1:47717/',
     });
@@ -114,6 +115,45 @@ describe('embedFrame', () => {
 
   it('h() itself still refuses <iframe>', () => {
     expect(() => h('iframe', { src: embedded.url })).toThrow(/not allowed/);
+  });
+});
+
+describe('createExternalLinkStore', () => {
+  const later: ExternalLink = { id: 'later', label: 'Later', url: 'https://later.example.com/', embed: true };
+
+  it('remembers the embed origins of the first successful fetch only', async () => {
+    const responses: Array<() => Promise<{ externalLinks?: unknown }>> = [
+      () => Promise.resolve({ externalLinks: [embedded, newTab] }),
+      () => Promise.resolve({ externalLinks: [embedded, later] }),
+    ];
+    const store = createExternalLinkStore(() => responses.shift()!());
+    expect(await store.links()).toEqual([embedded, newTab]);
+    expect(store.frameAllowedByDocument(embedded)).toBe(true);
+    expect(await store.reload()).toEqual([embedded, later]);
+    expect(store.frameAllowedByDocument(later)).toBe(false); // added after page load → banner
+    expect(store.frameAllowedByDocument(embedded)).toBe(true);
+  });
+
+  it('a failed fetch yields no links and does not fix the document origins (no false banner)', async () => {
+    let fail = true;
+    const store = createExternalLinkStore(() => (fail ? Promise.reject(new Error('offline')) : Promise.resolve({ externalLinks: [embedded] })));
+    expect(await store.links()).toEqual([]);
+    expect(store.frameAllowedByDocument(embedded)).toBe(true); // unknown → no warning
+    fail = false;
+    expect(await store.reload()).toEqual([embedded]);
+    expect(store.frameAllowedByDocument(embedded)).toBe(true);
+    expect(store.frameAllowedByDocument(later)).toBe(false);
+  });
+
+  it('links() reuses the pending/last fetch', async () => {
+    let calls = 0;
+    const store = createExternalLinkStore(() => {
+      calls++;
+      return Promise.resolve({ externalLinks: [embedded] });
+    });
+    await Promise.all([store.links(), store.links()]);
+    await store.links();
+    expect(calls).toBe(1);
   });
 });
 
