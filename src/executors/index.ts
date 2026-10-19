@@ -31,3 +31,15 @@ export { buildMinimalEnv, buildOrchEnv, contextSource, type OrchSourceInfo, buil
 export { EventLineParser, parseEventLine, type EventLineHandlers, type EventLineResult } from './event-parser.js';
 export { ensureWorkspaceWithin } from './workspace.js';
 export { MIN_STREAM_SECRET_LENGTH, REDACTION_MARKER, StreamRedactor } from './stream-redactor.js';
+export {
+  TOKEN_DIR_NAME,
+  TOKEN_FILE_ENV_SUFFIX,
+  TOKEN_RENEW_BEFORE_MS,
+  TOKEN_RENEW_MAX_RETRY_MS,
+  TOKEN_RENEW_RETRY_MS,
+  TokenFileSession,
+  removeTokenDirs,
+  tokenFileEnvName,
+  type TokenFileRequest,
+  type TokenFileSessionOptions,
+} from './token-files.js';

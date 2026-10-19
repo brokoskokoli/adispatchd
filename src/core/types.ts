@@ -394,7 +394,7 @@ export interface CredentialProvider {
    * `transient` / `rate_limited` for temporary failures of the token
    * exchange — consumers decide on retries via `SourceError.retryable`.
    */
-  getToken(identity: IdentityRef, options?: { signal?: AbortSignal }): Promise<AccessToken>;
+  getToken(identity: IdentityRef, options?: TokenRequestOptions): Promise<AccessToken>;
   /** Drop a cached token (e.g. after a 401) so the next call fetches a fresh one. */
   invalidate?(identity: IdentityRef): void;
   /**
@@ -403,6 +403,18 @@ export interface CredentialProvider {
    * idempotency markers). `undefined` for unknown identities.
    */
   describe?(identity: IdentityRef): IdentityDescription | undefined;
+}
+
+/** Options of {@link CredentialProvider.getToken}. */
+export interface TokenRequestOptions {
+  signal?: AbortSignal;
+  /**
+   * The returned token must stay valid at least this long (ms). Providers
+   * with cached, expiring tokens fetch a fresh one if the cached token
+   * expires earlier (used to renew token files ahead of expiry, WI-18).
+   * Providers without expiry ignore it.
+   */
+  minValidityMs?: number;
 }
 
 /** Public, non-secret description of an identity (see {@link CredentialProvider.describe}). */
@@ -574,6 +586,13 @@ export interface ExecutionSpec {
   /** Resolved secret values by env var name; never persisted, redacted from logs. */
   secrets: Readonly<Record<string, string>>;
   /**
+   * Further secret values that are not part of the environment but must be
+   * redacted from logs, events, context and result (e.g. tokens delivered as
+   * files, WI-18). The set may grow while the process runs (renewed tokens);
+   * new values are registered before they are handed to the worker.
+   */
+  redactSecrets?: SecretValues;
+  /**
    * Context written to `files.contextFile` (contains no secrets). The main
    * worker gets a {@link WorkerContext}; other executions (e.g. lifecycle
    * `shell` actions, WI-07) may pass their own JSON object (e.g. run + result).
@@ -595,6 +614,14 @@ export interface ExecutionSpec {
    * `max_log_size_per_run`); beyond that a truncation diagnostic naming the stream is emitted.
    */
   maxLogBytes?: number;
+}
+
+/** A growing set of secret values to redact (see {@link ExecutionSpec.redactSecrets}). */
+export interface SecretValues {
+  /** All values registered so far. */
+  values(): readonly string[];
+  /** Subscribe to values registered later; called synchronously on registration. */
+  onAdd(listener: (value: string) => void): Unsubscribe;
 }
 
 /** A chunk of raw worker output. */

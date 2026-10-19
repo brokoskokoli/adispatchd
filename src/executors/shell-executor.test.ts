@@ -593,6 +593,51 @@ echo '@@ADISPATCH_EVENT {"value":1}'`);
     expect(outcome.resultFile.state === 'valid' && outcome.resultFile.result.message).toBe(REDACTION_MARKER);
   });
 
+  it('redacts secret values registered while the process runs (redactSecrets, WI-18)', async () => {
+    const first = 'ghs_FirstFileToken01';
+    const second = 'ghs_SecondFileToken02';
+    const listeners = new Set<(value: string) => void>();
+    const values = [first];
+    const redactSecrets = {
+      values: () => [...values],
+      onAdd: (l: (value: string) => void) => {
+        listeners.add(l);
+        return () => listeners.delete(l);
+      },
+    };
+    const tokenFile = path.join(root, 'token');
+    await writeFile(tokenFile, first);
+    const spec = await makeSpec(
+      [
+        `echo "a=$(cat "$TOKEN_FILE")"`,
+        `echo '@@ADISPATCH_EVENT {"type":"ready"}'`,
+        `while [ ! -f "$ADISPATCH_WORKSPACE/go" ]; do sleep 0.02; done`,
+        `echo "b=$(cat "$TOKEN_FILE")"`,
+        `echo "@@ADISPATCH_EVENT {\\"type\\":\\"status\\",\\"message\\":\\"$(cat "$TOKEN_FILE")\\"}"`,
+        writeResult(`{"schema_version":1,"result":"success","message":"${second}"}`),
+      ].join('\n'),
+      { env: { TOKEN_FILE: tokenFile }, redactSecrets },
+    );
+    const h = await launch(spec);
+    await h.nextEvent('ready');
+    // Like a TokenFileSession: register first, then replace the file.
+    values.push(second);
+    for (const l of listeners) l(second);
+    await writeFile(tokenFile, second);
+    await writeFile(path.join(spec.workingDirectory, 'go'), '');
+    const outcome = await h.wait();
+    const stdout = await readFile(spec.files.stdoutLog, 'utf8');
+    expect(stdout).toContain(`a=${REDACTION_MARKER}`);
+    expect(stdout).toContain(`b=${REDACTION_MARKER}`);
+    for (const secret of [first, second]) {
+      expect(stdout).not.toContain(secret);
+      expect(h.outputs.map((o) => o.data).join('')).not.toContain(secret);
+    }
+    expect(h.events.find((e) => e.type === 'status')?.data.message).toBe(REDACTION_MARKER);
+    expect(outcome.resultFile.state === 'valid' && outcome.resultFile.result.message).toBe(REDACTION_MARKER);
+    expect(listeners.size).toBe(0); // unsubscribed when the execution completed
+  });
+
   it('a slow listener does not block log capture', async () => {
     const spec = await makeSpec(`i=0\nwhile [ $i -lt 200 ]; do printf '%01023d\\n' $i; i=$((i + 1)); done`);
     const proc = await new ShellExecutor().start(spec);
