@@ -10,6 +10,10 @@ Implementierung: `src/core/worker-protocol.ts`, `src/executors/`.
 - Das Kommando wird **ohne Shell** mit Argumentliste gestartet (`command` + `args`); Platzhalter in `args`/`env` werden vorher
   ersetzt (feste Platzhalterliste, unbekannte sind Konfigurationsfehler). Wer Shell-Syntax braucht, schreibt ein Skript.
 - Eigene Prozessgruppe/Session (`setsid`), stdin = `/dev/null`, cwd = Workspace.
+- Dateien, die nach dem Run erhalten bleiben sollen (Mitschnitte, Gate-Logs), schreibt der Worker **in den Workspace**
+  und der Workflow nennt sie unter `execute.keep` (relative Glob-Muster). Der Daemon kopiert sie nach dem Abschluss-Hook
+  und vor dem Cleanup nach `data-dir/runs/<run-id>/kept/` – nur reguläre Dateien, keine Symlinks, bis `keep_max_size`
+  ([Konfigurationsreferenz](configuration-reference.md) §3.4.8).
 
 ## Input
 

@@ -115,7 +115,7 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
 `overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?}}`,
-`execute {type, command, args, workingDirectory, timeout, secrets: [Namen]}`, `hasFilter`, `hasShellFilter`,
+`execute {type, command, args, workingDirectory, timeout, secrets: [Namen], keep: [Muster], keepMaxSizeBytes}`, `hasFilter`, `hasShellFilter`,
 `conditions {workflow, item}` (Anzahl), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
 
 Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven Lock (`409 lock_conflict`).
@@ -128,6 +128,8 @@ Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven 
 | GET | `/api/v1/runs/:id` | RunDetail |
 | GET | `/api/v1/runs/:id/events?after=<sequence>&limit=1000` | `{"events":[RunEvent],"hasMore","nextAfter"}` |
 | GET | `/api/v1/runs/:id/logs?stream=stdout\|stderr&offset=<byte>&limit=<bytes>` bzw. `&tail=<bytes>` | LogPage |
+| GET | `/api/v1/runs/:id/kept` | KeptListing – gesicherte Dateien (`execute.keep`, WI-22) |
+| GET | `/api/v1/runs/:id/kept/<pfad>` | Download einer gesicherten Datei (`<pfad>` relativ zu `kept/`, Segmente URL-kodiert); `400 invalid_path`, `404 not_found` |
 | POST | `/api/v1/runs/:id/cancel` `{"reason"?}` | `202 {"runId","status":"cancelling","run"}`; `409` wenn beendet/nicht abbrechbar |
 | POST | `/api/v1/runs/:id/recovery/retry` `{"assumeGone"?: bool}` | `202` – Recovery eines `recovery_pending`-Runs erneut versuchen (`assumeGone: true` = Operator bestätigt, Prozess ist weg); `409 run_not_recovery_pending` |
 
@@ -147,12 +149,34 @@ und `cancelled`; `lifecycleFailed` zeigt separat „Lifecycle failed“ (Spec §
 `RunDetail` = RunSummary + `lockKey, parameters, command {command, args}, workingDirectory, workspacePath, pid,
 result` (geparste Ergebnisdatei), `error` (technische Diagnose), `input` (`context.json`, Worker-Input; max. 1 MiB) /
 `inputError`, `resultFile` / `resultFileError` (Rohdatei), `actions` (Journal inkl. `attemptsDetail`), `events` (max. 500,
-`eventsTruncated`), `logs {stdout:{size, truncated}, stderr:{…}}`, `block` (aktiver Block des Scopes), `supervised`,
+`eventsTruncated`), `logs {stdout:{size, truncated}, stderr:{…}}`, `block` (aktiver Block des Scopes),
+`kept` (`{files, bytes, skippedCount, message, error}` aus dem Event `run.kept_files`, sonst `null`), `supervised`,
 `blockGeneration, countedTechnicalFailure, configVersion, configHash, finalizingAt, updatedAt`.
 
 `LogPage`: `{"runId","active","stream","offset","length","nextOffset","size","eof","exists","data"}` – Seiten max. 1 MiB
 (Default 64 KiB), geschnitten an UTF-8-Zeichengrenzen; `tail=N` liefert die letzten N Bytes. Folgeseite: `offset=nextOffset`.
 Für Live-Logs `run.output` per SSE nutzen und bei Reconnect ab `size` nachladen.
+
+`KeptListing` (Dateien unter `data-dir/runs/<run-id>/kept/`, sortiert, höchstens 10 000):
+```json
+{ "runId": "run-…", "files": [{ "path": ".agent/gate/unit.log", "size": 1234 }], "totalBytes": 1234, "truncated": false,
+  "report": { "message": "kept 1 file(s), 1234 bytes; 1 skipped (size_limit)", "patterns": [".agent/gate/*.log"],
+              "maxBytes": 104857600, "files": 1, "bytes": 1234, "unmatched": [],
+              "skipped": [{ "path": ".agent/gate/huge.log", "reason": "size_limit", "size": 209715200 }],
+              "skippedCount": 1, "walkLimitReached": false } }
+```
+`report` ist die Payload des Run-Events `run.kept_files` (`null`, wenn nichts gesichert wurde bzw. `keep` fehlt).
+Gründe in `skipped[].reason`: `size_limit`, `symlink`, `not_regular_file`, `outside_workspace`, `changed` (Datei
+während des Kopierens ersetzt), `file_limit`, `error`; `alreadyPresent: true` nach einer fortgesetzten Finalisierung,
+`error` bei einem grundsätzlichen Problem (z. B. Workspace fehlt).
+
+Download: Der Pfad wird segmentweise geprüft (keine leeren, `.`/`..`-Segmente, kein `\`, kein NUL), jede Komponente
+darf kein Symlink sein, der aufgelöste Pfad muss unter `kept/` liegen, und nur reguläre Dateien werden ausgeliefert –
+sonst `400 invalid_path` bzw. `404 not_found`. Antwort immer mit `Content-Disposition: attachment` (ASCII-Name plus
+`filename*=UTF-8''…`), `Content-Length`, `X-Content-Type-Options: nosniff` und `Content-Security-Policy: sandbox`.
+`Content-Type` nach Endung (`.log`/`.txt`/`.diff` → `text/plain`, `.json`, `.jsonl` → `application/x-ndjson`,
+`.md`, `.csv`, `.xml`, `.yaml`, `.gz`, `.zip`, `.png`, `.pdf` …); alles andere, insbesondere HTML/SVG/JS, als
+`application/octet-stream`.
 
 ### Blocks / Failed Actions
 
@@ -220,7 +244,7 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 |---|---|---|
 | `stream.open` | `id` = aktuelle Basis (ohne Resume) | `{lastEventId, replayed}` |
 | `stream.reset` | `id` = neueste ID | `{reason:"too_many_missed_events"\|"unknown_last_event_id", lastEventId}` – Client lädt per REST neu (auch wenn die `Last-Event-ID` größer als jede bekannte ID ist, z. B. nach Austausch des data-dir) |
-| `run.event` | ja | RunEvent `{id, runId, sequence, timestamp, origin: worker\|orchestrator, type, payload}`; `type` u. a. `run.status` (`{from,to,target?,blockId?}`), Worker-`status`/`progress`/…, `diagnostic.*`, `lifecycle.action`, `lifecycle.chain`, `run.spawn`, `run.cancel_requested`, `recovery.*`, `workspace.cleanup` |
+| `run.event` | ja | RunEvent `{id, runId, sequence, timestamp, origin: worker\|orchestrator, type, payload}`; `type` u. a. `run.status` (`{from,to,target?,blockId?}`), Worker-`status`/`progress`/…, `diagnostic.*`, `lifecycle.action`, `lifecycle.chain`, `run.spawn`, `run.cancel_requested`, `recovery.*`, `run.kept_files`, `workspace.cleanup` |
 | `run.output` | nein | `{runId, stream: stdout\|stderr, data, at}` (Live-Log, redigiert; per REST nachladen) |
 | `run.action` | nein | Action-Journal-Eintrag nach Änderung |
 | `block.created` / `block.cleared` | nein | Block |
