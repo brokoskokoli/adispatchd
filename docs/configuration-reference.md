@@ -50,7 +50,7 @@ config-dir/
 `views/needs-maintainer.yaml`, den benannten Filter `filters/needs-maintainer.yaml` (von `coder.yaml` und der View
 verwendet) und Beispielskripte unter `scripts/`. `init` überschreibt nie bestehende Dateien.
 
-Das `data-dir` (SQLite, Logs, `runs/<id>/context.json|result.json`, Default-Workspaces) ist **keine**
+Das `data-dir` (SQLite, Logs, `runs/<id>/context.json|result.json`, bei Container-Runs `runs/<id>/out/result.json`, Default-Workspaces) ist **keine**
 Konfiguration und wird hier nur erwähnt, wo es Defaults bestimmt.
 
 ### 1.2 Dateinamensregeln
@@ -257,6 +257,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `retention.cleanup_interval` | Dauer | `24h` | ≥ 1 s | Abstand der Retention-Durchläufe (erster Lauf 60 s nach Bereitschaft). |
 | `notifications.on` | Liste Enum | alle drei | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. |
 | `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
+| `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
 
 Retention löscht nie aktive Runs, Runs mit unfertiger oder gescheiterter Lifecycle-Kette und Runs eines **aktiven**
 Retry-Blocks. Gelöscht werden DB-Zeilen, `runs/<id>/`, `logs/<id>/` und der Workspace (nur unter `base_dir`).
@@ -312,6 +313,8 @@ notifications:
       url_env: OPS_WEBHOOK_URL
       headers_env: { Authorization: OPS_WEBHOOK_AUTH }
       on: [retry_block_created, recovery_failed]
+container:
+  engine: docker                                     # docker | podman (für execute.type: container)
 ```
 
 ### 3.2 sources.yaml
@@ -606,7 +609,7 @@ on_result:                       # benannte Ergebnisse (Ergebnisdatei "outcome")
 | `on_start`, `on_success`, `on_failure` | Liste Actions | nein | `[]` | §3.4.10 | Lifecycle-Hooks |
 | `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` | Liste Actions | nein | nicht definiert | §3.4.10 | technische Hooks; definiert (auch als `[]`) haben sie Vorrang vor `on_error` |
 | `on_error` | Liste Actions | nein | nicht definiert | §3.4.10 | Sammel-Hook für `crashed`, `start_error`, `timed_out`, `cancelled` ohne eigenen Hook |
-| `on_result` | Map Ergebnis-ID → Liste Actions | nein | `{}` | Schlüssel sind Konfigurations-IDs; nur mit Ergebnisdatei (`execute.type: shell`); leere Listen erlaubt | benannte Ergebnisse (`outcome` der Ergebnisdatei), §3.4.10 |
+| `on_result` | Map Ergebnis-ID → Liste Actions | nein | `{}` | Schlüssel sind Konfigurations-IDs; nur mit Ergebnisdatei (`execute.type: shell` oder `container`); leere Listen erlaubt | benannte Ergebnisse (`outcome` der Ergebnisdatei), §3.4.10 |
 
 #### 3.4.2 `trigger`
 
@@ -716,9 +719,9 @@ Regeln der Konfigurationsprüfung:
 
 | Schlüssel | Typ | Pflicht | Default | Regeln | Bedeutung |
 |---|---|---|---|---|---|
-| `type` | `shell` | ja | | einziger Executor in V1 | |
-| `command` | String | ja | | §2.4 | Worker-Programm |
-| `args` | Liste String | nein | `[]` | Templates, Modus `text` | Argumente |
+| `type` | `shell` \| `container` | ja | | | lokaler Prozess bzw. Wegwerf-Container (seit 0.3.0, s. u. „Container“) |
+| `command` | String | bei `shell` ja | | §2.4 | Worker-Programm (bei `container`: Liste, s. u.) |
+| `args` | Liste String | nein | `[]` | Templates, Modus `text`; nur `shell` | Argumente |
 | `working_directory` | String | nein | `{workspace.base_dir}/{workflow.id}/{run.id}` | Modus `path`; beginnt mit `/` oder `{workspace.base_dir}` | Arbeitsverzeichnis = Workspace (`ADISPATCH_WORKSPACE`) |
 | `create_directory` | Boolean | nein | `true` | | Verzeichnis anlegen; bei `false` muss es existieren (sonst `start_error`) |
 | `env` | Map Name → String/Zahl/Boolean | nein | `{}` | Templates; kein `ADISPATCH_`-Präfix | zusätzliche Umgebungsvariablen |
@@ -783,6 +786,69 @@ Muster, die wegen der Grenze nicht durchsucht wurden), sichtbar in der UI (Run �
 gelöscht. Grenzen: höchstens 10 000 Dateien und 100 000 untersuchte Verzeichniseinträge pro Run; Muster ohne
 Wildcards werden zuerst und ohne Verzeichnisauflistung geprüft und zählen nicht zur Grenze. Wildcard-Muster, die
 nach Erreichen der Grenze nichts gefunden haben, gelten als „nicht durchsucht“ (`notSearched`), nicht als ohne Treffer.
+
+**Container (`type: container`, seit 0.3.0):** Der Worker läuft in einem Wegwerf-Container. Der Daemon ruft die
+Engine-CLI im Vordergrund auf (`<engine> run --rm …`) und überwacht diesen Prozess wie einen Shell-Worker: stdout/stderr,
+Events (`@@ADISPATCH_EVENT`), Log-Limit, Timeouts, Ergebnisdatei und Klassifikation (§6.8) sind identisch, der
+Exit-Code des Containers ist der Exit-Code. `working_directory`, `create_directory`, `env`, `secrets`, `timeout`,
+`cancel_grace`, `keep` und `keep_max_size` gelten wie oben – der Workspace liegt weiterhin **auf dem Host** und wird in
+den Container gemountet (Cleanup und `keep` arbeiten auf dem Host-Pfad). Zusätzliche Schlüssel:
+
+| Schlüssel | Typ | Pflicht | Default | Regeln | Bedeutung |
+|---|---|---|---|---|---|
+| `image` | String | ja | | ohne Leerzeichen, nicht mit `-` beginnend | Image-Referenz, z. B. `localhost/worker:current` |
+| `engine` | Enum | nein | `container.engine` aus `config.yaml` (Default `docker`) | `docker`, `podman` | Engine-CLI (Binary über den `PATH` des Dienstes) |
+| `command` | Liste String | nein | `[]` (= Default-Kommando des Images) | Templates, Modus `text` | Kommando im Container |
+| `workdir` | String | nein | Ziel des Workspace-Mounts | absolut, normalisiert, nicht `/`, nicht unter `/adispatch` | Arbeitsverzeichnis im Container (`--workdir`) |
+| `mounts` | Liste `{ source, target, mode }` | nein | `[]` | s. u. | Bind-Mounts |
+| `mounts[].source` | String | ja | | absolut, relativ zum **config-dir** oder `{workspace.path}` bzw. `{workspace.path}/<pfad>` (einziger erlaubter Platzhalter, kein `..`); statische Quellen müssen existieren; keine `,`/`"`/Zeilenumbrüche | Quelle auf dem Host |
+| `mounts[].target` | String | ja | | absolut, normalisiert, nicht `/`, nicht `/adispatch` oder darunter, eindeutig | Ziel im Container |
+| `mounts[].mode` | Enum | ja | | `ro`, `rw` | Nur-Lesen oder Lesen/Schreiben |
+| `resources.memory` | String | nein | Engine-Default | z. B. `512m`, `8g`, `1.5g` | `--memory` |
+| `resources.cpus` | Zahl | nein | Engine-Default | > 0, z. B. `3`, `1.5` | `--cpus` |
+| `resources.pids` | Integer | nein | Engine-Default | ≥ 1 | `--pids-limit` |
+| `user` | String | nein | `<uid>:<gid>` des Dienstbenutzers | `name`, `uid`, `name:group`, `uid:gid` | `--user`; bei `podman` zusätzlich `--userns keep-id` |
+| `network` | String | nein | `default` | `default` (Engine-Default, kein Flag), `none` oder ein Netzwerkname | `--network` |
+| `pull` | Enum | nein | `missing` | `never`, `missing`, `always` | `--pull` |
+
+Aufruf (immer): `--rm --init --name adispatch-<run-id>`, Labels `adispatch.run=<run-id>`,
+`adispatch.workflow=<id>`, `adispatch.instance=<hash>` (erste 16 Hex-Zeichen von SHA-256 über den absoluten
+data-dir-Pfad – mehrere Instanzen räumen sich nie gegenseitig auf), `--cap-drop ALL --security-opt no-new-privileges`.
+Mounts als `--mount type=bind,source=…,target=…[,readonly]`:
+
+| Ziel im Container | Quelle auf dem Host | Modus |
+|---|---|---|
+| Ziel des Mounts mit `source: '{workspace.path}'`; fehlt er: `/work` (automatisch) | Workspace | `rw` (automatisch) bzw. wie konfiguriert |
+| `/adispatch/context.json` (`ADISPATCH_CONTEXT_FILE`) | `data-dir/runs/<run-id>/context.json` | `ro` |
+| `/adispatch/out/` (`ADISPATCH_RESULT_FILE` = `/adispatch/out/result.json`) | `data-dir/runs/<run-id>/out/` (leer angelegt) | `rw` |
+| `/adispatch/secrets/` (nur bei `delivery: file`; `<NAME>_FILE` = `/adispatch/secrets/<NAME>`) | `data-dir/runs/<run-id>/secrets/` | `ro` |
+
+So kann der Container weder die Daemon-Logs im Run-Verzeichnis noch andere Dateien außerhalb seines
+Ausgabeverzeichnisses (und seiner eigenen `rw`-Mounts) verändern. `ADISPATCH_WORKSPACE` und `workspace.path` der
+Kontextdatei sind der Container-Pfad des Workspaces. **Platzhalter:** In `command` und `env` steht
+`{workspace.path}` für diesen Container-Pfad, in `mounts[].source` für den Host-Pfad; alle anderen Platzhalter
+(auch `{source.vars.*}`, `{item.work_branch}`, `{item.work_pr}`) wie beim Shell-Executor.
+
+**Umgebung:** Nur explizit. `env`-Einträge und `secrets` (`delivery: env`) gehen als `-e NAME` an die Engine, der
+Wert steht nur in der Prozessumgebung des Engine-Aufrufs – **nie auf der Kommandozeile** (nicht in `ps`, nicht im
+gespeicherten Run-Kommando). Ausnahme: `env`-Namen, die der Engine-Prozess selbst braucht (`PATH`, `HOME`, `LANG`,
+`TZ`, `USER`, `LOGNAME`, `TMPDIR`, `DOCKER_*`-/`CONTAINER*`-/`XDG_*`-Variablen u. a.), stehen als
+`-e NAME=wert` auf der Kommandozeile; als `secrets`-Name sind sie verboten. `ADISPATCH_*` stehen ebenfalls als
+`-e NAME=wert` auf der Kommandozeile (keine Secrets). Der Engine-Prozess selbst bekommt die Minimalumgebung (§6.11)
+plus `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `DOCKER_API_VERSION`,
+`CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINERS_CONF`, `CONTAINERS_STORAGE_CONF`, `XDG_RUNTIME_DIR`,
+`XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `DBUS_SESSION_BUS_ADDRESS` aus der Dienstumgebung, falls gesetzt.
+
+**Cancel und Timeout:** `<engine> stop -t <cancel_grace in s> adispatch-<run-id>`; endet der Engine-Prozess danach
+nicht innerhalb von 10 s, wird er wie ein Shell-Worker behandelt (SIGTERM → `cancel_grace` → SIGKILL an seine
+Prozessgruppe), anschließend `<engine> rm -f`. **Recovery nach Neustart:** Container dieser Instanz werden am Label
+`adispatch.instance` gefunden (`<engine> ps -a --filter label=…`) und gestoppt – sowohl die von Runs, die als aktiv
+galten (diese enden wie Shell-Runs nach einem Neustart, i. d. R. `crashed`; Event `recovery.container_stopped`), als
+auch solche ohne aktiven Run. Laufende Container werden **nie übernommen** (wie beim Shell-Executor). Ist die Engine
+dabei nicht erreichbar, bleiben betroffene Runs `recovery_pending` (Retry über API/UI, wenn die Engine wieder läuft).
+**Fehler:** Engine-Binary fehlt → `start_error` (beim Daemon-Start zusätzlich eine Warnung im Log, nicht bei
+`config validate`); Engine-Fehler wie „Image nicht gefunden“ (Exit 125) → `crashed`.
+
 
 #### 3.4.9 `retry`
 
@@ -2181,6 +2247,60 @@ und der Dry-Run nennt den Grund. Wird das Item trotzdem gestartet (z. B. manuell
 endet der Run als `start_error`, bevor `on_start` das Label ändert. Der Kommentar in `on_success` liest `work_pr`
 erneut – er nennt also auch einen PR, den der Worker erst während des Runs geöffnet hat.
 
+### 7.11 Worker im Container
+
+Der Coder aus §7.2, aber in einem Wegwerf-Container (§3.4.8 „Container“): Workspace unter `/work/repo`,
+Agent-Definitionen aus dem config-dir read-only, Ressourcenlimits, kein Netzwerk außer dem Standardnetz, das Token
+als erneuerte Datei unter `/adispatch/secrets/GH_TOKEN`. `workflow dry-run` zeigt den vollständigen Engine-Aufruf.
+
+```yaml
+# example: container
+# extends: github
+# file: config.yaml
+container:
+  engine: podman
+```
+
+```yaml
+# example: container
+# file: agents/coder.yaml
+# Beliebige Dateien für den Container (hier: Agent-Definitionen), read-only gemountet.
+name: coder
+```
+
+```yaml
+# example: container
+# file: workflows/boxed-coder.yaml
+id: boxed-coder
+identity: coder
+trigger: { type: source, source: project_a }
+filter: { field: labels, operator: contains, value: ready-for-coding }
+execute:
+  type: container
+  image: localhost/worker:current
+  command: [worker, --issue, '{item.number}', --workspace, '{workspace.path}']   # {workspace.path} = /work/repo
+  mounts:
+    - { source: '{workspace.path}', target: /work/repo, mode: rw }
+    - { source: agents/, target: /home/worker/agents, mode: ro }               # relativ zum config-dir
+  env: { REPOSITORY: '{source.repository}' }
+  secrets:
+    GH_TOKEN: { identity: coder, delivery: file }   # GH_TOKEN_FILE=/adispatch/secrets/GH_TOKEN
+  resources: { memory: 8g, cpus: 3, pids: 4096 }
+  user: '1000:1000'
+  pull: missing
+  timeout: { max_duration: 4h, idle_timeout: 30m }
+  cancel_grace: 30s
+  keep: [.agent/transcript.jsonl]
+on_start:  [ { type: source.update, labels: { add: [coding], remove: [ready-for-coding] } } ]
+on_success: [ { type: source.update, labels: { add: [ready-for-review], remove: [coding] } } ]
+on_failure: [ { type: source.update, labels: { add: [needs-maintainer], remove: [coding] } } ]
+on_error:   [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+```
+
+Mit `podman` und `user` wird zusätzlich `--userns keep-id` gesetzt. Rechte von Docker/Podman: siehe
+[operations.md](operations.md) „Container-Executor“.
+
+
 ---
 
 ## 8. Häufige Validierungsfehler
@@ -2915,6 +3035,33 @@ execute:
 ```
 
 Lösung: Die Datei im Worker in den Workspace schreiben (bzw. dorthin kopieren) und relativ angeben.
+
+**Container-Mounts** (§3.4.8): Ziele müssen absolute, normalisierte Container-Pfade außerhalb von `/adispatch`
+sein; als Platzhalter in Quellen ist nur `{workspace.path}` erlaubt; statische Quellen müssen existieren.
+
+```yaml
+# example: err-container
+# extends: minimal
+# invalid
+# expect: workflows/hello.yaml: execute.mounts[0].source: Mount source does not exist:
+# expect: workflows/hello.yaml: execute.mounts[1].source: Only "{workspace.path}" (optionally followed by "/<path>") is allowed as template in a mount source
+# expect: workflows/hello.yaml: execute.mounts[2].target: "/adispatch" is reserved for the daemon's own mounts (context, result, token files)
+# expect: workflows/hello.yaml: execute.mounts[3].target: Duplicate mount target "/data" (also used by mounts[0])
+# file: workflows/hello.yaml
+id: hello
+trigger: { type: manual }
+execute:
+  type: container
+  image: busybox
+  mounts:
+    - { source: shared/data, target: /data, mode: ro }
+    - { source: '{run.id}', target: /run-data, mode: rw }
+    - { source: '{workspace.path}', target: /adispatch/work, mode: rw }
+    - { source: '{workspace.path}/cache', target: /data, mode: rw }
+```
+
+Lösung: Verzeichnis anlegen (relativ zum config-dir) bzw. absolut angeben, den Workspace unter einem eigenen Ziel
+(z. B. `/work`) mounten und Ziele eindeutig wählen.
 
 Weitere häufige Meldungen (ohne eigenes Beispiel):
 

@@ -15,6 +15,26 @@ Implementierung: `src/core/worker-protocol.ts`, `src/executors/`.
   und vor dem Cleanup nach `data-dir/runs/<run-id>/kept/` – nur reguläre Dateien, keine Symlinks, bis `keep_max_size`
   ([Konfigurationsreferenz](configuration-reference.md) §3.4.8).
 
+### Container-Worker (`execute.type: container`, seit 0.3.0)
+
+Der Worker läuft in einem Wegwerf-Container (`<engine> run --rm --init …` im Vordergrund, Details:
+[Konfigurationsreferenz](configuration-reference.md) §3.4.8 „Container“). Für den Worker gilt dasselbe Protokoll,
+nur mit Container-Pfaden:
+
+| Variable im Container | Wert |
+|---|---|
+| `ADISPATCH_CONTEXT_FILE` | `/adispatch/context.json` (read-only gemountet) |
+| `ADISPATCH_RESULT_FILE` | `/adispatch/out/result.json` – `/adispatch/out/` ist das einzige beschreibbare Daemon-Verzeichnis (leer zu Beginn) |
+| `ADISPATCH_WORKSPACE` | Ziel des Workspace-Mounts (Default `/work`); ebenso `workspace.path` in der Kontextdatei |
+| `<NAME>_FILE` (`delivery: file`) | `/adispatch/secrets/<NAME>` (Verzeichnis read-only gemountet, Datei wird weiterhin atomar ersetzt) |
+| `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`, `ADISPATCH_SOURCE_*` | wie beim Shell-Worker |
+| `execute.env`, `execute.secrets` (`delivery: env`) | wie beim Shell-Worker; Werte gelangen über die Umgebung des Engine-Prozesses (`-e NAME`) in den Container, nie über die Kommandozeile |
+
+Der Container bekommt **keine** Minimalumgebung vom Host (`PATH`, `HOME` … kommen aus dem Image) und läuft mit
+`--cap-drop ALL --security-opt no-new-privileges`, standardmäßig als `<uid>:<gid>` des Dienstbenutzers. stdout/stderr,
+Events, Exit-Code und Ergebnisdatei werden genau wie beim Shell-Worker ausgewertet (Exit-Code des Containers).
+Cancel/Timeout: `<engine> stop -t <cancel_grace>` (SIGTERM an den Init-Prozess des Containers, nach der Frist SIGKILL).
+
 ## Input
 
 ### Umgebung (Minimalumgebung, Spec §9.1/§20.3)
@@ -171,8 +191,10 @@ mv "$tmp" "$ADISPATCH_RESULT_FILE"
 - Cancel/Timeout: `SIGTERM` an die **ganze Prozessgruppe**, nach `execute.cancel_grace` (Default 30 s) `SIGKILL`; der Run
   gilt erst als beendet, wenn die Gruppe nachweislich weg ist.
 - Bleiben nach normalem Exit noch Prozesse der Gruppe übrig (`cmd &` ohne `wait`), werden sie beendet.
-- Prozesse **außerhalb** der Gruppe (eigene Session via `setsid`, `nohup … &` mit neuer Session, Docker-Container) erfasst
-  der Orchestrator nicht – das Skript ist für deren Cleanup verantwortlich (`trap '…' TERM EXIT`, `docker run --rm --init`).
+- Prozesse **außerhalb** der Gruppe (eigene Session via `setsid`, `nohup … &` mit neuer Session, selbst gestartete
+  Docker-Container) erfasst der Orchestrator nicht – das Skript ist für deren Cleanup verantwortlich (`trap '…' TERM EXIT`,
+  `docker run --rm --init`). Für Worker in Containern gibt es `execute.type: container`: Dann stoppt der Daemon den
+  Container selbst (Cancel, Timeout, Recovery nach Neustart über das Label `adispatch.instance`).
 - Nach einem Absturz des Orchestrators beendet die Recovery verwaiste Worker nur bei sicher verifizierter Identität
   (PID + Startzeit/Boot-ID); sonst `recovery_pending` (sichtbar, kein Doppelstart). Unter systemd beendet systemd die
   Worker beim Absturz ohnehin mit der cgroup (siehe [operations.md](operations.md#systemd)).
@@ -185,6 +207,11 @@ Sandbox. Ein Worker kann ihm übergebene Secrets (z. B. `GH_TOKEN` oder den Inha
 Event-/Result-/Log-Inhalte werden in API/UI als untrusted Text behandelt.
 
 Secrets sind nicht zwischen Runs/Actions desselben Dienstes isoliert: Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
+
+Mit `execute.type: container` sieht ein Worker nur seine eigenen Mounts: den eigenen Workspace, die eigene Kontextdatei,
+das eigene Ausgabeverzeichnis und die eigenen Token-Dateien (plus konfigurierte `mounts`) – nicht die Token-Dateien
+oder Umgebungen anderer Runs. Die Grenze ist die Engine (Container-Isolation, Rechte des Engine-Daemons), nicht der
+Daemon; wer `docker` nutzen darf, ist faktisch root ([operations.md](operations.md) „Container-Executor“).
 
 ## Shell-Lifecycle-Actions und Prüfskripte
 

@@ -28,6 +28,10 @@ Live-Updates.
 - **Tokens für lange Runs:** Secrets per Umgebungsvariable oder als **Token-Datei** (`delivery: file` →
   `<NAME>_FILE`), die der Daemon vor Ablauf atomar erneuert und nach dem Run löscht – Worker brauchen keine
   App-Schlüssel. Shell-Actions in Hooks können ebenfalls Tokens anfordern.
+- **Worker im Container:** `execute.type: container` startet den Worker in einem Wegwerf-Container (Docker oder
+  Podman) mit festen Mounts für Workspace, Kontext, Ergebnis und Token-Dateien, Ressourcenlimits, `--cap-drop ALL` –
+  Secrets nie auf der Kommandozeile; Cancel/Timeout stoppen den Container, nach einem Neustart räumt die Recovery
+  verwaiste Container dieser Instanz weg.
 
 Dokumentation: [Änderungen](CHANGELOG.md) · [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-protocol.md) · [HTTP-API/SSE](docs/api.md) ·
 [Cron-Semantik](docs/cron-semantics.md) · [Spezifikation](docs/spec-v0.1.md) · Manuelle Tests:
@@ -105,7 +109,7 @@ config-dir/                      data-dir/
   config.yaml   global (§5.1)      adispatchd.sqlite   Runs, Locks, Events, Blocks, Journale
   sources.yaml  GitHub-Repos       adispatchd.lock     Instanzsperre (nie anfassen)
   identities.yaml Apps/Tokens      logs/<run>/stdout.log, stderr.log
-  workflows/*.yaml                 runs/<run>/context.json, result.json
+  workflows/*.yaml                 runs/<run>/context.json, result.json (Container: out/result.json)
   views/*.yaml                     workspaces/<workflow>/<run>/
   filters/*.yaml benannte Filter   backups/   DB-Backups vor Migrationen
   scripts/*.sh
@@ -157,6 +161,9 @@ on_crash:   [ { type: source.update, labels: { add: [ready-for-coding], remove: 
 - Änderungen gelten erst nach `config reload` (oder UI „Reload“); laufende Runs nutzen ihren Snapshot. Runtime-Overrides aus
   der UI gehen bei Neustart verloren.
 - Secrets stehen nie in YAML: Private Keys/Webhook-URLs nur über Umgebungsvariablen (`private_key_env`, `url_env`, `headers_env`).
+- Worker im Container: `execute: { type: container, image: …, command: [...], mounts: [...], resources: {...} }`,
+  Engine per `container.engine` in `config.yaml` (`docker`/`podman`); `workflow dry-run` zeigt den Engine-Aufruf
+  ([Konfigurationsreferenz §3.4.8](docs/configuration-reference.md#348-execute), Rechte: [Betrieb](docs/operations.md#container-executor-executetype-container-seit-030)).
 
 ## Worker-Protokoll (Kurzfassung)
 
@@ -174,7 +181,8 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **Dateien behalten:** Was im Workspace unter `execute.keep` passt (z. B. `.agent/transcript.jsonl`, `.agent/gate/*.log`),
   sichert der Daemon nach dem Run – auch wenn der Workspace danach gelöscht wird.
 - **Cancel/Timeout:** SIGTERM an die Prozessgruppe, nach `cancel_grace` (30 s) SIGKILL. Eigene Sessions/Container räumt das
-  Skript selbst auf.
+  Skript selbst auf – außer bei `execute.type: container`: dann `<engine> stop -t <cancel_grace>`; im Container zeigen
+  `ADISPATCH_CONTEXT_FILE`/`ADISPATCH_RESULT_FILE` auf `/adispatch/context.json` bzw. `/adispatch/out/result.json`.
 
 ## Sicherheit
 
@@ -192,7 +200,8 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **Keine Isolation zwischen Runs desselben Dienstes:** `0700`/`0600` schützt nur vor anderen Systembenutzern. Alle
   Worker laufen als derselbe Dienstbenutzer und können Token-Dateien (vorhersagbare Pfade) bzw. unter Linux die Umgebung
   (`/proc/<pid>/environ`) paralleler Runs lesen. Hoch- und niedrig-privilegierte Workflows in getrennten Instanzen unter
-  getrennten Benutzern oder in Containern (WI-19) betreiben.
+  getrennten Benutzern oder in Containern (WI-19) betreiben. Mit `execute.type: container` sieht ein Worker nur die eigenen
+  Mounts (Workspace, Kontext, Ausgabeverzeichnis, eigene Token-Dateien); Zugriff auf den Docker-Daemon entspricht root.
 - GitHub-Apps mit minimalen Rechten; fehlende Rechte bei Cross-Repo-Abhängigkeiten führen zu `unknown` (kein Start), nicht zu „0“.
 - Event-, Result- und Log-Inhalte werden in der UI nur als Text dargestellt.
 

@@ -16,7 +16,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { FILTER_OPERATORS, HOOK_NAMES, NOTIFICATION_EVENT_TYPES, OPERATORS_BY_TYPE, PLACEHOLDERS } from '../core/index.js';
+import { CONTAINER_LABELS, CONTAINER_PATHS, FILTER_OPERATORS, HOOK_NAMES, NOTIFICATION_EVENT_TYPES, OPERATORS_BY_TYPE, PLACEHOLDERS } from '../core/index.js';
 import {
   CLOSING_PRS_FIRST,
   GITHUB_FIELD_DEFINITIONS,
@@ -213,6 +213,19 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain('GET /api/v1/runs/:id/kept');
     const fmt = (n: number): string => String(n).replace(/\B(?=(\d{3})+$)/g, ' ');
     expect(markdown).toContain(`höchstens ${fmt(KEEP_MAX_FILES)} Dateien und ${fmt(KEEP_MAX_ENTRIES)} untersuchte Verzeichniseinträge`);
+  });
+
+  it('documents the container executor: keys, defaults, mounts, labels and config.yaml (WI-19)', () => {
+    for (const key of ['image', 'engine', 'command', 'workdir', 'mounts', 'mounts[].source', 'mounts[].target', 'mounts[].mode', 'resources.memory', 'resources.cpus', 'resources.pids', 'user', 'network', 'pull']) {
+      expect(markdown, key).toContain(`| \`${key}\` |`);
+    }
+    expect(markdown).toContain(`| \`container.engine\` | Enum | \`${DEFAULTS.containerEngine}\` |`);
+    expect(markdown).toContain(`| \`pull\` | Enum | nein | \`${DEFAULTS.containerPull}\` |`);
+    for (const p of Object.values(CONTAINER_PATHS)) expect(markdown, p).toContain(p);
+    for (const l of Object.values(CONTAINER_LABELS)) expect(markdown, l).toContain(`${l}=`);
+    expect(markdown).toContain('--cap-drop ALL --security-opt no-new-privileges');
+    expect(markdown).toContain('`recovery.container_stopped`');
+    expect(sets.get('container')?.invalid).toBe(false);
   });
 
   it('documents all hooks, operators and notification events', () => {

@@ -26,6 +26,31 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
   Start, die Retention bei jedem Lauf. Das Token-Verzeichnis darf nicht im Workspace liegen; verglichen werden die aufgelösten Pfade (Symlinks werden verfolgt). Liegt es darin (z. B. Workspace unter `<data-dir>/runs/` oder ein Symlink dorthin), endet der Run mit `start_error` bzw. die Action scheitert.
   Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
 
+## Container-Executor (`execute.type: container`, seit 0.3.0)
+
+- **Rechte:** Der Dienstbenutzer braucht Zugriff auf die Engine. Bei **Docker** heißt das Mitgliedschaft in der Gruppe
+  `docker` (bzw. Zugriff auf `/var/run/docker.sock`) – **das entspricht root-Rechten auf dem Host** (wer den Docker-Daemon
+  steuert, kann beliebige Host-Pfade mounten). Mit **rootless Podman** (oder rootless Docker) bleibt alles beim
+  Dienstbenutzer: `podman` installieren, für den Dienstbenutzer `subuid`/`subgid` einrichten
+  (`usermod --add-subuids … --add-subgids … adispatchd`) und `loginctl enable-linger adispatchd`, damit
+  `XDG_RUNTIME_DIR` (`/run/user/<uid>`) existiert; `XDG_RUNTIME_DIR` in der Env-Datei setzen.
+- **Engine-Umgebung:** Der Engine-Prozess bekommt nur die Minimalumgebung plus `DOCKER_HOST`, `DOCKER_CONTEXT`,
+  `DOCKER_CONFIG`, `CONTAINER_HOST`, `XDG_RUNTIME_DIR` u. a. (Liste: [Konfigurationsreferenz](configuration-reference.md)
+  §3.4.8) – in `/etc/default/adispatchd` setzen, wenn nötig. Das Binary (`docker`/`podman`) muss im `PATH` des Dienstes
+  liegen; beim Start prüft der Daemon `<engine> --version` und warnt im Log, wenn es fehlt (Runs enden dann mit `start_error`).
+- **Benutzer im Container:** Default ist `<uid>:<gid>` des Dienstbenutzers, damit Workspace-Dateien dem Dienst gehören
+  (Cleanup) und Kontext-/Token-Dateien (`0600`) lesbar sind. Ein anderer `user` braucht passende Rechte auf dem
+  Workspace; Kontext- und Token-Dateien sind für ihn auf Linux dann nicht lesbar. Bei Podman setzt der Daemon
+  `--userns keep-id` (Podman ≥ 4.3 auch rootful).
+- **Images** baut und aktualisiert der Betreiber; `pull: missing` (Default) zieht fehlende Images beim ersten Run,
+  `never` verlangt ein lokales Image, `always` zieht jedes Mal.
+- **Aufräumen:** Container heißen `adispatch-<run-id>` und tragen die Labels `adispatch.run`, `adispatch.workflow`,
+  `adispatch.instance=<hash des data-dir>`. Nach einem Absturz stoppt die Recovery alle Container **dieser Instanz**
+  (andere Instanzen und fremde Container bleiben unberührt). Manuell:
+  `docker ps -a --filter label=adispatch.instance=<hash>`; den Hash zeigt `workflow dry-run` im Engine-Aufruf.
+- **Isolation:** Container trennen Runs voneinander (eigene Mounts, eigene Token-Dateien, `--cap-drop ALL`,
+  `no-new-privileges`), aber nur so weit wie die Engine – Netzwerk standardmäßig offen (`network: none` schließt es).
+
 ## Installation als systemd-Dienst (Linux)
 
 Voraussetzungen: Linux mit systemd, Node.js ≥ 22.13 (empfohlen 24 LTS) **systemweit** installiert (z. B. `/usr/bin/node`
@@ -235,6 +260,10 @@ Beim Start erfasst die Recovery alle zuvor aktiven Runs, **bevor** der Scheduler
   (bereits erfolgreiche Actions laufen nicht erneut; Kommentare werden über Marker abgeglichen).
 - Übrig gebliebene Token-Dateien (`delivery: file`) der zuvor aktiven Runs werden zuerst gelöscht – sie würden nicht
   mehr erneuert. Ein noch laufender, nicht beendbarer Worker (`recovery_pending`) verliert damit seine Token-Datei.
+- Container (`execute.type: container`) dieser Instanz werden danach am Label `adispatch.instance` gefunden und gestoppt
+  (`<engine> stop`, dann `rm -f`) – auch solche ohne aktiven Run; laufende Container werden nie übernommen. Der Run endet
+  wie ein Shell-Run nach Neustart (i. d. R. `crashed`, Event `recovery.container_stopped`). Ist die Engine nicht
+  erreichbar, bleiben die betroffenen Container-Runs `recovery_pending` → Engine starten, dann „Retry Recovery“.
 - **`recovery_pending`**: Prozess nicht sicher identifizierbar oder nicht beendbar → der Run bleibt sichtbar aktiv, hält
   seinen Lock (kein Doppelstart) und erzeugt die Notification `recovery_failed`. Lösung: Prozess prüfen/beenden, dann in der
   UI „Retry Recovery“ bzw. `POST /api/v1/runs/<id>/recovery/retry` (mit `{"assumeGone": true}`, wenn sicher ist, dass der
@@ -306,8 +335,10 @@ Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen i
 
 - Die Source-ID ist Teil des Item-Schlüssels (`<source>:<nummer>`): Umbenennen einer Source trennt die Run-Historie und
   Retry-Blocks von den Items.
-- Prozesse außerhalb der Worker-Prozessgruppe (eigene Session, Container) beendet der Orchestrator nicht (siehe
-  [worker-protocol.md](worker-protocol.md#abbruch-timeout-prozesse)).
+- Prozesse außerhalb der Worker-Prozessgruppe (eigene Session, selbst gestartete Container) beendet der Orchestrator nicht (siehe
+  [worker-protocol.md](worker-protocol.md#abbruch-timeout-prozesse)); Container von `execute.type: container` stoppt er selbst.
+- Container-Executor: getestet mit einer Fake-Engine und (optional, `ADISPATCH_CONTAINER_TEST=1`) mit Docker; Podman
+  (rootless, `--userns keep-id`) ist manuell zu prüfen.
 - Linux-spezifisches Verhalten (systemd, cgroups, Prozessidentität über `/proc`) ist manuell zu prüfen:
   [manual-tests/systemd.md](manual-tests/systemd.md), [manual-tests/process-supervision.md](manual-tests/process-supervision.md);
   GitHub-Annahmen: [manual-tests/github.md](manual-tests/github.md).

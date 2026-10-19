@@ -7,6 +7,24 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ### Hinzugefügt
 
+- **Container-Executor (`execute.type: container`):** Der Worker läuft in einem Wegwerf-Container
+  (`<engine> run --rm --init` im Vordergrund, `docker` oder `podman`; Default über den neuen Abschnitt
+  `container: { engine: docker }` in `config.yaml`). Schlüssel `image` (Pflicht), `command` (Templates), `workdir`,
+  `mounts` (`source` absolut/relativ zum config-dir oder `{workspace.path}`, `target`, `mode: ro|rw`), `resources`
+  (`memory`, `cpus`, `pids`), `user` (Default: UID/GID des Dienstes; Podman zusätzlich `--userns keep-id`), `network`
+  (`default`/`none`/Name), `pull` (`never`/`missing`/`always`); `env`, `secrets` (inkl. `delivery: file`), `timeout`,
+  `cancel_grace`, `keep` wie bei `shell`. Immer `--cap-drop ALL --security-opt no-new-privileges`, Name
+  `adispatch-<run-id>`, Labels `adispatch.run`/`adispatch.workflow`/`adispatch.instance` (Hash des data-dir).
+  Workspace (automatisch unter `/work`, wenn nicht gemountet), Kontextdatei (`/adispatch/context.json`, read-only),
+  Ausgabeverzeichnis (`/adispatch/out/`, Ergebnisdatei `/adispatch/out/result.json`) und Token-Dateien
+  (`/adispatch/secrets/`, read-only) werden gemountet; `ADISPATCH_*` zeigen auf die Container-Pfade. Werte von `env`
+  und `secrets` gehen als `-e NAME` über die Umgebung des Engine-Prozesses, nie über die Kommandozeile.
+  Logs, Events, Timeouts, Ergebnisdatei (auch `on_result`) und Klassifikation wie bei `shell`. Cancel/Timeout stoppen
+  den Container (`<engine> stop -t <cancel_grace>`); die Recovery stoppt nach einem Neustart alle Container dieser
+  Instanz (Event `recovery.container_stopped`; Engine nicht erreichbar → `recovery_pending`). Validierung: Mount-Quellen
+  existieren, Ziele absolut/normalisiert/eindeutig/nicht unter `/adispatch`, Formate von `resources`/`user`/`network`.
+  Beim Daemon-Start wird das Engine-Binary geprüft (Warnung). `workflow dry-run` (CLI, API, UI) und die
+  Workflow-Ansicht zeigen den Engine-Aufruf (Secrets nur mit Namen); das Run-Kommando ist der Engine-Aufruf.
 - **Benannte Ergebnisse (`on_result`):** Die Ergebnisdatei kann zusätzlich zu `result` ein `outcome` liefern
   (Format der Konfigurations-IDs, z. B. `"outcome": "needs_maintainer"`). Ist `on_result.<outcome>` im Workflow
   konfiguriert, läuft genau diese Kette **statt** `on_success`/`on_failure`; sonst bleibt alles wie bisher (ein
