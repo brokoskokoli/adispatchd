@@ -11,8 +11,10 @@ sources:
     owner: example
     repository: project-b
     identity: maintainer
-    # GitHub Projects (v2) board of the organisation (app permission "Organization → Projects: Read").
-    # Declared fields are available as project.<name> (see workflows/reviewer-project-b.yaml).
+    # GitHub Projects (v2) board of the organisation (app permission "Organization → Projects: Read",
+    # "Read and write" when source.update sets project fields).
+    # Declared fields are available as project.<name> and can be set by source.update
+    # (see workflows/reviewer-project-b.yaml).
     project:
       number: 3
       fields:

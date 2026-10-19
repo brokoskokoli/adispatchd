@@ -53,6 +53,9 @@ retry:
 on_start:
   - type: source.update
     labels: { add: [coding], remove: [ready-for-coding] }
+    # With a GitHub project on the source (sources.yaml → project), project fields can be set too
+    # (labels first, then project fields; null clears a field):
+    # project: { Status: In Progress }
   - type: source.comment
     message: 'Coder started, run {run.id}.'
     identity: coder

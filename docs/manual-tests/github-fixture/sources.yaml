@@ -12,6 +12,7 @@ sources:
     #   # owner: <user-login>        # User-Projekt (T25c) …
     #   # identity: project_reader   # … nur mit der github_token-Identity lesbar
     #   fields: { Status: single_select, Priority: single_select, Estimate: number, Due: date }
+    # T26 (Projektfelder setzen): zusätzlich Notes: text; App braucht "Projects: Read and write".
   test_b:
     type: github
     owner: ADISPATCH_TEST_OWNER
