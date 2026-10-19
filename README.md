@@ -7,10 +7,13 @@ Shell-Workflows in eigenen Workspaces aus, überwacht und protokolliert jeden Ru
 
 - **GitHub bleibt Source of Truth** – kein eigener Ticketstore; SQLite hält nur Runs, Locks, Events, Blocks, Aktionsjournale.
 - **Unabhängige Workflows** mit Source-, Cron- oder manuellem Trigger, globalen und workflowbezogenen Limits.
+- **Deklarative Filter und Prioritäten** auf Labels, Zustand, Milestone, Issue-Typ, native Abhängigkeiten („blocked by“)
+  und Felder aus **GitHub Projects** (Status, Priorität, eigene Felder; „A oder B“ per `in`) – fehlender Zugriff ergibt
+  `unknown` statt eines falschen Starts.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per
   Prozessgruppe, Drain, Crash-Recovery, systemd-Integration.
 
-Dokumentation: [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-protocol.md) · [HTTP-API/SSE](docs/api.md) ·
+Dokumentation: [Änderungen](CHANGELOG.md) · [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-protocol.md) · [HTTP-API/SSE](docs/api.md) ·
 [Cron-Semantik](docs/cron-semantics.md) · [Spezifikation](docs/spec-v0.1.md) · Manuelle Tests:
 [systemd](docs/manual-tests/systemd.md), [Prozess-Supervision](docs/manual-tests/process-supervision.md),
 [GitHub](docs/manual-tests/github.md)
@@ -23,13 +26,13 @@ Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 2
 Paket `adispatchd` auf npm, Befehl `adispatch`. Für Dienste immer eine **feste Version** global installieren (kein `npx`):
 
 ```bash
-npm install -g adispatchd@0.1.0                 # aus der npm-Registry
+npm install -g adispatchd@0.2.0                 # aus der npm-Registry
 
 # alternativ aus dem Repository-Checkout:
 git clone https://github.com/brokoskokoli/adispatchd.git && cd adispatchd
 npm install
-npm pack                                        # baut (prepack) und erzeugt adispatchd-0.1.0.tgz
-npm install -g ./adispatchd-0.1.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
+npm pack                                        # baut (prepack) und erzeugt adispatchd-0.2.0.tgz
+npm install -g ./adispatchd-0.2.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
 # lokal ohne globale Installation: npm run build && node dist/cli/main.js <kommando> …
 ```
 
@@ -51,6 +54,9 @@ adispatch start --config-dir ./config --data-dir ./data     # Vordergrund, Ctrl-
 - GitHub anbinden: GitHub App je Rolle anlegen (Rechte: Issues r/w, Pull requests write, Metadata read), App-/Installation-ID in
   `identities.yaml`, Repo in `sources.yaml`, Private Key als Umgebungsvariable (`export GITHUB_CODER_PRIVATE_KEY="$(cat key.pem)"`),
   dann in `workflows/coder.yaml` `enabled: true` setzen und `adispatch config reload --config-dir ./config`.
+- Projektfelder (`project.Status` …): `project`-Block an der Source in `sources.yaml` (siehe Kommentar nach `init`); Org-Projekte
+  brauchen das App-Recht *Organization → Projects: Read*, user-eigene Projekte eine `github_token`-Identity
+  ([Konfigurationsreferenz §3.2/§3.3](docs/configuration-reference.md#32-sourcesyaml)).
 
 `init` überschreibt nie bestehende Dateien (vorhandene werden als „kept“ gemeldet) und validiert danach die Konfiguration.
 
@@ -81,7 +87,7 @@ Beispiele darin werden per Test gegen den echten Loader geprüft).
 config-dir/                      data-dir/
   config.yaml   global (§5.1)      adispatchd.sqlite   Runs, Locks, Events, Blocks, Journale
   sources.yaml  GitHub-Repos       adispatchd.lock     Instanzsperre (nie anfassen)
-  identities.yaml GitHub Apps      logs/<run>/stdout.log, stderr.log
+  identities.yaml Apps/Tokens      logs/<run>/stdout.log, stderr.log
   workflows/*.yaml                 runs/<run>/context.json, result.json
   views/*.yaml                     workspaces/<workflow>/<run>/
   scripts/*.sh                     backups/   DB-Backups vor Migrationen
