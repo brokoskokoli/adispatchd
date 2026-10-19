@@ -12,6 +12,9 @@ Shell-Workflows in eigenen Workspaces aus, überwacht und protokolliert jeden Ru
   `unknown` statt eines falschen Starts.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per
   Prozessgruppe, Drain, Crash-Recovery, systemd-Integration.
+- **Tokens für lange Runs:** Secrets per Umgebungsvariable oder als **Token-Datei** (`delivery: file` →
+  `<NAME>_FILE`), die der Daemon vor Ablauf atomar erneuert und nach dem Run löscht – Worker brauchen keine
+  App-Schlüssel. Shell-Actions in Hooks können ebenfalls Tokens anfordern.
 
 Dokumentation: [Änderungen](CHANGELOG.md) · [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-protocol.md) · [HTTP-API/SSE](docs/api.md) ·
 [Cron-Semantik](docs/cron-semantics.md) · [Spezifikation](docs/spec-v0.1.md) · Manuelle Tests:
@@ -137,7 +140,8 @@ on_crash:   [ { type: source.update, labels: { add: [ready-for-coding], remove: 
 
 Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
-- **Input:** Minimalumgebung (`PATH`, `HOME`, …) + `execute.env` + deklarierte Secrets + `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`,
+- **Input:** Minimalumgebung (`PATH`, `HOME`, …) + `execute.env` + deklarierte Secrets (`GH_TOKEN` bzw. bei `delivery: file`
+  `GH_TOKEN_FILE`, z. B. `GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh …`) + `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`,
   `ADISPATCH_SOURCE_*`, `ADISPATCH_WORKSPACE`, `ADISPATCH_CONTEXT_FILE` (JSON-Kontext), `ADISPATCH_RESULT_FILE`. Keine Controller-Umgebung.
 - **Exit-Code = technischer Status:** `0` = ok, alles andere = `crashed` (technischer Fehler, zählt zum Retry-Block).
 - **Fachliches Ergebnis** nur über die Ergebnisdatei (atomar schreiben):
@@ -156,9 +160,10 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **Skripte und YAML sind vertrauenswürdiger Code** mit den Rechten des Dienstes – keine Sandbox. Schreibrecht auf das
   config-dir ist gleichbedeutend mit Codeausführung; `service install` legt es `root`-eigen an und lässt den Dienst unter einem
   eigenen Benutzer laufen.
-- Worker erhalten nur ausdrücklich deklarierte Secrets (z. B. kurzlebiges `GH_TOKEN`); Secrets werden nie in Kontext-/
-  Ergebnisdateien, API-Antworten oder Logs persistiert, Redaction in Prozesslogs ist best-effort. Ein Worker kann ihm
-  übergebene Secrets dennoch ausgeben.
+- Worker und Shell-Actions erhalten nur ausdrücklich deklarierte Secrets (z. B. kurzlebiges `GH_TOKEN`); Secrets werden
+  nie in Kontext-/Ergebnisdateien, API-Antworten oder Logs persistiert, Redaction in Prozesslogs ist best-effort. Einzige
+  Ausnahme ist die Token-Datei bei `delivery: file` (`data-dir/runs/<run>/secrets/`, `0600`, außerhalb des Workspaces,
+  nach dem Run gelöscht). Ein Worker kann ihm übergebene Secrets dennoch ausgeben.
 - GitHub-Apps mit minimalen Rechten; fehlende Rechte bei Cross-Repo-Abhängigkeiten führen zu `unknown` (kein Start), nicht zu „0“.
 - Event-, Result- und Log-Inhalte werden in der UI nur als Text dargestellt.
 

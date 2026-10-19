@@ -3,6 +3,30 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.3.0] – unveröffentlicht
+
+### Hinzugefügt
+
+- **Token-Dateien für lange Runs** (`execute.secrets.<NAME>.delivery: file`): Der Daemon schreibt das Token nach
+  `data-dir/runs/<run-id>/secrets/<NAME>` (Verzeichnis `0700`, Datei `0600`, außerhalb des Workspaces) und übergibt
+  den Pfad als `<NAME>_FILE` (`<NAME>` selbst wird nicht gesetzt). Solange der Worker läuft, wird die Datei
+  spätestens 10 Minuten vor Ablauf atomar ersetzt (temporäre Datei + `rename`); Identities ohne Ablauf
+  (`github_token`) werden einmal geschrieben. Fehler beim Erneuern werden ohne Token geloggt und mit Backoff
+  wiederholt. Nach Run-Ende (jeder Endstatus) und bei der Recovery nach einem Neustart wird die Datei gelöscht;
+  die Retention räumt Reste. Jedes ausgegebene Token wird vorher beim Redactor registriert. Default bleibt
+  `delivery: env` (bisheriges Verhalten). Mit der GitHub CLI: `GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh …`.
+- **Secrets für Shell-Actions:** `shell`-Actions in Hooks haben dasselbe Feld `secrets` wie `execute` (`env` oder
+  `file`; Datei in einem action-eigenen Verzeichnis, während langer Actions erneuert, danach gelöscht). Redaction
+  gilt auch für das Action-Log.
+- Validierung: `delivery` ∈ {`env`, `file`} (mit „did you mean …“), `<NAME>_FILE` darf weder in `env` noch als
+  anderer Secret-Name vorkommen, Identities müssen existieren (jetzt mit Vorschlag bei Tippfehlern).
+- API/UI: Workflow-Ansicht zeigt je Secret die Übergabeart (`execute.secretDelivery`).
+
+### Geändert
+
+- Worker-Protokoll: Die Regel „Shell-Actions bekommen keine Secrets“ gilt nur noch, solange die Action keine
+  `secrets` deklariert.
+
 ## [0.2.0] – 2026-10-19
 
 ### Hinzugefügt

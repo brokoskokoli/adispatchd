@@ -186,6 +186,8 @@ Die Secrets liegen nicht in YAML oder Run-Kontexten. Der Credential-Provider erz
 
 **Nachtrag 0.2.0 (WI-14):** Zweiter Identity-Typ `github_token` mit `token_env` (Name der Env-Variable mit einem langlebigen Token, z. B. fine-grained PAT), vor allem für user-eigene GitHub Projects, die Installation-Tokens nicht lesen können. Der Token wird beim Start gelesen und redigiert; ein Composite-Provider leitet je Identity an den Provider ihrer Art. Marker-Kommentare solcher Identities werden am Login des Token-Users erkannt (`GET /user`). Eine GitHub-Source kann zusätzlich `project: { owner, number, identity, fields }` deklarieren (Details: [configuration-reference.md](configuration-reference.md) §3.2, §3.3).
 
+**Nachtrag 0.3.0 (WI-18):** Tokens können statt als Env-Variable als **erneuerte Token-Datei** übergeben werden (`delivery: file` → `<NAME>_FILE`), damit lange Runs keine Private Keys brauchen; auch Shell-Actions können `secrets` deklarieren (siehe §20, Nachtrag).
+
 ### 5.4 Source-Workflow
 
 ```yaml
@@ -646,6 +648,8 @@ Konfigurationsänderungen werden **nur manuell** per GUI/CLI übernommen. Reload
 6. Shell-Kommandos mit Argumentlisten statt unsicherer Shell-Interpolation konstruieren, wo möglich. Bei expliziten Shell-Kommandos liegt die Verantwortung beim Konfigurationsautor.
 7. Source-Updates nur mit erlaubten App-Rechten; keine automatische Berechtigungseskalation. Cross-Repo-Abhängigkeiten bei fehlenden Rechten fail-closed.
 8. Externe Lifecycle-Aktionen können nicht global atomar sein: Fehlersichtbarkeit, Precondition-Checks und Idempotenzmechanismen sind Pflicht.
+
+**Nachtrag 0.3.0 (WI-18) – Token-Dateien und Secrets für Shell-Actions:** `execute.secrets.<NAME>` erhält `delivery: env | file` (Default `env` = bisheriges Verhalten). Bei `file` schreibt der Daemon das Token in eine Datei im Run-Verzeichnis **außerhalb** des Workspaces (`data-dir/runs/<run-id>/secrets/<NAME>`, Verzeichnis 0700, Datei 0600) und übergibt nur den Pfad als `<NAME>_FILE`; `<NAME>` wird nicht gesetzt. Solange der Prozess läuft, ersetzt er die Datei atomar (temporäre Datei + `rename` im selben Verzeichnis) spätestens 10 Minuten vor Ablauf; Identities ohne Ablauf (`github_token`) werden einmal geschrieben. Fehler beim Erneuern werden ohne Token geloggt und mit Backoff wiederholt, der Run läuft weiter, bis das alte Token abläuft. Nach Run-Ende (jeder Endstatus) und bei der Recovery nach einem Neustart wird die Datei gelöscht, die Retention räumt Reste. Diese Datei ist die **einzige** Stelle, an der ein Token persistiert wird (Ausnahme zu Punkt 4); jedes ausgegebene Token wird vor dem Schreiben beim Redactor registriert (stdout/stderr, Events, Logs, Action-Logs). `shell`-Actions erhalten dasselbe Feld `secrets` (`env` oder `file`, Datei in einem action-eigenen Verzeichnis, nach dem Versuch gelöscht, bei langen Actions ebenfalls erneuert); ohne `secrets` bekommen sie weiterhin keine Tokens. Validierung: `delivery` ∈ {`env`, `file`}; `<NAME>_FILE` kollidiert weder mit `env` noch mit anderen Secret-Namen; Identities müssen existieren. Details: [configuration-reference.md](configuration-reference.md) §3.4.8, §3.4.11, [worker-protocol.md](worker-protocol.md).
 
 ## 21. Betrieb, Observability und Aufbewahrung
 

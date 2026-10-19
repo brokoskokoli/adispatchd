@@ -20,6 +20,10 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
   Mehrere Instanzen mit getrennten data-dirs koordinieren sich nicht.
 - `workspace.base_dir` (Default `<data-dir>/workspaces`) muss für den Dienst schreibbar sein; liegt es außerhalb von
   data-dir, Rechte selbst setzen.
+- **Token-Dateien** (`delivery: file`, seit 0.3.0): `runs/<run-id>/secrets/<NAME>` bzw.
+  `runs/<run-id>/actions/<action>/attempt-<n>/secrets/<NAME>`, Verzeichnis 0700, Datei 0600 (Dienstbenutzer). Sie
+  existieren nur, solange der Worker bzw. die Action läuft; Reste nach einem Absturz löscht die Recovery beim nächsten
+  Start, die Retention bei jedem Lauf. Workspaces nicht unter `runs/` legen (sonst `start_error`).
 
 ## Installation als systemd-Dienst (Linux)
 
@@ -191,7 +195,7 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 | config-dir | Versionsverwaltung (git) oder Dateikopie; enthält keine Secrets |
 | Env-Datei | sicher (verschlüsselt) aufbewahren – enthält Private Keys |
 | `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
-| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal) |
+| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien) |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
 **`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
@@ -201,7 +205,7 @@ ein zweites Mal. Externe Werkzeuge, die die Datei als SQLite-DB öffnen (`sqlite
 konkurrieren um die Sperre und scheitern bzw. blockieren; eine kopierte Lock-Datei ist wertlos. Beim Sichern ausschließen, z. B.:
 
 ```bash
-rsync -a --exclude 'adispatchd.lock*' --exclude 'adispatchd.sqlite*' /var/lib/adispatchd/ /backup/orch-data/
+rsync -a --exclude 'adispatchd.lock*' --exclude 'adispatchd.sqlite*' --exclude 'secrets/' /var/lib/adispatchd/ /backup/orch-data/
 sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch-data/adispatchd.sqlite'"
 ```
 
@@ -214,6 +218,8 @@ Beim Start erfasst die Recovery alle zuvor aktiven Runs, **bevor** der Scheduler
 - noch lebende, sicher identifizierte Worker-Prozessgruppen (PID + Startzeit/Boot-ID) werden beendet; verschwundene Runs
   werden `crashed` mit `on_crash` (zählt als technischer Fehler); halb abgearbeitete Lifecycle-Ketten werden fortgesetzt
   (bereits erfolgreiche Actions laufen nicht erneut; Kommentare werden über Marker abgeglichen).
+- Übrig gebliebene Token-Dateien (`delivery: file`) der zuvor aktiven Runs werden zuerst gelöscht – sie würden nicht
+  mehr erneuert. Ein noch laufender, nicht beendbarer Worker (`recovery_pending`) verliert damit seine Token-Datei.
 - **`recovery_pending`**: Prozess nicht sicher identifizierbar oder nicht beendbar → der Run bleibt sichtbar aktiv, hält
   seinen Lock (kein Doppelstart) und erzeugt die Notification `recovery_failed`. Lösung: Prozess prüfen/beenden, dann in der
   UI „Retry Recovery“ bzw. `POST /api/v1/runs/<id>/recovery/retry` (mit `{"assumeGone": true}`, wenn sicher ist, dass der

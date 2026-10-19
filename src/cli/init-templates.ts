@@ -177,6 +177,8 @@ execute:
     NODE_ENV: production
   secrets:
     GH_TOKEN: { identity: coder }   # short-lived installation token, only for this worker
+    # Long runs: { identity: coder, delivery: file } puts the token into a file ($GH_TOKEN_FILE)
+    # that is renewed before it expires; use it per call: GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh ...
   timeout:
     max_duration: 6h
     idle_timeout: 45m

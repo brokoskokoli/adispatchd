@@ -43,6 +43,7 @@ execute:
   secrets:
     GH_TOKEN:
       identity: coder
+      # delivery: file   # instead of GH_TOKEN: path in GH_TOKEN_FILE, renewed while the worker runs (0.3.0)
   timeout:
     max_duration: 6h
     idle_timeout: 45m

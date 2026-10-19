@@ -503,7 +503,8 @@ execute:
     NODE_ENV: production
     ISSUE_URL: '{item.url}'
   secrets:
-    GH_TOKEN: { identity: coder }  # kurzlebiges Installation-Token der Identity
+    GH_TOKEN: { identity: coder }  # kurzlebiges Installation-Token der Identity (delivery: env, Default)
+    REVIEW_TOKEN: { identity: maintainer, delivery: file }  # Token-Datei, Pfad in REVIEW_TOKEN_FILE, wird erneuert
   timeout:
     max_duration: 6h
     idle_timeout: 45m
@@ -528,6 +529,8 @@ on_success:
     command: scripts/notify.sh
     args: ['{workflow.id}', '{run.id}', '{result.status}']
     env: { CHANNEL: '#agents' }
+    secrets:
+      GH_TOKEN: { identity: maintainer, delivery: file }  # seit 0.3.0 (WI-18)
     timeout: 1m
 on_failure:
   - type: source.update
@@ -658,7 +661,7 @@ Regeln der Konfigurationsprüfung:
 | `working_directory` | String | nein | `{workspace.base_dir}/{workflow.id}/{run.id}` | Modus `path`; beginnt mit `/` oder `{workspace.base_dir}` | Arbeitsverzeichnis = Workspace (`ADISPATCH_WORKSPACE`) |
 | `create_directory` | Boolean | nein | `true` | | Verzeichnis anlegen; bei `false` muss es existieren (sonst `start_error`) |
 | `env` | Map Name → String/Zahl/Boolean | nein | `{}` | Templates; kein `ADISPATCH_`-Präfix | zusätzliche Umgebungsvariablen |
-| `secrets` | Map Name → `{ identity: <id> }` | nein | `{}` | Identity muss existieren; Name nicht zugleich in `env`; kein `ADISPATCH_` | Installation-Token der Identity als Env-Variable (nur im Speicher) |
+| `secrets` | Map Name → `{ identity: <id>, delivery?: env\|file }` | nein | `{}` | Identity muss existieren; Name nicht zugleich in `env`; kein `ADISPATCH_`; bei `file` darf `<NAME>_FILE` weder in `env` noch als anderer Secret-Name vorkommen | Token der Identity für den Worker, s. u. „Secrets und Token-Dateien“ |
 | `timeout.max_duration` | Dauer | nein | unbegrenzt | > 0 | Gesamtlaufzeit → `timed_out` |
 | `timeout.idle_timeout` | Dauer | nein | unbegrenzt | > 0 | Zeit ohne Ausgabe auf stdout/stderr → `timed_out` (Warnung, wenn > `max_duration`) |
 | `cancel_grace` | Dauer | nein | `30s` | | Wartezeit zwischen `SIGTERM` und `SIGKILL` an die Prozessgruppe bei Cancel/Timeout |
@@ -667,6 +670,29 @@ Workspace-Regeln: Liegt der gerenderte Pfad strikt unter `workspace.base_dir`, w
 (Symlink-geprüft) und gemäß `workspace.cleanup` gelöscht. Liegt er außerhalb, wird er wie konfiguriert angelegt,
 aber **nie** automatisch gelöscht. Der Pfad darf nicht `base_dir` selbst sein. Eine Warnung erscheint, wenn ein
 `env`-Schlüssel nach Secret aussieht (`…_TOKEN`, `…PASSWORD`, `API_KEY`, …) und einen nicht-leeren Literalwert hat.
+
+**Secrets und Token-Dateien** (`delivery`, seit 0.3.0): Jeder Eintrag unter `secrets` übergibt ein Token der
+angegebenen Identity (GitHub App: Installation-Token, ca. 1 h gültig; `github_token`: der Token selbst).
+
+| `delivery` | Variable(n) beim Prozess | Verhalten |
+|---|---|---|
+| `env` (Default, wie bis 0.2.0) | `<NAME>` = Token | Token wird beim Start einmal geholt und nur im Speicher gehalten; läuft der Prozess länger als das Token gilt, muss er sich selbst ein neues besorgen. |
+| `file` | `<NAME>_FILE` = absoluter Pfad der Token-Datei; `<NAME>` selbst wird **nicht** gesetzt | Der Daemon schreibt das Token nach `data-dir/runs/<run-id>/secrets/<NAME>` (Verzeichnis `0700`, Datei `0600`, **außerhalb** des Workspaces) und ersetzt die Datei, solange der Prozess läuft, **atomar** (temporäre Datei + `rename` im selben Verzeichnis) spätestens **10 Minuten vor Ablauf** des Tokens. Identities ohne Ablauf (`github_token`) werden einmal geschrieben. |
+
+Bei `file` gilt außerdem: Die Datei enthält nur das Token (ohne Zeilenumbruch). Scheitert das Erneuern (z. B.
+GitHub nicht erreichbar), wird das ohne Token geloggt und mit Backoff (30 s, verdoppelt bis 5 min) erneut versucht;
+der Worker läuft weiter, die alte Datei bleibt bis zum Ablauf des alten Tokens gültig. Scheitert schon das erste
+Schreiben, endet der Run mit `start_error` (`on_start_error`). Nach dem Prozessende (jeder Endstatus) wird das
+Verzeichnis gelöscht, nach einem Neustart räumt die Recovery Reste weg, die Retention entfernt bei jedem Lauf
+übrig gebliebene Token-Verzeichnisse beendeter Runs. Jedes ausgegebene Token wird beim Redactor registriert, bevor
+es in der Datei steht (stdout/stderr-Logs, Live-Output, Events, Ergebnis, Dienst-Log). Liegt der Workspace so, dass
+das Token-Verzeichnis darin läge (Workspace im Data-Dir), endet der Run mit `start_error`.
+
+Mit der GitHub CLI liest man das Token pro Aufruf aus der Datei:
+
+```sh
+GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh pr create --fill
+```
 
 #### 3.4.9 `retry`
 
@@ -725,11 +751,19 @@ entfernt (Vergleich ohne Groß-/Kleinschreibung) → idempotent. Schreib-Identit
 | `command` | String | ja | | §2.4 |
 | `args` | Liste String | nein | `[]` | Templates |
 | `env` | Map | nein | `{}` | Templates, kein `ADISPATCH_`-Präfix |
+| `secrets` | Map Name → `{ identity, delivery? }` | nein | `{}` | wie `execute.secrets` (seit 0.3.0), dieselben Regeln |
 | `timeout` | Dauer | nein | `5m` | Laufzeitlimit pro Versuch (> 0) |
 
 Erfolg = Exit 0; alles andere (Exit ≠ 0, Signal, Timeout, Startfehler) = gescheiterter, wiederholbarer Versuch.
-Keine Secrets. Arbeitsverzeichnis: der Run-Workspace, falls er existiert, sonst ein eigenes Verzeichnis pro Versuch
+Arbeitsverzeichnis: der Run-Workspace, falls er existiert, sonst ein eigenes Verzeichnis pro Versuch
 unter `data-dir/runs/<run>/actions/…`. SIGTERM→SIGKILL-Frist fest 5 s, Log-Limit fest 10 MiB pro Versuch.
+
+**Secrets für Shell-Actions** (seit 0.3.0): `secrets` wie bei `execute` (§3.4.8). Tokens werden **pro Versuch**
+geholt. Bei `delivery: file` liegt die Datei in einem action-eigenen Verzeichnis
+`data-dir/runs/<run>/actions/<action>/attempt-<n>/secrets/<NAME>`, wird bei langen Actions ebenso erneuert und
+nach dem Versuch gelöscht. Werte werden im Action-Log redigiert. Scheitert das Holen des Tokens, scheitert der
+Versuch (wiederholbar je nach Fehlerart, z. B. `transient` ja, `auth` nein); die Action startet dann nicht. Ohne
+deklarierte `secrets` bekommt eine Shell-Action wie bisher keine Tokens.
 
 ### 3.5 views/*.yaml
 
@@ -1257,15 +1291,16 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
 | Projektfelder lesen (`project.*`, GraphQL) | `sources.<id>.project.identity` → `sources.<id>.identity` |
 | `source.update` (inkl. Re-Read vor dem Schreiben) | Workflow-`identity` → Source-`identity` |
 | `source.comment` (inkl. Marker-Suche) | Action-`identity` → Workflow-`identity` → Source-`identity` |
-| `execute.secrets.<NAME>` | die angegebene Identity (Installation-Token, ca. 1 h gültig, beim Start geholt; bei `github_token` der Token selbst) |
-| `shell`-Actions, Conditions, `shell_filter` | keine (keine Secrets) |
+| `execute.secrets.<NAME>` | die angegebene Identity (Installation-Token, ca. 1 h gültig, beim Start geholt; bei `delivery: file` bis zum Prozessende erneuert; bei `github_token` der Token selbst) |
+| `shell`-Action `secrets.<NAME>` | die angegebene Identity (pro Versuch geholt; bei `delivery: file` während der Action erneuert) |
+| `shell`-Actions ohne `secrets`, Conditions, `shell_filter` | keine (keine Secrets) |
 
 ### 6.11 Umgebung von Worker, Actions und Prüfskripten
 
 | | Haupt-Worker | `shell`-Action | Conditions / `shell_filter` |
 |---|---|---|---|
 | Basis | `PATH`, `HOME`, `LANG`, `TZ`, `USER`, `LOGNAME`, `TMPDIR` aus der Controller-Umgebung (PATH-Fallback `/usr/local/bin:/usr/bin:/bin`) | wie Worker | dieselben Variablen (ohne PATH-Fallback) |
-| Konfiguriert | `execute.env`, dann `execute.secrets` | Action-`env` | – |
+| Konfiguriert | `execute.env`, dann `execute.secrets` (`<NAME>` bzw. bei `delivery: file` `<NAME>_FILE`) | Action-`env`, dann Action-`secrets` (ebenso) | – |
 | Orchestrator | `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`, `ADISPATCH_CONTEXT_FILE`, `ADISPATCH_RESULT_FILE`, `ADISPATCH_WORKSPACE`; bei Item zusätzlich `ADISPATCH_SOURCE_TYPE`, `ADISPATCH_SOURCE_ID`, `ADISPATCH_SOURCE_ITEM_ID`, `ADISPATCH_SOURCE_URL` | dieselben (`ADISPATCH_WORKSPACE` = Arbeitsverzeichnis der Action; Kontext `kind: lifecycle_action` mit Hook, Action, `result`) | `ADISPATCH_CHECK_CONTEXT_FILE` (JSON: `kind`, `workflow.id`, bei Item `source{id,type,item_id,item_key,url,item_type,created_at,attributes}`) |
 | Arbeitsverzeichnis | Workspace | Workspace, falls vorhanden, sonst Versuchsverzeichnis | temporäres Verzeichnis |
 
@@ -1385,7 +1420,7 @@ execute:
   command: scripts/coder.sh
   args: ['{item.url}']
   secrets:
-    GH_TOKEN: { identity: coder }
+    GH_TOKEN: { identity: coder, delivery: file }   # lange Runs: $GH_TOKEN_FILE, wird erneuert (§3.4.8)
   timeout: { max_duration: 6h, idle_timeout: 45m }
 retry: { max_technical_failures: 3 }
 on_start:
@@ -1773,6 +1808,51 @@ identity: codr
 trigger: { type: source, source: project_x }
 execute: { type: shell, command: scripts/coder.sh }
 ```
+
+**Secrets: `delivery` und `<NAME>_FILE`** (seit 0.3.0) – `delivery` ist `env` oder `file`; bei `file` setzt der
+Daemon `<NAME>_FILE`, das weder in `env` noch als anderer Secret-Name vorkommen darf.
+
+```yaml
+# example: err-secret-delivery
+# extends: github
+# invalid
+# expect: workflows/coder.yaml: execute.secrets.GH_TOKEN.delivery: Invalid option: expected one of "env"|"file" (did you mean "file"?)
+# file: workflows/coder.yaml
+id: coder
+trigger: { type: source, source: project_a }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  secrets:
+    GH_TOKEN: { identity: coder, delivery: fiel }
+```
+
+Ein Schemafehler wie dieser verhindert die weiteren Prüfungen der Datei; Kollisionen und Identities prüft erst die
+semantische Validierung:
+
+```yaml
+# example: err-secret-file-name
+# extends: github
+# invalid
+# expect: workflows/coder.yaml: execute.secrets.API_TOKEN.delivery: "delivery: file" sets "API_TOKEN_FILE", which is also defined in "env"
+# expect: workflows/coder.yaml: on_success[0].secrets.GH_TOKEN.identity: Unknown identity "revewer" (did you mean "reviewer"?)
+# file: workflows/coder.yaml
+id: coder
+trigger: { type: source, source: project_a }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  env: { API_TOKEN_FILE: /tmp/token }
+  secrets:
+    API_TOKEN: { identity: coder, delivery: file }
+on_success:
+  - type: shell
+    command: scripts/notify.sh
+    secrets:
+      GH_TOKEN: { identity: revewer }
+```
+
+Lösung: `delivery: file`; die Variable in `env` umbenennen (oder `delivery: env`); Identity-Namen korrigieren.
 
 **Unbekannter oder unpassender Platzhalter** – `{result.*}` gibt es in `on_start` noch nicht.
 
@@ -2255,7 +2335,8 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
    sollen, als benannten Filter in `filters/<id>.yaml` anlegen und mit `filter: <id>` bzw. `{ use: <id> }`
    verwenden (§3.6).
 5. **execute:** Skript ausführbar machen (`chmod +x`), Pfad relativ zum config-dir oder absolut; Argumente als
-   Liste; Timeouts setzen; Secrets nur über `secrets`.
+   Liste; Timeouts setzen; Secrets nur über `secrets`. Läuft der Worker (oder eine Shell-Action) länger als ein
+   Installation-Token gilt (ca. 1 h), `delivery: file` verwenden und das Token pro Aufruf aus `<NAME>_FILE` lesen.
 6. **Hooks:** Label-Übergänge für jeden Ausgang (`on_start`, `on_success`, `on_failure`, `on_crash`,
    `on_start_error`, `on_timeout`, `on_cancel`) so wählen, dass das Item nicht hängen bleibt und nicht sofort wieder
    matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab).
