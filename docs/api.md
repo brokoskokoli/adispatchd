@@ -201,15 +201,15 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 
 | HTTP | Codes (Auswahl) |
 |---|---|
-| 400 | `invalid_request` (Schema-Validierung, `details.issues`), `invalid_json`, `manual_item_required`, `manual_item_not_supported`, `manual_item_invalid_ref`, `invalid_parameters` (`details.errors`), `lifecycle_not_skippable`, `validation_error` |
+| 400 | `invalid_request` (Schema-Validierung, `details.issues`), `invalid_json`, `manual_item_required`, `manual_item_not_supported`, `manual_item_invalid_ref`, `invalid_parameters` (`details.errors`), `lifecycle_not_skippable`, `validation_error`, `comment_contains_secret`, `comment_too_long`, `label_not_found`, `project_not_configured`, `invalid_project_fields`, `ambiguous_item_ref` (WI-27) |
 | 401 | `authentication_required`, `invalid_credentials`, `untrusted_proxy`, `invalid_proxy_secret`, `invalid_identity_header`, `control_token_not_local`, `invalid_control_token` (WI-26) |
 | 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed`, `control_token_not_allowed` (WI-26), `ui_actions_disabled`, `user_login_required`, `identity_not_allowed` (WI-27) |
 | 421 | `host_not_allowed` (Host-Allowlist) |
-| 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found` |
-| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition` |
-| 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt) |
-| 429 | `too_many_attempts` (Login, WI-26), `rate_limited` (Info-Refresh) |
-| 502 | `source_unavailable` |
+| 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found`, `source_not_found`, `item_not_found`, `github_not_found` (WI-27) |
+| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27) |
+| 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt), `github_rejected` (WI-27) |
+| 429 | `too_many_attempts` (Login, WI-26), `rate_limited` (Info-Refresh), `ui_actions_throttled`, `github_rate_limited` (WI-27) |
+| 502 | `source_unavailable`, `github_forbidden`, `github_auth_failed`, `github_unavailable`, `github_outcome_unknown` (WI-27) |
 | 503 | `run_controller_not_ready` (Recovery läuft), `run_controller_not_accepting` / `scheduler_not_accepting` (Drain/Shutdown) |
 | 500 | `kill_failed`, `internal_error` |
 
@@ -470,6 +470,8 @@ bereinigt, redigiert, dann gekürzt), `stale` (Wert älter als der fehlgeschlage
 
 ### UI-Aktionen als Identity (seit 0.4.0, WI-27)
 
+![Item-Panel der Web-UI](screenshots/item-panel.png)
+
 Ein angemeldeter Benutzer mit Rolle `admin` kommentiert ein Issue/PR, setzt/entfernt Labels oder ändert Projektfelder
 **als eine konfigurierte Identity** (z. B. eine GitHub App) – nicht als er selbst. Voraussetzungen, alle serverseitig
 geprüft (in dieser Reihenfolge nach Host/CSRF/Rolle):
@@ -485,15 +487,25 @@ geprüft (in dieser Reihenfolge nach Host/CSRF/Rolle):
 |---|---|---|---|
 | GET | `/api/v1/items/resolve?ref=` | – | `{"source","item"}` für eine URL, `owner/repo#nr` oder `<source>:<nr>`; eine bloße Nummer passt bei mehreren Sources nicht (`400 ambiguous_item_ref`) |
 | GET | `/api/v1/items/:source/:item` | – | `{source, itemId, key, url, type, repository, title, state, labels, project: {owner, number, fields:[{name, kind, known, value, reason, choices, problem}], error} \| null, availableLabels \| null, labelsError, identities:[{id, type}], recentActions:[…]}` – `choices` = Optionen (single_select) bzw. Iterationen (iteration) aus den Projektmetadaten; `identities` = nur die freigeschalteten |
-| POST | `/api/v1/items/:source/:item/comment` | `{"identity","body"}` (Markdown, 1–65 536 Zeichen) | `{"comment":{"id","url"},"redacted":bool,"action":{…}}` |
-| POST | `/api/v1/items/:source/:item/labels` | `{"identity","add":[],"remove":[]}` (je ≤ 50) | `{"changed","applied":{labelsAdded, labelsRemoved},"action"}` |
+| POST | `/api/v1/items/:source/:item/comment` | `{"identity","body"}` (Markdown, 1–65 536 Zeichen, gemessen am gesendeten Text) | `{"comment":{"id","url"},"action":{…}}` |
+| POST | `/api/v1/items/:source/:item/labels` | `{"identity","add":[],"remove":[],"create":false}` (je ≤ 50 Namen à ≤ 50 Zeichen) | `{"changed","applied":{labelsAdded, labelsRemoved},"action"}`; ein Name in `add`, den das Repository nicht kennt → `400 label_not_found` (`details.labels`), außer mit `create: true` (GitHub legt das Label dann an) |
 | POST | `/api/v1/items/:source/:item/project` | `{"identity","fields":{"Status":"Review","Notes":null}}` | `{"changed","applied":{projectFields, projectItemAdded?},"action"}` |
-| GET | `/api/v1/ui-actions?source=&item=<key>&limit=&offset=` | – | `{"enabled","identities","actions":[…],"total","limit","offset"}` (neueste zuerst) |
+| GET | `/api/v1/ui-actions?source=&item=<key>&limit=&offset=` | – | `{"enabled","identities","actions":[…],"total","limit","offset"}` (neueste zuerst); mit `auth.mode: none` `403 ui_actions_disabled` |
 
-- **Kommentare** werden vor dem Senden redigiert (dem Daemon bekannte Secrets, GitHub-Token-Formate `ghp_…`,
-  `github_pat_…` usw., PEM-Private-Keys; `redacted: true` meldet das), ohne Marker gesendet und **nie automatisch
-  wiederholt** – auch nicht nach Rate-Limit oder Timeout (Doppelpost vermeiden). Nach einem Fehler, bei dem der Kommentar
-  angekommen sein kann, antwortet die API `502 github_outcome_unknown`; vor einem erneuten Senden auf GitHub nachsehen.
+- **Kommentare werden nie still verändert.** Sieht der Text nach einem Secret aus, antwortet die API
+  `400 comment_contains_secret` (Meldung und `details.findings` nennen nur Art und Anzahl, nie den Wert) und sendet nichts.
+  Erkannt werden – **best effort**, keine Garantie – dem Daemon bekannte Werte (Installation-Tokens, Keys, Token-Identities)
+  sowie die Formate GitHub-Token (`ghp_…`, `gho_…`, `github_pat_…`, …), Anthropic-Key (`sk-ant-…`), AWS-Access-Key-ID
+  (`AKIA…`), Slack-Token (`xox?-…`) und PEM-Private-Keys (schon die `BEGIN`-Zeile). Die UI warnt schon beim Tippen.
+- **HTML-Kommentare** werden wie bei Orchestrator-Kommentaren entschärft (`<!--` → `&lt;!--`): ein UI-Kommentar kann keinen
+  Idempotenz-Marker (`<!-- adispatchd:… -->`) vortäuschen. Die 65 536 Zeichen gelten für den so gesendeten Text
+  (`400 comment_too_long`).
+- **Kein Doppelpost:** gesendet ohne Marker und **nie automatisch wiederholt** – auch nicht nach Rate-Limit oder Timeout.
+  Derselbe Text desselben Benutzers am selben Item innerhalb von 60 s → `409 duplicate_comment` (nach einem eindeutigen
+  Fehlschlag sofort wieder erlaubt). Nach einem Fehler, bei dem der Kommentar angekommen sein kann, antwortet die API
+  `502 github_outcome_unknown`; vor einem erneuten Senden auf GitHub nachsehen.
+- **Rate-Limit je Benutzer:** höchstens 20 Aktionen (Kommentar, Labels, Projektfelder) und 60 Item-Abrufe
+  (`GET /items/…`, Resolve) pro Minute, sonst `429 ui_actions_throttled` mit `Retry-After`.
 - **Labels** und **Projektfelder** nutzen den `source.update`-Pfad: erst lesen, dann nur Abweichendes schreiben
   (wiederholbar, idempotent). Projektfelder werden gegen `project.fields` der Source geprüft (`400 project_not_configured`,
   `400 invalid_project_fields` mit `details.problems`), Optionen/Iterationen wie bei `source.update` aufgelöst (unbekannte
@@ -505,8 +517,10 @@ geprüft (in dieser Reihenfolge nach Host/CSRF/Rolle):
 - **Audit** (Tabelle `ui_actions`, Schema v4): jede Aktion ab Schritt 3, auch fehlgeschlagene – `id, createdAt, actor,
   actorVia, identity, sourceId, itemId, itemKey, itemUrl, kind (comment|labels|project), result
   (succeeded|failed|unknown), errorCode, errorMessage, commentId, commentUrl, details` (Labels bzw. Feldwerte; bei
-  Kommentaren nur Länge und `redacted`, **nie der Text**). Aufbewahrung wie Runs: erfolgreiche wie `retention.completed_runs`,
-  andere wie `retention.failed_runs`. Zusätzlich die Log-Zeilen `api write` und `ui action`.
+  Kommentaren nur die Länge, **nie der Text**; Labelnamen und Feldwerte maskiert wie Secrets). Aufbewahrung:
+  `retention.ui_actions` (Default 365 Tage), unabhängig vom Ergebnis. Zusätzlich die Log-Zeilen `api write` und `ui action`.
+  Scheitert nur das Protokollieren nach einer erfolgreichen Änderung auf GitHub, antwortet die API trotzdem 2xx mit
+  `"action": null, "auditWarning": "…"` (und loggt den Fehler) – nie 500 für eine ausgeführte Aktion.
 
 ### Notifications
 

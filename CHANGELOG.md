@@ -18,7 +18,7 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   Schaltflächen ohne passende Rolle. CLI-Steuerbefehle arbeiten über einen lokalen Steuer-Token
   (`<data-dir>/control.token`, `0600`, nur über Loopback und den Port der Instanz, Rolle `operator` nur für die Routen der
   CLI-Befehle – Worker können ihn lesen). Optional `auth.trusted_header.proxy_secret_env` (Geheimnis des Proxys in
-  `X-Adispatch-Proxy-Secret`); ohne es und mit nur Loopback-Proxys (Tailscale Serve) ist die Identität lokal fälschbar
+  `X-Adispatch-Proxy-Secret`); ohne es und mit einem Loopback-Proxy (Tailscale Serve) ist die Identität lokal fälschbar
   (Warnung beim Start). Audit: schreibende Aktionen stehen mit Benutzer im Dienstlog,
   Run-Aktionen zusätzlich als Run-Event `audit.user_action`. Einrichtung: `docs/operations.md`.
 
@@ -27,11 +27,15 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   View-Zeilen und der Seite „UI Actions“ mit Suche nach URL/`owner/repo#nr`) mit Bestätigungsdialog vor jedem Senden.
   Freischaltung je Identity mit `ui_actions: true` in `identities.yaml` (Default aus); nur mit Anmeldung (`auth.mode` ≠
   `none`, sonst Warnung bei `config validate`), nur für echte Benutzer (nie mit dem Steuer-Token); bei lokal
-  fälschbarem `trusted_header` ist `ui_actions: true` ein Konfigurationsfehler. Kommentare werden vor dem Senden
-  redigiert und nie automatisch wiederholt; Labels/Projektfelder idempotent über den `source.update`-Pfad. Neue
-  Endpunkte `GET /api/v1/items/resolve`, `GET /api/v1/items/:source/:item`, `POST …/comment`, `…/labels`, `…/project`,
-  `GET /api/v1/ui-actions` (Rolle `admin`). Jede Aktion wird dauerhaft protokolliert (neue Tabelle `ui_actions`,
-  Datenbank-Schema v4, Migration automatisch beim Start; Kommentar-URL, nie der Text; Aufbewahrung wie Runs).
+  fälschbarem `trusted_header` (ein Loopback-Eintrag in `trusted_proxies` ohne `proxy_secret_env`) ist
+  `ui_actions: true` ein Konfigurationsfehler. Kommentare, die nach einem Secret aussehen, werden abgelehnt (nie still
+  verändert, best effort); HTML-Kommentare werden entschärft; Kommentare werden nie automatisch wiederholt, ein
+  identischer Kommentar innerhalb von 60 s wird abgewiesen. Labels/Projektfelder idempotent über den
+  `source.update`-Pfad; neue Labels nur nach ausdrücklicher Bestätigung (`create: true`). Je Benutzer höchstens 20
+  Aktionen und 60 Item-Abrufe pro Minute. Neue Endpunkte `GET /api/v1/items/resolve`, `GET /api/v1/items/:source/:item`,
+  `POST …/comment`, `…/labels`, `…/project`, `GET /api/v1/ui-actions` (Rolle `admin`). Jede Aktion wird protokolliert
+  (neue Tabelle `ui_actions`, Datenbank-Schema v4, Migration automatisch beim Start; Kommentar-URL, nie der Text;
+  Aufbewahrung `retention.ui_actions`, Default 365 Tage).
 
 - **Server-Ressourcen im Dashboard:** neuer Bereich „Server“ mit gestapeltem CPU-Diagramm über die Zeit (Daemon, jeder
   aktive Run mit stabiler Farbe je Workflow und Link zum Run, Hooks/Checks des Daemons, die größten fremden Prozesse

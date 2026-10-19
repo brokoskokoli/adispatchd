@@ -69,8 +69,8 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   (identity from Tailscale Serve, oauth2-proxy, …), roles `viewer` / `operator` / `admin` per endpoint, audit of every
   write; the CLI keeps working through a local control token.
 - **Act as a GitHub App from the UI** – admins can comment on an issue/PR, add or remove labels and set project fields
-  as a configured identity (`ui_actions: true` in `identities.yaml`), with a confirmation dialog and a persistent audit
-  log; requires a login, never available to the CLI control token.
+  as a configured identity (`ui_actions: true` in `identities.yaml`), with a confirmation dialog and an audit log (kept
+  365 days by default, `retention.ui_actions`); requires a login, never available to the CLI control token.
 - **Dry-run** – `adispatch workflow dry-run <id>` shows which items would start and why the others would not,
   without starting anything.
 - **Robust operations** – retry blocks, action retries, cancel/timeout per process group, drain, crash recovery,

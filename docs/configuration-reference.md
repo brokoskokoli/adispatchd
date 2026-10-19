@@ -261,6 +261,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `retention.blocked_runs` | Dauer \| `never` | `never` | | Runs, deren technischer Fehler in einen Retry-Block gezählt wurde. |
 | `retention.max_log_size_per_run` | Größe | `100MB` | | Log-Limit des Haupt-Workers pro Run (stdout+stderr); Überlauf wird markiert. |
 | `retention.cleanup_interval` | Dauer | `24h` | ≥ 1 s | Abstand der Retention-Durchläufe (erster Lauf 60 s nach Bereitschaft). |
+| `retention.ui_actions` | Dauer \| `never` | `365d` | | seit 0.4.0: Audit-Einträge der UI-Aktionen (§3.3 `ui_actions`), unabhängig vom Ergebnis. |
 | `notifications.on` | Liste Enum | alle drei | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. |
 | `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
 | `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
@@ -391,7 +392,7 @@ statischen UI-Hülle eine Anmeldung und eine **Mindestrolle** (Tabelle je Endpun
   die TCP-Gegenstelle (nicht `X-Forwarded-For`) in `trusted_header.trusted_proxies` liegt, sonst `401`; ohne Header `401`;
   Login nicht in `trusted_header.users` → `403`. Logins werden ohne Groß-/Kleinschreibung verglichen. adispatchd muss
   dann an `127.0.0.1` gebunden und **nur** über den Proxy erreichbar sein (beim Start wird bei Nicht-Loopback-Bind
-  gewarnt). **Lokal fälschbar:** Stehen nur Loopback-Adressen in `trusted_proxies` und ist kein `proxy_secret_env`
+  gewarnt). **Lokal fälschbar:** Deckt ein Eintrag in `trusted_proxies` eine Loopback-Adresse ab und ist kein `proxy_secret_env`
   gesetzt (typisch Tailscale Serve), kann **jeder Prozess auf dem Host – auch jeder Worker** – den Header selbst setzen
   und sich als beliebiger gelisteter Login ausgeben (Warnung beim Start). Mit `proxy_secret_env` muss der Proxy zusätzlich
   `X-Adispatch-Proxy-Secret` senden. Reservierte Header (`Host`, `Cookie`, `Origin`, `X-Forwarded-For`,
@@ -483,6 +484,7 @@ retention:
   blocked_runs: never
   max_log_size_per_run: 100MB
   cleanup_interval: 24h
+  ui_actions: 365d                                   # Audit der UI-Aktionen (WI-27)
 notifications:
   on: [retry_block_created, lifecycle_action_failed, recovery_failed]
   channels:
@@ -694,13 +696,20 @@ eigene Person aufzutreten. Default aus. Voraussetzungen und Grenzen:
 
 - `auth.mode` muss `password` oder `trusted_header` sein. Mit `mode: none` sind UI-Aktionen deaktiviert (Hinweis in der
   UI, Warnung bei `config validate`).
-- Mit `trusted_header`, in dem ein Loopback-Proxy steht (z. B. Tailscale Serve) und kein `proxy_secret_env` gesetzt ist,
-  könnte jeder lokale Prozess – auch ein Worker – den Login-Header fälschen: dann ist `ui_actions: true` ein **Fehler**.
-  Abhilfe: `auth.mode: password` (funktioniert auch über Tailscale) oder `proxy_secret_env`.
+- Mit `trusted_header`, in dessen `trusted_proxies` ein Eintrag Loopback abdeckt (z. B. Tailscale Serve auf
+  `127.0.0.1`) und kein `proxy_secret_env` gesetzt ist, könnte jeder lokale Prozess – auch ein Worker – den Login-Header
+  fälschen: dann ist `ui_actions: true` ein **Fehler**. Abhilfe: `auth.mode: password` (funktioniert auch über Tailscale)
+  oder `proxy_secret_env`.
+- **Jeder Proxy auf demselben Host** braucht für UI-Aktionen `proxy_secret_env` (oder `auth.mode: password`) – auch wenn
+  er in `trusted_proxies` mit seiner LAN- oder Tailscale-IP steht: lokale Prozesse erreichen adispatchd auch über diese
+  Adresse. Das erkennt die Prüfung nicht automatisch (sie sieht nur Loopback-Einträge).
+- **`ui_actions` an einer `github_token`-Identity** heißt: Admins handeln in der UI **als die Person**, der der Token
+  gehört (Kommentare erscheinen unter ihrem Namen). Nur bewusst einsetzen, für Apps bevorzugt `github_app`.
 - Nur echte Benutzer: Der CLI-Steuer-Token wird für UI-Aktionen nie akzeptiert.
 - Geschrieben wird genau mit dieser Identity (auch Projektfelder, unabhängig von `project.identity` der Source). App-Rechte:
   Issues und Pull Requests **Read and write**, für Projektfelder Organization → Projects **Read and write**.
-- Jede Aktion steht im Audit (`GET /api/v1/ui-actions`, UI-Seite „UI Actions“), Details: [api.md](api.md#ui-aktionen-als-identity-seit-040-wi-27).
+- Jede Aktion steht im Audit (`GET /api/v1/ui-actions`, UI-Seite „UI Actions“), aufbewahrt für `retention.ui_actions`
+  (Default `365d`, §3.1). Details: [api.md](api.md#ui-aktionen-als-identity-seit-040-wi-27).
 
 ```yaml
 # example: ui-actions

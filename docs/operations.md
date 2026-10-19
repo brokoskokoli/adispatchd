@@ -461,33 +461,60 @@ zusätzlich als Event `audit.user_action` in den Run-Details, entfernte Blocks m
 
 Administratoren können in der Web-UI (Menü **UI Actions**, Link „Act as identity…“ im Run-Detail und in Views) auf ein
 Issue/PR **als eine konfigurierte Identity** antworten, Labels setzen/entfernen und Projektfelder ändern – etwa als
-`maintainer`-App statt mit dem eigenen GitHub-Konto. Einrichtung:
+`maintainer`-App statt mit dem eigenen GitHub-Konto.
+
+![Item-Panel: Identity, Kommentar, Labels, Projektfelder, letzte Aktionen](screenshots/item-panel.png)
+
+Einrichtung:
 
 1. Anmeldung einschalten: `auth.mode: password` oder `trusted_header` (siehe oben). Mit `mode: none` bleiben UI-Aktionen
-   aus. Bei `trusted_header` hinter einem lokalen Proxy ohne `proxy_secret_env` (z. B. Tailscale Serve) lehnt
-   `config validate` `ui_actions: true` ab – ein Worker könnte sonst den Login-Header fälschen und als App posten. Über
-   Tailscale funktioniert `auth.mode: password` genauso.
+   aus. Über Tailscale funktioniert `auth.mode: password` genauso gut.
 2. Benutzer mit Rolle `admin` anlegen.
 3. In `identities.yaml` die Identity mit `ui_actions: true` freischalten, `adispatch config reload`.
 4. App-Rechte prüfen: **Issues** und **Pull requests** „Read and write“ (Kommentare, Labels), für Projektfelder
    **Organization → Projects** „Read and write“. Fehlende Rechte meldet die UI als `github_forbidden`.
 
-Sicherheit: Der CLI-Steuer-Token öffnet diese Routen nie (nur echte Anmeldungen). Vor jedem Senden zeigt die UI einen
-Bestätigungsdialog („Send as maintainer (GitHub App)?“). Kommentartexte werden vor dem Senden redigiert (bekannte Secrets,
-GitHub-Token-Formate, Private Keys) und **nicht automatisch wiederholt**; bei `github_outcome_unknown` erst auf GitHub
-nachsehen, ob der Kommentar schon da ist. Der Link „Open on GitHub“ öffnet das Item in einem neuen Tab – dort liest und
-schreibt man als man selbst.
+> **Proxy auf demselben Host = lokal fälschbar.** Mit `trusted_header` glaubt adispatchd den Login-Header jeder
+> Verbindung von einer Adresse in `trusted_proxies`. Läuft der Proxy auf demselben Rechner, kann **jeder lokale Prozess,
+> auch jeder Worker**, sich über dieselbe Adresse verbinden und als Admin eine App-Identity posten lassen – egal ob der
+> Proxy dort als `127.0.0.1` oder mit seiner LAN- bzw. Tailscale-IP eingetragen ist. Für UI-Aktionen deshalb entweder
+> `auth.mode: password` oder einen Proxy, der `X-Adispatch-Proxy-Secret` mitsendet (`proxy_secret_env`). `config validate`
+> lehnt `ui_actions: true` ab, sobald ein `trusted_proxies`-Eintrag Loopback abdeckt und kein `proxy_secret_env` gesetzt
+> ist (z. B. Tailscale Serve); eine eigene LAN-/Tailscale-IP erkennt die Prüfung nicht – das ist Ihre Verantwortung.
+
+> **`github_token`-Identities handeln als echte Person.** `ui_actions: true` an einer Token-Identity (z. B. einem
+> persönlichen Access-Token) bedeutet: Jeder Admin der UI kommentiert und ändert Labels/Felder **im Namen des
+> Token-Besitzers** – für Mitlesende auf GitHub nicht von ihm selbst zu unterscheiden. Nur bewusst und für eigene
+> Maschinen-Konten einsetzen; für Bot-Antworten eine GitHub App (`github_app`) verwenden.
+
+Sicherheit und Verhalten:
+
+- Der CLI-Steuer-Token öffnet diese Routen nie (nur echte Anmeldungen). Vor jedem Senden zeigt die UI einen
+  Bestätigungsdialog („Send as maintainer (GitHub App)?“), vor dem Anlegen neuer Labels einen eigenen.
+- **Kommentare werden nie still verändert:** Sieht ein Text nach einem Secret aus (bekannte Werte des Daemons, GitHub-,
+  Anthropic-, AWS-, Slack-Token-Formate, PEM-Private-Keys), warnt die UI und der Server lehnt ab
+  (`comment_contains_secret`). Das ist **best effort** – andere Geheimnisse erkennt die Prüfung nicht.
+- HTML-Kommentare (`<!-- … -->`) werden als Text gesendet; ein UI-Kommentar kann keine Orchestrator-Marker vortäuschen.
+- Kommentare werden **nicht automatisch wiederholt**; derselbe Text am selben Item innerhalb von 60 s wird abgewiesen.
+  Bei `github_outcome_unknown` erst auf GitHub nachsehen, ob der Kommentar schon da ist.
+- Je Benutzer höchstens 20 Aktionen und 60 Item-Abrufe pro Minute (`429 ui_actions_throttled`).
+- Der Link „Open on GitHub“ öffnet das Item in einem neuen Tab – dort liest und schreibt man als man selbst.
 
 **Audit:** Tabelle `ui_actions` in der Datenbank (Schema v4): Zeit, Benutzer, Identity, Item, Art, Ergebnis/Fehler, bei
-Kommentaren die URL (nie der Text). Anzeige auf der Seite „UI Actions“ und im Item-Panel, API `GET /api/v1/ui-actions`,
-zusätzlich Log-Zeilen `"msg":"ui action"`. Aufbewahrung wie Runs (`retention.completed_runs` für erfolgreiche,
-`retention.failed_runs` für fehlgeschlagene Einträge).
+Kommentaren die URL (nie der Text; Labels/Feldwerte maskiert). Anzeige auf der Seite „UI Actions“ und im Item-Panel, API
+`GET /api/v1/ui-actions`, zusätzlich Log-Zeilen `"msg":"ui action"`. Aufbewahrung: `retention.ui_actions` (Default
+**365 Tage**, `never` = unbegrenzt), unabhängig vom Ergebnis. Kann ein Eintrag nach einer erfolgreichen Änderung nicht
+geschrieben werden (z. B. Platte voll), meldet die UI eine Warnung und der Dienstlog `ui action audit failed`.
 
 | Meldung | Ursache / Lösung |
 |---|---|
 | `403 ui_actions_disabled` | `auth.mode: none` → Anmeldung einschalten |
 | `403 identity_not_allowed` | Identity ohne `ui_actions: true` (Reload vergessen?) |
 | `403 control_token_not_allowed` / `user_login_required` | Aufruf mit dem Steuer-Token – nur angemeldete Benutzer |
+| `400 comment_contains_secret` | Text enthält etwas, das wie ein Token/Key aussieht – entfernen und neu senden |
+| `400 label_not_found` | Label existiert im Repository nicht; in der UI das Anlegen bestätigen (`create: true`) |
+| `409 duplicate_comment` | derselbe Kommentar wurde gerade gesendet – auf GitHub prüfen |
+| `429 ui_actions_throttled` | zu viele UI-Aktionen/Abrufe pro Minute; `Retry-After` abwarten |
 | `502 github_forbidden` | App-Rechte fehlen oder die Unterhaltung ist gesperrt (locked) |
 | `429 github_rate_limited` | Rate-Limit der Identity; später erneut senden (`Retry-After`) |
 | `502 github_outcome_unknown` | Antwort ging verloren – auf GitHub prüfen, bevor erneut gesendet wird |
