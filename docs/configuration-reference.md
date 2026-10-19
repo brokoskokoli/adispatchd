@@ -258,6 +258,11 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `notifications.on` | Liste Enum | alle drei | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. |
 | `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
 | `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
+| `monitoring.enabled` | Boolean | `true` | | Bereich „Server“ im Dashboard: CPU, RAM, Platte und Prozesse messen (seit 0.3.1). `false` → keine Messung, Dashboard zeigt einen Hinweis. |
+| `monitoring.interval` | Dauer | `scheduler.polling_interval`, höchstens `60s` | ≥ 5 s | Abtastintervall. Ohne Angabe gilt das Polling-Intervall, begrenzt auf 5 s … 60 s. Messungen laufen nie parallel. |
+| `monitoring.retention` | Dauer | `6h` | ≥ 10 und ≤ 20 000 Intervalle | wie lange Messpunkte **im Speicher** gehalten werden (Ringpuffer; geht beim Neustart verloren). |
+| `monitoring.top_processes` | Integer | `5` | 0–50 | fremde Prozesse (weder Daemon noch Run noch Hook), die einzeln mit Namen gezeigt werden; gleichnamige werden zusammengefasst (`node ×3`). `0` = keine. |
+| `monitoring.min_cpu_percent` | Zahl | `2` | ≥ 0 | fremde Prozesse(-gruppen) mit weniger CPU landen in „Others“. 100 = ein voll ausgelasteter Kern. |
 
 Retention löscht nie aktive Runs, Runs mit unfertiger oder gescheiterter Lifecycle-Kette und Runs eines **aktiven**
 Retry-Blocks. Gelöscht werden DB-Zeilen, `runs/<id>/`, `logs/<id>/` und der Workspace (nur unter `base_dir`).
@@ -315,7 +320,25 @@ notifications:
       on: [retry_block_created, recovery_failed]
 container:
   engine: docker                                     # docker | podman (für execute.type: container)
+monitoring:                                          # Server-Ressourcen im Dashboard (seit 0.3.1)
+  enabled: true
+  interval: 30s                                      # Default: scheduler.polling_interval, 5s … 60s
+  retention: 6h                                      # nur im Speicher
+  top_processes: 5
+  min_cpu_percent: 2
 ```
+
+**Ressourcen-Monitor (`monitoring`, seit 0.3.1).** Der Daemon misst im Abstand `interval` die CPU-Auslastung
+(Delta der `os.cpus()`-Zeiten), Kerne und Load Average, den Arbeitsspeicher (Linux: `MemAvailable` aus
+`/proc/meminfo`; macOS: verfügbar = free + inactive + speculative aus `vm_stat`, sonst `os.freemem()`), den freien
+Platz des data-dir und – falls auf einem anderen Dateisystem – von `workspace.base_dir`, sowie einmal je Intervall die
+Prozessliste (`ps -A -o pid=,ppid=,pgid=,time=,rss=,comm=`, ohne Shell, mit Timeout). Die CPU je Prozess ist das Delta der
+kumulierten CPU-Zeit geteilt durch die Wandzeit (100 % = ein Kern; Linux-`ps` liefert sie in ganzen Sekunden). Zuordnung:
+eigene PID → Daemon; Prozessgruppe bzw. Vorfahrenkette des Workers → der Run (Container-Runs zusätzlich
+`<engine> stats --no-stream`); andere Kindprozesse des Daemons → „adispatchd (hooks/checks)“; der Rest → fremde
+Prozesse. Gezeigt werden **nur Befehlsnamen, nie Argumente** – fremde Prozessnamen sind aber in der UI sichtbar
+(UI nur hinter Authentifizierung freigeben). Fehler einer Messung (z. B. `ps` fehlt) werden gedrosselt geloggt und lassen den
+Teilwert leer. API: `GET /api/v1/system/metrics`, SSE-Event `system.metrics` ([api.md](api.md)).
 
 ### 3.2 sources.yaml
 

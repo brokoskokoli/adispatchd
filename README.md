@@ -54,6 +54,9 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   workspace is cleaned up; download them in the UI or via the API.
 - **Web UI with live updates** – workflows, runs, live output, events, kept files and views (read-only tables across
   repositories), streamed via Server-Sent Events; plus a JSON HTTP API.
+- **Server resources on the dashboard** – CPU over time stacked by the daemon, each run (click through to the run),
+  hooks/checks and the busiest foreign processes, plus memory, load and free disk space; sampled in memory
+  (`monitoring` in `config.yaml`), only command names are shown, never arguments.
 - **Dry-run** – `adispatch workflow dry-run <id>` shows which items would start and why the others would not,
   without starting anything.
 - **Robust operations** – retry blocks, action retries, cancel/timeout per process group, drain, crash recovery,
@@ -106,7 +109,7 @@ GitHub App per role (permissions: Issues read/write, Pull requests write, Metada
 (`export GITHUB_CODER_PRIVATE_KEY="$(cat key.pem)"`), set `enabled: true` in `workflows/coder.yaml` and run
 `adispatch config reload --config-dir ./config`.
 
-For services, always install a **fixed version** globally (`npm install -g adispatchd@0.3.0`), not `npx`.
+For services, always install a **fixed version** globally (`npm install -g adispatchd@0.3.1`), not `npx`.
 
 ## Example workflow
 
@@ -234,6 +237,8 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **No authentication in V1.** The API binds to `127.0.0.1` by default. For remote access use an
   **authenticating** reverse proxy, VPN or Tailscale and list its host names in `server.allowed_hosts` (DNS
   rebinding protection). Mutating requests need the header `X-Adispatch-Request: 1`; there is no CORS.
+  The dashboard shows the command names of all processes on the server (never their arguments) – one more reason to
+  expose the UI only behind authentication (or set `monitoring.enabled: false`).
 - **Scripts and YAML are trusted code** running with the service's permissions – there is no sandbox. Write access
   to the config dir equals code execution.
 - Workers and shell actions only receive explicitly declared secrets; secrets never end up in YAML (private keys only
@@ -247,7 +252,7 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
 ## Status and roadmap
 
-Version 0.3.0. All planned work items are implemented and covered by an automated test suite (CI on Node 22 and 24).
+Version 0.3.1. All planned work items are implemented and covered by an automated test suite (CI on Node 22 and 24).
 Manual verification against real GitHub repositories and systemd on Linux is still pending – see
 [docs/status.md](docs/status.md) for what is open before production use, and [CHANGELOG.md](CHANGELOG.md) for
 release notes.

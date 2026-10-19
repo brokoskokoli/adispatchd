@@ -245,6 +245,33 @@ Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_res
 | POST | `/api/v1/config/validate` | `{"ok", "errors":[ConfigIssue], "warnings", "hash"?}` – prüft Dateien, aktiviert nichts |
 | POST | `/api/v1/config/reload` | `200 {"ok":true,"version","hash","changed","diff","resetOverrides","warnings"}` / `422 config_invalid` (`details.errors`) – atomar, bei Fehler bleibt die aktive Konfiguration |
 
+### System-Ressourcen (seit 0.3.1)
+
+| Methode | Pfad | Antwort |
+|---|---|---|
+| GET | `/api/v1/system/metrics?since=<ISO>` | `{"enabled", "intervalMs", "retentionMs", "samples":[Sample]}` – Messpunkte des Ressourcen-Monitors (älteste zuerst; mit `since` nur jüngere). `enabled: false` (`monitoring.enabled: false`) → `samples: []`. Schreibgeschützt, Host-/Origin-Regeln wie alle GET-Endpunkte; ungültiges `since` → `400 invalid_request` |
+
+Sample:
+```json
+{"at":"2026-10-19T10:00:30.000Z",
+ "cpu":{"totalPercent":46.2,"cores":8,"load":[2.1,1.8,1.5]},
+ "memory":{"totalBytes":17179869184,"availableBytes":6442450944},
+ "disks":[{"path":"/var/lib/adispatchd","freeBytes":52613349376,"totalBytes":214748364800}],
+ "processes":[
+   {"kind":"daemon","label":"adispatchd","cpuPercent":0.6,"rssBytes":96944128,"count":1},
+   {"kind":"run","label":"coder · 1a2b3c4d · project_a:12","runId":"run-…-1a2b3c4d","workflowId":"coder","itemKey":"project_a:12","cpuPercent":98.0,"rssBytes":412000000,"count":4},
+   {"kind":"hooks","label":"adispatchd (hooks/checks)","cpuPercent":1.5,"rssBytes":8000000,"count":2},
+   {"kind":"other","label":"node ×3","name":"node","cpuPercent":37.2,"rssBytes":300000000,"count":3},
+   {"kind":"rest","label":"Others","cpuPercent":120.6,"rssBytes":6937321472,"count":728}]}
+```
+- `cpu.totalPercent`: Auslastung aller Kerne seit der vorigen Messung (0–100). `processes[].cpuPercent`: 100 = ein Kern
+  (Delta der CPU-Zeit aus `ps` / Wandzeit); im Diagramm ÷ `cores`. Der Rest bis `totalPercent` ist „System / unattributed“.
+- `kind`: `daemon` (eigene PID), `run` (Prozessgruppe/Prozessbaum des Workers; Container-Runs zusätzlich `<engine> stats`),
+  `hooks` (andere Kindprozesse des Daemons: Shell-Actions, Conditions), `other` (fremde Prozesse, nach Namen gruppiert, die
+  `monitoring.top_processes` größten über `min_cpu_percent`), `rest` (übrige fremde Prozesse).
+- Nur Befehlsnamen (`comm`, Basename, gekürzt), **nie Argumente**. Konnte die Prozessliste nicht gelesen werden, ist
+  `processes` leer. Werte liegen nur im Speicher (gehen beim Neustart verloren).
+
 ### Notifications
 
 | Methode | Pfad | Antwort |
@@ -278,6 +305,7 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 | `notification` | nein | Notification inkl. `deliveries` (bei Anlage und jedem Zustellversuch) |
 | `config.reloaded` | nein | `{version, hash, changed, diff, resetOverrides}` |
 | `retention.finished` | nein | `{finishedAt, deletedRuns, errors}` |
+| `system.metrics` | nein | neuester Messpunkt des Ressourcen-Monitors (Sample wie bei `GET /api/v1/system/metrics`), je Intervall; nicht bei `?run=` |
 
 - **Reconnect:** `EventSource` sendet `Last-Event-ID` automatisch; alternativ `?lastEventId=`. Verpasste persistente
   Events werden aus SQLite nachgeliefert (max. 5000, sonst `stream.reset`), danach live – ohne Lücken/Duplikate.

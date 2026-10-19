@@ -3,6 +3,32 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.3.1] – unveröffentlicht
+
+### Hinzugefügt
+
+- **Server-Ressourcen im Dashboard:** neuer Bereich „Server“ mit gestapeltem CPU-Diagramm über die Zeit (Daemon, jeder
+  aktive Run mit stabiler Farbe je Workflow und Link zum Run, Hooks/Checks des Daemons, die größten fremden Prozesse
+  nach Namen, „Others“ und der nicht zuordenbare Rest bis zur Gesamtauslastung; Skala 0–100 % der Gesamtkapazität),
+  Diagrammen für RAM (belegt/verfügbar) und freien Plattenplatz (data-dir und – falls anderes Dateisystem –
+  `workspace.base_dir`), aktuellen Werten (CPU, Load, RAM, Platte) als Zahlen und Tabelle, Tooltip je Zeitpunkt,
+  Zeitraum-Auswahl und Live-Aktualisierung per SSE. Eigenes SVG-Rendering ohne Bibliotheken, Hell/Dunkel.
+- **Messung:** CPU aus den `os.cpus()`-Zeiten, RAM über `MemAvailable` (Linux) bzw. `vm_stat` (macOS), Platte über
+  `statfs`, Prozesse über eine `ps`-Ausführung je Intervall (`execFile`, Timeout, Ausgabe begrenzt); CPU je Prozess aus
+  dem Delta der CPU-Zeit (PID-Wiederverwendung erkannt). Zuordnung zu Runs über Prozessgruppe/Prozessbaum, bei
+  Container-Runs zusätzlich `<engine> stats`. **Nur Befehlsnamen, nie Argumente.** Messungen laufen nie parallel;
+  Fehler (z. B. fehlendes `ps`) werden gedrosselt geloggt und lassen den Teilwert leer. Werte nur im Speicher
+  (Ringpuffer, gehen beim Neustart verloren).
+- **Konfiguration `monitoring`** in `config.yaml` (alles optional): `enabled` (`true`), `interval` (Default
+  `scheduler.polling_interval`, 5 s … 60 s), `retention` (`6h`, 10 … 20 000 Intervalle), `top_processes` (`5`),
+  `min_cpu_percent` (`2`). Die Konfigurationsseite zeigt die Werte.
+- **API:** `GET /api/v1/system/metrics?since=<ISO>` und SSE-Event `system.metrics`.
+
+### Hinweis
+
+- Die UI zeigt die Befehlsnamen fremder Prozesse des Servers – UI nur hinter Authentifizierung freigeben oder
+  `monitoring.enabled: false` setzen.
+
 ## [0.3.0] – 2026-10-19
 
 ### Hinzugefügt
@@ -203,6 +229,7 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
+[0.3.1]: https://github.com/brokoskokoli/adispatchd/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/brokoskokoli/adispatchd/releases/tag/v0.1.0

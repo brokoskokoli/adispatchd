@@ -70,8 +70,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.3.0
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.3.0.tgz
+sudo npm install -g adispatchd@0.3.1
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.3.1.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -327,6 +327,26 @@ Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen i
 - Run-Logs: `data-dir/logs/<run-id>/{stdout,stderr}.log`, Events/Status in SQLite, live per SSE.
 - Aufbewahrung über `retention` in `config.yaml` (Default: erfolgreiche Runs 30 d, fehlgeschlagene 90 d, Block-Runs nie,
   100 MB Log pro Run, Prüfung alle 24 h). Aktive Runs, offene Blocks und unvollständige Aktionsketten werden nie gelöscht.
+
+### Server-Ressourcen im Dashboard (`monitoring`, seit 0.3.1)
+
+- Der Daemon misst CPU, Load, RAM, freien Plattenplatz (data-dir und – falls anderes Dateisystem – `workspace.base_dir`)
+  und die Prozessliste (`ps`, einmal je `monitoring.interval`, ohne Shell, Timeout 10 s). Die Werte liegen nur im
+  Speicher (`monitoring.retention`, Default 6 h) und **gehen beim Neustart verloren**; es gibt keine DB-Migration.
+  API: `GET /api/v1/system/metrics`, live per SSE `system.metrics`.
+- **Sichtbarkeit:** Die UI zeigt die **Befehlsnamen fremder Prozesse** des Servers (nie Argumente – die können Secrets
+  enthalten). Die UI daher nur hinter Authentifizierung/Reverse Proxy freigeben; wer das nicht will, setzt
+  `monitoring.enabled: false` (keine Messung, kein `ps`).
+- **Zuordnung:** eigene PID → Daemon; Prozessgruppe bzw. Prozessbaum eines Workers → dessen Run; andere Kindprozesse des
+  Daemons (Shell-Actions, Conditions) → „adispatchd (hooks/checks)“. Container-Runs: der Engine-CLI-Prozess plus – wenn
+  möglich – `<engine> stats --no-stream`; unter Linux sichtbare Container-Prozesse werden nicht doppelt gezählt. Docker
+  Desktop/Podman-Maschine auf macOS: die Container laufen in einer VM, gezählt wird nur `stats`.
+- **macOS-RAM:** „verfügbar“ = free + inactive + speculative Seiten aus `vm_stat` (vergleichbar mit Linux `MemAvailable`;
+  komprimierter Speicher zählt als belegt). Linux: `MemAvailable` aus `/proc/meminfo`. Fehlt beides: `os.freemem()`.
+- **Genauigkeit:** CPU je Prozess = Delta der kumulierten CPU-Zeit aus `ps` zwischen zwei Messungen (Linux-`ps` liefert
+  ganze Sekunden: bei 30 s Intervall ±3 % je Prozess). Prozesse, die zwischen zwei Messungen starten und enden, fehlen
+  in der Aufteilung; die Differenz zur Gesamtauslastung erscheint als „System / unattributed“.
+- Fehler (z. B. `ps` fehlt im Container-Image) werden höchstens alle 10 min geloggt; der Teilwert bleibt leer.
 
 ## Fehlerbilder
 
