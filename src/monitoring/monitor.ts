@@ -23,7 +23,7 @@ import { ResourceSampler } from './sampler.js';
 import type { AttributionTargets, MetricsSample, MonitorSettings } from './types.js';
 
 /** Hard cap of the ring buffer (validation limits `retention / interval` to the same value). */
-export const MAX_BUFFERED_SAMPLES = 20_000;
+export const MAX_BUFFERED_SAMPLES = 5_000;
 /** Delay of the first real sample after the priming measurement (at most the interval). */
 export const DEFAULT_PRIME_DELAY_MS = 5_000;
 /** How often a disabled monitor checks whether it was enabled by a reload. */

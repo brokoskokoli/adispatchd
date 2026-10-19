@@ -68,7 +68,7 @@ export const MAX_DEFAULT_MONITORING_INTERVAL_MS = 60_000;
 /** `monitoring.retention` must hold at least this many intervals … */
 export const MIN_MONITORING_SAMPLES = 10;
 /** … and at most this many (memory bound of the in-memory ring buffer). */
-export const MAX_MONITORING_SAMPLES = 20_000;
+export const MAX_MONITORING_SAMPLES = 5_000;
 
 const configId = z
   .string()
@@ -226,7 +226,7 @@ export const globalConfigSchema = z.strictObject({
       /** Default: `scheduler.polling_interval`, at most 60s (applied when normalizing). */
       interval: durationSchema.refine((ms) => ms >= MIN_MONITORING_INTERVAL_MS, 'Duration must be at least 5s').optional(),
       retention: positiveDuration.default(parseDuration(DEFAULTS.monitoringRetention)),
-      top_processes: z.number().int('Must be an integer').min(0, 'Must be 0 or greater').max(50, 'Must be at most 50').default(DEFAULTS.monitoringTopProcesses),
+      top_processes: z.number().int('Must be an integer').min(0, 'Must be 0 or greater').max(20, 'Must be at most 20').default(DEFAULTS.monitoringTopProcesses),
       min_cpu_percent: z.number().finite().min(0, 'Must be 0 or greater').default(DEFAULTS.monitoringMinCpuPercent),
     })
     .prefault({}),

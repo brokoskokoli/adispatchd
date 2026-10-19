@@ -27,4 +27,5 @@ export {
   type SystemProbeOptions,
 } from './probe.js';
 export { DAEMON_LABEL, DEFAULT_ERROR_LOG_INTERVAL_MS, HOOKS_LABEL, REST_LABEL, ResourceSampler, runLabel, type ResourceSamplerOptions } from './sampler.js';
+export { DEFAULT_MAX_POINTS, downsample, MAX_NAMED_OTHERS_PER_BUCKET, MAX_POINTS, mergeBucket } from './downsample.js';
 export { DEFAULT_PRIME_DELAY_MS, DISABLED_RECHECK_MS, MAX_BUFFERED_SAMPLES, ResourceMonitor, type ResourceMonitorOptions } from './monitor.js';

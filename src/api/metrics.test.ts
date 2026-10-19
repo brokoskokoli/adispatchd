@@ -79,6 +79,26 @@ describe.runIf(supported)('system metrics API', () => {
     expect(env.app.controller.supervisedProcesses()).toEqual([]);
   }, 30_000);
 
+  it('bounds the payload: points downsample to bucket averages, range limits the time span (review M1)', async () => {
+    for (let i = 0; i < 25; i++) {
+      await new Promise((r) => setTimeout(r, 2));
+      await env.app.monitor.sampleNow();
+    }
+    const all = await env.request('GET', '/api/v1/system/metrics');
+    expect(all.json.samples.length).toBeGreaterThanOrEqual(25);
+    expect(all.json.bucketMs).toBeNull();
+    const few = await env.request('GET', '/api/v1/system/metrics?points=10');
+    expect(few.status).toBe(200);
+    expect(few.json.samples.length).toBeLessThanOrEqual(10);
+    expect(few.json.bucketMs).toBeGreaterThan(0);
+    expect(few.json.samples.at(-1).at).toBe(all.json.samples.at(-1).at);
+    const recent = await env.request('GET', '/api/v1/system/metrics?range=1ms');
+    expect(recent.json.samples.length).toBeLessThan(all.json.samples.length);
+    expect((await env.request('GET', '/api/v1/system/metrics?points=5')).status).toBe(400);
+    expect((await env.request('GET', '/api/v1/system/metrics?points=100000')).status).toBe(400);
+    expect((await env.request('GET', '/api/v1/system/metrics?range=soon')).status).toBe(400);
+  });
+
   it('is subject to the Host allowlist like every GET', async () => {
     const res = await env.request('GET', '/api/v1/system/metrics', undefined, { host: 'evil.example:8787' });
     expect(res.status).toBe(421);
@@ -103,7 +123,7 @@ describe.runIf(supported)('system metrics API with monitoring disabled', () => {
   it('reports enabled: false and no samples; nothing is measured', async () => {
     await new Promise((r) => setTimeout(r, 200));
     const res = await env.request('GET', '/api/v1/system/metrics');
-    expect(res.json).toEqual({ enabled: false, intervalMs: 10_000, retentionMs: 6 * 3_600_000, samples: [] });
+    expect(res.json).toEqual({ enabled: false, intervalMs: 10_000, retentionMs: 6 * 3_600_000, bucketMs: null, samples: [] });
     expect(probe.calls.processes).toBe(0);
   });
 });

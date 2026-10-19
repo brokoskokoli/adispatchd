@@ -29,6 +29,7 @@ import {
   REDACTED,
   redactValue,
   systemClock,
+  tryParseDuration,
   type Clock,
   type Logger,
   type Redactor,
@@ -43,7 +44,7 @@ import type { Repositories, RunRecord } from '../persistence/index.js';
 import { listKeptFiles, RUN_EVENTS, type RetentionService, type RunController } from '../runs/index.js';
 import type { DashboardInfoService } from '../dashboard/index.js';
 import type { Scheduler } from '../scheduler/index.js';
-import type { ResourceMonitor } from '../monitoring/index.js';
+import { DEFAULT_MAX_POINTS, downsample, MAX_POINTS, type ResourceMonitor } from '../monitoring/index.js';
 import type { ViewService } from '../views/index.js';
 import { uiContentSecurityPolicy } from './csp.js';
 import { ApiError, toErrorResponse } from './errors.js';
@@ -153,7 +154,17 @@ const logsQuery = z
     tail: z.coerce.number().int().min(0).optional(),
   })
   .strict();
-const metricsQuery = z.object({ since: z.string().datetime({ offset: true }).optional() }).strict();
+const metricsQuery = z
+  .object({
+    since: z.string().datetime({ offset: true }).optional(),
+    /** Duration back from now, e.g. `1h`, `900000ms` (combined with `since`: the later start wins). */
+    range: z
+      .string()
+      .refine((v) => tryParseDuration(v) !== undefined, 'Expected a duration such as 15m, 1h or 3600000ms')
+      .optional(),
+    points: z.coerce.number().int().min(10).max(MAX_POINTS).optional(),
+  })
+  .strict();
 const sseQuery = z
   .object({ run: z.string().optional(), lastEventId: z.coerce.number().int().min(0).optional() })
   .strict();
@@ -808,12 +819,12 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const monitor = deps.monitor;
     const settings = monitor?.settings ?? { ...deps.config.current.global.monitoring, enabled: false };
     const enabled = monitor !== undefined && settings.enabled;
-    return {
-      enabled,
-      intervalMs: settings.intervalMs,
-      retentionMs: settings.retentionMs,
-      samples: enabled && monitor ? monitor.list(q.since ? new Date(q.since) : undefined) : [],
-    };
+    let sinceMs = q.since ? Date.parse(q.since) : -Infinity;
+    if (q.range) sinceMs = Math.max(sinceMs, clock.now().getTime() - (tryParseDuration(q.range) ?? 0));
+    const raw = enabled && monitor ? monitor.list(Number.isFinite(sinceMs) ? new Date(sinceMs) : undefined) : [];
+    // Bounded payload: at most `points` (default 600) bucket averages.
+    const { samples, bucketMs } = downsample(raw, q.points ?? DEFAULT_MAX_POINTS);
+    return { enabled, intervalMs: settings.intervalMs, retentionMs: settings.retentionMs, bucketMs, samples };
   });
 
   // --- SSE --------------------------------------------------------------------

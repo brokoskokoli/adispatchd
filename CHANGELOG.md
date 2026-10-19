@@ -20,7 +20,7 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   Fehler (z. B. fehlendes `ps`) werden gedrosselt geloggt und lassen den Teilwert leer. Werte nur im Speicher
   (Ringpuffer, gehen beim Neustart verloren).
 - **Konfiguration `monitoring`** in `config.yaml` (alles optional): `enabled` (`true`), `interval` (Default
-  `scheduler.polling_interval`, 5 s … 60 s), `retention` (`6h`, 10 … 20 000 Intervalle), `top_processes` (`5`),
+  `scheduler.polling_interval`, 5 s … 60 s), `retention` (`6h`, 10 … 5 000 Intervalle), `top_processes` (`5`),
   `min_cpu_percent` (`2`). Die Konfigurationsseite zeigt die Werte.
 - **API:** `GET /api/v1/system/metrics?since=<ISO>` und SSE-Event `system.metrics`.
 - **Conditions sichtbar (WI-24):** Shell-Prüfungen in `conditions.workflow[]`, `conditions.item[]` und `shell_filter`

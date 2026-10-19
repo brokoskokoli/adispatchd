@@ -265,8 +265,8 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
 | `monitoring.enabled` | Boolean | `true` | | Bereich „Server“ im Dashboard: CPU, RAM, Platte und Prozesse messen (seit 0.3.1). `false` → keine Messung, Dashboard zeigt einen Hinweis. |
 | `monitoring.interval` | Dauer | `scheduler.polling_interval`, höchstens `60s` | ≥ 5 s | Abtastintervall. Ohne Angabe gilt das Polling-Intervall, begrenzt auf 5 s … 60 s. Messungen laufen nie parallel. |
-| `monitoring.retention` | Dauer | `6h` | ≥ 10 und ≤ 20 000 Intervalle | wie lange Messpunkte **im Speicher** gehalten werden (Ringpuffer; geht beim Neustart verloren). |
-| `monitoring.top_processes` | Integer | `5` | 0–50 | fremde Prozesse (weder Daemon noch Run noch Hook), die einzeln mit Namen gezeigt werden; gleichnamige werden zusammengefasst (`node ×3`). `0` = keine. |
+| `monitoring.retention` | Dauer | `6h` | ≥ 10 und ≤ 5 000 Intervalle | wie lange Messpunkte **im Speicher** gehalten werden (Ringpuffer; geht beim Neustart verloren). |
+| `monitoring.top_processes` | Integer | `5` | 0–20 | fremde Prozesse (weder Daemon noch Run noch Hook), die einzeln mit Namen gezeigt werden; gleichnamige werden zusammengefasst (`node ×3`). `0` = keine. |
 | `monitoring.min_cpu_percent` | Zahl | `2` | ≥ 0 | fremde Prozesse(-gruppen) mit weniger CPU landen in „Others“. 100 = ein voll ausgelasteter Kern. |
 | `ui.external_links` | Liste | `[]` | | externe Tools in der Toolbar der Web-UI (seit 0.3.1), siehe unten. `[]` = keine Einträge sichtbar. |
 

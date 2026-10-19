@@ -32,7 +32,7 @@ describe('monitoring (WI-23)', () => {
     };
     expect(await errors('monitoring: { interval: 2s }\n')).toEqual(['monitoring.interval: Duration must be at least 5s']);
     expect(await errors('monitoring: { interval: 30s, retention: 4m }\n')).toEqual(['monitoring.retention: Must be at least 10 sampling intervals (10 × 30s)']);
-    expect(await errors('monitoring: { interval: 5s, retention: 30d }\n')).toEqual(['monitoring.retention: Must be at most 20000 sampling intervals (20000 × 5s)']);
+    expect(await errors('monitoring: { interval: 5s, retention: 30d }\n')).toEqual(['monitoring.retention: Must be at most 5000 sampling intervals (5000 × 5s)']);
     expect((await errors('monitoring: { top_processes: -1, min_cpu_percent: -2 }\n')).sort()).toEqual([
       'monitoring.min_cpu_percent: Must be 0 or greater',
       'monitoring.top_processes: Must be 0 or greater',
