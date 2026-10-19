@@ -7,7 +7,7 @@ import { ACTIVE_STATUSES, isTerminalStatus, type TechnicalStatus } from '../core
 import { workflowSecrets, type EffectiveWorkflow, type ParameterDefinition, type WorkflowConfig } from '../config/index.js';
 import { describeContainerExecute } from '../executors/index.js';
 import type { ActionAttemptRecord, BlockRecord, RunActionRecord, RunRecord } from '../persistence/index.js';
-import type { CronWorkflowStatus, WorkflowPlanningDiagnosis } from '../scheduler/index.js';
+import { checkDisplayName, type CronWorkflowStatus, type WorkflowConditionStatus, type WorkflowPlanningDiagnosis } from '../scheduler/index.js';
 
 /**
  * Unambiguous outcome of a run for the UI (Spec §21): business `failure` vs.
@@ -155,7 +155,18 @@ function parameterView(def: ParameterDefinition): Record<string, unknown> {
 /** Workflow in lists / detail. */
 export function toWorkflowView(
   wf: EffectiveWorkflow,
-  extra: { activeRuns: number; activeBlocks: number; cron: CronWorkflowStatus | null; diagnosis: WorkflowPlanningDiagnosis | undefined },
+  extra: {
+    activeRuns: number;
+    activeBlocks: number;
+    cron: CronWorkflowStatus | null;
+    diagnosis: WorkflowPlanningDiagnosis | undefined;
+    /** Last condition status (WI-24); `undefined` = none recorded. */
+    conditionStatus?: WorkflowConditionStatus | undefined;
+    /** Config dir (display names relative to it). */
+    configDir?: string;
+    /** Redaction of error texts / stderr lines. */
+    redact?: (text: string) => string;
+  },
 ): Record<string, unknown> {
   const c: WorkflowConfig = wf.config;
   return {
@@ -207,7 +218,7 @@ export function toWorkflowView(
     secrets: workflowSecrets(c),
     hasFilter: c.filter !== null,
     hasShellFilter: c.shellFilter !== null,
-    conditions: { workflow: c.conditions.workflow.length, item: c.conditions.item.length },
+    conditions: conditionsView(c, extra.conditionStatus, extra.configDir, extra.redact ?? ((t) => t)),
     maxTechnicalFailures: c.retry.maxTechnicalFailures,
     cron: extra.cron,
     lastPlanning: extra.diagnosis
@@ -220,6 +231,57 @@ export function toWorkflowView(
           started: extra.diagnosis.candidates.filter((x) => x.decision === 'started').length,
           // Per source (WI-20).
           sources: extra.diagnosis.sources.map((x) => ({ sourceId: x.sourceId, status: x.status, error: x.error, polled: x.polled })),
+        }
+      : null,
+  };
+}
+
+/**
+ * Shell checks of a workflow with display name and last status (WI-24):
+ * workflow conditions with their last evaluation, item conditions and the
+ * shell filter with the summary of the last planning step.
+ */
+export function conditionsView(
+  c: WorkflowConfig,
+  status: WorkflowConditionStatus | undefined,
+  configDir: string | undefined,
+  redact: (text: string) => string,
+): Record<string, unknown> {
+  const items = status?.items ?? null;
+  const red = (t: string | null): string | null => (t === null ? null : redact(t));
+  return {
+    workflow: c.conditions.workflow.map((cond, index) => {
+      const last = status?.workflow[index] ?? null;
+      return {
+        index,
+        name: cond.name ?? null,
+        label: checkDisplayName(cond, configDir),
+        command: cond.command,
+        args: cond.args,
+        timeoutMs: cond.timeoutMs,
+        cacheMs: cond.cacheMs,
+        last: last ? { ...last, error: red(last.error), stderr: red(last.stderr) } : null,
+      };
+    }),
+    item: c.conditions.item.map((cond, index) => {
+      const counts = items?.itemConditions[index];
+      return {
+        index,
+        name: cond.name ?? null,
+        label: checkDisplayName(cond, configDir),
+        command: cond.command,
+        args: cond.args,
+        timeoutMs: cond.timeoutMs,
+        last: items && counts ? { at: items.at, items: items.items, ...counts } : null,
+      };
+    }),
+    shellFilter: c.shellFilter
+      ? {
+          name: c.shellFilter.name ?? null,
+          label: checkDisplayName(c.shellFilter, configDir),
+          command: c.shellFilter.command,
+          timeoutMs: c.shellFilter.timeoutMs,
+          last: items?.shellFilter ? { at: items.at, ...items.shellFilter } : null,
         }
       : null,
   };
