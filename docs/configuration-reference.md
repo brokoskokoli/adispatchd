@@ -680,13 +680,22 @@ regulären Dateien, die auf ein Muster passen, mit ihrer relativen Struktur nach
 nicht aufgeräumt wird. Muster sind relativ zum Workspace: `*` = beliebige Zeichen außer `/`, `?` = ein Zeichen außer
 `/`, `**` als ganzes Segment = beliebig viele Verzeichnisebenen (auch keine); alles andere ist literal. Wildcards
 passen auch auf Namen mit führendem Punkt (`**/*.log` findet `.agent/gate/unit.log`). Ein Muster ohne Treffer ist kein
-Fehler. Symlinks werden **nie** verfolgt (weder Datei- noch Verzeichnis-Links; passende Links werden als übersprungen
+Fehler. Ein Muster, das genau ein Verzeichnis benennt (`.agent/gate`), kopiert nichts und wird als übersprungen
+(`directory`, Hinweis `.agent/gate/**/*`) vermerkt; Verzeichnisse, die nur über Wildcards passen, werden ignoriert.
+Symlinks werden **nie** verfolgt (weder Datei- noch Verzeichnis-Links; passende Links werden als übersprungen
 vermerkt), nur reguläre Dateien werden kopiert, und jede Datei wird vor dem Kopieren zusätzlich über ihren
-aufgelösten Pfad geprüft. Was die Summe `keep_max_size` überschreiten würde, wird übersprungen (kleinere spätere
-Dateien passen ggf. noch). Ergebnis als Run-Event `run.kept_files` (Anzahl, Bytes, übersprungene Einträge mit Grund
-`size_limit`/`symlink`/`not_regular_file`/…, Muster ohne Treffer), sichtbar in der UI (Run → **Files**) und über
+aufgelösten Pfad geprüft. **Secrets werden beim Kopieren redigiert** – best effort, wie Logs: dieselbe
+byteweise Ersetzung wie für stdout/stderr (auch über Lesegrenzen hinweg) mit den Secrets des Runs
+(`execute.secrets`) und allen dem Daemon bekannten Tokens/Schlüsseln; umgewandelte Werte (base64, URL-kodiert …)
+werden nicht erkannt, nach einem Neustart sind bereits abgelaufene Tokens nicht mehr bekannt. Was die Summe
+`keep_max_size` überschreiten würde (gezählt werden die **geschriebenen** Bytes nach dem Redigieren), wird
+übersprungen (kleinere spätere Dateien passen ggf. noch). Ergebnis als Run-Event `run.kept_files` (Anzahl, Bytes,
+übersprungene Einträge mit Grund `size_limit`/`symlink`/`directory`/`not_regular_file`/…, Muster ohne Treffer,
+Muster, die wegen der Grenze nicht durchsucht wurden), sichtbar in der UI (Run → **Files**) und über
 `GET /api/v1/runs/:id/kept` ([api.md](api.md)). Die Dateien gehören zum Run und werden mit ihm von der Retention
-gelöscht. Grenzen: höchstens 10 000 Dateien und 100 000 untersuchte Verzeichniseinträge pro Run.
+gelöscht. Grenzen: höchstens 10 000 Dateien und 100 000 untersuchte Verzeichniseinträge pro Run; Muster ohne
+Wildcards werden zuerst und ohne Verzeichnisauflistung geprüft und zählen nicht zur Grenze. Wildcard-Muster, die
+nach Erreichen der Grenze nichts gefunden haben, gelten als „nicht durchsucht“ (`notSearched`), nicht als ohne Treffer.
 
 #### 3.4.9 `retry`
 

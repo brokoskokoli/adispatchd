@@ -161,22 +161,31 @@ Für Live-Logs `run.output` per SSE nutzen und bei Reconnect ab `size` nachladen
 ```json
 { "runId": "run-…", "files": [{ "path": ".agent/gate/unit.log", "size": 1234 }], "totalBytes": 1234, "truncated": false,
   "report": { "message": "kept 1 file(s), 1234 bytes; 1 skipped (size_limit)", "patterns": [".agent/gate/*.log"],
-              "maxBytes": 104857600, "files": 1, "bytes": 1234, "unmatched": [],
+              "maxBytes": 104857600, "files": 1, "bytes": 1234, "unmatched": [], "notSearched": [],
               "skipped": [{ "path": ".agent/gate/huge.log", "reason": "size_limit", "size": 209715200 }],
               "skippedCount": 1, "walkLimitReached": false } }
 ```
-`report` ist die Payload des Run-Events `run.kept_files` (`null`, wenn nichts gesichert wurde bzw. `keep` fehlt).
-Gründe in `skipped[].reason`: `size_limit`, `symlink`, `not_regular_file`, `outside_workspace`, `changed` (Datei
-während des Kopierens ersetzt), `file_limit`, `error`; `alreadyPresent: true` nach einer fortgesetzten Finalisierung,
-`error` bei einem grundsätzlichen Problem (z. B. Workspace fehlt).
+`report` ist die Payload des Run-Events `run.kept_files`. `report: null` heißt: Für diesen Run wurde (noch) kein
+Sicherungsschritt ausgeführt – der Workflow hat kein `execute.keep`, der Run hatte keinen Workspace oder ist noch nicht
+bis zum Cleanup gekommen. Ein ausgeführter Schritt ohne Treffer liefert dagegen einen `report` mit `files: 0`.
+`bytes`/`size` sind die **geschriebenen** Bytes (nach dem Redigieren), `size` in `skipped` die Größe der Quelldatei.
+Gründe in `skipped[].reason`: `size_limit`, `symlink`, `directory` (Muster benennt ein Verzeichnis; Hinweis in
+`message`), `not_regular_file`, `outside_workspace`, `changed` (Datei nach der Suche ersetzt), `file_limit`, `error`.
+`unmatched` = Muster ohne Treffer, `notSearched` = Wildcard-Muster, die wegen der Grenze für Verzeichniseinträge nicht
+(vollständig) durchsucht wurden (`walkLimitReached: true`). `alreadyPresent: true` nach einer fortgesetzten
+Finalisierung, `error` bei einem grundsätzlichen Problem (z. B. Workspace fehlt; dann ist nichts gesichert).
+
+Secrets werden beim Kopieren redigiert – best effort, wie Logs (gleiche byteweise Ersetzung wie stdout/stderr; Marker
+`[REDACTED]`); die ausgelieferten Dateien enthalten also bereits den redigierten Inhalt.
 
 Download: Der Pfad wird segmentweise geprüft (keine leeren, `.`/`..`-Segmente, kein `\`, kein NUL), jede Komponente
 darf kein Symlink sein, der aufgelöste Pfad muss unter `kept/` liegen, und nur reguläre Dateien werden ausgeliefert –
 sonst `400 invalid_path` bzw. `404 not_found`. Antwort immer mit `Content-Disposition: attachment` (ASCII-Name plus
-`filename*=UTF-8''…`), `Content-Length`, `X-Content-Type-Options: nosniff` und `Content-Security-Policy: sandbox`.
-`Content-Type` nach Endung (`.log`/`.txt`/`.diff` → `text/plain`, `.json`, `.jsonl` → `application/x-ndjson`,
-`.md`, `.csv`, `.xml`, `.yaml`, `.gz`, `.zip`, `.png`, `.pdf` …); alles andere, insbesondere HTML/SVG/JS, als
-`application/octet-stream`.
+`filename*=UTF-8''…` nach RFC 5987), `Content-Length`, `X-Content-Type-Options: nosniff` und
+`Content-Security-Policy: sandbox`. `Content-Type` nach Endung: `.log`/`.txt`/`.diff`/`.patch` → `text/plain`,
+`.json` → `application/json`, `.jsonl`/`.ndjson` → `application/x-ndjson`, `.md` → `text/markdown`, `.csv` →
+`text/csv`, `.xml` → `application/xml`, `.yaml`/`.yml` → `application/yaml` (Textarten mit `charset=utf-8`), dazu
+`.gz`, `.zip`, `.tar`, `.png`, `.jpg`, `.pdf`; alles andere, insbesondere HTML/SVG/JS, als `application/octet-stream`.
 
 ### Blocks / Failed Actions
 
