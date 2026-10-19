@@ -48,6 +48,7 @@ describe('kept file access', () => {
     expect(keptContentType('x.html')).toBe('application/octet-stream');
     expect(keptContentType('x.svg')).toBe('application/octet-stream');
     expect(keptContentType('noext')).toBe('application/octet-stream');
+    expect(attachmentDisposition("it's (1)*.log")).toBe(`attachment; filename="it's (1)*.log"; filename*=UTF-8''it%27s%20%281%29%2A.log`);
     expect(attachmentDisposition('a "b".log')).toBe(`attachment; filename="a _b_.log"; filename*=UTF-8''a%20%22b%22.log`);
   });
 });

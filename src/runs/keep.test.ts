@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -123,5 +123,116 @@ describe('keepWorkspaceFiles', () => {
     write('a.log', 'x');
     const report = await keepWorkspaceFiles({ workspace: link, keptDir: kept, patterns: ['a.log'], maxBytes: 100 });
     expect(report.files).toBe(1);
+  });
+
+  it('redacts secrets while copying (also across read chunks) and counts written bytes', async () => {
+    const secret = 'ghs_SECRETTOKENVALUE123';
+    // Secret straddles the 64 KiB read chunk boundary.
+    const big = Buffer.concat([Buffer.alloc(65_536 - 5, 'a'), Buffer.from(secret), Buffer.from('\nend')]);
+    write('big.log', big);
+    write('small.log', `token=${secret}\n`);
+    const report = await keepWorkspaceFiles({ workspace: ws, keptDir: kept, patterns: ['*.log'], maxBytes: 1024 * 1024, secrets: [secret] });
+    const keptBig = readFileSync(path.join(kept, 'big.log'), 'latin1');
+    expect(keptBig).not.toContain(secret);
+    expect(keptBig).toContain('[REDACTED]\nend');
+    expect(readFileSync(path.join(kept, 'small.log'), 'utf8')).toBe('token=[REDACTED]\n');
+    const written = keptBig.length + 'token=[REDACTED]\n'.length;
+    expect(report.bytes).toBe(written);
+    expect((await listKeptFiles(kept)).files.reduce((n, f) => n + f.size, 0)).toBe(written);
+  });
+
+  it('applies the size limit to the written (redacted) bytes', async () => {
+    // A 4-byte secret becomes the 10-byte marker: 20 source bytes → 50 written bytes.
+    write('a.log', 'abcd'.repeat(5));
+    const report = await keepWorkspaceFiles({ workspace: ws, keptDir: kept, patterns: ['a.log'], maxBytes: 30, secrets: ['abcd'] });
+    expect(report.files).toBe(0);
+    expect(report.skipped).toEqual([{ path: 'a.log', reason: 'size_limit', size: 20 }]);
+    expect(existsSync(path.join(kept, 'a.log'))).toBe(false);
+  });
+
+  it('literal patterns are resolved outside the walk budget; starved wildcard patterns are "not searched"', async () => {
+    for (let i = 0; i < 20; i++) write(`many/f${i}.txt`, 'x');
+    write('z/report.log', 'r');
+    write('exact.log', 'e');
+    const report = await keepWorkspaceFiles({
+      workspace: ws,
+      keptDir: kept,
+      patterns: ['many/*.txt', 'z/*.log', 'exact.log', 'nope.log'],
+      maxBytes: 1024,
+      maxEntries: 5,
+    });
+    expect(report.walkLimitReached).toBe(true);
+    expect(report.message).toContain('directory entry limit reached');
+    // The literal pattern after the wildcards is still found; the unmatched literal is "unmatched".
+    expect(existsSync(path.join(kept, 'exact.log'))).toBe(true);
+    expect(report.unmatched).toEqual(['nope.log']);
+    expect(report.notSearched).toEqual(['z/*.log']);
+    expect(report.message).toContain('not searched (limit): z/*.log');
+    // At most the budget was listed: some, not all of many/*.
+    const listed = (await listKeptFiles(kept)).files.filter((f) => f.path.startsWith('many/'));
+    expect(listed.length).toBeLessThanOrEqual(5);
+  });
+
+  it('reports a pattern naming a directory instead of silently matching it', async () => {
+    write('.agent/gate/unit.log', 'u');
+    const report = await keep(['.agent/gate', '.agent/*']);
+    expect(report.files).toBe(0);
+    expect(report.skipped).toEqual([
+      { path: '.agent/gate', reason: 'directory', message: 'directories are not copied; use ".agent/gate/**/*" to keep its files' },
+    ]);
+    // A directory matched only by a wildcard is ignored (no match).
+    expect(report.unmatched).toEqual(['.agent/*']);
+  });
+
+  it('caps the number of kept files (file_limit)', async () => {
+    for (const n of ['a', 'b', 'c']) write(`${n}.log`, n);
+    const report = await keepWorkspaceFiles({ workspace: ws, keptDir: kept, patterns: ['*.log'], maxBytes: 1024, maxFiles: 2 });
+    expect(report.files).toBe(2);
+    expect(report.skipped).toEqual([{ path: 'c.log', reason: 'file_limit', size: 1 }]);
+  });
+
+  it('skips a file replaced after the walk (changed)', async () => {
+    write('a.log', 'original');
+    const report = await keepWorkspaceFiles({
+      workspace: ws,
+      keptDir: kept,
+      patterns: ['a.log'],
+      maxBytes: 1024,
+      beforeCopy: () => {
+        writeFileSync(path.join(ws, 'b.tmp'), 'swapped');
+        renameSync(path.join(ws, 'b.tmp'), path.join(ws, 'a.log'));
+      },
+    });
+    expect(report.files).toBe(0);
+    expect(report.skipped).toEqual([{ path: 'a.log', reason: 'changed', size: 8 }]);
+  });
+
+  it('skips a file whose parent directory was swapped for a symlink to the outside (outside_workspace)', async () => {
+    write('d/a.log', 'inside');
+    // Same inode reachable outside (hard link), so only the real-path check can catch the swap.
+    linkSync(path.join(ws, 'd/a.log'), path.join(outside, 'a.log'));
+    const report = await keepWorkspaceFiles({
+      workspace: ws,
+      keptDir: kept,
+      patterns: ['d/a.log'],
+      maxBytes: 1024,
+      beforeCopy: () => {
+        rmSync(path.join(ws, 'd'), { recursive: true });
+        symlinkSync(outside, path.join(ws, 'd'));
+      },
+    });
+    expect(report.files).toBe(0);
+    expect(report.skipped).toEqual([{ path: 'd/a.log', reason: 'outside_workspace', size: 6 }]);
+    expect(existsSync(kept)).toBe(false);
+  });
+
+  it('a failed attempt reports nothing as kept', async () => {
+    write('a.log', 'a');
+    // kept.tmp's parent is a file → mkdir fails → whole attempt fails.
+    const badKept = path.join(root, 'file-not-dir', 'kept');
+    writeFileSync(path.join(root, 'file-not-dir'), 'x');
+    const report = await keepWorkspaceFiles({ workspace: ws, keptDir: badKept, patterns: ['a.log'], maxBytes: 1024 });
+    expect(report.error).toBeDefined();
+    expect(report).toMatchObject({ files: 0, bytes: 0 });
   });
 });

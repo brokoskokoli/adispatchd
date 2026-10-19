@@ -132,6 +132,42 @@ ${extra}`,
       expect(existsSync(path.join(env.dataDir, 'runs', run.id, 'kept', '.agent/transcript.jsonl'))).toBe(true);
     });
 
+    it('keeps files AFTER the completion hook (a file written by on_success is kept)', async () => {
+      const worker = env.script('w.sh', 'echo worker > worker.log');
+      const hook = env.script('hook.sh', 'echo hook > hook.log');
+      const snapshot = await env.snapshot(`
+id: wf
+trigger: { type: source, source: repo_a }
+execute:
+  type: shell
+  command: ${worker}
+  keep: ['*.log']
+on_success:
+  - type: shell
+    command: ${hook}
+`);
+      const h = await readyHarness();
+      const run = env.reserve(snapshot);
+      const final = await h.controller.startRun(run.id).done;
+      expect(final.status).toBe('completed');
+      const kept = path.join(env.dataDir, 'runs', run.id, 'kept');
+      expect(readFileSync(path.join(kept, 'worker.log'), 'utf8')).toBe('worker\n');
+      expect(readFileSync(path.join(kept, 'hook.log'), 'utf8')).toBe('hook\n');
+      expect(existsSync(final.workspacePath as string)).toBe(false);
+    });
+
+    it('keeps files of a timed-out run (workspace kept, cleanup on_success)', async () => {
+      const worker = env.script('slow.sh', 'echo partial > partial.log\nexec sleep 30');
+      const snapshot = await env.snapshot(
+        workflowYaml(worker).replace('  cancel_grace: 300ms', "  cancel_grace: 300ms\n  timeout: { max_duration: 400ms }\n  keep: ['partial.log']"),
+      );
+      const h = await readyHarness();
+      const run = env.reserve(snapshot);
+      const final = await h.controller.startRun(run.id).done;
+      expect(final.status).toBe('timed_out');
+      expect(readFileSync(path.join(env.dataDir, 'runs', run.id, 'kept', 'partial.log'), 'utf8')).toBe('partial\n');
+    });
+
     it('does nothing without keep (no event, no kept dir)', async () => {
       const snapshot = await env.snapshot(workflowYaml(keepScript()));
       const h = await readyHarness();

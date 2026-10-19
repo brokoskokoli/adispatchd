@@ -384,6 +384,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     credentials: sources,
     notifier: notifications,
     maxLogBytesPerRun: () => config.current.global.retention.maxLogSizePerRunBytes,
+    secretValues: () => redactor.values(),
   });
   const scheduler = new Scheduler({ config, repositories: repos, controller, sources: sourceLookup, clock, timers, logger });
   const views = new ViewService({ config, sources: sourceLookup, runs: repos.runs, clock, logger, redact: redactor.asRedactor, ...(options.viewCacheTtlMs !== undefined ? { cacheTtlMs: options.viewCacheTtlMs } : {}) });

@@ -112,5 +112,7 @@ export function keptContentType(name: string): string {
 /** `Content-Disposition: attachment` with an ASCII fallback and the RFC 5987 UTF-8 name. */
 export function attachmentDisposition(name: string): string {
   const ascii = name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+  // RFC 5987 attr-char excludes ' ( ) * which encodeURIComponent leaves as is.
+  const encoded = encodeURIComponent(name).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }

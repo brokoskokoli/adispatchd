@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { REPO_A, startAppEnv, type AppEnv } from './testing/helpers.js';
@@ -65,9 +65,9 @@ beforeAll(async () => {
       );
       const keeper = e.script(
         'keeper.sh',
-        `mkdir -p .agent/gate && echo '{"t":1}' > .agent/transcript.jsonl && echo gate > .agent/gate/unit.log && echo '<script>x</script>' > page.html && : > empty.log && printf 'ü' > "grün.log"`,
+        `mkdir -p .agent/gate && echo '{"t":1}' > .agent/transcript.jsonl && echo gate > .agent/gate/unit.log && echo '<script>x</script>' > page.html && : > empty.log && printf 'ü' > "grün.log" && echo "token=$GH_TOKEN" > .agent/token.txt`,
       );
-      wf('keeper', '{ type: manual }', keeper, "  keep: ['.agent/**/*', '*.html', '*.log']\n");
+      wf('keeper', '{ type: manual }', keeper, "  keep: ['.agent/**/*', '*.html', '*.log']\n  secrets: { GH_TOKEN: { identity: coder } }\n");
       e.github.createIssue(REPO_A, { number: 7, title: 'Issue seven', labels: ['ready'] });
       e.github.createIssue(REPO_A, { number: 8, title: 'Issue eight', labels: [] });
     },
@@ -356,14 +356,15 @@ describe('kept files (WI-22)', () => {
     expect(res.status).toBe(200);
     expect(res.json.files).toEqual([
       { path: '.agent/gate/unit.log', size: 5 },
+      { path: '.agent/token.txt', size: 17 },
       { path: '.agent/transcript.jsonl', size: 8 },
       { path: 'empty.log', size: 0 },
       { path: 'grün.log', size: 2 },
       { path: 'page.html', size: 19 },
     ]);
-    expect(res.json).toMatchObject({ runId, totalBytes: 34, truncated: false, report: { files: 5, skippedCount: 0 } });
+    expect(res.json).toMatchObject({ runId, totalBytes: 51, truncated: false, report: { files: 6, bytes: 51, skippedCount: 0 } });
     const detail = (await env.request('GET', `/api/v1/runs/${runId}`)).json;
-    expect(detail.kept).toMatchObject({ files: 5, bytes: 34, skippedCount: 0, error: null });
+    expect(detail.kept).toMatchObject({ files: 6, bytes: 51, skippedCount: 0, error: null });
     // Runs without keep: empty listing, no summary.
     const other = (await env.request('GET', '/api/v1/runs?workflow=coder&limit=1')).json.runs[0];
     if (other) {
@@ -371,6 +372,14 @@ describe('kept files (WI-22)', () => {
       expect((await env.request('GET', `/api/v1/runs/${other.id}`)).json.kept).toBeNull();
     }
     expect((await env.request('GET', '/api/v1/runs/unknown-run/kept')).status).toBe(404);
+  });
+
+  it('redacts the run\'s secrets in kept files (token written by the worker)', async () => {
+    const res = await env.app.http.inject({ method: 'GET', url: `/api/v1/runs/${runId}/kept/.agent/token.txt` });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toBe('token=[REDACTED]\n');
+    const raw = readFileSync(path.join(keptDir, '.agent', 'token.txt'), 'utf8');
+    expect(raw).toBe('token=[REDACTED]\n');
   });
 
   it('downloads a kept file as attachment with a fitting content type', async () => {

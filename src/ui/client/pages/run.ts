@@ -412,9 +412,10 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
         h(
           'section',
           { class: 'card' },
-          h('p', { class: 'hint' }, 'Files copied from the workspace after the run (execute.keep). They are deleted together with the run (retention).'),
+          h('p', { class: 'hint' }, 'Files copied from the workspace after the run (execute.keep); known secrets are redacted (best effort, like logs). They are deleted together with the run (retention).'),
           k.report?.error ? h('div', { class: 'alert alert-warn' }, `Keeping files failed: ${k.report.error}`) : null,
           k.report?.unmatched?.length ? h('p', { class: 'muted' }, `No match: ${k.report.unmatched.join(', ')}`) : null,
+          k.report?.notSearched?.length ? h('div', { class: 'alert alert-warn' }, `Not searched (directory entry limit reached): ${k.report.notSearched.join(', ')}`) : null,
           table(
             ['File', 'Size', ''],
             k.files.map((f) => [

@@ -136,6 +136,7 @@ export interface KeptListing {
     patterns?: string[];
     maxBytes?: number;
     unmatched?: string[];
+    notSearched?: string[];
     skipped?: KeptSkip[];
     skippedCount?: number;
     error?: string;

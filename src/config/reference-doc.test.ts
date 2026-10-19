@@ -186,6 +186,7 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain('| `keep` | Liste String | nein | `[]` |');
     expect(markdown).toContain(`| \`keep_max_size\` | Größe | nein | \`${DEFAULTS.keepMaxSize}\` |`);
     expect(markdown).toContain('`run.kept_files`');
+    expect(markdown).toContain('**Secrets werden beim Kopieren redigiert** – best effort, wie Logs');
     expect(markdown).toContain('GET /api/v1/runs/:id/kept');
     const fmt = (n: number): string => String(n).replace(/\B(?=(\d{3})+$)/g, ' ');
     expect(markdown).toContain(`höchstens ${fmt(KEEP_MAX_FILES)} Dateien und ${fmt(KEEP_MAX_ENTRIES)} untersuchte Verzeichniseinträge`);

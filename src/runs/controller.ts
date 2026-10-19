@@ -166,6 +166,11 @@ export interface RunControllerOptions {
   notifier?: Notifier;
   /** Executor per run; default `new ShellExecutor({clock, logger, workspaceBaseDir})`. */
   createExecutor?: (options: { workspaceBaseDir: string | undefined }) => Executor;
+  /**
+   * Currently registered secret values of the shared redactor (issued tokens,
+   * keys); redacted in kept files together with the run's own secrets (WI-22).
+   */
+  secretValues?: () => Iterable<string>;
   /** `retention.max_log_size_per_run` in bytes (value or getter for the live config). */
   maxLogBytesPerRun?: number | (() => number | undefined);
   clock?: Clock;
@@ -234,6 +239,8 @@ export class RunController {
   private readonly timers: Timers;
   private readonly logger: Logger;
   private readonly active = new Map<string, ActiveRun>();
+  /** Secret values injected into a run (`execute.secrets`), kept until the run is finished (WI-22 redaction). */
+  private readonly runSecrets = new Map<string, string[]>();
   private readonly idleWaiters = new Set<() => void>();
   /** Woken when a running shutdown is escalated (cancel mode / stricter timeouts). */
   private readonly shutdownWakeups = new Set<() => void>();
@@ -923,6 +930,8 @@ export class RunController {
 
     // 4. Spawn. Persist the intent first: recovery must know a process may exist.
     const { spec } = prepared;
+    // Secret values of this run stay known until the run is finished (kept files are redacted with them).
+    this.runSecrets.set(runId, Object.values(spec.secrets));
     this.repos.transaction(() => {
       this.repos.runs.update(runId, { workspacePath: spec.workingDirectory, command: { command: spec.command, args: spec.args } });
       this.repos.events.append(runId, RUN_EVENTS.spawn, {
@@ -1096,6 +1105,7 @@ export class RunController {
       await this.cleanupWorkspace(runId, snapshot, target.status, target.businessResult);
     }
     const finished = this.repos.runs.finish(runId);
+    this.runSecrets.delete(runId);
     this.publisher.flush();
     return finished;
   }
@@ -1133,6 +1143,9 @@ export class RunController {
       keptDir,
       patterns: keep,
       maxBytes: snapshot.workflow.execute.keepMaxSizeBytes,
+      // Best effort like the logs: the run's injected secrets plus everything the shared redactor knows.
+      // After a restart the run's own tokens are gone; still-valid ones remain registered in the shared redactor.
+      secrets: [...(this.runSecrets.get(runId) ?? []), ...(this.options.secretValues?.() ?? [])],
     });
     if (report.skippedCount > 0 || report.error) {
       this.logger.warn('kept files incomplete', { runId, skipped: report.skippedCount, error: report.error });
