@@ -500,8 +500,10 @@ export class ViewService {
 /**
  * Sections an item of the view belongs to (indexes into `tables`). Exclusive:
  * the first section whose filter is `true`; otherwise every such section. The
- * rest section takes items placed nowhere else. `unknown` verdicts are counted
- * per section (the item is not shown there).
+ * rest section takes items placed nowhere else. An `unknown` verdict is
+ * counted for that section and never moves the item elsewhere: exclusive
+ * stops there (the item is not shown at all – it might belong to that
+ * section), non-exclusive keeps it out of the rest section.
  */
 async function placeInSections(
   view: ViewConfig,
@@ -510,6 +512,7 @@ async function placeInSections(
   unknownCounts: number[],
 ): Promise<number[]> {
   const placed: number[] = [];
+  let unknown = false;
   for (let i = 0; i < tables.length; i++) {
     const t = tables[i] as Table;
     if (t.rest || !t.filter) continue;
@@ -517,9 +520,13 @@ async function placeInSections(
     if (verdict === true) {
       placed.push(i);
       if (view.exclusive) break;
-    } else if (verdict === 'unknown') unknownCounts[i] = (unknownCounts[i] ?? 0) + 1;
+    } else if (verdict === 'unknown') {
+      unknownCounts[i] = (unknownCounts[i] ?? 0) + 1;
+      unknown = true;
+      if (view.exclusive) return [];
+    }
   }
-  if (placed.length === 0) {
+  if (placed.length === 0 && !unknown) {
     const rest = tables.findIndex((t) => t.rest);
     if (rest >= 0) placed.push(rest);
   }
@@ -592,8 +599,9 @@ function isEmptyValue(v: FieldValue | null): boolean {
  * directions. Comparison is case-sensitive.
  */
 export function compareOrdered(a: FieldValue | null, b: FieldValue | null, order: ReadonlyMap<string, number>, direction: 1 | -1): number {
-  const emptyA = isEmptyValue(a);
-  const emptyB = isEmptyValue(b);
+  // `''` counts as empty here, like in the group label (an empty text/single-select value).
+  const emptyA = isEmptyValue(a) || a === '';
+  const emptyB = isEmptyValue(b) || b === '';
   if (emptyA || emptyB) return emptyA === emptyB ? 0 : emptyA ? 1 : -1;
   const sa = String(a);
   const sb = String(b);

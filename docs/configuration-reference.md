@@ -1396,9 +1396,14 @@ lokal (Abschnittsfilter und View-Filter sind per `all` verknüpft).
 - **`exclusive: true`** (Default): die Reihenfolge der Abschnitte entscheidet, ein Item steht nur im ersten
   passenden. **`exclusive: false`**: ein Item steht in jedem passenden Abschnitt; `rest` enthält dann die Items, die
   in keinem anderen stehen.
-- Ergibt ein Abschnittsfilter `unknown`, steht das Item nicht in diesem Abschnitt (gezählt je Abschnitt in
-  `counts.filterUnknown`); die Auswertung geht mit den folgenden Abschnitten weiter, landet es nirgends, kommt es
-  in den `rest`-Abschnitt.
+- Ergibt ein Abschnittsfilter `unknown`, wird das Item bei diesem Abschnitt gezählt (`counts.filterUnknown`) und
+  **nie woandershin verschoben** (es könnte in diesen Abschnitt gehören): mit `exclusive: true` endet die Auswertung
+  dort, das Item erscheint in keinem Abschnitt (auch nicht in `rest`); mit `exclusive: false` steht es in den
+  Abschnitten, deren Filter `true` ergibt, aber nie in `rest`.
+- Die Feldliste je Item umfasst alles, was irgendein Abschnitt braucht (View- und Abschnittsfilter, Spalten aller
+  Abschnitte, Link-Felder, Sortierschlüssel): sobald für ein Item ein teures Feld (§4.7.2) gebraucht wird, werden
+  alle teuren Felder dieser Liste in einer Abfrage mitgelesen – auch die Spalten von Abschnitten, in denen das Item
+  am Ende nicht steht.
 - **`state` in Abschnittsfiltern** wirkt nur lokal (kein Pushdown, keine eigene Abfrage): welche Items gelesen
   werden, bestimmt allein der View-`filter` (ohne `state`-Prädikat nur offene, §4.5). Ein Abschnitt, der nach
   Werten fragt, die die View nie liest (z. B. `state equals closed` bei einer View ohne `state`-Selektor), ist ein

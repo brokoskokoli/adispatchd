@@ -123,6 +123,8 @@ describe('view sort by custom value order (WI-28)', () => {
     expect(compareOrdered('a', 'b', order, -1)).toBeGreaterThan(0);
     expect(compareOrdered('x', 'b', order, -1)).toBeGreaterThan(0);
     expect(compareOrdered(null, 'x', order, -1)).toBeGreaterThan(0);
+    expect(compareOrdered('', 'x', order, 1)).toBeGreaterThan(0); // '' counts as empty
+    expect(compareOrdered('', null, order, 1)).toBe(0);
     expect(compareOrdered('x', 'y', order, -1)).toBeLessThan(0);
   });
 
@@ -167,12 +169,29 @@ describe('view sections (WI-28)', () => {
     expect(byTitle['Open again']?.sort).toEqual([{ field: 'number', direction: 'desc', order: null }]);
     expect(byTitle.Review?.fields.map((c) => c.field)).toEqual(['title']);
     expect(byTitle.Review?.rows.map((r) => r.cells.map((c) => c.value))).toEqual([['#1']]);
-    // Rest: unlisted, empty and unknown (#8 is unknown for every section filter → counted there, then rest).
-    expect(byTitle.Rest?.rows.map((r) => r.itemId)).toEqual(['3', '4', '7', '8']);
+    // Rest: unlisted and empty values. #8 is unknown for the first section: counted there and shown nowhere
+    // (it might belong to "Early"), neither in later sections nor in the rest.
+    expect(byTitle.Rest?.rows.map((r) => r.itemId)).toEqual(['3', '4', '7']);
     expect(byTitle.Early?.counts).toEqual({ rows: 3, filterUnknown: 1, truncated: false });
-    expect(byTitle.Review?.counts).toEqual({ rows: 1, filterUnknown: 1, truncated: false });
-    expect(byTitle.Rest?.counts).toEqual({ rows: 4, filterUnknown: 0, truncated: false });
+    expect(byTitle.Review?.counts).toEqual({ rows: 1, filterUnknown: 0, truncated: false });
+    expect(byTitle.Rest?.counts).toEqual({ rows: 3, filterUnknown: 0, truncated: false });
     expect(byTitle.Rest?.rest).toBe(true);
+  });
+
+  it('exclusive: an unknown verdict stops placement even if a later section would match', async () => {
+    const v = view([], {
+      ...sections(true, [
+        { title: 'Labelled', filter: { field: 'labels', operator: 'contains', value: 'x' }, rest: false, sort: null, fields: null },
+        S('Board', ['open']),
+        { title: 'All', filter: { field: 'number', operator: 'less_than', value: 100 }, rest: false, sort: null, fields: null },
+        S('Rest', null),
+      ]),
+    });
+    const res = await service(v, adapter(ITEMS)).items('v');
+    const all = res.sections?.find((s) => s.title === 'All');
+    expect(all?.rows.map((r) => r.itemId)).not.toContain('8');
+    expect(res.sections?.flatMap((s) => s.rows.map((r) => r.itemId))).not.toContain('8');
+    expect(res.sections?.map((s) => s.counts.filterUnknown)).toEqual([0, 1, 0, 0]);
   });
 
   it('non-exclusive: an item can appear in several sections; rest = in no other section', async () => {
@@ -183,8 +202,9 @@ describe('view sections (WI-28)', () => {
     expect(res.sections?.map((s) => [s.title, s.rows.map((r) => r.itemId)])).toEqual([
       ['Early', ['2', '5', '6']],
       ['Open', ['2', '6']],
-      ['Rest', ['1', '3', '4', '7', '8', '9']],
+      ['Rest', ['1', '3', '4', '7', '9']], // #8 (unknown) stays out of the rest
     ]);
+    expect(res.sections?.map((s) => s.counts.filterUnknown)).toEqual([1, 1, 0]);
   });
 
   it('the view filter applies to all sections and counts its own unknowns', async () => {
