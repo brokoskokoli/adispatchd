@@ -58,7 +58,9 @@ who picks which issue, what happens when an agent crashes, how do labels get res
 - **Keep files** – `execute.keep` copies transcripts and logs (glob patterns) to `runs/<run-id>/kept/` before the
   workspace is cleaned up; download them in the UI or via the API.
 - **Web UI with live updates** – workflows, runs, live output, events, kept files and views (read-only tables across
-  repositories), streamed via Server-Sent Events; plus a JSON HTTP API.
+  repositories), streamed via Server-Sent Events; plus a JSON HTTP API. Optional toolbar links to other local tools
+  (e.g. the [claude-inspect](https://github.com/brokoskokoli/claude_inspect) dashboard), opened in a new tab or embedded
+  (`ui.external_links`).
 - **Dry-run** – `adispatch workflow dry-run <id>` shows which items would start and why the others would not,
   without starting anything.
 - **Robust operations** – retry blocks, action retries, cancel/timeout per process group, drain, crash recovery,

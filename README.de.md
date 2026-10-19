@@ -59,7 +59,9 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Dateien sichern:** `execute.keep` kopiert Mitschnitte und Logs (Glob-Muster) vor dem Workspace-Cleanup nach
   `runs/<run-id>/kept/` – mit Größenlimit, ohne Symlinks zu folgen; Download in UI und API, gelöscht mit dem Run.
 - **Weboberfläche mit Live-Updates** (SSE): Workflows, Runs mit Live-Output, Events und gesicherten Dateien, Views
-  über mehrere Repositories; dazu eine JSON-HTTP-API.
+  über mehrere Repositories; dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools in der Toolbar
+  (z. B. das Dashboard [claude-inspect](https://github.com/brokoskokoli/claude_inspect)), im neuen Tab oder eingebettet
+  (`ui.external_links`).
 - **Dry-Run:** `adispatch workflow dry-run <id>` zeigt, welche Items starten würden und warum die anderen nicht – ohne
   etwas zu starten.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per

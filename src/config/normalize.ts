@@ -89,6 +89,15 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
       })),
     },
     container: { engine: raw.container.engine },
+    ui: {
+      externalLinks: raw.ui.external_links.map((link) => ({
+        id: link.id,
+        label: link.label,
+        url: link.url,
+        enabled: link.enabled,
+        embed: link.embed,
+      })),
+    },
   };
 }
 

@@ -320,6 +320,66 @@ server {
 
 Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen in `allowed_hosts` eintragen.
 
+## Externe Tools in der UI, z. B. claude-inspect (seit 0.3.1)
+
+`ui.external_links` in `config.yaml` nimmt lokale Werkzeuge in die Navigation auf – als Link in neuem Tab oder
+eingebettet (`embed: true`, Details und Validierung: [configuration-reference.md](configuration-reference.md) §3.1).
+adispatchd leitet nichts weiter: Der **Browser** öffnet die konfigurierte URL direkt. Sie muss also aus Sicht des Browsers
+stimmen. Abschalten: Eintrag entfernen oder `enabled: false`, dann `adispatch config reload`.
+
+- **Wer die URL sieht:** Die URL jedes aktiven Eintrags (auch ein Token darin) sieht jeder, der UI oder API von
+  adispatchd erreicht – gleiche Vertrauensgrenze wie adispatchd selbst, also UI nur lokal oder hinter Authentifizierung.
+- **Gleicher Hostname und gleiches Schema** für UI und Tool (z. B. beide `127.0.0.1`, auf dem Server dieselbe registrierbare
+  Domain und beide HTTPS). Sonst ist der Frame „cross-site“ und `SameSite`-Cookies eines per Token geschützten Tools
+  werden im Frame nicht gesendet.
+
+Beispiel [claude-inspect](https://github.com/brokoskokoli/claude_inspect) (Dashboard für Claude-Code-Sitzungen, liest
+`~/.claude` des Benutzers, unter dem es läuft; nur lesend). Laut dessen README gilt:
+
+- **Lokal** (Rechner, auf dem Browser und Agenten laufen): `npx claude-inspect` (gibt eine URL mit zufälligem Zugangstoken
+  `?t=…` aus) oder dauerhaft `npm install -g claude-inspect` + `claude-inspect service install` – der Dienst läuft
+  danach unter Port 47717 **ohne Token** und ist nur von localhost erreichbar. Eintrag mit demselben Hostnamen, unter dem
+  die adispatchd-UI geöffnet wird – bei `http://127.0.0.1:8787/`:
+  ```yaml
+  ui:
+    external_links:
+      - { id: claude-inspect, label: Claude Inspect, url: "http://127.0.0.1:47717/", embed: true }
+  ```
+  (öffnet man die UI als `http://localhost:8787/`, entsprechend `http://localhost:47717/`).
+- **Auf dem Server:** claude-inspect zeigt das `~/.claude` des Benutzers, unter dem es läuft. Damit es die Sitzungen der
+  Agenten zeigt, muss es unter **dem Benutzer laufen, unter dem die Agenten laufen** – beim Dienstbetrieb also unter dem
+  Dienstbenutzer von adispatchd (alternativ zeigt `CLAUDE_CONFIG_DIR=/pfad/zu/.claude` auf dessen Verzeichnis, sofern
+  lesbar). claude-inspect lauscht nur auf `127.0.0.1` und nimmt nur Anfragen mit lokalem `Host`-Header
+  (`localhost`/`127.0.0.1`) an. Von außen deshalb nur über den **authentifizierenden Reverse Proxy** (wie oben), der an
+  `127.0.0.1:<port>` weiterleitet und dabei einen lokalen `Host` setzt – z. B. einen eigenen Namen
+  `inspect.example.com` mit
+  ```nginx
+  location / {
+    proxy_pass http://127.0.0.1:47717;
+    proxy_set_header Host 127.0.0.1:47717;   # claude-inspect akzeptiert nur lokale Host-Header
+    proxy_http_version 1.1;
+    proxy_buffering off;                     # Live-Updates per SSE
+    proxy_read_timeout 1h;
+  }
+  ```
+  und in `config.yaml` `url: https://inspect.example.com/` (UI z. B. unter `https://orchestrator.example.com/`: gleiche
+  registrierbare Domain, beide HTTPS). Ob ein Unterpfad (`/inspect/`) funktioniert, hängt vom Tool ab – ein eigener
+  (Sub-)Hostname ist die sichere Wahl.
+  - claude-inspect lehnt außerdem **POST**-Anfragen ab, deren `Origin` nicht lokal ist; hinter dem Proxy schlägt daher
+    z. B. *Analyze with Claude* mit 403 fehl. Wer das braucht, kann im Proxy `proxy_set_header Origin "";` setzen – das
+    schaltet diese Prüfung von claude-inspect für alle Anfragen über den Proxy ab; die Absicherung hängt dann allein an der
+    Authentifizierung des Proxys (eigene Abwägung).
+  - Leitet die Authentifizierung des Proxys auf eine Anmeldeseite eines anderen Hosts um (z. B. OIDC), blockiert die CSP
+    der UI diese Umleitung im Frame (`frame-src` erlaubt nur die Origin des Tools). Dann zuerst über „Open in new tab“
+    anmelden und die eingebettete Seite danach neu laden.
+- **Tokens:** Gehört ein Token in die URL (`?t=…`), steht es in `config.yaml` und ist für jeden sichtbar, der die UI/API
+  erreicht (Toolbar, `externalLinks` von `GET /api/v1/config`; adispatchd warnt bei der Validierung). Besser: claude-inspect ohne Token nur lokal betreiben (Dienst) und den Zugriff
+  von außen über die Authentifizierung des Proxys schützen. Keine Zugangsdaten in die URL schreiben (`user:pass@` ist
+  ein Konfigurationsfehler).
+- **Einbetten:** `embed: true` erlaubt die Origin des Tools in der CSP der UI (`frame-src`). Bleibt die eingebettete
+  Seite leer, läuft das Tool nicht, ist unter der URL vom Browser aus nicht erreichbar, lehnt die Anfrage ab (Host-Prüfung,
+  Token) oder verbietet das Einbetten – dann „Open in new tab“ nutzen oder `embed: false` setzen.
+
 ## Observability
 
 - `GET /health` (Prozess lebt), `GET /ready` (DB ok, Recovery fertig, Scheduler läuft, kein Shutdown), `adispatch status`.

@@ -20,19 +20,33 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   critical_below}]`. Der Daemon führt die Skripte nur im Hintergrund aus (beim Start, nach Ablauf von `cache`, nach
   Reload für neue/geänderte Kacheln), nie durch einen Seitenaufruf; höchstens eine Ausführung je Kachel und zwei
   insgesamt; Mechanik wie Conditions (keine Shell, Minimalumgebung + `env`, Timeout mit Prozessgruppen-Kill,
-  Ausgabelimit, Arbeitsverzeichnis config-dir). Wert = erste stdout-Zeile; Fehler zeigen eine kurze, redigierte
-  Meldung und behalten den letzten gültigen Wert. Dashboard-Bereich „Information“ mit Wert, Einheit, Prozentbalken,
+  Ausgabelimit, Arbeitsverzeichnis config-dir). Wert = erste stdout-Zeile; Fehler zeigen eine kurze Meldung (`exit code 2: …`) und behalten
+  den letzten gültigen Wert; Werte, Meldungen und stderr-Zeilen werden von ANSI-/Steuer-/Bidi-Zeichen bereinigt,
+  redigiert und erst dann gekürzt; `nextAttemptAt` zeigt den nächsten (Wiederholungs-)Abruf. Dashboard-Bereich „Information“ mit Wert, Einheit, Prozentbalken,
   Farbe nach Schwellwerten, Zeitpunkt und gedrosseltem „Refresh“-Knopf. API `GET /api/v1/dashboard/info`,
   `POST /api/v1/dashboard/info/:id/refresh` (CSRF-/Host-/Origin-Schutz, 429 bei Drosselung), SSE `dashboard.info`.
   Validierung beim Laden und bei `config reload` (Schema mit „did you mean …“, eindeutige IDs, Schwellwerte nur bei
-  `number`/`percent`, `cache` ≥ 10 s, Skript existiert); Teil des Konfigurations-Hashs und der Dateiliste.
+  `number`/`percent`, `cache` ≥ 10 s, `timeout` ≤ 5 min und ≤ `cache`, Skript existiert); Teil des Konfigurations-Hashs und der Dateiliste.
   `init` und `examples/config` legen eine Kachel „Plattenbelegung des data-dir“ an.
+- **Externe Tools in der Toolbar (`ui.external_links`):** Weitere lokale Werkzeuge – z. B. das Dashboard
+  [claude-inspect](https://github.com/brokoskokoli/claude_inspect) – erscheinen als Eintrag in der Navigation der
+  Weboberfläche: `embed: false` (Default) öffnet sie in einem neuen Tab, `embed: true` zeigt sie auf einer eigenen Seite
+  `#/tools/<id>` in einem `iframe` (Sandbox, kein Referrer) mit „Open in new tab“ und Hinweis, falls nichts erscheint.
+  Schlüssel `id`, `label` (1–40 Zeichen), `url` (absolut, `http`/`https`, ohne Zugangsdaten), `enabled`, `embed`;
+  die URLs aktiver Einträge sieht jeder, der UI/API erreicht – Token-ähnliche Query-Parameter (`t`, `token`, …) ergeben
+  deshalb eine Warnung; `embed: true` verlangt einen in der CSP ausdrückbaren Host (Hostname/IPv4). Deaktivierte Einträge
+  erscheinen nirgends in API/UI. Kein Proxy – der Browser spricht das Tool
+  direkt an. `GET /api/v1/config` liefert die aktiven Einträge als `externalLinks`. Betrieb neben adispatchd (lokal
+  und auf dem Server hinter dem Reverse Proxy): `docs/operations.md`.
 
 ### Geändert
 
 - `GET /api/v1/workflows[/:id]`: `conditions` enthält jetzt die Definitionen samt letztem Status
   (`{workflow: [...], item: [...], shellFilter}`) statt nur der Anzahlen (`{workflow: <n>, item: <n>}`); die Anzahl
   ist die Länge der Listen.
+- Die Content-Security-Policy der Weboberfläche kommt als HTTP-Header statt als `<meta>`-Tag (Inhalt unverändert) und
+  erlaubt `frame-src` genau für die Origins der aktivierten eingebetteten Tools; ein Reload der Konfiguration wirkt sofort
+  für neu geladene Seiten.
 
 ## [0.3.0] – 2026-10-19
 

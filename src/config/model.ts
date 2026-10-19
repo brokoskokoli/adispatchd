@@ -110,6 +110,23 @@ export interface ContainerDefaultsConfig {
   engine: ContainerEngine;
 }
 
+/** External tool linked from the web UI toolbar (`ui.external_links`, WI-25). */
+export interface ExternalLinkConfig {
+  id: string;
+  /** Text of the toolbar entry (1–40 characters, rendered as text only). */
+  label: string;
+  /** Absolute http(s) URL as the *browser* reaches the tool. */
+  url: string;
+  enabled: boolean;
+  /** `true` = shown inside the UI (iframe), `false` = link opening a new tab. */
+  embed: boolean;
+}
+
+/** Web UI settings (`ui:` in config.yaml, WI-25). */
+export interface UiConfig {
+  externalLinks: readonly ExternalLinkConfig[];
+}
+
 /** Content of `config.yaml`. */
 export interface GlobalConfig {
   server: ServerConfig;
@@ -123,6 +140,8 @@ export interface GlobalConfig {
    * versions lack it: readers must treat `undefined` as `{ engine: 'docker' }`.
    */
   container: ContainerDefaultsConfig;
+  /** Web UI settings (WI-25). */
+  ui: UiConfig;
 }
 
 // ---------------------------------------------------------------------------

@@ -145,6 +145,19 @@ const webhookChannelSchema = z.strictObject({
   on: z.array(notificationEvent).optional(),
 });
 
+/** Entry of `ui.external_links` (WI-25); URL rules are checked semantically (validate.ts). */
+const externalLinkSchema = z.strictObject({
+  id: configId,
+  label: z
+    .string()
+    .min(1, 'Must not be empty')
+    .max(40, 'Must be at most 40 characters')
+    .refine((v) => v.trim().length > 0, 'Must not be empty'),
+  url: z.string().min(1, 'Must not be empty'),
+  enabled: z.boolean().default(true),
+  embed: z.boolean().default(false),
+});
+
 /** Schema of `config.yaml`. */
 export const globalConfigSchema = z.strictObject({
   server: z
@@ -192,6 +205,12 @@ export const globalConfigSchema = z.strictObject({
   container: z
     .strictObject({
       engine: z.enum(CONTAINER_ENGINES).default(DEFAULTS.containerEngine),
+    })
+    .prefault({}),
+  /** Web UI settings (WI-25). */
+  ui: z
+    .strictObject({
+      external_links: z.array(externalLinkSchema).default([]),
     })
     .prefault({}),
 });

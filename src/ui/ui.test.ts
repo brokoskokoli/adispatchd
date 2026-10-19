@@ -50,7 +50,11 @@ describe('web UI build + delivery', () => {
     expect(res.headers['x-content-type-options']).toBe('nosniff');
     const html = String(res.json);
     expect(html).toContain(`src="${UI_ENTRY}"`);
-    expect(html).toMatch(/Content-Security-Policy[^>]*script-src 'self'/);
+    // CSP as HTTP header (WI-25: frame-src depends on ui.external_links); a <meta> policy would be enforced on top
+    // of it and block every embedded tool, so there must be none.
+    expect(String(res.headers['content-security-policy'])).toMatch(/^default-src 'none'; script-src 'self'; style-src 'self';/);
+    expect(String(res.headers['content-security-policy'])).not.toContain('frame-src');
+    expect(html).not.toMatch(/http-equiv="Content-Security-Policy"/i);
     expect(html).not.toMatch(/(src|href)="(https?:)?\/\//);
     const index = await env!.request('GET', '/index.html');
     expect(index.status).toBe(200);

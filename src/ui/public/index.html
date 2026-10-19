@@ -3,15 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
-    />
+    <!-- Content-Security-Policy comes as an HTTP header (src/api/csp.ts): frame-src depends on ui.external_links. -->
     <meta name="referrer" content="no-referrer" />
     <meta name="color-scheme" content="light dark" />
     <title>Agent Dispatch Daemon</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="tools.css" />
     <script type="module" src="js/client/app.js"></script>
   </head>
   <body>

@@ -58,6 +58,16 @@ notifications:
   #     url_env: SLACK_WEBHOOK_URL
   #     headers_env: { Authorization: WEBHOOK_AUTH_HEADER }
   on: [retry_block_created, lifecycle_action_failed, recovery_failed]
+
+# Web UI: external tools in the toolbar (optional). url = how the BROWSER reaches the tool.
+# embed: true shows it inside the UI (#/tools/<id>), false (default) opens a new tab.
+# Example: the claude-inspect dashboard as a local service (claude-inspect service install → port 47717):
+# ui:
+#   external_links:
+#     - id: claude-inspect
+#       label: Claude Inspect
+#       url: http://127.0.0.1:47717/
+#       embed: true
 `;
 
 const SOURCES_YAML = `# sources.yaml – external task sources (Spec §5.2). V1: GitHub issues/PRs.
