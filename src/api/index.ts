@@ -15,3 +15,19 @@ export {
 } from './sse.js';
 export { readLogPage, DEFAULT_LOG_PAGE_BYTES, MAX_LOG_PAGE_BYTES, type LogPage } from './logs.js';
 export { toRunSummary, runOutcome, type RunOutcome, type RunSummary, type ActionView } from './serialize.js';
+export {
+  AuthService,
+  CONTROL_TOKEN_FILE,
+  CONTROL_TOKEN_HEADER,
+  LOGIN_LIMITS,
+  SESSION_COOKIE,
+  controlTokenPath,
+  isLoopbackAddress,
+  readControlToken,
+  removeControlToken,
+  writeControlToken,
+  type AuthServiceOptions,
+  type Principal,
+} from './auth.js';
+export { hashPassword, parsePasswordHash, verifyPassword, SCRYPT_DEFAULTS } from './password.js';
+export { ROUTE_ROLES, roleAllows, routeAccess, type RouteAccess } from './roles.js';

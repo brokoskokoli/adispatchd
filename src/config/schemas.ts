@@ -21,6 +21,8 @@ import {
 } from '../core/index.js';
 import { PROJECT_FIELD_KINDS } from '../sources/index.js';
 import { filterNodeSchema } from './filter-schema.js';
+import { AUTH_MODES, AUTH_ROLES } from './model.js';
+import { isIP } from 'node:net';
 
 /** Pattern for environment variable names. */
 export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -56,6 +58,10 @@ export const DEFAULTS = {
   containerEngine: 'docker',
   containerPull: 'missing',
   containerNetwork: 'default',
+  authMode: 'none',
+  authHeader: 'Tailscale-User-Login',
+  authTrustedProxies: ['127.0.0.1', '::1'],
+  sessionTtl: '12h',
 } as const;
 
 const configId = z
@@ -158,6 +164,58 @@ const externalLinkSchema = z.strictObject({
   embed: z.boolean().default(false),
 });
 
+/** Upper bound of `auth.session_ttl`. */
+export const MAX_SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
+
+/** IP address or CIDR range (`10.0.0.0/8`, `fd7a::/48`). */
+const ipOrCidr = z.string().refine((value) => {
+  const [ip, bits, ...rest] = value.trim().split('/');
+  if (rest.length > 0 || !ip) return false;
+  const family = isIP(ip);
+  if (family === 0) return false;
+  if (bits === undefined) return true;
+  if (!/^\d{1,3}$/.test(bits)) return false;
+  return Number(bits) <= (family === 4 ? 32 : 128);
+}, 'Invalid IP address or CIDR range (e.g. 127.0.0.1, ::1, 100.64.0.0/10)');
+
+/** HTTP headers that cannot carry the user of `auth.mode: trusted_header`. */
+const RESERVED_AUTH_HEADERS = new Set(['host', 'cookie', 'origin', 'content-type', 'content-length', 'x-adispatch-request', 'x-adispatch-control-token', 'x-forwarded-for', 'x-forwarded-proto']);
+
+const authRole = z.enum(AUTH_ROLES);
+
+/** `auth:` (WI-26). */
+const authSchema = z.strictObject({
+  mode: z.enum(AUTH_MODES).default(DEFAULTS.authMode),
+  users: z
+    .array(
+      z.strictObject({
+        name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._@-]{0,63}$/, 'Invalid user name (letters, digits, ".", "_", "@", "-"; max. 64)'),
+        password_hash_env: envName,
+        role: authRole,
+      }),
+    )
+    .default([]),
+  trusted_header: z
+    .strictObject({
+      header: z
+        .string()
+        .regex(/^[A-Za-z0-9-]{1,64}$/, 'Invalid HTTP header name')
+        .refine((h) => !RESERVED_AUTH_HEADERS.has(h.toLowerCase()), 'This header cannot carry the user')
+        .default(DEFAULTS.authHeader),
+      trusted_proxies: z.array(ipOrCidr).default([...DEFAULTS.authTrustedProxies]),
+      users: z
+        .array(z.strictObject({ login: z.string().trim().min(1, 'Must not be empty').max(320).refine((v) => !/[\s,\x00-\x1f]/.test(v), 'Must not contain whitespace or commas'), role: authRole }))
+        .default([]),
+    })
+    .prefault({}),
+  trusted_proxies: z.array(ipOrCidr).default([...DEFAULTS.authTrustedProxies]),
+  session_ttl: durationSchema
+    .refine((ms) => ms >= 60_000, 'Duration must be at least 1m')
+    .refine((ms) => ms <= MAX_SESSION_TTL_MS, 'Duration must be at most 30d')
+    .default(parseDuration(DEFAULTS.sessionTtl)),
+  read_requires_login: z.boolean().default(true),
+});
+
 /** Schema of `config.yaml`. */
 export const globalConfigSchema = z.strictObject({
   server: z
@@ -213,6 +271,8 @@ export const globalConfigSchema = z.strictObject({
       external_links: z.array(externalLinkSchema).default([]),
     })
     .prefault({}),
+  /** Authentication of web UI and API (WI-26). */
+  auth: authSchema.prefault({}),
 });
 
 /** Parsed `config.yaml`. */

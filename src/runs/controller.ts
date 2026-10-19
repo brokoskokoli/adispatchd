@@ -114,6 +114,8 @@ export const RUN_EVENTS = {
   keptFiles: 'run.kept_files',
   /** Recovery stopped a left-over container of the run (WI-19): `{engine, container, result}`. */
   containerStopped: 'recovery.container_stopped',
+  /** API write by an authenticated user (WI-26 audit): `{action, actor, role, via, ...}`. */
+  userAction: 'audit.user_action',
 } as const;
 
 /** Optional per-start settings. */
@@ -371,6 +373,16 @@ export class RunController {
   /** True if an active retry block exists for the workflow/item (`itemKey = null` → workflow scope). */
   isBlocked(workflowId: string, itemKey: string | null): boolean {
     return this.repos.blocks.isBlocked(workflowId, itemKey);
+  }
+
+  /**
+   * Audit (WI-26): record which user triggered an API write on a run (run
+   * event `audit.user_action`, shown with the run's events). Unknown runs are ignored.
+   */
+  recordUserAction(runId: string, payload: { action: string; actor: string; role: string; via: string } & Record<string, unknown>): void {
+    if (!this.repos.runs.get(runId)) return;
+    this.repos.events.append(runId, RUN_EVENTS.userAction, payload);
+    this.publisher.flush();
   }
 
   /** Remove a block: starts a new counting period; runs/history stay (idempotent). */

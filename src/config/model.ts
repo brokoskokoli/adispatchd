@@ -127,6 +127,48 @@ export interface UiConfig {
   externalLinks: readonly ExternalLinkConfig[];
 }
 
+/** Roles of the web UI/API (WI-26), ordered: viewer < operator < admin. */
+export const AUTH_ROLES = ['viewer', 'operator', 'admin'] as const;
+/** Role of an authenticated user. */
+export type AuthRole = (typeof AUTH_ROLES)[number];
+/** Authentication modes (WI-26). */
+export const AUTH_MODES = ['none', 'password', 'trusted_header'] as const;
+/** Authentication mode: `none` = no login (behaviour before 0.3.1). */
+export type AuthMode = (typeof AUTH_MODES)[number];
+
+/** Built-in user of `auth.mode: password`. */
+export interface PasswordUserConfig {
+  name: string;
+  /** Environment variable holding the scrypt hash (`adispatch auth hash-password`). */
+  passwordHashEnv: string;
+  role: AuthRole;
+}
+
+/** Login → role of `auth.mode: trusted_header`. */
+export interface TrustedHeaderUserConfig {
+  /** Login as sent by the proxy, lower case (compared case-insensitively). */
+  login: string;
+  role: AuthRole;
+}
+
+/** `auth:` in config.yaml (WI-26). */
+export interface AuthConfig {
+  mode: AuthMode;
+  users: readonly PasswordUserConfig[];
+  trustedHeader: {
+    /** Header name, lower case (default `tailscale-user-login`). */
+    header: string;
+    /** IPs/CIDRs of the proxies whose header is believed (checked against the TCP peer). */
+    trustedProxies: readonly string[];
+    users: readonly TrustedHeaderUserConfig[];
+  };
+  /** Password mode: proxies whose `X-Forwarded-Proto`/`X-Forwarded-For` are believed (TCP peer). */
+  trustedProxies: readonly string[];
+  sessionTtlMs: number;
+  /** `false`: GET requests work without login (viewer), writes need a login. */
+  readRequiresLogin: boolean;
+}
+
 /** Content of `config.yaml`. */
 export interface GlobalConfig {
   server: ServerConfig;
@@ -142,6 +184,8 @@ export interface GlobalConfig {
   container: ContainerDefaultsConfig;
   /** Web UI settings (WI-25). */
   ui: UiConfig;
+  /** Authentication of web UI and API (WI-26); `mode: none` without the section. */
+  auth: AuthConfig;
 }
 
 // ---------------------------------------------------------------------------

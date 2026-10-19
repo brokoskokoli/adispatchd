@@ -61,7 +61,7 @@ import { Scheduler } from './scheduler/index.js';
 import { DashboardInfoService, type DashboardInfoServiceOptions } from './dashboard/index.js';
 import { createGitHubSourceFactory } from './sources/index.js';
 import { ViewService } from './views/index.js';
-import { createApiServer, EventHub, type ReadinessReport } from './api/index.js';
+import { AuthService, createApiServer, EventHub, removeControlToken, writeControlToken, type AuthServiceOptions, type ReadinessReport } from './api/index.js';
 import type { FastifyInstance } from 'fastify';
 
 /** Package version reported by `/api/v1/status`. */
@@ -270,6 +270,8 @@ export interface AppOptions {
   allowedOrigins?: readonly string[];
   /** Static web UI directory (WI-11). */
   uiDir?: string;
+  /** Authentication tuning (WI-26; tests: fake scrypt, no failure delay, fixed control token). */
+  auth?: Partial<Pick<AuthServiceOptions, 'scrypt' | 'sleep' | 'controlToken'>>;
   /** Tuning of the dashboard info tiles (WI-24; tests). */
   dashboardInfo?: Partial<Pick<DashboardInfoServiceOptions, 'maxParallel' | 'manualMinIntervalMs' | 'manualPerMinute'>>;
 }
@@ -305,6 +307,8 @@ export interface App {
   /** Dashboard info tiles (WI-24). */
   readonly dashboard: DashboardInfoService;
   readonly events: EventHub;
+  /** Authentication (WI-26). */
+  readonly auth: AuthService;
   readonly http: FastifyInstance;
   readonly redactor: SecretRedactor;
   readonly logger: Logger;
@@ -512,6 +516,8 @@ export async function createApp(options: AppOptions): Promise<App> {
       }
       views.invalidate();
       dashboard.sync();
+      auth.sweep();
+      warnAuthUsers();
       notifications.refreshSecrets();
       events.publish('config.reloaded', {
         version: res.config.version,
@@ -550,6 +556,21 @@ export async function createApp(options: AppOptions): Promise<App> {
 
   let shutdown: (opts?: AppShutdownOptions) => Promise<AppStopResult>;
 
+  // WI-26: authentication (mode read per request from the active configuration).
+  const auth = new AuthService({
+    config: () => config.current.global.auth,
+    clock,
+    timers,
+    logger,
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.auth ?? {}),
+  });
+  const warnAuthUsers = (): void => {
+    for (const name of auth.checkUsers()) {
+      log.warn('auth: user cannot log in – password hash variable missing or malformed (adispatch auth hash-password)', { user: name });
+    }
+  };
+
   const http = await createApiServer({
     config,
     repositories: repos,
@@ -582,6 +603,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     info: { version: APP_VERSION, startedAt, host, port: () => (listening ? actualPort() : null) },
     ...(options.allowedOrigins ? { allowedOrigins: options.allowedOrigins } : {}),
     ...(options.uiDir ? { uiDir: options.uiDir } : {}),
+    auth,
   });
 
   const actualPort = (): number | null => {
@@ -604,6 +626,8 @@ export async function createApp(options: AppOptions): Promise<App> {
     await retention.stop().catch(() => undefined);
     await notifications.stop().catch(() => undefined);
     events.close();
+    auth.stop();
+    removeControlToken(dataDir, auth.controlToken);
     if (listening) {
       await http.close().catch((err: unknown) => log.warn('closing HTTP server failed', { error: errorMessage(err) }));
     } else {
@@ -655,11 +679,19 @@ export async function createApp(options: AppOptions): Promise<App> {
   const start = async (): Promise<string> => {
     if (started) throw new Error('application already started');
     started = true;
-    if (!isLoopback(host)) {
+    const authMode = config.current.global.auth.mode;
+    if (!isLoopback(host) && authMode === 'none') {
       log.warn('HTTP API bound to a non-loopback address without authentication – protect it with a reverse proxy/VPN (Spec §20)', {
         host,
       });
     }
+    if (!isLoopback(host) && authMode === 'trusted_header') {
+      log.warn('auth.mode trusted_header while bound to a non-loopback address: bind to 127.0.0.1 and reach adispatchd only through the proxy', { host });
+    }
+    warnAuthUsers();
+    // Local control token for the CLI (WI-26): new random value per start, 0600, written atomically.
+    writeControlToken(dataDir, auth.controlToken);
+    auth.start();
     await http.listen({ host, port });
     listening = true;
     const p = actualPort();
@@ -707,6 +739,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     retention,
     dashboard,
     events,
+    auth,
     http,
     redactor,
     logger,

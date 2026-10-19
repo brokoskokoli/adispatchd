@@ -137,6 +137,7 @@ export function validateSemantics(input: SemanticInput, issues: IssueCollector):
 
 function validateGlobal(global: GlobalConfig, issues: IssueCollector): void {
   validateExternalLinks(global.ui.externalLinks, CONFIG_FILE, issues);
+  validateAuth(global, issues);
   const ids = new Set<string>();
   global.notifications.channels.forEach((channel, i) => {
     const at: IssuePath = ['notifications', 'channels', i];
@@ -149,6 +150,31 @@ function validateGlobal(global: GlobalConfig, issues: IssueCollector): void {
       issues.error(CONFIG_FILE, [...at, 'url'], 'Webhook "url" must be an absolute http(s) URL');
     }
   });
+}
+
+/** `auth:` (WI-26): unique users; a mode without users locks everybody out (warning, the control token still works). */
+function validateAuth(global: GlobalConfig, issues: IssueCollector): void {
+  const auth = global.auth;
+  const names = new Set<string>();
+  auth.users.forEach((user, i) => {
+    const key = user.name.toLowerCase();
+    if (names.has(key)) issues.error(CONFIG_FILE, ['auth', 'users', i, 'name'], `Duplicate user "${user.name}"`);
+    names.add(key);
+  });
+  const logins = new Set<string>();
+  auth.trustedHeader.users.forEach((user, i) => {
+    if (logins.has(user.login)) issues.error(CONFIG_FILE, ['auth', 'trusted_header', 'users', i, 'login'], `Duplicate login "${user.login}"`);
+    logins.add(user.login);
+  });
+  if (auth.mode === 'password' && auth.users.length === 0) {
+    issues.warning(CONFIG_FILE, ['auth', 'users'], 'No users configured: nobody can log in to the web UI (CLI control commands still work locally)');
+  }
+  if (auth.mode === 'trusted_header' && auth.trustedHeader.users.length === 0) {
+    issues.warning(CONFIG_FILE, ['auth', 'trusted_header', 'users'], 'No logins configured: every request is rejected with 403 (CLI control commands still work locally)');
+  }
+  if (auth.mode === 'trusted_header' && auth.trustedHeader.trustedProxies.length === 0) {
+    issues.warning(CONFIG_FILE, ['auth', 'trusted_header', 'trusted_proxies'], 'No trusted proxies: every request is rejected with 401');
+  }
 }
 
 function isHttpUrl(value: string): boolean {

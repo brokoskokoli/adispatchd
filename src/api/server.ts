@@ -2,8 +2,9 @@
  * HTTP API (Spec §15) on Fastify: `/health`, `/ready` and `/api/v1/*`
  * (documented in docs/api.md).
  *
- * Security (Spec §15, §20): no built-in authentication – bind to loopback
- * (default) or run behind an authenticating proxy/VPN. Mutating requests
+ * Security (Spec §15, §20): authentication is optional (WI-26, `auth.mode`;
+ * see auth.ts and the minimum role per route in roles.ts). With `mode: none`
+ * bind to loopback (default) or run behind an authenticating proxy/VPN. Mutating requests
  * (POST/PATCH/PUT/DELETE) require the header `X-Adispatch-Request: 1`,
  * a JSON body (or none), and – if the browser sends an `Origin` – an origin
  * matching the `Host` (or an allowed origin); cross-site fetches
@@ -44,12 +45,25 @@ import { listKeptFiles, RUN_EVENTS, type RetentionService, type RunController } 
 import type { DashboardInfoService } from '../dashboard/index.js';
 import type { Scheduler } from '../scheduler/index.js';
 import type { ViewService } from '../views/index.js';
+import type { AuthRequest, AuthService, Principal } from './auth.js';
 import { uiContentSecurityPolicy } from './csp.js';
+import { roleAllows, routeAccess, routeKey, type RouteAccess } from './roles.js';
 import { ApiError, toErrorResponse } from './errors.js';
 import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile } from './kept.js';
 import { readLogPage } from './logs.js';
 import { runDetailFields, toBlockView, toRunSummary, toWorkflowView, type ActionView } from './serialize.js';
 import type { EventHub } from './sse.js';
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** Authenticated caller (WI-26); `null` without login or with `auth.mode: none`. */
+    principal: Principal | null;
+  }
+  interface FastifyInstance {
+    /** `"<METHOD> <url>"` of every registered route (roles test). */
+    adispatchRoutes: string[];
+  }
+}
 
 /** Header that every mutating request must carry (CSRF protection). */
 export const CSRF_HEADER = 'x-adispatch-request';
@@ -100,6 +114,8 @@ export interface ApiDeps {
   allowedOrigins?: readonly string[];
   /** Directory with static web UI assets (WI-11), served at `/` if present. */
   uiDir?: string;
+  /** Authentication (WI-26); absent = behaves like `auth.mode: none`. */
+  auth?: AuthService;
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +142,7 @@ const cancelBody = z.object({ reason: z.string().max(500).optional() }).strict()
 const recoveryBody = z.object({ assumeGone: z.boolean().optional() }).strict();
 const clearBody = z.object({ clearedBy: z.string().max(200).optional() }).strict();
 const emptyBody = z.object({}).strict();
+const loginBody = z.object({ name: z.string().min(1).max(64), password: z.string().min(1).max(1024) }).strict();
 const runsQuery = z
   .object({
     workflow: z.string().optional(),
@@ -316,6 +333,74 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
       throw new ApiError(415, 'unsupported_media_type', 'Request bodies must be application/json');
     }
   });
+  // --- Authentication / roles (WI-26) ---------------------------------------
+  // Every route needs an entry in ROUTE_ROLES (roles.ts): registering one without fails here.
+  app.decorate('adispatchRoutes', [] as string[]);
+  app.decorateRequest('principal', null);
+  app.addHook('onRoute', (route) => {
+    const methods = Array.isArray(route.method) ? route.method : [route.method];
+    for (const method of methods) {
+      if (routeAccess(method, route.url) === undefined) {
+        throw new Error(`Route ${routeKey(method, route.url)} has no minimum role (add it to ROUTE_ROLES in src/api/roles.ts and docs/api.md)`);
+      }
+      app.adispatchRoutes.push(`${method} ${route.url}`);
+    }
+  });
+  const authRequest = (req: FastifyRequest): AuthRequest => ({
+    headers: req.headers,
+    remoteAddress: req.raw.socket?.remoteAddress,
+    encrypted: (req.raw.socket as { encrypted?: boolean } | undefined)?.encrypted === true,
+  });
+  const accessOf = (req: FastifyRequest): RouteAccess => {
+    const url = req.routeOptions.url;
+    if (url !== undefined) return routeAccess(req.method, url) ?? 'viewer';
+    // Unknown route (404): API paths need a login, anything else is the public UI shell.
+    return (req.url.split('?')[0] ?? '').startsWith('/api/') ? 'viewer' : 'public';
+  };
+  const authEnabled = (): boolean => deps.auth?.enabled === true;
+  app.addHook('onRequest', async (req) => {
+    const auth = deps.auth;
+    if (!auth || !auth.enabled) return;
+    const access = accessOf(req);
+    const resolved = auth.resolve(authRequest(req));
+    if (!resolved.ok) {
+      if (access === 'public') return;
+      throw new ApiError(resolved.status, resolved.code, resolved.message);
+    }
+    let principal = resolved.principal;
+    if (!principal && !auth.config.readRequiresLogin && (req.method === 'GET' || req.method === 'HEAD')) {
+      principal = { name: 'anonymous', role: 'viewer', via: 'anonymous' };
+    }
+    req.principal = principal;
+    if (access === 'public') return;
+    if (!principal) throw new ApiError(401, 'authentication_required', 'Login required');
+    if (!roleAllows(principal.role, access)) {
+      throw new ApiError(403, 'forbidden', `This action requires the role "${access}" (your role: "${principal.role}")`, { requiredRole: access, role: principal.role });
+    }
+  });
+  /** The authenticated user behind a request (never the anonymous reader). */
+  const actorOf = (req: FastifyRequest): Principal | null => (req.principal && req.principal.via !== 'anonymous' ? req.principal : null);
+  /** Audit (WI-26): record the user on the run's events. */
+  const auditRun = (req: FastifyRequest, runId: string, action: string, extra: Record<string, unknown> = {}): void => {
+    const actor = actorOf(req);
+    if (!actor) return;
+    deps.controller.recordUserAction(runId, { action, actor: actor.name, role: actor.role, via: actor.via, ...extra });
+  };
+  app.addHook('onResponse', async (req, reply) => {
+    // Audit (WI-26): every write by an authenticated user in the daemon log (no bodies).
+    const actor = actorOf(req);
+    if (!actor || req.method === 'GET' || req.method === 'HEAD') return;
+    logger.info('api write', {
+      actor: actor.name,
+      role: actor.role,
+      via: actor.via,
+      method: req.method,
+      route: req.routeOptions.url ?? null,
+      path: req.url.split('?')[0] ?? '',
+      status: reply.statusCode,
+    });
+  });
+
   app.addHook('onSend', async (req, reply, payload) => {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'no-referrer');
@@ -352,9 +437,44 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
 
   // --- Health / readiness ---------------------------------------------------
   app.get('/health', async () => ({ status: 'ok', time: clock.now().toISOString() }));
-  app.get('/ready', async (_req, reply) => {
+  app.get('/ready', async (req, reply) => {
     const r = deps.readiness();
-    return reply.status(r.ready ? 200 : 503).send(r);
+    // With authentication only logged-in callers see the individual checks.
+    const body = authEnabled() && !req.principal ? { ready: r.ready } : r;
+    return reply.status(r.ready ? 200 : 503).send(body);
+  });
+
+  // --- Authentication (WI-26) -----------------------------------------------
+  app.post('/api/v1/auth/login', async (req, reply) => {
+    const body = parse(loginBody, req.body, 'body');
+    const auth = deps.auth;
+    if (!auth || !auth.enabled) throw new ApiError(400, 'login_not_available', 'Login is only available with auth.mode: password');
+    const res = await auth.login(body.name, body.password, authRequest(req));
+    if (!res.ok) {
+      if (res.retryAfterMs !== undefined) void reply.header('retry-after', String(Math.max(1, Math.ceil(res.retryAfterMs / 1000))));
+      throw new ApiError(res.status, res.code, res.message);
+    }
+    void reply.header('set-cookie', res.cookie);
+    return { user: { name: res.principal.name, role: res.principal.role, via: res.principal.via }, expiresAt: res.expiresAt };
+  });
+  app.post('/api/v1/auth/logout', async (req, reply) => {
+    parse(emptyBody, req.body, 'body');
+    if (deps.auth?.enabled && deps.auth.config.mode === 'password') void reply.header('set-cookie', deps.auth.logout(authRequest(req)));
+    return { ok: true };
+  });
+  app.get('/api/v1/auth/me', async (req) => {
+    const auth = deps.auth;
+    if (!auth || !auth.enabled) return { mode: 'none', readRequiresLogin: false, user: null, role: 'admin', expiresAt: null, error: null };
+    const resolved = auth.resolve(authRequest(req));
+    const p = req.principal;
+    return {
+      mode: auth.config.mode,
+      readRequiresLogin: auth.config.readRequiresLogin,
+      user: p && p.via !== 'anonymous' ? { name: p.name, role: p.role, via: p.via } : null,
+      role: p?.role ?? null,
+      expiresAt: auth.sessionExpiry(p),
+      error: resolved.ok ? null : { status: resolved.status, code: resolved.code, message: resolved.message },
+    };
   });
 
   // --- Status / scheduler / shutdown ----------------------------------------
@@ -488,6 +608,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
       ...(body.parameters !== undefined ? { parameters: body.parameters } : {}),
     });
     result.done.catch((err: unknown) => logger.warn('manual run supervision failed', { runId: result.run.id, error: errorMessage(err) }));
+    auditRun(req, result.run.id, 'start');
     return accepted(reply, { run: toRunSummary(repos.runs.get(result.run.id) ?? result.run) });
   });
   app.post('/api/v1/workflows/:id/dry-run', async (req) => {
@@ -640,7 +761,9 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const { id } = parse(idParam, req.params, 'path');
     const body = parse(cancelBody, req.body, 'body');
     requireRun(id);
-    const r = deps.controller.requestCancel(id, { reason: body.reason ?? 'cancelled via API' });
+    const actor = actorOf(req);
+    const r = deps.controller.requestCancel(id, { reason: body.reason ?? (actor ? `cancelled via API by ${actor.name}` : 'cancelled via API') });
+    auditRun(req, id, 'cancel', body.reason ? { reason: body.reason } : {});
     return accepted(reply, { runId: r.runId, status: r.status, run: toRunSummary(requireRun(id)) });
   });
 
@@ -651,6 +774,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const op = deps.background(`recovery retry ${id}`, () => deps.controller.retryRecovery(id, { assumeGone: body.assumeGone === true }));
     const error = await earlyError(op);
     if (error) throw error;
+    auditRun(req, id, 'recovery_retry', { assumeGone: body.assumeGone === true });
     return accepted(reply, { accepted: true, run: toRunSummary(requireRun(id)) });
   });
 
@@ -675,7 +799,9 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const { id } = parse(numericIdParam, req.params, 'path');
     const body = parse(clearBody, req.body, 'body');
     if (!repos.blocks.get(id)) throw new ApiError(404, 'not_found', `Block ${id} not found`);
-    deps.controller.clearBlock(id, body.clearedBy ?? 'api');
+    // With authentication the logged-in user is recorded (WI-26 audit), not a client-supplied name.
+    const actor = actorOf(req);
+    deps.controller.clearBlock(id, actor ? actor.name : (body.clearedBy ?? 'api'));
     void deps.scheduler.planOnce().catch(() => undefined);
     return { block: blockView(id) };
   });
@@ -702,6 +828,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     );
     const error = await earlyError(op);
     if (error) throw error;
+    auditRun(req, action.runId, kind === 'retry' ? 'action_retry' : 'action_skip', { actionId: id });
     return accepted(reply, { accepted: true, action: repos.actions.get(id) });
   };
   app.post('/api/v1/actions/:id/retry', async (req, reply) => actionOp(req, reply, 'retry'));
@@ -805,6 +932,12 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const fromHeader = typeof header === 'string' && /^\d+$/.test(header.trim()) ? Number(header.trim()) : null;
     const lastEventId = fromHeader ?? q.lastEventId ?? null;
     if (q.run) requireRun(q.run);
+    // A logout or the session's expiry closes the stream (WI-26); the reconnect then fails with 401.
+    const sessionKey = req.principal?.sessionKey;
+    if (sessionKey && deps.auth) {
+      const off = deps.auth.registerStream(sessionKey, () => reply.raw.end());
+      reply.raw.on('close', off);
+    }
     reply.hijack();
     deps.events.handle(req.raw, reply.raw, { runId: q.run ?? null, lastEventId });
   });

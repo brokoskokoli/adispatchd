@@ -3,8 +3,11 @@
 Implementierung: `src/api/` (WI-10). Spec §15, §16, §17, §18, §21.
 
 - Basis: `http://<server.host>:<server.port>` (Default `127.0.0.1:8787`), API unter `/api/v1`, JSON (UTF-8).
-- **Keine Anmeldung** in V1: nur auf Loopback binden oder hinter einem authentifizierenden Reverse Proxy/VPN betreiben.
-  Bei Nicht-Loopback-Bind wird beim Start gewarnt (Log + CLI).
+- **Anmeldung** (seit 0.3.1, WI-26): `auth.mode` in `config.yaml` – `none` (Default, keine Anmeldung wie bisher: nur auf
+  Loopback binden oder hinter einem authentifizierenden Reverse Proxy/VPN betreiben; bei Nicht-Loopback-Bind wird beim
+  Start gewarnt), `password` (eingebaute Benutzer, Session-Cookie) oder `trusted_header` (Identität vom vorgeschalteten
+  Proxy). Jeder Endpunkt hat eine **Mindestrolle** (`viewer` < `operator` < `admin`), siehe
+  [Anmeldung und Rollen](#anmeldung-und-rollen-seit-031-wi-26).
 - Antworten von `/api/*`, `/health`, `/ready` tragen `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`. Es werden **nie CORS-Header** gesendet.
 - Die statische Web-UI (alle anderen Pfade) trägt dieselben Header plus die **Content-Security-Policy** als HTTP-Header:
@@ -52,6 +55,117 @@ Für `POST`, `PATCH`, `PUT`, `DELETE` gilt:
 
 Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1/scheduler/pause`
 
+## Anmeldung und Rollen (seit 0.3.1, WI-26)
+
+Konfiguration: [configuration-reference.md](configuration-reference.md) §3.1 (`auth`); Betrieb (Tailscale Serve,
+oauth2-proxy, HTTPS-Proxy, Hash erzeugen): [operations.md](operations.md). Mit `auth.mode: none` (Default) gilt nichts aus
+diesem Abschnitt außer `GET /api/v1/auth/me`; alle Endpunkte verhalten sich wie vor 0.3.1.
+
+**Reihenfolge der Prüfungen** je Request: Host-/Origin-Allowlist → CSRF (mutierend) → Anmeldung → Mindestrolle der Route.
+
+| Fall | Antwort |
+|---|---|
+| Route verlangt eine Rolle, keine gültige Anmeldung | `401 authentication_required` |
+| Rolle zu niedrig | `403 forbidden` mit `details: {requiredRole, role}` |
+| `trusted_header`: Header von einer Gegenstelle außerhalb `trusted_proxies` | `401 untrusted_proxy` (auch wenn der Header stimmt) |
+| `trusted_header`: Header leer, mehrfach oder mit Leer-/Steuerzeichen bzw. Komma | `401 invalid_identity_header` |
+| `trusted_header`: Login nicht in `auth.trusted_header.users` | `403 login_not_allowed` |
+| Steuer-Token nicht von Loopback / falsch | `401 control_token_not_local` / `401 invalid_control_token` |
+
+- **`auth.read_requires_login: false`:** `GET`/`HEAD` (inkl. SSE) gehen ohne Anmeldung mit der Rolle `viewer`; jede
+  schreibende Anfrage braucht eine Anmeldung.
+- **Unbekannte API-Pfade** (`/api/…` ohne Route) verlangen wie `viewer`-Routen eine Anmeldung (`401` statt `404`, kein
+  Ausprobieren von Routen ohne Anmeldung); andere unbekannte Pfade gehören zur statischen UI (`404`).
+- **`/health`, `/ready`** bleiben ohne Anmeldung (Monitoring); `/ready` liefert dann nur `{"ready": bool}` (Status 200/503
+  unverändert), die einzelnen `checks` nur angemeldet.
+- **Die statische UI** (HTML/JS/CSS, enthält keine Daten) ist ohne Anmeldung abrufbar, damit die Login-Seite lädt.
+- **SSE** (`/api/v1/events`) verlangt `viewer` wie jede Leseroute; eine geöffnete Verbindung wird beim Logout und beim
+  Ablauf der Session geschlossen (der Reconnect scheitert dann mit `401`).
+
+### Auth-Endpunkte
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| POST | `/api/v1/auth/login` | `{"name","password"}` (CSRF-Header wie jeder POST) | `200 {"user":{"name","role","via":"password"},"expiresAt"}` + `Set-Cookie: adispatch_session=…; Path=/; Max-Age=…; HttpOnly; SameSite=Strict[; Secure]`; `401 invalid_credentials` (gleiche Antwort für unbekannte Benutzer und falsche Passwörter); `429 too_many_attempts` mit `Retry-After`; `400 login_not_available` außerhalb von `mode: password` |
+| POST | `/api/v1/auth/logout` | – | `200 {"ok":true}`, beendet die Session (Cookie gelöscht, offene SSE-Verbindungen der Session geschlossen) |
+| GET | `/api/v1/auth/me` | – | `{"mode","readRequiresLogin","user":{"name","role","via"}\|null,"role","expiresAt","error"}` – `role` = wirksame Rolle (`mode: none` → `admin`; anonym mit `read_requires_login: false` → `viewer`; sonst `null`), `error` = Grund, warum die Anfrage abgewiesen würde (z. B. `login_not_allowed`), `via` ∈ `password`, `trusted_header`, `control_token` |
+
+**Sessions** (`mode: password`): 32 zufällige Bytes (`randomBytes`), im Speicher (ein Neustart meldet alle ab), gültig für
+`auth.session_ttl` ab Anmeldung (kein Verlängern). Die Rolle wird bei jeder Anfrage aus der aktiven Konfiguration gelesen –
+nach einem Reload gilt die neue Rolle sofort, ein entfernter Benutzer ist sofort abgemeldet. `Secure` wird gesetzt, wenn die
+Anfrage per HTTPS kam: eigene TLS-Verbindung oder `X-Forwarded-Proto: https` von einer Gegenstelle in `auth.trusted_proxies`.
+
+**Login-Schutz:** Passwortvergleich mit scrypt (`node:crypto`) und `timingSafeEqual`; ein unbekannter Benutzer kostet
+dieselbe scrypt-Berechnung (Dummy-Hash) – keine Unterscheidung „unbekannt“/„falsch“, weder in Antwort noch in Laufzeit.
+Nach jedem Fehlschlag 1 s Verzögerung. Grenzen je Fenster von 15 Minuten: 20 Fehlversuche je Client-IP, 5 je Benutzername
+(auch für nicht existierende Namen); höchstens 8 gleichzeitige Prüfungen. Client-IP ist die TCP-Gegenstelle bzw. – wenn
+diese in `auth.trusted_proxies` steht – der letzte Eintrag von `X-Forwarded-For`.
+
+**Steuer-Token** (CLI, alle Modi außer `none`): Der Daemon schreibt bei jedem Start einen neuen zufälligen Token (32 Bytes,
+base64url) atomar nach `<data-dir>/control.token` (Modus `0600`) und löscht ihn beim Beenden. Die CLI sendet ihn als
+`X-Adispatch-Control-Token`; er gilt als Rolle `admin` (`via: control_token`, Name `control-token`), **nur** wenn die
+TCP-Gegenstelle Loopback ist (`127.0.0.0/8`, `::1`). Die CLI sendet ihn nur an Loopback-URLs.
+
+**Audit:** Jede schreibende Anfrage eines angemeldeten Benutzers steht im Daemon-Log (`api write` mit `actor`, `role`,
+`via`, `method`, `route`, `path`, `status`; nie Bodies oder Passwörter). Schreibende Aktionen an einem Run (manueller Start,
+Abbruch, Recovery-Retry, Action-Retry/-Skip) erzeugen zusätzlich das Run-Event `audit.user_action`
+(`{action: start|cancel|recovery_retry|action_retry|action_skip, actor, role, via, …}`), sichtbar in den Events des Runs;
+beim Abbruch ohne eigenen Grund lautet `reason` „cancelled via API by <Benutzer>“. Beim Entfernen eines Blocks wird der
+angemeldete Benutzer als `clearedBy` gespeichert (ein mitgesendetes `clearedBy` wird dann ignoriert).
+
+### Mindestrolle je Endpunkt
+
+`public` = ohne Anmeldung. `HEAD` gilt wie `GET`. Die Tabelle wird von `src/api/roles.test.ts` gegen die registrierten
+Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich nicht registrieren.
+
+| Endpunkt | Mindestrolle |
+|---|---|
+| `GET /health` | public |
+| `GET /ready` | public |
+| `POST /api/v1/auth/login` | public |
+| `POST /api/v1/auth/logout` | public |
+| `GET /api/v1/auth/me` | public |
+| `GET /api/v1/status` | viewer |
+| `POST /api/v1/scheduler/pause` | operator |
+| `POST /api/v1/scheduler/resume` | operator |
+| `PATCH /api/v1/scheduler/runtime` | operator |
+| `POST /api/v1/shutdown/drain` | operator |
+| `POST /api/v1/shutdown/cancel-all` | operator |
+| `GET /api/v1/workflows` | viewer |
+| `GET /api/v1/workflows/:id` | viewer |
+| `PATCH /api/v1/workflows/:id/runtime` | operator |
+| `POST /api/v1/workflows/:id/start` | operator |
+| `POST /api/v1/workflows/:id/dry-run` | viewer |
+| `GET /api/v1/runs` | viewer |
+| `GET /api/v1/runs/:id` | viewer |
+| `GET /api/v1/runs/:id/events` | viewer |
+| `GET /api/v1/runs/:id/logs` | viewer |
+| `GET /api/v1/runs/:id/kept` | viewer |
+| `GET /api/v1/runs/:id/kept/*` | viewer |
+| `POST /api/v1/runs/:id/cancel` | operator |
+| `POST /api/v1/runs/:id/recovery/retry` | operator |
+| `GET /api/v1/blocks` | viewer |
+| `POST /api/v1/blocks/:id/clear` | operator |
+| `GET /api/v1/actions/failed` | viewer |
+| `POST /api/v1/actions/:id/retry` | operator |
+| `POST /api/v1/actions/:id/skip` | operator |
+| `GET /api/v1/views` | viewer |
+| `GET /api/v1/views/:id` | viewer |
+| `GET /api/v1/views/:id/items` | viewer |
+| `GET /api/v1/config` | viewer |
+| `GET /api/v1/config/files` | viewer |
+| `POST /api/v1/config/validate` | viewer |
+| `POST /api/v1/config/reload` | operator |
+| `GET /api/v1/dashboard/info` | viewer |
+| `POST /api/v1/dashboard/info/:id/refresh` | operator |
+| `GET /api/v1/notifications` | viewer |
+| `POST /api/v1/notifications/:id/retry` | operator |
+| `GET /api/v1/events` | viewer |
+| `GET /*` | public |
+
+`POST …/dry-run` und `POST /config/validate` ändern nichts und brauchen daher nur `viewer` (aber eine Anmeldung, auch mit
+`read_requires_login: false`). `admin` umfasst alles von `operator`; eigene `admin`-Endpunkte folgen mit WI-27.
+
 ## Fehlerform
 
 ```json
@@ -61,11 +175,13 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 | HTTP | Codes (Auswahl) |
 |---|---|
 | 400 | `invalid_request` (Schema-Validierung, `details.issues`), `invalid_json`, `manual_item_required`, `manual_item_not_supported`, `manual_item_invalid_ref`, `invalid_parameters` (`details.errors`), `lifecycle_not_skippable`, `validation_error` |
-| 403 | CSRF-/Origin-Codes (s. o.) |
+| 401 | `authentication_required`, `invalid_credentials`, `untrusted_proxy`, `invalid_identity_header`, `control_token_not_local`, `invalid_control_token` (WI-26) |
+| 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed` (WI-26) |
 | 421 | `host_not_allowed` (Host-Allowlist) |
 | 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found` |
 | 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition` |
 | 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt) |
+| 429 | `too_many_attempts` (Login, WI-26), `rate_limited` (Info-Refresh) |
 | 502 | `source_unavailable` |
 | 503 | `run_controller_not_ready` (Recovery läuft), `run_controller_not_accepting` / `scheduler_not_accepting` (Drain/Shutdown) |
 | 500 | `kill_failed`, `internal_error` |
@@ -77,7 +193,7 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 | Methode | Pfad | Antwort |
 |---|---|---|
 | GET | `/health` | `200 {"status":"ok","time":"…"}` sobald HTTP läuft |
-| GET | `/ready` | `200` / `503` `{"ready":bool,"checks":{"database","recovery","scheduler","shuttingDown"}}` (kein eigener Config-Check: ohne gültige Konfiguration startet die Instanz nicht, ein gescheiterter Reload behält die aktive) – `ready` erst nach abgeschlossener Recovery und gestartetem Scheduler, `false` während Shutdown |
+| GET | `/ready` | `200` / `503` `{"ready":bool,"checks":{"database","recovery","scheduler","shuttingDown"}}` (mit `auth.mode` ≠ `none` ohne Anmeldung nur `{"ready":bool}`) (kein eigener Config-Check: ohne gültige Konfiguration startet die Instanz nicht, ein gescheiterter Reload behält die aktive) – `ready` erst nach abgeschlossener Recovery und gestartetem Scheduler, `false` während Shutdown |
 | GET | `/api/v1/status` | Scheduler-Zustand, Limits, Auslastung, Zähler (s. u.) |
 
 ```json
@@ -323,7 +439,7 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 |---|---|---|
 | `stream.open` | `id` = aktuelle Basis (ohne Resume) | `{lastEventId, replayed}` |
 | `stream.reset` | `id` = neueste ID | `{reason:"too_many_missed_events"\|"unknown_last_event_id", lastEventId}` – Client lädt per REST neu (auch wenn die `Last-Event-ID` größer als jede bekannte ID ist, z. B. nach Austausch des data-dir) |
-| `run.event` | ja | RunEvent `{id, runId, sequence, timestamp, origin: worker\|orchestrator, type, payload}`; `type` u. a. `run.status` (`{from,to,target?,outcome?,hook?,blockId?}`; `outcome`/`hook` beim Übergang nach `finalizing`), `run.outcome_warning` (`{code: invalid_outcome|unmatched_outcome, message, outcome?, hook?}`), Worker-`status`/`progress`/…, `diagnostic.*`, `lifecycle.action`, `lifecycle.chain`, `run.spawn`, `run.cancel_requested`, `recovery.*`, `run.kept_files`, `workspace.cleanup` |
+| `run.event` | ja | RunEvent `{id, runId, sequence, timestamp, origin: worker\|orchestrator, type, payload}`; `type` u. a. `run.status` (`{from,to,target?,outcome?,hook?,blockId?}`; `outcome`/`hook` beim Übergang nach `finalizing`), `run.outcome_warning` (`{code: invalid_outcome|unmatched_outcome, message, outcome?, hook?}`), Worker-`status`/`progress`/…, `diagnostic.*`, `lifecycle.action`, `lifecycle.chain`, `run.spawn`, `run.cancel_requested`, `recovery.*`, `run.kept_files`, `workspace.cleanup`, `audit.user_action` (WI-26) |
 | `run.output` | nein | `{runId, stream: stdout\|stderr, data, at}` (Live-Log, redigiert; per REST nachladen) |
 | `run.action` | nein | Action-Journal-Eintrag nach Änderung |
 | `block.created` / `block.cleared` | nein | Block |

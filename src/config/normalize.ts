@@ -98,6 +98,18 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
         embed: link.embed,
       })),
     },
+    auth: {
+      mode: raw.auth.mode,
+      users: raw.auth.users.map((u) => ({ name: u.name, passwordHashEnv: u.password_hash_env, role: u.role })),
+      trustedHeader: {
+        header: raw.auth.trusted_header.header.toLowerCase(),
+        trustedProxies: raw.auth.trusted_header.trusted_proxies.map((p) => p.trim()),
+        users: raw.auth.trusted_header.users.map((u) => ({ login: u.login.toLowerCase(), role: u.role })),
+      },
+      trustedProxies: raw.auth.trusted_proxies.map((p) => p.trim()),
+      sessionTtlMs: raw.auth.session_ttl,
+      readRequiresLogin: raw.auth.read_requires_login,
+    },
   };
 }
 
