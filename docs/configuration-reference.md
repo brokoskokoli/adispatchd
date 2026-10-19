@@ -207,8 +207,8 @@ Template; Platzhalter in `command` werden nicht ersetzt. Existenz/Ausführbarkei
   Syntaxfehler. Beispiel: `'{{"run":"{run.id}"}}'` → `{"run":"run-2026…"}`.
 - Templates sind nur folgende Felder: `execute.working_directory` (Modus `path`), `execute.args[]`,
   `execute.env.*`, `conditions.workflow[].args[]`, `conditions.item[].args[]`, `source.comment.message`,
-  `shell`-Action `args[]` und `env.*` (alle Modus `text`). **Keine** Templates: `command`, Labels in
-  `source.update`, Filterwerte, `secrets`, alle übrigen Felder.
+  `shell`-Action `args[]` und `env.*` (alle Modus `text`). **Keine** Templates: `command`, Labels und
+  Projektfeldwerte in `source.update`, Filterwerte, `secrets`, alle übrigen Felder.
 
 **Modus `text`:** Werte werden unverändert eingesetzt (Zahlen/Booleans als `5`, `true`). Ein erlaubter Platzhalter
 ohne Wert wird zu einem **leeren String**.
@@ -351,7 +351,7 @@ sources:
 | `<id>.project` | Objekt | nein | strikt | GitHub-Projects-(v2)-Projekt, dessen Felder als `project.<Name>` verfügbar sind (§4.7.1) |
 | `<id>.project.owner` | String | nein | nicht leer; Default = `<id>.owner` | User- **oder** Org-Login, dem das Projekt gehört |
 | `<id>.project.number` | Integer | ja | > 0 | Projektnummer aus `https://github.com/orgs/<org>/projects/<n>` bzw. `…/users/<user>/projects/<n>` |
-| `<id>.project.identity` | Identity-ID | nein | muss existieren; Default = `<id>.identity` | Identity für die Projekt-Abfragen (z. B. eine `github_token`-Identity für User-Projekte, §3.3) |
+| `<id>.project.identity` | Identity-ID | nein | muss existieren; Default = `<id>.identity` | Identity für die Projekt-Abfragen (z. B. eine `github_token`-Identity für User-Projekte, §3.3); **wenn gesetzt**, schreibt sie auch die Projektfelder von `source.update` (§3.4.11, §6.10) |
 | `<id>.project.fields` | Map Feldname → Art | ja | mind. ein Eintrag; Name nicht leer, ohne führende/abschließende Leerzeichen und ohne Steuerzeichen; Art `single_select`, `text`, `number`, `date`, `iteration` | Felder, auf die gefiltert/sortiert werden soll |
 
 Nur `github.com` wird unterstützt (keine Einstellung für GitHub Enterprise). Gelesen werden Issues **und** Pull
@@ -387,6 +387,14 @@ Items `unknown`.
   Account-Recht *Projects: Read*) ist für user-eigene Projekte **nicht verifiziert** (Live-Test T25c in
   [manual-tests/github.md](manual-tests/github.md)).
 - Die Source selbst kann weiter per App lesen.
+
+**Schreibrechte (seit 0.3.0, `source.update` → `project`, §3.4.11).** Geschrieben wird mit `project.identity`, wenn
+sie an der Source **ausdrücklich** gesetzt ist, sonst mit der Identity der Action (Workflow → Source, §6.10).
+- **Org-eigene** Projekte per GitHub App: **Organization → Projects: Read and write**.
+- **User-eigene** Projekte per `github_token`: klassischer Token mit **`project`** (statt `read:project`) plus
+  **`repo`** (private Repositories; zum Hinzufügen des Items muss der Token das Issue/den PR lesen können).
+  Fine-grained Tokens (*Projects: Read and write*) sind **nicht verifiziert**.
+- Fehlt das Schreibrecht, scheitert die Action mit `forbidden` (nicht wiederholbar).
 
 ### 3.3 identities.yaml
 
@@ -428,7 +436,8 @@ ungültig, scheitert der jeweilige Zugriff mit einem nicht wiederholbaren Authen
 in der Planungsdiagnose, `start_error` bei `execute.secrets`, endgültig gescheiterte Action). Aus dem Schlüssel
 werden kurzlebige Installation-Tokens erzeugt und im Speicher gecacht; Schlüssel, JWT und Tokens werden in Logs
 redigiert. Minimale App-Rechte: Issues lesen/schreiben, Pull Requests schreiben (Labels/Kommentare auf PRs),
-Metadata lesen; für Projektfelder org-eigener Projekte zusätzlich **Organization → Projects: Read** (§3.2).
+Metadata lesen; für Projektfelder org-eigener Projekte zusätzlich **Organization → Projects: Read**, zum Setzen
+von Projektfeldern **Read and write** (§3.2).
 
 **`github_token`** (seit 0.2.0): ein langlebiger GitHub-Token, vor allem für **user-eigene Projekte**, die
 GitHub-App-Installationstoken nicht lesen können (§3.2). Der Token wird beim Start des Dienstes (bzw. beim Aufbau
@@ -701,15 +710,62 @@ Gemeinsame Schlüssel aller Actions:
 | `retry.max_attempts` | Integer ≥ 1 | nein | `lifecycle.action_retry.max_attempts` | Versuche insgesamt |
 | `retry.delay` | Dauer | nein | `lifecycle.action_retry.delay` | Pause zwischen Versuchen (`0s` erlaubt) |
 
-`source.update` – Labels des Items ändern (nur Source-Workflows):
+`source.update` – Labels und/oder Projektfelder des Items ändern (nur Source-Workflows):
 
 | Schlüssel | Typ | Pflicht | Regeln |
 |---|---|---|---|
-| `labels.add` | Liste String | nein (`[]`) | mindestens eines von `add`/`remove` nicht leer; kein Label in beiden |
+| `labels.add` | Liste String | nein (`[]`) | kein Label in `add` und `remove` |
 | `labels.remove` | Liste String | nein (`[]`) | |
+| `project` | Map Feldname → Wert | nein | seit 0.3.0; mind. ein Eintrag; Schlüssel = Name aus `project.fields` der Trigger-Source (ohne `project.`-Präfix); Wert je Art (Tabelle unten), `null` = Feld leeren |
 
-Kein Template. Vor dem Schreiben wird das Item neu gelesen; nur fehlende Labels werden hinzugefügt, nur vorhandene
-entfernt (Vergleich ohne Groß-/Kleinschreibung) → idempotent. Schreib-Identity: Workflow → Source (§6.10).
+Mindestens ein Label in `labels.add`/`labels.remove` **oder** ein `project`-Eintrag ist Pflicht. Kein Template:
+Labels und Projektwerte werden wörtlich übernommen. Vor dem Schreiben wird das Item neu gelesen; nur fehlende Labels
+werden hinzugefügt, nur vorhandene entfernt (Vergleich ohne Groß-/Kleinschreibung) → idempotent. Schreib-Identity:
+Workflow → Source (§6.10).
+
+```yaml
+on_start:
+  - type: source.update
+    labels: { add: [in-progress], remove: [ready-for-coding] }
+    project:
+      Status: In Progress     # single_select: Optionsname
+      Estimate: 3             # number
+      Due: 2026-11-01         # date (YYYY-MM-DD)
+      Sprint: Sprint 12       # iteration: Iterationstitel
+      Notes: null             # null = Feld leeren
+on_success:
+  - type: source.update
+    project: { Status: Review }
+```
+
+| Art (`project.fields`) | Wert in `project` | Abgleich beim Schreiben |
+|---|---|---|
+| `single_select` | String (Optionsname) | Option mit exakt diesem Namen, sonst ohne Groß-/Kleinschreibung, wenn eindeutig |
+| `iteration` | String (Iterationstitel) | wie `single_select`, über laufende/kommende **und** abgeschlossene Iterationen |
+| `text` | String (nicht leer) | wörtlich |
+| `number` | Zahl | |
+| `date` | Datum `YYYY-MM-DD` (unquotiert oder quotiert) | gültiges Kalenderdatum |
+| alle | `null` | Feld leeren |
+
+**Projektfelder setzen** (Source braucht `project` in `sources.yaml`, §3.2):
+- **Reihenfolge:** erst Labels, dann Projektfelder. Scheitern die Projektfelder, scheitert die Action (die Labels
+  sind dann schon gesetzt); ein Retry ist sicher, weil beide Teile idempotent sind.
+- **Erst lesen, dann schreiben:** Metadaten des Projekts (Feld-IDs, Optionen, Iterationen; bis zu 5 min gecacht)
+  und das Projekt-Item des Issues/PRs werden per GraphQL gelesen. Ist das Item nicht im Projekt, wird es mit
+  `addProjectV2ItemById` hinzugefügt (Journal `projectItemAdded: true`). Felder, deren Wert schon stimmt, werden
+  übersprungen; sonst je Feld `updateProjectV2ItemFieldValue` bzw. für `null` `clearProjectV2ItemFieldValue`.
+  Alle Werte gehen nur als GraphQL-Variablen an GitHub.
+- **Nicht wiederholbare Fehler** (Action sofort `failed`, §6.9): Feld fehlt im Projekt, Art passt nicht zum
+  `dataType`, Option/Iteration unbekannt oder mehrdeutig (Meldung listet die vorhandenen, z. B. `option "Blocked"
+  not found (available: "Todo", "In Progress", "Done")`), fehlendes Schreibrecht (`forbidden`). Vorher werden
+  gecachte Metadaten einmal frisch geladen (neu angelegte Optionen werden also gefunden).
+- **Wiederholbar:** Rate-Limits (auch HTTP 200 mit `RATE_LIMITED`, mit `Retry-After`), transiente Fehler und
+  GraphQL-Fehler ohne Typ (`lifecycle.action_retry`).
+- **Identity:** `project.identity` der Source, wenn dort ausdrücklich gesetzt, sonst dieselbe wie für die Labels
+  (§6.10). Rechte: §3.2.
+- **Journal:** `details.applied.projectFields` (geänderte Felder → neuer Wert, `null` = geleert), sichtbar im Run
+  unter *Events* (z. B. `on_start on_start.0 succeeded (+in-progress, Status=In Progress)`) und in
+  `GET /api/v1/runs/:id/events`.
 
 `source.comment` – Kommentar am Issue/PR (nur Source-Workflows; Konversationskommentar, kein Review):
 
@@ -1104,7 +1160,7 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 | `parameters.<name>` | ✓ nur `required` oder mit `default` | ✓ | ✓ | ✓ | – | – |
 
 Nicht als Template ausgewertet (Platzhalter bleiben wörtlich stehen): alle `command`, `source.update.labels`,
-`shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
+`source.update.project`, `shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
 
 ---
 
@@ -1242,7 +1298,8 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
 - **Manuell:** `POST /api/v1/actions/:id/retry` (frische Versuchsrunde, danach läuft die Kette weiter; nicht für
   `on_start`, wenn der Run nicht mehr `starting` ist) und `POST /api/v1/actions/:id/skip` (failed/pending →
   `skipped`, Kette läuft weiter). Der Haupt-Worker wird nie neu gestartet; erfolgreiche Actions laufen nie erneut.
-- **Idempotenz:** `source.update` liest vor dem Schreiben neu und ändert nur, was fehlt. `source.comment` hängt als
+- **Idempotenz:** `source.update` liest vor dem Schreiben neu und ändert nur, was fehlt (Labels und
+  Projektfelder; ein fehlendes Projekt-Item wird hinzugefügt, GitHub liefert dabei ein vorhandenes zurück). `source.comment` hängt als
   letzte Zeile `<!-- adispatchd:<run-id>:<journal-action-id> -->` an; vor jeder Wiederholung (und nach Neustart) wird ein
   Kommentar mit diesem Marker gesucht, der von der eigenen App stammt → kein Duplikat. `<!--` im gerenderten Text
   wird zu `&lt;!--`.
@@ -1256,6 +1313,7 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
 | Pollen, Item lesen, Dependencies auflösen, Item-Re-Read vor `on_start` | `sources.<id>.identity` |
 | Projektfelder lesen (`project.*`, GraphQL) | `sources.<id>.project.identity` → `sources.<id>.identity` |
 | `source.update` (inkl. Re-Read vor dem Schreiben) | Workflow-`identity` → Source-`identity` |
+| `source.update` → `project` (Metadaten, Item lesen, Mutationen) | `sources.<id>.project.identity`, **wenn ausdrücklich gesetzt** → Workflow-`identity` → Source-`identity` |
 | `source.comment` (inkl. Marker-Suche) | Action-`identity` → Workflow-`identity` → Source-`identity` |
 | `execute.secrets.<NAME>` | die angegebene Identity (Installation-Token, ca. 1 h gültig, beim Start geholt; bei `github_token` der Token selbst) |
 | `shell`-Actions, Conditions, `shell_filter` | keine (keine Secrets) |
@@ -1566,9 +1624,11 @@ Umgebung (z. B. `/etc/default/adispatchd`): `SLACK_WEBHOOK_URL=https://hooks.sla
 
 ### 7.7 Filter auf Projektstatus und Priorität
 
-`project_a` liest das Board der Organisation per App (Berechtigung **Organization → Projects: Read**),
-`project_b` ein **user-eigenes** Board über eine `github_token`-Identity, das Repository selbst weiter per App.
-Der Coder startet Items, deren Projektstatus `Todo` **oder** `Ready` ist; `P0`/`P1` kommen zuerst.
+`project_a` liest das Board der Organisation per App (Berechtigung **Organization → Projects: Read and write**,
+weil der Coder den Status setzt), `project_b` ein **user-eigenes** Board über eine `github_token`-Identity, das
+Repository selbst weiter per App. Der Coder startet Items, deren Projektstatus `Todo` **oder** `Ready` ist;
+`P0`/`P1` kommen zuerst. Beim Start setzt er den Status auf `In Progress`, nach Erfolg auf `Review`, bei Abbruch
+oder Absturz zurück auf `Ready` (sonst passt das Item nicht mehr zum Filter und bliebe liegen).
 
 ```yaml
 # example: projects
@@ -1631,6 +1691,15 @@ execute:
 on_start:
   - type: source.update
     labels: { add: [coding] }
+    project: { Status: In Progress }
+on_success:
+  - type: source.update
+    labels: { remove: [coding] }
+    project: { Status: Review }
+on_crash:       [ { type: source.update, labels: { remove: [coding] }, project: { Status: Ready } } ]
+on_start_error: [ { type: source.update, labels: { remove: [coding] }, project: { Status: Ready } } ]
+on_timeout:     [ { type: source.update, labels: { remove: [coding] }, project: { Status: Ready } } ]
+on_cancel:      [ { type: source.update, labels: { remove: [coding] }, project: { Status: Ready } } ]
 ```
 
 ```yaml
@@ -1946,7 +2015,7 @@ notifications:
 # extends: github
 # invalid
 # expect: workflows/coder.yaml: on_start[0].labels: Label "coding" is both added and removed
-# expect: workflows/coder.yaml: on_success[0].labels: "source.update" must add or remove at least one label
+# expect: workflows/coder.yaml: on_success[0].labels: "source.update" must add or remove at least one label or set a project field
 # expect: workflows/coder.yaml: on_success[1].id: Duplicate action ID "notify" (also used at on_start[1])
 # file: workflows/coder.yaml
 id: coder
@@ -2076,6 +2145,67 @@ sources.yaml`. Weitere Meldungen in `sources.yaml`: `Expected one of: single_sel
 (unbekannte Art), `Declare at least one project field`, `Project field name must not start or end with
 whitespace`, `Project field name must not contain control characters`; in Views zusätzlich `its kind differs
 between the sources of the view`.
+
+**Projektfelder setzen** – `source.update` → `project` nur mit deklarierten Feldern und passendem Werttyp.
+
+```yaml
+# example: err-project-update
+# extends: projects
+# invalid
+# expect: workflows/board-coder.yaml: on_start[0].project.Statsu: Unknown project field "Statsu": it is not declared in "project.fields" of source "project_a" (did you mean "Status"?)
+# expect: workflows/board-coder.yaml: on_start[0].project.Estimate: Invalid value for project field "Estimate" (number): expected a number or null
+# expect: workflows/board-coder.yaml: on_success[0].project: "project" must set at least one field
+# expect: workflows/review.yaml: on_success[0].project: Source "project_c" has no "project" in sources.yaml; project fields cannot be set
+# file: workflows/board-coder.yaml
+id: board-coder
+trigger: { type: source, source: project_a }
+execute: { type: shell, command: scripts/coder.sh }
+on_start:
+  - type: source.update
+    project: { Statsu: In Progress, Estimate: three }
+on_success:
+  - type: source.update
+    project: {}
+```
+
+```yaml
+# example: err-project-update
+# file: workflows/review.yaml
+id: review
+trigger: { type: source, source: project_c }
+execute: { type: shell, command: scripts/coder.sh }
+on_success:
+  - type: source.update
+    project: { Status: Done }
+```
+
+```yaml
+# example: err-project-update
+# file: sources.yaml
+sources:
+  project_a:
+    type: github
+    owner: example
+    repository: project-a
+    identity: maintainer
+    project:
+      number: 3
+      fields: { Status: single_select, Priority: single_select, Estimate: number }
+  project_b:
+    type: github
+    owner: example
+    repository: project-b
+    identity: maintainer
+    project: { owner: alice, number: 1, identity: project_reader, fields: { Status: single_select, Priority: single_select } }
+  project_c: { type: github, owner: example, repository: project-c, identity: maintainer }
+```
+
+Lösung: Schlüssel genau wie unter `project.fields` (ohne `project.`-Präfix), Wert passend zur Art (§3.4.11), `null`
+zum Leeren; die Trigger-Source braucht `project`. Weitere Meldungen: `expected a date YYYY-MM-DD or null`, `expected
+a string or null`, `empty value; use null to clear the field`, `Expected a string, a number, a date or null`
+(Boolean, Liste), `"source.update" must add or remove at least one label or set a project field`. Erst **zur
+Laufzeit** fallen auf (Action `failed`, nicht wiederholbar): unbekannte/mehrdeutige Option oder Iteration, Feld fehlt
+im Projekt oder hat eine andere Art, fehlendes Schreibrecht – siehe Fehlertext in der Run-Ansicht (*Actions*).
 
 **`state` an wirkungsloser Stelle** – die Source liest ohne `state`-Selektor auf oberster Ebene nur offene Items.
 
@@ -2258,7 +2388,9 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
    Liste; Timeouts setzen; Secrets nur über `secrets`.
 6. **Hooks:** Label-Übergänge für jeden Ausgang (`on_start`, `on_success`, `on_failure`, `on_crash`,
    `on_start_error`, `on_timeout`, `on_cancel`) so wählen, dass das Item nicht hängen bleibt und nicht sofort wieder
-   matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab).
+   matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab). Wer per `project` einen Status setzt, der
+   im Filter vorkommt, setzt ihn in den Fehler-Hooks auch zurück; Optionsnamen genau wie im Projekt, Schreibrecht
+   der Identity (§3.2) vorher prüfen.
 7. **Validieren:** `adispatch config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
 8. **Trockenlauf:** `adispatch workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
    (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität; bei Projektfeldern die Zeilen
