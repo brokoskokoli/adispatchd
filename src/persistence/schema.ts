@@ -224,6 +224,35 @@ ALTER TABLE run_actions_v3 RENAME TO run_actions;
 CREATE INDEX run_actions_status ON run_actions (status);
 `;
 
+/**
+ * v4 (WI-27): audit of actions taken in the web UI as a configured identity
+ * (comments, labels, project fields). Never stores comment texts, tokens or
+ * request bodies – only who, as whom, where, what kind, the outcome and (for
+ * comments) the comment URL.
+ */
+const V4_DDL = `
+CREATE TABLE ui_actions (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at     TEXT NOT NULL,
+  actor          TEXT NOT NULL,
+  actor_via      TEXT NOT NULL,
+  identity       TEXT NOT NULL,
+  source_id      TEXT NOT NULL,
+  item_id        TEXT NOT NULL,
+  item_key       TEXT NOT NULL,
+  item_url       TEXT,
+  kind           TEXT NOT NULL CHECK (kind IN ('comment','labels','project')),
+  result         TEXT NOT NULL CHECK (result IN ('succeeded','failed','unknown')),
+  error_code     TEXT,
+  error_message  TEXT,
+  comment_id     TEXT,
+  comment_url    TEXT,
+  details_json   TEXT
+);
+CREATE INDEX ui_actions_created ON ui_actions (created_at);
+CREATE INDEX ui_actions_item ON ui_actions (item_key, created_at);
+`;
+
 /** All built-in migrations, in order. */
 export const MIGRATIONS: readonly Migration[] = [
   {
@@ -246,6 +275,13 @@ export const MIGRATIONS: readonly Migration[] = [
     disableForeignKeys: true,
     up(db) {
       db.exec(V3_DDL);
+    },
+  },
+  {
+    version: 4,
+    name: 'ui_actions',
+    up(db) {
+      db.exec(V4_DDL);
     },
   },
 ];

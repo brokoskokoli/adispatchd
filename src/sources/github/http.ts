@@ -76,6 +76,11 @@ export interface GitHubRequestOptions {
    */
   idempotent?: boolean;
   /**
+   * Never repeat this request automatically, not even after a rate-limit
+   * response (WI-27: comments written in the web UI are sent exactly once).
+   */
+  noRetry?: boolean;
+  /**
    * Inspect a successful (2xx) parsed body inside the retry loop: a returned
    * error is thrown as if the request had failed (e.g. GraphQL rate limits
    * reported with HTTP 200), so retries and rate-limit waits apply.
@@ -256,7 +261,7 @@ export class GitHubHttpClient {
       } catch (err) {
         if (!(err instanceof SourceError) || options.signal?.aborted) throw err;
         const retryAllowed = err.kind === 'rate_limited' || (idempotent && err.kind === 'transient');
-        if (!retryAllowed || attempt >= this.maxRetries) throw err;
+        if (!retryAllowed || options.noRetry === true || attempt >= this.maxRetries) throw err;
         const delay =
           err.kind === 'rate_limited'
             ? (err.retryAfterMs ?? this.retryBaseDelayMs)

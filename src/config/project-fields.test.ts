@@ -60,7 +60,7 @@ describe('config: GitHub project fields (WI-14)', () => {
       fields: { Status: 'single_select', Priority: 'single_select', Estimate: 'number', Due: 'date' },
     });
     expect(config?.sources.repo_b?.project).toEqual({ owner: 'my-user', number: 7, identity: 'project_reader', writeIdentity: 'project_reader', fields: { Sprint: 'iteration', Notes: 'text' } });
-    expect(config?.identities.project_reader).toEqual({ id: 'project_reader', type: 'github_token', tokenEnv: 'TEST_PROJECT_TOKEN' });
+    expect(config?.identities.project_reader).toEqual({ id: 'project_reader', type: 'github_token', tokenEnv: 'TEST_PROJECT_TOKEN', uiActions: false });
     expect(config?.identities.maintainer?.type).toBe('github_app');
   });
 

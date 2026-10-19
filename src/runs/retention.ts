@@ -51,6 +51,8 @@ export interface RetentionReport {
   deletedBlocks: number;
   deletedNotifications: number;
   deletedCronFirings: number;
+  /** Audit entries of UI actions (WI-27): succeeded like completed runs, others like failed runs. */
+  deletedUiActions: number;
   orphanDirsRemoved: number;
   /** Left-over token directories (WI-18) removed. */
   tokenDirsRemoved: number;
@@ -60,7 +62,7 @@ export interface RetentionReport {
 
 /** Options of {@link RetentionService}. */
 export interface RetentionServiceOptions {
-  repositories: Pick<Repositories, 'runs' | 'retention'>;
+  repositories: Pick<Repositories, 'runs' | 'retention'> & Partial<Pick<Repositories, 'uiActions'>>;
   dataDir: string;
   /** Live retention settings (`config.global.retention`). */
   settings: () => RetentionConfig;
@@ -147,6 +149,7 @@ export class RetentionService {
       deletedBlocks: 0,
       deletedNotifications: 0,
       deletedCronFirings: 0,
+      deletedUiActions: 0,
       orphanDirsRemoved: 0,
       tokenDirsRemoved: 0,
       errors: [],
@@ -168,6 +171,7 @@ export class RetentionService {
     if (notificationsBefore) report.deletedNotifications = retention.deleteNotifications(notificationsBefore);
     const firingsBefore = cutoff(settings.completedRunsMs ?? CRON_FIRINGS_FALLBACK_MS);
     if (firingsBefore) report.deletedCronFirings = retention.deleteCronFirings(firingsBefore);
+    report.deletedUiActions = this.options.repositories.uiActions?.deleteOlderThan(cutoff(settings.completedRunsMs), cutoff(settings.failedRunsMs)) ?? 0;
     const runDirNames = await readdir(dataPaths(this.options.dataDir).runsDir).catch(() => [] as string[]);
     if (!this.stopped) await this.removeOrphans(report, runDirNames);
     if (!this.stopped) await this.removeTokenFiles(report, runDirNames);
@@ -179,6 +183,7 @@ export class RetentionService {
       deletedBlocks: report.deletedBlocks,
       deletedNotifications: report.deletedNotifications,
       deletedCronFirings: report.deletedCronFirings,
+      deletedUiActions: report.deletedUiActions,
       orphanDirsRemoved: report.orphanDirsRemoved,
       tokenDirsRemoved: report.tokenDirsRemoved,
       errors: report.errors.length,

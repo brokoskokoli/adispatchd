@@ -25,6 +25,7 @@ import {
   type Clock,
   type IdentityRef,
   type Logger,
+  type ProjectFieldOption,
   type ProjectFieldUpdateValue,
   type SourceUpdateApplied,
 } from '../../core/index.js';
@@ -195,11 +196,13 @@ export class GitHubProjectWriter {
     content: { contentId: string; key: string },
     desired: Readonly<Record<string, ProjectFieldUpdateValue>>,
     identity: IdentityRef,
+    options: { exactIdentity?: boolean } = {},
   ): Promise<ProjectWriteResult> {
     const names = Object.keys(desired);
     if (names.length === 0) return { changed: {}, itemAdded: false };
     this.checkDesired(desired);
-    const writer = this.settings.writeIdentity ?? identity;
+    // UI actions (WI-27) write strictly as the chosen identity, never as `project.identity`.
+    const writer = options.exactIdentity === true ? identity : (this.settings.writeIdentity ?? identity);
     const progress: ProjectWriteResult = { changed: {}, itemAdded: false };
     try {
       // A NOT_FOUND for an ID from cached metadata (e.g. a deleted and re-created option): reload once and redo.
@@ -216,6 +219,24 @@ export class GitHubProjectWriter {
       });
     }
     return progress;
+  }
+
+  /**
+   * Declared fields with their selectable options/iterations, resolved
+   * against the project metadata read with `identity` (cached like writes).
+   */
+  async fieldOptions(identity: IdentityRef): Promise<ProjectFieldOption[]> {
+    const { metadata } = await this.metadata(identity, false);
+    return Object.entries(this.settings.fields).map(([name, kind]) => {
+      const field =
+        metadata.fields.find((f) => f.name === name) ?? metadata.fields.find((f) => f.name.toLowerCase() === name.toLowerCase());
+      if (!field) return { name, kind, choices: [], problem: `not found in GitHub project ${this.label}` };
+      if (field.dataType !== PROJECT_FIELD_DATA_TYPES[kind]) {
+        return { name, kind, choices: [], problem: `has type ${field.dataType || 'unknown'} in GitHub project ${this.label}, declared as ${kind}` };
+      }
+      const choices = kind === 'single_select' ? field.options.map((o) => o.name) : kind === 'iteration' ? field.iterations.map((i) => i.title) : [];
+      return { name, kind, choices, problem: null };
+    });
   }
 
   /**

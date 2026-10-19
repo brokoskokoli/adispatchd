@@ -12,6 +12,7 @@ import { NotificationRepository } from './notifications.js';
 import { RetentionRepository } from './retention.js';
 import { RunRepository } from './runs.js';
 import { afterCommit, transaction } from './sqlite.js';
+import { UiActionRepository } from './ui-actions.js';
 
 /** All repositories over one connection. */
 export interface Repositories {
@@ -22,6 +23,8 @@ export interface Repositories {
   notifications: NotificationRepository;
   cronFirings: CronFiringRepository;
   retention: RetentionRepository;
+  /** Audit of UI actions (WI-27). */
+  uiActions: UiActionRepository;
   /** Run `fn` in one transaction (nested repository calls join it via savepoints). */
   transaction<T>(fn: () => T): T;
   /**
@@ -44,6 +47,7 @@ export function createRepositories(db: DatabaseSync, options: { clock?: Clock } 
     notifications: new NotificationRepository(db, clock),
     cronFirings: new CronFiringRepository(db, clock),
     retention: new RetentionRepository(db),
+    uiActions: new UiActionRepository(db, clock),
     transaction: (fn) => transaction(db, fn),
     afterCommit: (cb) => afterCommit(db, cb),
   };

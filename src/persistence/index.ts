@@ -67,6 +67,14 @@ export {
   type CronDecision,
   type RecordCronFiringInput,
 } from './cron-firings.js';
+export {
+  UiActionRepository,
+  type UiActionKind,
+  type UiActionQuery,
+  type UiActionRecord,
+  type UiActionResult,
+  type RecordUiActionInput,
+} from './ui-actions.js';
 export { RetentionRepository, type RunRetentionCategory, type RunRetentionCandidate } from './retention.js';
 export {
   LockConflictError,

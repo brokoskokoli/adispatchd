@@ -24,7 +24,7 @@ describe('schema v3 – run outcomes and completion hooks', () => {
 
     const p = openPersistence(tmp.dir, { clock });
     try {
-      expect(schemaVersion(p.db)).toBe(3);
+      expect(schemaVersion(p.db)).toBeGreaterThanOrEqual(3);
       expect(p.db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
       expect(p.db.prepare('PRAGMA foreign_key_check').all()).toEqual([]);
       const [action] = p.actions.listForRun('run-1');

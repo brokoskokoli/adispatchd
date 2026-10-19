@@ -618,7 +618,7 @@ export interface SourceAdapter {
    * Apply a declarative update idempotently: re-read the item first, change
    * only what differs, preserve unrelated manual changes (Spec §10).
    */
-  applyUpdate(item: SourceItem, update: SourceUpdate, identity: IdentityRef): Promise<SourceUpdateResult>;
+  applyUpdate(item: SourceItem, update: SourceUpdate, identity: IdentityRef, options?: SourceUpdateOptions): Promise<SourceUpdateResult>;
 
   /**
    * Post a conversation comment (not a review) containing `marker` in an
@@ -628,6 +628,40 @@ export interface SourceAdapter {
 
   /** Find a previously posted comment carrying `marker` (idempotency before retry). */
   findCommentByMarker(item: SourceItem, marker: string, identity: IdentityRef): Promise<CommentRef | null>;
+
+  /**
+   * Post a comment written by a user in the web UI (WI-27): no marker, sent
+   * exactly once (never retried automatically, to avoid double posts).
+   * Optional: adapters without it do not support UI actions.
+   */
+  postUserComment?(item: SourceItem, body: string, identity: IdentityRef): Promise<CommentRef>;
+
+  /** Declared project fields with their selectable options/iterations (WI-27 item panel); `[]` without a project. */
+  projectFieldOptions?(options?: { signal?: AbortSignal }): Promise<ProjectFieldOption[]>;
+
+  /** Labels defined in the repository (WI-27 item panel, suggestions only). */
+  listLabels?(options?: { signal?: AbortSignal }): Promise<string[]>;
+}
+
+/** Options of {@link SourceAdapter.applyUpdate}. */
+export interface SourceUpdateOptions {
+  /**
+   * Write everything with exactly `identity` (WI-27 UI actions): an explicit
+   * project write identity of the source (`project.identity`) is NOT used.
+   */
+  exactIdentity?: boolean;
+}
+
+/** A declared project field and what can be selected for it (WI-27). */
+export interface ProjectFieldOption {
+  /** Declared name (as in `project.<name>`). */
+  name: string;
+  /** Declared kind (`single_select`, `text`, `number`, `date`, `iteration`). */
+  kind: string;
+  /** Option names (single_select) or iteration titles (iteration, current and completed); empty otherwise. */
+  choices: string[];
+  /** Problem resolving the field in the project (not found, wrong type), `null` if fine. */
+  problem: string | null;
 }
 
 /** Dependencies handed to adapter factories. */

@@ -251,6 +251,8 @@ export interface GithubAppIdentityConfig {
   installationId: number;
   /** Name of the environment variable holding the PEM private key (never the key itself). */
   privateKeyEnv: string;
+  /** `ui_actions` (WI-27): may act in the web UI (comments, labels, project fields); missing in snapshots before 0.4.0. */
+  uiActions: boolean;
 }
 
 /**
@@ -262,6 +264,8 @@ export interface GithubTokenIdentityConfig {
   type: 'github_token';
   /** Name of the environment variable holding the token (never the token itself). */
   tokenEnv: string;
+  /** See {@link GithubAppIdentityConfig.uiActions}. */
+  uiActions: boolean;
 }
 
 /** A configured identity. */

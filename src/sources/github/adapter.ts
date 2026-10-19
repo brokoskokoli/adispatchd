@@ -17,12 +17,14 @@ import {
   type IdentityRef,
   type ListCandidatesOptions,
   type Logger,
+  type ProjectFieldOption,
   type SourceAdapter,
   type SourceAdapterDeps,
   type SourceAdapterFactory,
   type SourceItem,
   type SourceUpdate,
   type SourceUpdateApplied,
+  type SourceUpdateOptions,
   type SourceUpdateResult,
   type Timers,
 } from '../../core/index.js';
@@ -281,7 +283,7 @@ export class GitHubSourceAdapter implements SourceAdapter {
    * A thrown {@link SourceError} carries what was applied before the failure
    * in `details.applied` (for the action journal).
    */
-  async applyUpdate(item: SourceItem, update: SourceUpdate, identity: IdentityRef): Promise<SourceUpdateResult> {
+  async applyUpdate(item: SourceItem, update: SourceUpdate, identity: IdentityRef, options: SourceUpdateOptions = {}): Promise<SourceUpdateResult> {
     this.assertOwnItem(item);
     const project = update.project && Object.keys(update.project).length > 0 ? update.project : undefined;
     if (project && !this.projectWriter) {
@@ -297,7 +299,9 @@ export class GitHubSourceAdapter implements SourceAdapter {
         if (typeof issue.node_id !== 'string' || issue.node_id === '') {
           throw new SourceError('invalid', `Item ${item.key} has no GraphQL node ID`, { retryable: false });
         }
-        const result = await this.projectWriter.apply({ contentId: issue.node_id, key: item.key }, project, identity);
+        const result = await this.projectWriter.apply({ contentId: issue.node_id, key: item.key }, project, identity, {
+          ...(options.exactIdentity === true ? { exactIdentity: true } : {}),
+        });
         if (Object.keys(result.changed).length > 0) applied.projectFields = result.changed;
         if (result.itemAdded) applied.projectItemAdded = true;
       } catch (err) {
@@ -372,6 +376,48 @@ export class GitHubSourceAdapter implements SourceAdapter {
       });
     }
     return toCommentRef(res.data);
+  }
+
+  /**
+   * Comment from the web UI (WI-27): posted as is (no marker) and sent exactly
+   * once – no automatic retry, not even after a rate limit. Only a 401 is
+   * repeated once with a fresh token (the comment was not created then).
+   * A failure after sending is reported with `outcomeUnknown`.
+   */
+  async postUserComment(item: SourceItem, body: string, identity: IdentityRef): Promise<CommentRef> {
+    this.assertOwnItem(item);
+    const res = await this.withToken(identity, undefined, (token) =>
+      this.http.request<GitHubCommentJson>('POST', `${this.repoPath}/issues/${item.itemId}/comments`, {
+        token,
+        body: { body },
+        noRetry: true,
+      }),
+    );
+    const id = res.data?.id;
+    if ((typeof id !== 'number' && typeof id !== 'string') || String(id) === '') {
+      throw new SourceError('transient', `Comment on ${item.key} returned no comment id; outcome unknown`, {
+        status: res.status,
+        outcomeUnknown: true,
+        retryable: false,
+      });
+    }
+    this.logger.info('Posted UI comment', { item: item.key, identity, commentId: String(id) });
+    return toCommentRef(res.data);
+  }
+
+  /** Declared project fields with options/iterations, read with the project read identity (WI-27). */
+  async projectFieldOptions(): Promise<ProjectFieldOption[]> {
+    const project = this.config.project;
+    if (!project || !this.projectWriter) return [];
+    return this.projectWriter.fieldOptions(project.identity ?? this.config.identity);
+  }
+
+  /** Labels of the repository (`GET /repos/{o}/{r}/labels`, at most a few pages), with the source identity. */
+  async listLabels(options: { signal?: AbortSignal } = {}): Promise<string[]> {
+    const labels = await this.withToken(this.config.identity, options.signal, (token) =>
+      this.http.paginate<{ name?: unknown }>(`${this.repoPath}/labels`, { token, ...(options.signal ? { signal: options.signal } : {}) }),
+    );
+    return labels.map((l) => l.name).filter((n): n is string => typeof n === 'string' && n !== '');
   }
 
   async findCommentByMarker(item: SourceItem, marker: string, identity: IdentityRef): Promise<CommentRef | null> {

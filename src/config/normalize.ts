@@ -159,8 +159,9 @@ export function normalizeIdentities(raw: RawIdentitiesFile): Record<string, Iden
             appId: identity.app_id,
             installationId: identity.installation_id,
             privateKeyEnv: identity.private_key_env,
+            uiActions: identity.ui_actions,
           }
-        : { id, type: identity.type, tokenEnv: identity.token_env };
+        : { id, type: identity.type, tokenEnv: identity.token_env, uiActions: identity.ui_actions };
   }
   return out;
 }

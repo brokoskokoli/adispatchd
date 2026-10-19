@@ -5,6 +5,7 @@
  * YAML key names.
  */
 import { statSync } from 'node:fs';
+import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { Cron } from 'croner';
 import {
@@ -113,6 +114,7 @@ export function cronError(expression: string, timezone?: string): string | undef
 export function validateSemantics(input: SemanticInput, issues: IssueCollector): void {
   validateGlobal(input.global, issues);
   validateSources(input, issues);
+  validateUiActions(input, issues);
   const seenWorkflows = new Map<string, string>();
   for (const entry of input.workflows) {
     const { workflow } = entry;
@@ -190,6 +192,52 @@ function isHttpUrl(value: string): boolean {
     return url.protocol === 'https:' || url.protocol === 'http:';
   } catch {
     return false;
+  }
+}
+
+/**
+ * True if any local process (including workers) can send the identity
+ * header itself: `trusted_header` mode with a trusted proxy entry that covers
+ * a loopback address. (WI-26 review: to be reconciled with WI-26's
+ * `isIdentityForgeableLocally`, which also honours `proxy_secret_env`.)
+ */
+export function trustedHeaderForgeableLocally(global: GlobalConfig): boolean {
+  const auth = global.auth;
+  if (auth.mode !== 'trusted_header') return false;
+  return auth.trustedHeader.trustedProxies.some((entry) => coversLoopback(entry));
+}
+
+function coversLoopback(entry: string): boolean {
+  const [ip, prefix] = entry.split('/');
+  const family = isIP(ip ?? '');
+  if (family === 0) return false;
+  const list = new BlockList();
+  const type = family === 4 ? 'ipv4' : 'ipv6';
+  if (prefix === undefined) list.addAddress(ip as string, type);
+  else list.addSubnet(ip as string, Number(prefix), type);
+  return list.check('127.0.0.1', 'ipv4') || list.check('::1', 'ipv6') || (family === 6 && list.check('::ffff:127.0.0.1', 'ipv6'));
+}
+
+/**
+ * `ui_actions: true` (WI-27) only works with a login: without one the UI
+ * actions are disabled (warning). With a header login that local processes
+ * can forge, a worker could act as the identity: error.
+ */
+function validateUiActions(input: SemanticInput, issues: IssueCollector): void {
+  const mode = input.global.auth.mode;
+  const forgeable = trustedHeaderForgeableLocally(input.global);
+  for (const identity of Object.values(input.identities)) {
+    if (!identity.uiActions) continue;
+    const at: IssuePath = ['identities', identity.id, 'ui_actions'];
+    if (mode === 'none') {
+      issues.warning(IDENTITIES_FILE, at, 'UI actions need a login (auth.mode password or trusted_header); with auth.mode none they are disabled');
+    } else if (forgeable) {
+      issues.error(
+        IDENTITIES_FILE,
+        at,
+        'UI actions are not allowed with auth.mode trusted_header behind a local (loopback) proxy: any local process, including workers, could forge the login header. Use auth.mode password (also works over Tailscale) or a proxy secret',
+      );
+    }
   }
 }
 

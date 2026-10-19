@@ -382,12 +382,16 @@ const githubAppIdentitySchema = z.strictObject({
   app_id: positiveInt,
   installation_id: positiveInt,
   private_key_env: envName,
+  /** May be used in the web UI for comments/labels/project fields (WI-27); needs `auth.mode` ≠ none. */
+  ui_actions: z.boolean().default(false),
 });
 
 /** Token identity (e.g. a fine-grained personal access token); the token is read from `token_env`. */
 const githubTokenIdentitySchema = z.strictObject({
   type: z.literal('github_token'),
   token_env: envName,
+  /** See `github_app`. */
+  ui_actions: z.boolean().default(false),
 });
 
 /** Schema of `identities.yaml`. */

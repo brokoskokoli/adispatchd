@@ -11,6 +11,7 @@
  * - `POST /repos/{o}/{r}/issues/{n}/labels`, `DELETE /repos/{o}/{r}/issues/{n}/labels/{name}`
  * - `GET|POST /repos/{o}/{r}/issues/{n}/comments` (pagination)
  * - `PATCH /repos/{o}/{r}/issues/{n}` (`state`, `title`)
+ * - `GET  /repos/{o}/{r}/labels` (labels of {@link FakeGitHub.addRepoLabels} plus those used on items; pagination)
  * - `GET  /user` (user tokens from {@link FakeGitHub.createUserToken})
  * - `POST /graphql` (GHES: `/api/graphql`): the GitHub Projects (v2)
  *   queries of the adapter – `repositoryOwner { projectV2 }` metadata (field
@@ -248,6 +249,8 @@ export class FakeGitHub {
   private readonly deniedProjects = new Set<string>();
   private readonly deniedProjectWrites = new Set<string>();
   private readonly deniedLinked = new Set<string>();
+  /** Labels defined in a repository besides those used on its items. */
+  private readonly repoLabelDefs = new Map<string, Set<string>>();
   /** Deleted branches as `repo:name`. */
   private readonly deletedBranches = new Set<string>();
   private faults: Fault[] = [];
@@ -521,6 +524,14 @@ export class FakeGitHub {
     values[field] = value;
   }
 
+  /** Define labels in `repo` (listed by `GET /repos/{o}/{r}/labels` even if no item uses them). */
+  addRepoLabels(repo: string, ...names: string[]): void {
+    const key = normalizeRepo(repo);
+    const set = this.repoLabelDefs.get(key) ?? new Set<string>();
+    for (const n of names) set.add(n);
+    this.repoLabelDefs.set(key, set);
+  }
+
   /** Make a project unreadable for every token (GraphQL answers `projectV2: null` + FORBIDDEN error). */
   denyProject(project: FakeProject): void {
     this.deniedProjects.add(project.id);
@@ -640,6 +651,17 @@ export class FakeGitHub {
       return json(401, { message: 'Requires authentication' });
     }
 
+    const labelsMatch = /^\/repos\/([^/]+)\/([^/]+)\/labels$/.exec(path);
+    if (labelsMatch && method === 'GET') {
+      const repo = normalizeRepo(`${decodeURIComponent(labelsMatch[1] as string)}/${decodeURIComponent(labelsMatch[2] as string)}`);
+      const auth = this.authenticate(headers);
+      if (auth instanceof Response) return auth;
+      if (this.restricted.has(repo) || !this.repos.has(repo)) return json(404, { message: 'Not Found' });
+      const names = new Map<string, string>();
+      for (const n of this.repoLabelDefs.get(repo) ?? []) names.set(n.toLowerCase(), n);
+      for (const issue of this.repoIssues(repo).values()) for (const n of issue.labels) if (!names.has(n.toLowerCase())) names.set(n.toLowerCase(), n);
+      return this.page([...names.values()].sort().map((name) => ({ name })), url);
+    }
     const m = /^\/repos\/([^/]+)\/([^/]+)\/issues(?:\/(\d+)(\/.*)?)?$/.exec(path);
     if (!m) return json(404, { message: 'Not Found' });
     const repo = normalizeRepo(`${decodeURIComponent(m[1] as string)}/${decodeURIComponent(m[2] as string)}`);
