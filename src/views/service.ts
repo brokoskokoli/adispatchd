@@ -128,6 +128,8 @@ export interface ViewItemsResult {
   sections?: ViewSectionResult[];
   /** Only for a grouped view without sections (WI-28). */
   groupBy?: ViewGrouping;
+  /** Only for views with sections (WI-28): the UI hides sections without rows. */
+  hideEmptySections?: boolean;
 }
 
 /** Section definition as exposed by the API (WI-28). */
@@ -447,7 +449,7 @@ export class ViewService {
         groupBy: t.groupBy,
       };
     });
-    return { ...base, rows: [], truncated: sections.some((s) => s.counts.truncated), sections };
+    return { ...base, rows: [], truncated: sections.some((s) => s.counts.truncated), sections, hideEmptySections: view.hideEmptySections };
   }
 
   /**

@@ -402,15 +402,44 @@ export interface ViewDef {
   sources: string[];
 }
 
+export type ViewColumnDef = { field: string; label: string; link?: string | null; type?: string };
+export type ViewRowData = {
+  key: string;
+  sourceId: string;
+  itemId: string;
+  url: string | null;
+  lastRunId: string | null;
+  cells: Array<{ value: unknown; known: boolean; link?: string | null }>;
+  /** WI-28: value of the first sort key when the table is grouped. */
+  group?: string | null;
+};
+export type ViewSortKeyDef = { field: string; direction: 'asc' | 'desc'; order: string[] | null };
+
+/** WI-28: one section of a view result. */
+export interface ViewSectionData {
+  title: string;
+  rest: boolean;
+  fields: ViewColumnDef[];
+  sort: ViewSortKeyDef[];
+  rows: ViewRowData[];
+  counts: { rows: number; filterUnknown: number; truncated: boolean };
+  groupBy: { field: string; label: string } | null;
+}
+
 export interface ViewItems {
   view: ViewDef;
-  columns: Array<{ field: string; label: string; link?: string | null; type?: string }>;
-  rows: Array<{ key: string; sourceId: string; itemId: string; url: string | null; lastRunId: string | null; cells: Array<{ value: unknown; known: boolean; link?: string | null }> }>;
+  columns: ViewColumnDef[];
+  rows: ViewRowData[];
   errors: Array<{ sourceId: string; message: string }>;
   filterUnknown: number;
   truncated: boolean;
   fetchedAt: string;
   cached: boolean;
+  /** WI-28 (missing before 0.5.0). */
+  warnings?: string[];
+  sections?: ViewSectionData[];
+  groupBy?: { field: string; label: string };
+  hideEmptySections?: boolean;
 }
 
 export interface ConfigIssue {
