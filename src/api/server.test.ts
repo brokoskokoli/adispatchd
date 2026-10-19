@@ -56,6 +56,7 @@ beforeAll(async () => {
         ].join('\n'),
       );
       wf('slow', '{ type: source, source: repo_a }', slow, 'enabled: false\n');
+      wf('multi', '{ type: source, sources: [repo_a, repo_b] }', ok, 'enabled: false\nmax_concurrent: 2\nmax_concurrent_per_source: 1\n');
       wf('crasher', '{ type: manual }', crash, 'retry: { max_technical_failures: 1 }\n');
       wf(
         'deploy',
@@ -204,7 +205,7 @@ describe('scheduler control', () => {
 describe('workflows', () => {
   it('lists workflows, shows details and applies / resets runtime overrides', async () => {
     const list = await env.request('GET', '/api/v1/workflows');
-    expect(list.json.workflows.map((w: { id: string }) => w.id)).toEqual(['coder', 'crasher', 'deploy', 'keeper', 'slow']);
+    expect(list.json.workflows.map((w: { id: string }) => w.id)).toEqual(['coder', 'crasher', 'deploy', 'keeper', 'multi', 'slow']);
     const keeper = list.json.workflows.find((w: { id: string }) => w.id === 'keeper');
     expect(keeper.execute).toMatchObject({ keep: ['.agent/**/*', '*.html', '*.log'], keepMaxSizeBytes: 100 * 1024 * 1024 });
     const deploy = list.json.workflows.find((w: { id: string }) => w.id === 'deploy');
@@ -229,6 +230,27 @@ describe('workflows', () => {
     expect(res.json.workflowId).toBe('coder');
     expect(res.json.candidates.map((c: { itemKey: string }) => c.itemKey)).toContain('repo_a:7');
     expect((await env.request('POST', '/api/v1/workflows/nope/dry-run')).status).toBe(404);
+  });
+
+  it('shows all sources of a multi-source workflow (WI-20)', async () => {
+    await env.app.scheduler.planOnce();
+    const detail = await env.request('GET', '/api/v1/workflows/multi');
+    expect(detail.json).toMatchObject({
+      trigger: { type: 'source', source: 'repo_a', sources: ['repo_a', 'repo_b'] },
+      maxConcurrent: 2,
+      maxConcurrentPerSource: 1,
+      lastPlanning: { status: 'disabled', sources: [{ sourceId: 'repo_a' }, { sourceId: 'repo_b' }] },
+    });
+    expect((await env.request('GET', '/api/v1/workflows/coder')).json.maxConcurrentPerSource).toBeNull();
+    const dry = await env.request('POST', '/api/v1/workflows/multi/dry-run');
+    // The fake has no repository example/b: that source fails, repo_a is still polled.
+    expect(dry.json.source.sources.map((x: { sourceId: string; status: string }) => [x.sourceId, x.status])).toEqual([
+      ['repo_a', 'ok'],
+      ['repo_b', 'source_error'],
+    ]);
+    expect(dry.json.source.error).toContain("polling source 'repo_b' failed");
+    expect(dry.json.candidates.map((c: { itemKey: string }) => c.itemKey)).toContain('repo_a:7');
+    expect(dry.json.capacity.perSource).toEqual({ max: 1, active: { repo_a: 0, repo_b: 0 } });
   });
 });
 

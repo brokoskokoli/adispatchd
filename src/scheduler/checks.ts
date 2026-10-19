@@ -39,13 +39,20 @@ function fromResult(kind: CheckKind, index: number, command: string, r: ShellChe
   };
 }
 
-function templateValues(workflow: WorkflowConfig, now: Date, item?: SourceItem, sourceType?: string, repository?: string): TemplateValues {
+function templateValues(workflow: WorkflowConfig, now: Date, target?: CheckItem): TemplateValues {
+  const item = target?.item;
   const title = item?.fields.title;
+  const repository = target?.repository;
   return buildTemplateValues({
     workflow: { id: workflow.id, name: workflow.name },
     ...(item
       ? {
-          source: { id: item.sourceId, type: sourceType ?? '', ...(repository !== undefined ? { repository } : {}) },
+          source: {
+            id: item.sourceId,
+            type: target.sourceType,
+            ...(repository !== undefined ? { repository } : {}),
+            ...(target.vars ? { vars: target.vars } : {}),
+          },
           item: {
             id: item.itemId,
             key: item.key,
@@ -64,6 +71,8 @@ export interface CheckItem {
   item: SourceItem;
   sourceType: string;
   repository?: string;
+  /** Variables of the item's source (`{source.vars.<name>}`, WI-20). */
+  vars?: Readonly<Record<string, string>>;
 }
 
 /** Runs the scheduler's shell checks. */
@@ -128,7 +137,7 @@ export class SchedulerChecks {
   ): Promise<CheckDiagnosis> {
     let args: string[];
     try {
-      const values = templateValues(workflow, this.now(), target?.item, target?.sourceType, target?.repository);
+      const values = templateValues(workflow, this.now(), target);
       const scope = kind === 'item_condition' ? { source: true } : {};
       args = condition.args.map((a) => renderTemplate(a, values, { mode: 'text', scope }));
     } catch (err) {

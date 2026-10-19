@@ -110,13 +110,22 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 | GET | `/api/v1/workflows` | – | `{"workflows":[Workflow], "overrides":{"global":{},"workflows":{}}}` |
 | GET | `/api/v1/workflows/:id` | – | Workflow + `diagnosis` (letzte Planungsdiagnose), `filter`, `hooks` |
 | PATCH | `/api/v1/workflows/:id/runtime` | `{"enabled"?: bool\|null, "priority"?: number\|null, "maxConcurrent"?: int≥1\|null}` (`null` = Override entfernen) | `200` Workflow |
-| POST | `/api/v1/workflows/:id/start` | `{"item"?: "https://github.com/o/r/issues/7" \| "#7" \| "7", "parameters"?: {…}}` | `202 {"run": RunSummary}` |
-| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14; `hooks: {onResult: [...], technical: {crashed, start_error, timed_out, cancelled → Hook}}`, WI-17; seit 0.3.0 `secrets` wie beim Workflow, WI-18) |
+| POST | `/api/v1/workflows/:id/start` | `{"item"?: "https://github.com/o/r/issues/7" \| "#7" \| "7" \| "repo_a:7", "parameters"?: {…}}` | `202 {"run": RunSummary}` |
+| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14; `hooks: {onResult: [...], technical: {crashed, start_error, timed_out, cancelled → Hook}}`, WI-17; seit 0.3.0 `secrets` wie beim Workflow, WI-18; `source.sources` je Source, `capacity.perSource`, WI-20; je Kandidat optional `linkedFields` für `linked_branches` … `work_pr_url`, wenn der Workflow sie verwendet, WI-21) |
 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
 `overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?}}`,
 `execute {type, command, args, workingDirectory, timeout, secrets: [Namen], secretDelivery: {Name: env|file}, keep: [Muster], keepMaxSizeBytes}` (seit 0.3.0 `secretDelivery`; nie Werte), `secrets` (seit 0.3.0: alle deklarierten Secrets von `execute` und `shell`-Actions als `[{where, name, identity, delivery, variable}]`, nie Werte), `hasFilter`, `hasShellFilter`,
 `conditions {workflow, item}` (Anzahl), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
+
+Mehrere Sources (WI-20): `trigger` enthält dann zusätzlich `sources: [<id>, …]` (`source` = erste Source, wie bisher);
+`maxConcurrentPerSource` (`null` = nicht konfiguriert); `lastPlanning.sources: [{sourceId, status, error, polled}]` (auch
+bei einer Source, ein Eintrag; `lastPlanning.status` ist `source_error`, sobald eine Source ausfiel, `error` fasst die
+Meldungen zusammen). Die Planungsdiagnose (`diagnosis`) und das DryRunResult (`source`) behalten `sourceId` (erste
+Source), `polled` (Summe), `pushdown` und `error` und haben zusätzlich `sources: [{sourceId, status, error, polled,
+pushdown}]`; neuer Kandidaten-Status `source_limit` (`max_concurrent_per_source` erreicht). Manueller Start: `item` darf
+`<source>:<nr>` sein; bei mehreren Sources wird die Source aus URL bzw. Präfix abgeleitet, sonst `400
+manual_item_invalid_ref` mit Hinweis.
 
 Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven Lock (`409 lock_conflict`).
 
@@ -221,6 +230,9 @@ clearedAt, clearedBy, active, affectedRunIds, sourceUrl`.
   "fetchedAt": "…", "cached": false }
 ```
 `cells` hat die Reihenfolge von `columns`. Nicht verfügbare Felder: `value: null, known: false`. Links nur `http(s)`.
+Spalten vom Typ `object[]` (z. B. `closing_prs`, WI-21) liefern `value` als Liste flacher Objekte
+(`[{ "number": 12, "state": "open", "head_ref": "feature/12", "is_draft": false, "url": "…" }]`); `work_pr` hat
+als `link` die PR-URL (`work_pr_url`).
 Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_result`, `run.last_result.message`,
 `run.last_status_message`, `run.last_started_at`, `run.last_finished_at` (letzter Run des Items nach Erstellzeit, workflowübergreifend).
 

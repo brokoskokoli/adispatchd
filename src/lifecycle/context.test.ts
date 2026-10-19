@@ -132,7 +132,7 @@ on_success:
       const run = env.p.runs.require(env.finalizeSuccess(env.reserve(snapshot).id).id);
       const withParams = { ...run, parameters: { mode: 'fast' } };
       const scope = hookTemplateScope(snapshot, 'on_success');
-      expect(scope).toEqual({ run: true, workspace: true, source: true, result: true, parameters: ['mode'] });
+      expect(scope).toEqual({ run: true, workspace: true, source: true, result: true, linked: true, parameters: ['mode'] });
       expect(hookTemplateScope(snapshot, 'on_start').result).toBe(false);
       const values = buildHookTemplateValues({ run: withParams, snapshot, hook: 'on_success', item: null, now: env.clock.now() });
       expect(renderHookText('{parameters.mode} {workspace.base_dir}', values, scope)).toMatch(/^fast \//);

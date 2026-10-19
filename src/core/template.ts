@@ -19,7 +19,7 @@ import path from 'node:path';
 import { OrchestratorError } from './errors.js';
 import { formatCompactTimestamp } from './ids.js';
 import { sanitizeSegment } from './paths.js';
-import type { BusinessResult, TerminalStatus, TriggerType } from './types.js';
+import type { BusinessResult, FieldResolution, TerminalStatus, TriggerType } from './types.js';
 
 /** Interpolation mode, see module docs. */
 export type TemplateMode = 'text' | 'path';
@@ -29,11 +29,15 @@ export type TemplateMode = 'text' | 'path';
  * - `always`: every workflow context
  * - `run`: once a run exists (not in filters/conditions before reservation)
  * - `workspace`: after the workspace path is known (not in `working_directory` itself)
- * - `source`: only for source-bound runs (source trigger or manual with item)
+ * - `source`: only for source-bound runs (source trigger or manual with item);
+ *   includes the source variables `{source.vars.<name>}` (WI-20)
  * - `result`: only in completion hooks (`on_success`, `on_failure`, ...)
  * - `parameters`: declared manual-start parameters, `{parameters.<name>}`
+ * - `linked`: work branch / PR of the item (WI-21, GitHub). Expensive: the
+ *   caller resolves them right before rendering (run start, action attempt);
+ *   only in `execute` and lifecycle actions of source-bound workflows.
  */
-export type PlaceholderGroup = 'always' | 'run' | 'workspace' | 'source' | 'result' | 'parameters';
+export type PlaceholderGroup = 'always' | 'run' | 'workspace' | 'source' | 'result' | 'parameters' | 'linked';
 
 /** Definition of a whitelisted placeholder. */
 export interface PlaceholderDefinition {
@@ -62,14 +66,89 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'item.key', group: 'source', description: 'Global item key <source>:<item>' },
   { name: 'item.url', group: 'source', description: 'Item URL' },
   { name: 'item.title', group: 'source', description: 'Item title' },
+  { name: 'item.work_branch', group: 'linked', description: 'Work branch of the item (field work_branch, GitHub); empty if none' },
+  { name: 'item.work_pr', group: 'linked', description: 'Number of the open PR of the item (field work_pr, GitHub); empty if none' },
   { name: 'result.status', group: 'result', description: 'Technical final status' },
   { name: 'result.result', group: 'result', description: 'Business result (success|failure|empty)' },
   { name: 'result.message', group: 'result', description: 'Message from the worker result file' },
   { name: 'result.outcome', group: 'result', description: 'Named outcome from the worker result file (empty if none)' },
 ];
 
+/**
+ * Placeholders of the `linked` group → the (expensive) item field that
+ * provides the value. Callers resolve these fields before rendering and fail
+ * (never render an empty string) when a used field is unknown.
+ */
+export const LINKED_PLACEHOLDER_FIELDS: Readonly<Record<string, string>> = {
+  'item.work_branch': 'work_branch',
+  'item.work_pr': 'work_pr',
+};
+
+/**
+ * Item fields (by name) behind the `linked` placeholders used in `templates`,
+ * in order of first use. Templates with syntax errors are skipped (they fail
+ * on rendering anyway).
+ */
+export function linkedFieldsUsed(templates: Iterable<string>): string[] {
+  const out: string[] = [];
+  for (const template of templates) {
+    let names: string[];
+    try {
+      names = extractPlaceholders(template);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const field = Object.hasOwn(LINKED_PLACEHOLDER_FIELDS, name) ? LINKED_PLACEHOLDER_FIELDS[name] : undefined;
+      if (field !== undefined && !out.includes(field)) out.push(field);
+    }
+  }
+  return out;
+}
+
+/** A linked field used by a template that could not be determined. */
+export interface UnknownLinkedField {
+  field: string;
+  placeholder: string;
+  reason: string;
+}
+
+/**
+ * The first field of `used` (see {@link linkedFieldsUsed}) that is not known
+ * in `resolved` – such a template must not be rendered (fail closed, never an
+ * empty string). `undefined` if all are known.
+ */
+export function unknownLinkedField(
+  used: readonly string[],
+  resolved: Readonly<Record<string, FieldResolution>> | undefined,
+): UnknownLinkedField | undefined {
+  for (const field of used) {
+    const res = resolved?.[field];
+    if (res?.known) continue;
+    const placeholder = Object.keys(LINKED_PLACEHOLDER_FIELDS).find((p) => LINKED_PLACEHOLDER_FIELDS[p] === field) ?? field;
+    return { field, placeholder, reason: res ? res.reason : `field "${field}" was not resolved` };
+  }
+  return undefined;
+}
+
+/** `workBranch`/`workPr` of {@link TemplateInput.item} from resolved fields (only known values of the right type). */
+export function linkedTemplateItem(resolved: Readonly<Record<string, FieldResolution>> | undefined): {
+  workBranch?: string | null;
+  workPr?: number | null;
+} {
+  const branch = resolved?.work_branch;
+  const pr = resolved?.work_pr;
+  return {
+    ...(branch?.known && (typeof branch.value === 'string' || branch.value === null) ? { workBranch: branch.value } : {}),
+    ...(pr?.known && (typeof pr.value === 'number' || pr.value === null) ? { workPr: pr.value } : {}),
+  };
+}
+
 /** Prefix of parameter placeholders: `{parameters.<name>}`. */
 export const PARAMETER_PLACEHOLDER_PREFIX = 'parameters.';
+
+/** Prefix of source variable placeholders: `{source.vars.<name>}` (WI-20, group `source`). */
+export const SOURCE_VAR_PLACEHOLDER_PREFIX = 'source.vars.';
 
 const PLACEHOLDER_BY_NAME = new Map(PLACEHOLDERS.map((p) => [p.name, p]));
 const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_-]+)*$/;
@@ -162,16 +241,29 @@ export interface TemplateScope {
   workspace?: boolean;
   source?: boolean;
   result?: boolean;
+  /** `{item.work_branch}` / `{item.work_pr}` (WI-21). */
+  linked?: boolean;
   /** Declared parameter names usable as `{parameters.<name>}`. */
   parameters?: readonly string[];
+  /**
+   * Check of a source variable `{source.vars.<name>}` (WI-20, needs `source`):
+   * returns a problem (e.g. "not defined in source b") or `undefined`.
+   * Omitted = every syntactically valid name is accepted (render time).
+   */
+  sourceVar?: (name: string) => string | undefined;
 }
 
 /** Scope with every group enabled (parameters: none). */
-export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true };
+export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true, linked: true };
 
 /** True if `name` is on the whitelist (parameters: any syntactically valid name). */
 export function isKnownPlaceholder(name: string): boolean {
-  return PLACEHOLDER_BY_NAME.has(name) || isParameterPlaceholder(name);
+  return PLACEHOLDER_BY_NAME.has(name) || isParameterPlaceholder(name) || isSourceVarPlaceholder(name);
+}
+
+function isSourceVarPlaceholder(name: string): boolean {
+  const rest = name.startsWith(SOURCE_VAR_PLACEHOLDER_PREFIX) ? name.slice(SOURCE_VAR_PLACEHOLDER_PREFIX.length) : '';
+  return /^[A-Za-z_][A-Za-z0-9_-]*$/.test(rest);
 }
 
 function isParameterPlaceholder(name: string): boolean {
@@ -180,6 +272,13 @@ function isParameterPlaceholder(name: string): boolean {
 }
 
 function checkAvailability(name: string, scope: TemplateScope): TemplateIssue | undefined {
+  if (isSourceVarPlaceholder(name)) {
+    if (!scope.source) {
+      return { code: 'unavailable_placeholder', message: `Placeholder "{${name}}" is not available in this context`, placeholder: name };
+    }
+    const problem = scope.sourceVar?.(name.slice(SOURCE_VAR_PLACEHOLDER_PREFIX.length));
+    return problem ? { code: 'unavailable_placeholder', message: problem, placeholder: name } : undefined;
+  }
   if (isParameterPlaceholder(name)) {
     const param = name.slice(PARAMETER_PLACEHOLDER_PREFIX.length);
     return scope.parameters?.includes(param)
@@ -189,6 +288,13 @@ function checkAvailability(name: string, scope: TemplateScope): TemplateIssue | 
   const def = PLACEHOLDER_BY_NAME.get(name);
   if (!def) {
     return { code: 'unknown_placeholder', message: `Unknown placeholder "{${name}}"`, placeholder: name };
+  }
+  if (def.group === 'linked' && !scope.linked) {
+    return {
+      code: 'unavailable_placeholder',
+      message: `Placeholder "{${name}}" is only available in "execute" and lifecycle actions of workflows triggered by a GitHub source`,
+      placeholder: name,
+    };
   }
   if (def.group !== 'always' && def.group !== 'parameters' && !scope[def.group]) {
     return {
@@ -319,8 +425,18 @@ export interface TemplateInput {
   workflow: { id: string; name?: string };
   workspace?: { baseDir?: string; path?: string };
   run?: { id: string; trigger?: TriggerType; startedAt?: Date };
-  source?: { id: string; type: string; repository?: string };
-  item?: { id: string; key?: string; number?: number | string; url?: string; title?: string };
+  source?: { id: string; type: string; repository?: string; vars?: Readonly<Record<string, string>> };
+  item?: {
+    id: string;
+    key?: string;
+    number?: number | string;
+    url?: string;
+    title?: string;
+    /** Resolved `work_branch` (`null` = none); omit when not resolved. */
+    workBranch?: string | null;
+    /** Resolved `work_pr` (`null` = none); omit when not resolved. */
+    workPr?: number | null;
+  };
   result?: { status?: TerminalStatus; result?: BusinessResult; message?: string; outcome?: string };
   parameters?: Readonly<Record<string, string | number | boolean>>;
   /** Time used for `{timestamp}`. */
@@ -346,6 +462,8 @@ export function buildTemplateValues(input: TemplateInput): TemplateValues {
     'item.number': input.item?.number,
     'item.url': input.item?.url,
     'item.title': input.item?.title,
+    'item.work_branch': input.item?.workBranch,
+    'item.work_pr': input.item?.workPr,
     'result.status': input.result?.status,
     'result.result': input.result?.result ?? undefined,
     'result.message': input.result?.message,
@@ -353,6 +471,9 @@ export function buildTemplateValues(input: TemplateInput): TemplateValues {
   };
   for (const [name, value] of Object.entries(input.parameters ?? {})) {
     values[`${PARAMETER_PLACEHOLDER_PREFIX}${name}`] = value;
+  }
+  for (const [name, value] of Object.entries(input.source?.vars ?? {})) {
+    values[`${SOURCE_VAR_PLACEHOLDER_PREFIX}${name}`] = value;
   }
   return values;
 }

@@ -243,7 +243,9 @@ export class ViewService {
 
     // Run enrichment (one query for all items).
     const lastRuns = this.options.runs.lastRunsForItems(loaded.map((l) => l.item.key));
-    const wanted = [...new Set([...collectFields(view.filter), ...view.fields.flatMap((f) => [f.field, ...(f.link ? [f.link] : [])])])];
+    // Column links include the defaults of the field definitions (e.g. `work_pr` → `work_pr_url`), so that
+    // expensive link targets are fetched in the same batch as the column itself.
+    const wanted = [...new Set([...collectFields(view.filter), ...columns.flatMap((c) => [c.field, ...(c.link ? [c.link] : [])])])];
     if (view.sort) wanted.push(view.sort.field);
 
     let filterUnknown = 0;

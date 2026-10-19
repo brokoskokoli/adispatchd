@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import {
   buildTemplateValues,
   extractPlaceholders,
+  linkedFieldsUsed,
+  linkedTemplateItem,
   parseTemplate,
   renderTemplate,
   TemplateError,
+  unknownLinkedField,
   validateTemplate,
   type TemplateValues,
 } from './template.js';
@@ -154,5 +157,70 @@ describe('renderTemplate path mode (traversal protection)', () => {
 
   it('rejects NUL bytes in the template itself', () => {
     expect(() => renderTemplate('/tmp/a\0b', values, { mode: 'path' })).toThrow(TemplateError);
+  });
+});
+
+describe('linked placeholders (WI-21)', () => {
+  it('finds the fields behind {item.work_branch} / {item.work_pr}; skips broken templates', () => {
+    expect(linkedFieldsUsed(['{item.work_pr} {item.title}', 'x/{item.work_branch}/{item.work_pr}', '{broken'])).toEqual(['work_pr', 'work_branch']);
+    expect(linkedFieldsUsed(['{item.title}'])).toEqual([]);
+  });
+
+  it('are only valid with the linked scope', () => {
+    expect(validateTemplate('{item.work_branch}', { mode: 'text', scope: { source: true } })).toMatchObject([
+      { code: 'unavailable_placeholder', placeholder: 'item.work_branch' },
+    ]);
+    expect(validateTemplate('{item.work_branch}', { mode: 'text', scope: { source: true, linked: true } })).toEqual([]);
+  });
+
+  it('renders resolved values; null is empty in text mode and an error in path mode', () => {
+    const resolved = { work_branch: { known: true as const, value: 'feature/x' }, work_pr: { known: true as const, value: null } };
+    const v = buildTemplateValues({
+      workflow: { id: 'w' },
+      workspace: { baseDir: '/base' },
+      item: { id: '1', ...linkedTemplateItem(resolved) },
+      now: new Date('2026-10-19T00:00:00Z'),
+    });
+    expect(renderTemplate('{item.work_branch}#{item.work_pr}', v, { mode: 'text' })).toBe('feature/x#');
+    expect(renderTemplate('{workspace.base_dir}/{item.work_branch}', v, { mode: 'path' })).toBe('/base/feature_x');
+    expect(() => renderTemplate('{workspace.base_dir}/{item.work_pr}', v, { mode: 'path' })).toThrow(/No value/);
+  });
+
+  it('reports the first used field that is unknown or missing', () => {
+    expect(unknownLinkedField(['work_pr'], { work_pr: { known: false, reason: 'rate limit' } })).toEqual({
+      field: 'work_pr',
+      placeholder: 'item.work_pr',
+      reason: 'rate limit',
+    });
+    expect(unknownLinkedField(['work_branch'], undefined)).toMatchObject({ placeholder: 'item.work_branch', reason: expect.stringMatching(/not resolved/) });
+    expect(unknownLinkedField(['work_pr'], { work_pr: { known: true, value: 3 } })).toBeUndefined();
+  });
+});
+
+describe('source variables {source.vars.<name>} (WI-20)', () => {
+  const withVars = buildTemplateValues({
+    workflow: { id: 'wf' },
+    source: { id: 'repo_a', type: 'github', vars: { base_branch: 'main', 'deploy-env': 'a/b' } },
+    now: new Date('2026-10-16T19:00:00Z'),
+  });
+
+  it('renders in text mode and as one safe segment in path mode', () => {
+    expect(renderTemplate('{source.vars.base_branch}:{source.vars.deploy-env}', withVars, { mode: 'text' })).toBe('main:a/b');
+    expect(renderTemplate('/w/{source.vars.deploy-env}', withVars, { mode: 'path' })).toBe('/w/a_b');
+    expect(renderTemplate('[{source.vars.missing}]', withVars, { mode: 'text' })).toBe('[]');
+    expect(() => renderTemplate('/w/{source.vars.missing}', withVars, { mode: 'path' })).toThrow(/No value/);
+  });
+
+  it('belongs to the source group and is checked by the scope', () => {
+    expect(validateTemplate('{source.vars.base_branch}', { mode: 'text', scope: {} })).toEqual([
+      expect.objectContaining({ code: 'unavailable_placeholder', placeholder: 'source.vars.base_branch' }),
+    ]);
+    expect(validateTemplate('{source.vars.base_branch}', { mode: 'text', scope: { source: true } })).toEqual([]);
+    const sourceVar = (name: string): string | undefined => (name === 'base_branch' ? undefined : `"${name}" is missing`);
+    expect(validateTemplate('{source.vars.base_branch} {source.vars.x}', { mode: 'text', scope: { source: true, sourceVar } })).toEqual([
+      { code: 'unavailable_placeholder', message: '"x" is missing', placeholder: 'source.vars.x' },
+    ]);
+    expect(validateTemplate('{source.vars.}', { mode: 'text', scope: { source: true } })[0]?.code).toBe('syntax');
+    expect(validateTemplate('{source.vars.a.b}', { mode: 'text', scope: { source: true } })[0]?.code).toBe('unknown_placeholder');
   });
 });

@@ -18,7 +18,7 @@ Inhalt:
 
 ## 0 Annahmen und Doku-Stand
 
-### 0.1 Annahmen im Code (A1–A21)
+### 0.1 Annahmen im Code (A1–A25)
 
 | # | Annahme (im Code umgesetzt) | Stelle | Doku-Stand 2026-10-17 | Testfall |
 |---|---|---|---|---|
@@ -43,6 +43,10 @@ Inhalt:
 | A19 | `addProjectV2ItemById(input: {projectId, contentId})` ist idempotent und liefert für ein schon vorhandenes Item dessen ID; `node(id: <Item-ID>)` liefert danach das `ProjectV2Item`. | `addItem`, `readItem` | Idempotenz laut Doku, nicht live geprüft | T26b |
 | A20 | `updateProjectV2ItemFieldValue` mit `value: { singleSelectOptionId \| text \| number \| date \| iterationId }` (genau ein Schlüssel, `number` als Float, `date` als `YYYY-MM-DD`) und `clearProjectV2ItemFieldValue` ändern genau ein Feld. Fehler kommen als HTTP 200 + `errors[]` (`FORBIDDEN`, `NOT_FOUND`, sonst ohne `type`). | `writeField`, `writeErrorKind` | Schema laut Doku, Fehlerform **nicht** geprüft | T26a, T26c, T26d |
 | A21 | Schreibrechte: App „Organization → Projects: Read and write“ (Org-Projekt), klassischer PAT `project` (+ `repo`) für User-Projekte; fine-grained PAT unbestätigt. | Doku (`configuration-reference.md` §3.2) | nicht geprüft | T26 |
+| A22 | `repository(owner:, name:) { issueOrPullRequest(number:) { … on Issue { linkedBranches(first: 20) { totalCount nodes { ref { name repository { nameWithOwner } } } } } } }` liefert die unter „Development“ verlinkten Branches; ein gelöschter Branch bleibt verlinkt mit `ref: null` (oder verschwindet). | `src/sources/github/linked.ts` (`LINKED_QUERY`) | Schema laut GraphQL-Doku, `ref: null` **nicht** geprüft | T27a, T27c |
+| A23 | `closedByPullRequestsReferences(first: 20, includeClosedPrs: true)` liefert offene, gemergte und geschlossene PRs mit „Closes #n“ (auch manuell verknüpfte); `state` ist `OPEN`/`CLOSED`/`MERGED`, `merged`, `isDraft`, `headRefName`, `url`, `isCrossRepository`, `repository.nameWithOwner` (Basis-Repo) sind gesetzt. | `parseIssue`, `pullRequest` | Schema laut Doku, Inhalt nach Merge/Schließen **nicht** geprüft | T27b, T27c |
+| A24 | Für PR-Items liefert `issueOrPullRequest` den `PullRequest` mit `number`, `state`, `headRefName`, `url`. | `parsePullRequest` | nicht geprüft | T27d |
+| A25 | Lesen braucht nur die vorhandenen Leserechte der Source-Identity (App: *Issues*, *Pull requests*, *Contents*/*Metadata: Read*); fehlt eine, kommt HTTP 200 mit `errors[]` (Teilfehler) – der Adapter wertet dann alles als unknown. | `resolve` | nicht geprüft | T27e |
 
 ### 0.2 Rechercheergebnisse (offizielle GitHub-Doku, abgerufen 2026-10-17)
 
@@ -384,7 +388,7 @@ Tokens und teilt keinen Cache mit der laufenden Instanz.
 import { loadConfig } from '../src/config/index.js';
 import { ConsoleLogger, SecretRedactor, systemClock } from '../src/core/index.js';
 import { SourceRegistry } from '../src/app.js';
-import { DEPENDENCY_FIELDS } from '../src/sources/index.js';
+import { DEPENDENCY_FIELDS, LINKED_FIELDS } from '../src/sources/index.js';
 
 const [cmd, ...args] = process.argv.slice(2);
 const loaded = await loadConfig(process.env.ADISPATCH_CFG ?? 'tmp/orch-cfg', { dataDir: process.env.ADISPATCH_DATA ?? 'tmp/orch-data' });
@@ -424,6 +428,11 @@ switch (cmd) {
     out(await a.resolveFields(it, DEPENDENCY_FIELDS));
     break;
   }
+  case 'linked': { // linked <source> <ref>  (WI-21: linked_branches, closing_prs, work_branch, work_pr, work_pr_url)
+    const { a, it } = await item(args[0]!, args[1]!);
+    out(await a.resolveFields(it, LINKED_FIELDS));
+    break;
+  }
   case 'labels': { // labels <source> <ref> <identity> +add -remove ...
     const { a, it } = await item(args[0]!, args[1]!);
     const add = args.slice(3).filter((l) => l.startsWith('+')).map((l) => l.slice(1));
@@ -442,7 +451,7 @@ switch (cmd) {
     break;
   }
   default:
-    process.stderr.write('usage: probe.ts token|list|item|deps|labels|comment|find ...\n');
+    process.stderr.write('usage: probe.ts token|list|item|deps|linked|labels|comment|find ...\n');
     process.exitCode = 2;
 }
 ```
@@ -1386,6 +1395,76 @@ fields: {…} }` → T26a wiederholen; geschrieben wird mit dem Token (`project`
 
 **Ist:** ☐ OK ☐ Abweichung: ……
 
+### T27 – Verknüpfte Branches und PRs (WI-21, A22–A25)
+
+Prüft `linked_branches`, `closing_prs`, `work_branch`, `work_pr` und die Platzhalter gegen echtes GitHub (Repo
+`orch-test-a`, Source `test_a`, Lesen per Maintainer-App).
+
+**Vorbereitung:**
+```bash
+R=$(repo orch-test-a)
+cat > "$ADISPATCH_CFG/workflows/linked-test.yaml" <<'EOF'
+id: linked-test
+trigger: { type: source, source: test_a }
+filter:
+  all:
+    - { field: labels, operator: contains, value: linked-test }
+    - { field: work_pr, operator: not_equals, value: null }
+execute:
+  type: shell
+  command: scripts/test-worker.sh
+  env: { WORK_BRANCH: '{item.work_branch}', WORK_PR: '{item.work_pr}' }
+on_start:
+  - { type: source.update, labels: { remove: [linked-test] } }
+on_success:
+  - { type: source.comment, message: 'linked-test: PR #{item.work_pr} on {item.work_branch}' }
+EOF
+cat > "$ADISPATCH_CFG/views/linked.yaml" <<'EOF'
+id: linked
+sources: [test_a]
+fields:
+  - { field: title, link: url }
+  - { field: linked_branches }
+  - { field: work_branch }
+  - { field: work_pr }
+  - { field: closing_prs }
+EOF
+orch config validate --config-dir "$ADISPATCH_CFG" && orch config reload --config-dir "$ADISPATCH_CFG"
+L1=$(mkissue orch-test-a "Linked-Test" linked-test)
+gh issue develop "$L1" -R "$R" --name "feature/$L1-linked" --base main   # verlinkter Branch („Development“)
+```
+
+**T27a – nur verlinkter Branch:** `view linked`. **Erwartet:** Zeile `$L1` mit `linked_branches: feature/$L1-linked`,
+`work_branch: feature/$L1-linked`, `work_pr` leer; `diag linked-test` → `filtered` (`work_pr not_equals null: false
+(actual null)`). Werte direkt: `probe linked test_a $L1`.
+
+**T27b – PR öffnet („Closes #n“):**
+```bash
+gh api -X PUT repos/$R/contents/linked-$L1.txt -f message="linked test" -f branch="feature/$L1-linked" \
+  -f content="$(printf 'linked\n' | base64)" >/dev/null
+L_PR=$(gh pr create -R "$R" --head "feature/$L1-linked" --base main --draft --title "Linked-Test" \
+  --body "Closes #$L1" | sed 's#.*/##')
+```
+**Erwartet:** `view linked` → `work_branch` unverändert `feature/$L1-linked`, `work_pr` = `$L_PR` (Link auf den PR),
+`closing_prs` = `#$L_PR open (draft)`. Der nächste Poll startet `linked-test`: im Worker-Log `WORK_BRANCH`/`WORK_PR`
+gesetzt, Kontextdatei (`runs/<id>/context.json`) enthält alle fünf Felder in `source.attributes`, Kommentar
+`linked-test: PR #$L_PR on feature/$L1-linked`, Event `run.linked_resolved` mit leerem `unknown`.
+
+**T27c – Merge und Branch löschen:** `gh pr ready $L_PR -R "$R" && gh pr merge $L_PR -R "$R" --squash --delete-branch`.
+**Erwartet:** `view linked` → `work_pr` leer, `closing_prs` = `#$L_PR merged`, `linked_branches` leer (Rohantwort:
+bleibt der Link mit `ref: null` stehen?), `work_branch` = `feature/$L1-linked` (aus dem gemergten PR). Hinweis: GitHub
+schließt `$L1` durch den Merge; für die View ggf. `state in [open, closed]` als Filter ergänzen.
+
+**T27d – PR als Item:** `view linked` mit dem offenen PR `$A_PR` aus 3.3. **Erwartet:** `work_branch: pr-test`,
+`work_pr: $A_PR`, `linked_branches`/`closing_prs` leer.
+
+**T27e – kein Zugriff → unknown:** der Maintainer-App das Recht *Pull requests* entziehen (oder Repo aus der
+Installation nehmen) und `diag linked-test` / `view linked` ansehen. **Erwartet:** `work_pr` unknown mit Grund
+(`linked branches/PRs of test_a:… not readable: …`), `filter_unknown`, kein Start; im Log einmal „Could not read linked
+branches/PRs“. Danach Rechte zurücksetzen; Rohantwort (Teilfehler? Typ?) notieren.
+
+**Ist:** ☐ OK ☐ Abweichung: ……
+
 ---
 
 ## 5 Auswertung und Aufräumen
@@ -1415,6 +1494,8 @@ Zusätzlich die offenen Fragen beantworten:
 | `addProjectV2ItemById` für vorhandenes Item: gleiche ID? Fehlerform bei unbekannter Option-ID / fehlendem Schreibrecht? | T26b, T26d | |
 | `fieldValueByName` case-sensitiv? | T25b | |
 | GraphQL-Kosten je Poll? | T25e | |
+| Gelöschter verlinkter Branch: `ref: null` oder Link weg? Liefert `closedByPullRequestsReferences` nach dem Merge den PR als `MERGED`? | T27c | |
+| Fehlende PR-Leserechte: Teilfehler mit welchem `type`? | T27e | |
 
 ### 5.2 Bei Abweichungen
 

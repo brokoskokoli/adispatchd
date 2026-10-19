@@ -1,7 +1,7 @@
 /** Views (Spec §17): read-only tables from YAML, sorting in the browser only. */
 import { api, seg } from '../api.js';
 import { h, replaceChildren } from '../dom.js';
-import { cellText, nextSort, sortRows, type SortDirection } from '../../shared/sort.js';
+import { cellText, nextSort, objectText, sortRows, type SortDirection } from '../../shared/sort.js';
 import type { Page, PageContext } from '../page.js';
 import type { ViewDef, ViewItems } from '../types.js';
 import { button, errorBox, externalLink, loading, routeLink, runLink, table, time } from '../ui.js';
@@ -40,6 +40,16 @@ export const viewPage = (ctx: PageContext, id: string): Page => {
     if (!c.known) return h('span', { class: 'unknown', title: 'Field not available for this item' }, '—');
     const t = cellText(c);
     if (field === 'run.last_id' && typeof c.value === 'string') return runLink(c.value);
+    if (Array.isArray(c.value) && c.value.some((x) => typeof x === 'object' && x !== null)) {
+      // object[] (e.g. closing_prs): one entry per object, linked to its `url` if it is http(s).
+      const parts: Array<Node | string> = [];
+      c.value.forEach((x: unknown, i: number) => {
+        if (i > 0) parts.push(', ');
+        const url = typeof x === 'object' && x !== null ? (x as { url?: unknown }).url : undefined;
+        parts.push(typeof url === 'string' ? externalLink(url, objectText(x)) : objectText(x));
+      });
+      return h('span', null, ...parts);
+    }
     if (c.link) return externalLink(c.link, t || c.link);
     if (/(_at|^run\.last_(started|finished)_at)$/.test(field) && typeof c.value === 'string' && !Number.isNaN(Date.parse(c.value))) return time(c.value);
     return document.createTextNode(t);

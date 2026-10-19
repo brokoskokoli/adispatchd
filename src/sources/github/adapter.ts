@@ -26,8 +26,10 @@ import {
   type SourceUpdateResult,
   type Timers,
 } from '../../core/index.js';
-import { DEPENDENCY_FIELDS, GITHUB_FIELD_DEFINITIONS, projectFieldDefinitions, type ProjectFieldKind } from './fields.js';
+import { DEPENDENCY_FIELDS, GITHUB_FIELD_DEFINITIONS, LINKED_FIELDS, projectFieldDefinitions, type ProjectFieldKind } from './fields.js';
 import { GitHubHttpClient, type GitHubHttpClientOptions } from './http.js';
+import { GitHubLinkedReader } from './linked.js';
+import { GraphQLRateLimitPause } from './rate-limit.js';
 import { GitHubProjectReader, type ProjectLookupItem } from './project.js';
 import { GitHubProjectWriter, withApplied } from './project-write.js';
 import { pushdownQuery } from './pushdown.js';
@@ -124,6 +126,7 @@ export class GitHubSourceAdapter implements SourceAdapter {
   private readonly definitions: readonly FieldDefinition[];
   private readonly project: GitHubProjectReader | undefined;
   private readonly projectWriter: GitHubProjectWriter | undefined;
+  private readonly linked: GitHubLinkedReader;
   /** Login per `github_token` identity (from `GET /user`), for comment authorship checks. */
   private readonly userLogins = new Map<IdentityRef, Promise<string>>();
 
@@ -145,6 +148,20 @@ export class GitHubSourceAdapter implements SourceAdapter {
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
         ...(config.apiBaseUrl ? { baseUrl: config.apiBaseUrl } : {}),
       });
+    // GraphQL rate limits apply per token: readers using the same identity share one pause.
+    const pauses = new Map<IdentityRef, GraphQLRateLimitPause>();
+    const pauseFor = (identity: IdentityRef): GraphQLRateLimitPause => {
+      let pause = pauses.get(identity);
+      if (!pause) {
+        pause = new GraphQLRateLimitPause(
+          { clock: deps.clock, logger: this.logger },
+          'GitHub GraphQL rate limit: GraphQL-based fields unknown until reset',
+          { identity },
+        );
+        pauses.set(identity, pause);
+      }
+      return pause;
+    };
     const project = config.project;
     this.definitions = Object.freeze(project ? [...GITHUB_FIELD_DEFINITIONS, ...projectFieldDefinitions(project.fields)] : GITHUB_FIELD_DEFINITIONS);
     this.project = project
@@ -160,6 +177,7 @@ export class GitHubSourceAdapter implements SourceAdapter {
             clock: deps.clock,
             logger: this.logger,
             withToken: (identity, signal, fn) => this.withToken(identity, signal, fn),
+            pause: pauseFor(project.identity ?? config.identity),
           },
         )
       : undefined;
@@ -179,6 +197,16 @@ export class GitHubSourceAdapter implements SourceAdapter {
           },
         )
       : undefined;
+    this.linked = new GitHubLinkedReader(
+      { owner: config.owner, repository: config.repository, identity: config.identity },
+      {
+        http: this.http,
+        clock: deps.clock,
+        logger: this.logger,
+        withToken: (identity, signal, fn) => this.withToken(identity, signal, fn),
+        pause: pauseFor(config.identity),
+      },
+    );
   }
 
   /** Static GitHub fields plus the declared `project.*` fields of this source. */
@@ -224,10 +252,17 @@ export class GitHubSourceAdapter implements SourceAdapter {
   ): Promise<Record<string, FieldResolution>> {
     const out: Record<string, FieldResolution> = {};
     const wantsDependencies = fields.some((f) => (DEPENDENCY_FIELDS as readonly string[]).includes(f));
-    const dependencies = wantsDependencies ? await this.resolveDependencies(item, options.signal) : undefined;
+    const wantsLinked = fields.some((f) => (LINKED_FIELDS as readonly string[]).includes(f));
+    // Both groups are fetched in parallel: dependencies via REST, linked branches/PRs via one GraphQL query.
+    const [dependencies, linked] = await Promise.all([
+      wantsDependencies ? this.resolveDependencies(item, options.signal) : undefined,
+      wantsLinked ? this.resolveLinked(item, options.signal) : undefined,
+    ]);
     for (const name of fields) {
       if (dependencies && name in dependencies) {
         out[name] = dependencies[name] as FieldResolution;
+      } else if (linked && name in linked) {
+        out[name] = linked[name] as FieldResolution;
       } else if (Object.hasOwn(item.fields, name)) {
         out[name] = { known: true, value: item.fields[name] as FieldValue };
       } else if (item.unknownFields && Object.hasOwn(item.unknownFields, name)) {
@@ -452,6 +487,12 @@ export class GitHubSourceAdapter implements SourceAdapter {
       'dependencies.blocked': { known: true, value: open > 0 },
       'dependencies.status': { known: true, value: 'ok' },
     };
+  }
+
+  /** All linked fields of one item (WI-21); one GraphQL query, fail closed. */
+  private async resolveLinked(item: SourceItem, signal: AbortSignal | undefined): Promise<Record<string, FieldResolution>> {
+    this.assertOwnItem(item);
+    return this.linked.resolve(Number(item.itemId), item.key, signal);
   }
 
   private async fetchIssue(itemId: string, identity: IdentityRef, signal?: AbortSignal): Promise<GitHubIssueJson | null> {

@@ -31,7 +31,8 @@ function key(value: unknown, type: string): number | string {
     if (!Number.isNaN(t)) return t;
   }
   if (typeof value === 'boolean') return value ? 1 : 0;
-  if (Array.isArray(value)) return value.map((v) => String(v)).join(', ');
+  // object[] (e.g. closing_prs) sorts by its display text (`#12 open, …`), never by "[object Object]".
+  if (Array.isArray(value)) return value.map((v) => (typeof v === 'object' && v !== null ? objectText(v) : String(v))).join(', ');
   if (value !== null && typeof value === 'object') return JSON.stringify(value);
   return String(value);
 }
@@ -63,11 +64,23 @@ export function nextSort(current: { column: number; direction: SortDirection } |
   return { column, direction: current.direction === 'asc' ? 'desc' : 'asc' };
 }
 
-/** Display text of a cell value (arrays joined, objects as JSON); `''` for empty. */
+/**
+ * Display text of one element of an `object[]` value: pull requests
+ * (`{ number, state, is_draft }`, e.g. GitHub `closing_prs`) as `#12 open`
+ * (`#12 open (draft)`); other objects as JSON.
+ */
+export function objectText(o: unknown): string {
+  if (typeof o !== 'object' || o === null) return String(o);
+  const r = o as Record<string, unknown>;
+  if (typeof r.number === 'number' && typeof r.state === 'string') return `#${r.number} ${r.state}${r.is_draft === true ? ' (draft)' : ''}`;
+  return JSON.stringify(o);
+}
+
+/** Display text of a cell value (arrays joined, objects via {@link objectText}); `''` for empty. */
 export function cellText(c: CellLike | undefined): string {
   if (isEmpty(c)) return '';
   const v = c!.value;
-  if (Array.isArray(v)) return v.map((x) => (typeof x === 'object' && x !== null ? JSON.stringify(x) : String(x))).join(', ');
+  if (Array.isArray(v)) return v.map((x) => (typeof x === 'object' && x !== null ? objectText(x) : String(x))).join(', ');
   if (typeof v === 'object' && v !== null) return JSON.stringify(v);
   return String(v);
 }

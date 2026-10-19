@@ -7,10 +7,15 @@ Shell-Workflows in eigenen Workspaces aus, überwacht und protokolliert jeden Ru
 Live-Updates.
 
 - **GitHub bleibt Source of Truth** – kein eigener Ticketstore; SQLite hält nur Runs, Locks, Events, Blocks, Aktionsjournale.
-- **Unabhängige Workflows** mit Source-, Cron- oder manuellem Trigger, globalen und workflowbezogenen Limits.
+- **Unabhängige Workflows** mit Source-, Cron- oder manuellem Trigger, globalen und workflowbezogenen Limits; ein
+  Workflow kann **mehrere Repositories** bedienen (`sources: [...]`, optional Limit je Source), Unterschiede je
+  Repository stehen als Variablen an der Source (`{source.vars.base_branch}`).
 - **Deklarative Filter und Prioritäten** auf Labels, Zustand, Milestone, Issue-Typ, native Abhängigkeiten („blocked by“)
   und Felder aus **GitHub Projects** (Status, Priorität, eigene Felder; „A oder B“ per `in`) – fehlender Zugriff ergibt
   `unknown` statt eines falschen Starts.
+- **Arbeits-Branch und PR eines Issues** als Felder (`work_branch`, `work_pr`, `linked_branches`, `closing_prs`):
+  filtern („hat offenen PR“), in Views mit Link auf den PR anzeigen und per `{item.work_branch}`/`{item.work_pr}`
+  direkt an Worker und Actions übergeben – frisch gelesen, nie leer geraten, wenn GitHub sie nicht liefern kann.
 - **Lifecycle-Aktionen** setzen Labels und **Projektfelder** (z. B. `Status: In Progress` beim Start, `Review` nach
   Erfolg; Items werden bei Bedarf dem Projekt hinzugefügt), schreiben Kommentare und rufen Shell-Hooks auf –
   idempotent (erst lesen, dann schreiben) mit Journal und Retries.
@@ -137,9 +142,15 @@ on_crash:   [ { type: source.update, labels: { add: [ready-for-coding], remove: 
   `on_success`/`on_failure`); Actions `source.update`, `source.comment`, `shell`; Retry 3 × 30 s
   (`lifecycle.action_retry`), `continue_on_error`.
 - Platzhalter (feste Liste): `{run.id}`, `{workflow.id}`, `{item.number}`, `{item.url}`, `{result.message}`,
-  `{parameters.<name>}`, `{workspace.base_dir}` … – unbekannte Platzhalter sind Konfigurationsfehler.
+  `{parameters.<name>}`, `{source.vars.<name>}`, `{workspace.base_dir}`, `{item.work_branch}`, `{item.work_pr}` … –
+  unbekannte Platzhalter sind Konfigurationsfehler.
 - Manuelle Starts (UI/API) umgehen Filter, Conditions, Limits und Retry-Blocks, nie aber den aktiven Lock pro Workflow+Item.
 - Views (`views/*.yaml`) sind read-only Tabellen über mehrere Sources inkl. `run.last_*`-Feldern.
+- Ein Workflow für mehrere Repositories: `trigger: { type: source, sources: [project_a, project_b] }` – Kandidaten
+  aller Sources konkurrieren nach Item-Priorität (bei Gleichstand gilt die Listenreihenfolge), Locks bleiben pro
+  Item, `max_concurrent_per_source` begrenzt je Source, eine ausgefallene Source hält die anderen nicht auf.
+  Werte je Repository als `vars` in `sources.yaml` und `{source.vars.<name>}` in `execute`/Hooks
+  ([Konfigurationsreferenz §3.4.2](docs/configuration-reference.md#342-trigger)).
 - Benannte Filter (`filters/<id>.yaml`) einmal definieren und in Workflows/Views mit `filter: <id>` oder
   `{ use: <id> }` an beliebiger Stelle im Filterbaum verwenden – alle sehen dieselben Items
   ([Konfigurationsreferenz §3.6](docs/configuration-reference.md#36-filtersyaml)).

@@ -84,6 +84,7 @@ export function createSchedulerEnv(options: { start?: string } = {}): SchedulerE
   const env = createRunsEnv();
   const clock = new FakeClock(options.start ?? '2026-01-01T00:00:00.000Z');
   const adapterB = createFakeGitHubSource(env.github, { sourceId: 'repo_b', owner: 'example', repository: 'b', identity: 'maintainer' });
+  env.addSource('repo_b', adapterB);
   const releaseFile = path.join(env.marks, 'release');
   const built: Built[] = [];
   return {

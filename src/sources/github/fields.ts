@@ -2,7 +2,7 @@
  * Field catalogue of the GitHub source adapter (Spec §6, §17), including the
  * per-source GitHub Projects (v2) fields `project.<name>` (WI-14).
  */
-import { OPERATORS_BY_TYPE, type FieldDefinition, type FieldType } from '../../core/index.js';
+import { LINKED_ITEM_FIELDS, OPERATORS_BY_TYPE, type FieldDefinition, type FieldType } from '../../core/index.js';
 
 const STRING_OPS = OPERATORS_BY_TYPE.string;
 const NUMBER_OPS = OPERATORS_BY_TYPE.number;
@@ -17,6 +17,12 @@ export const DEPENDENCY_FIELDS = [
   'dependencies.blocked',
   'dependencies.status',
 ] as const;
+
+/**
+ * Names of the expensive linked-branch/PR fields (WI-21), resolved together by
+ * ONE GraphQL query per item. `work_pr_url` is the link target of `work_pr` in views.
+ */
+export const LINKED_FIELDS = LINKED_ITEM_FIELDS;
 
 /** All fields provided by the GitHub adapter. */
 export const GITHUB_FIELD_DEFINITIONS: readonly FieldDefinition[] = Object.freeze([
@@ -77,6 +83,45 @@ export const GITHUB_FIELD_DEFINITIONS: readonly FieldDefinition[] = Object.freez
     name: 'dependencies.status',
     type: 'string',
     description: '"ok" if dependencies were fully resolved, otherwise "unknown"',
+    operators: STRING_OPS,
+    expensive: true,
+  },
+  {
+    name: 'linked_branches',
+    type: 'string[]',
+    description: 'Branches of the same repository linked under "Development" (issues; [] for PRs)',
+    operators: LIST_OPS,
+    expensive: true,
+  },
+  {
+    name: 'closing_prs',
+    type: 'object[]',
+    description:
+      'PRs of the same repository that close the issue: { number, state (open|merged|closed), head_ref, is_draft, url }; ' +
+      'open first, then merged, then closed, each by number ([] for PRs)',
+    operators: [],
+    expensive: true,
+    filterHint: 'use "work_pr" (e.g. { field: work_pr, operator: not_equals, value: null }) or "work_branch" instead',
+  },
+  {
+    name: 'work_branch',
+    type: 'string',
+    description: 'Work branch: first linked branch, else head_ref of the first open, then of the first merged closing PR; PRs: own head_ref; null if none',
+    operators: STRING_OPS,
+    expensive: true,
+  },
+  {
+    name: 'work_pr',
+    type: 'number',
+    description: 'Number of the first open closing PR; PRs: own number while open; null if none',
+    link: 'work_pr_url',
+    operators: NUMBER_OPS,
+    expensive: true,
+  },
+  {
+    name: 'work_pr_url',
+    type: 'string',
+    description: 'URL of the work_pr PR; null if none',
     operators: STRING_OPS,
     expensive: true,
   },

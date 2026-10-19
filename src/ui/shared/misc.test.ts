@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cellText, compareCells, nextSort, sortRows } from './sort.js';
+import { cellText, compareCells, nextSort, objectText, sortRows } from './sort.js';
 import { buildHash, parseHash } from './route.js';
 import { buildRuntimeBody, buildStartBody } from './params.js';
 
@@ -23,6 +23,21 @@ describe('view sorting (browser only, Spec §17)', () => {
     expect(cellText({ value: ['a', 'b'], known: true })).toBe('a, b');
     expect(cellText({ value: { x: 1 }, known: true })).toBe('{"x":1}');
     expect(cellText({ value: 'x', known: false })).toBe('');
+    // object[] (WI-21 closing_prs): pull requests as "#n state".
+    expect(
+      cellText({
+        value: [
+          { number: 12, state: 'open', is_draft: true, url: 'https://x.test/12' },
+          { number: 9, state: 'merged', is_draft: false },
+          { other: 1 },
+        ],
+        known: true,
+      }),
+    ).toBe('#12 open (draft), #9 merged, {"other":1}');
+    expect(objectText({ number: 3, state: 'closed' })).toBe('#3 closed');
+    // Browser sorting of object[] columns uses the display text (numeric collation).
+    const prs = (n: number) => ({ cells: [{ value: [{ number: n, state: 'open' }], known: true }] });
+    expect(sortRows([prs(12), prs(3), prs(7)], 0, 'object[]', 'asc').map((r) => (r.cells[0]!.value as Array<{ number: number }>)[0]!.number)).toEqual([3, 7, 12]);
   });
 });
 

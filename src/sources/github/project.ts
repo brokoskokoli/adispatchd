@@ -26,15 +26,16 @@
 import { SourceError, type Clock, type FieldValue, type IdentityRef, type Logger } from '../../core/index.js';
 import { PROJECT_FIELD_DATA_TYPES, PROJECT_FIELD_PREFIX, type ProjectFieldKind } from './fields.js';
 import type { GitHubHttpClient, GraphQLErrorJson, GraphQLResponse } from './http.js';
+import { GRAPHQL_MAX_RETRY_WAIT_MS, GRAPHQL_RATE_LIMIT_FALLBACK_MS, GraphQLRateLimitPause } from './rate-limit.js';
 
 /** Metadata may be reused this long by single-item reads (`getItem`). */
 export const PROJECT_METADATA_TTL_MS = 5 * 60_000;
 /** Metadata is shared between listings this long (N workflows on one source → one lookup per poll). */
 export const PROJECT_METADATA_LISTING_TTL_MS = 30_000;
 /** Longest retry wait of a project read (a longer rate-limit wait gives up immediately). */
-export const PROJECT_MAX_RETRY_WAIT_MS = 5_000;
+export const PROJECT_MAX_RETRY_WAIT_MS = GRAPHQL_MAX_RETRY_WAIT_MS;
 /** Rate-limit pause when GitHub gives no reset time. */
-export const PROJECT_RATE_LIMIT_FALLBACK_MS = 60_000;
+export const PROJECT_RATE_LIMIT_FALLBACK_MS = GRAPHQL_RATE_LIMIT_FALLBACK_MS;
 /** Max node IDs per values query. */
 export const PROJECT_NODES_CHUNK = 50;
 /** Project items read per issue/PR; with more memberships an absent match is unknown. */
@@ -148,15 +149,24 @@ export class GitHubProjectReader {
   private readonly lastReasons = new Map<string, string | undefined>();
   /** Last logged failure of the values query (warn only on changes). */
   private lastValuesFailure: string | undefined;
-  /** No GraphQL calls before this time (epoch ms) after a rate limit. */
-  private rateLimitedUntil = 0;
+  /** No GraphQL calls until a rate limit resets. */
+  private readonly pause: GraphQLRateLimitPause;
   private readonly label: string;
 
   constructor(
     private readonly settings: GitHubProjectSettings,
-    private readonly deps: { http: GitHubHttpClient; clock: Clock; logger: Logger; withToken: WithToken },
+    private readonly deps: {
+      http: GitHubHttpClient;
+      clock: Clock;
+      logger: Logger;
+      withToken: WithToken;
+      /** Rate-limit pause shared with other GraphQL readers of the same identity (adapter); default: own. */
+      pause?: GraphQLRateLimitPause;
+    },
   ) {
     this.label = `${settings.owner}/${settings.number}`;
+    this.pause =
+      deps.pause ?? new GraphQLRateLimitPause(deps, 'GitHub GraphQL rate limit: project fields unknown until reset', { project: this.label });
   }
 
   /** Full names (`project.<name>`) of all declared fields. */
@@ -341,19 +351,12 @@ export class GitHubProjectReader {
 
   /** Reason while a rate limit is in effect, otherwise `undefined`. */
   private rateLimitReason(): string | undefined {
-    if (this.deps.clock.now().getTime() >= this.rateLimitedUntil) return undefined;
-    return `GitHub GraphQL rate limit until ${new Date(this.rateLimitedUntil).toISOString()}`;
+    return this.pause.reason();
   }
 
   /** Remember a rate limit (reset time from the error, fallback {@link PROJECT_RATE_LIMIT_FALLBACK_MS}). */
   private noteRateLimit(err: unknown): void {
-    if (!(err instanceof SourceError) || err.kind !== 'rate_limited') return;
-    const wait = err.retryAfterMs ?? PROJECT_RATE_LIMIT_FALLBACK_MS;
-    this.rateLimitedUntil = this.deps.clock.now().getTime() + Math.max(wait, 1_000);
-    this.deps.logger.warn('GitHub GraphQL rate limit: project fields unknown until reset', {
-      project: this.label,
-      until: new Date(this.rateLimitedUntil).toISOString(),
-    });
+    this.pause.note(err);
   }
 
   private markAll(item: ProjectTarget, reason: string): void {

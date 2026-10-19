@@ -5,6 +5,7 @@
  * module only.
  */
 export * from './model.js';
+export { actionTemplates, linkedFieldUsage, type LinkedFieldUsage } from './linked-usage.js';
 export { formatConfigIssue } from './issues.js';
 export {
   FILTERS_DIR,

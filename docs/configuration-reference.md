@@ -211,7 +211,9 @@ Template; Platzhalter in `command` werden nicht ersetzt. Existenz/Ausführbarkei
   Projektfeldwerte in `source.update`, Filterwerte, `secrets`, alle übrigen Felder.
 
 **Modus `text`:** Werte werden unverändert eingesetzt (Zahlen/Booleans als `5`, `true`). Ein erlaubter Platzhalter
-ohne Wert wird zu einem **leeren String**.
+ohne Wert wird zu einem **leeren String**. Ausnahme `{item.work_branch}`/`{item.work_pr}` (§5.3): ist der Wert
+**unknown** (z. B. GitHub nicht erreichbar), wird gar nicht gerendert – der Run endet als `start_error` bzw. die
+Action scheitert; nur ein bekannt leerer Wert (`null`) wird zum leeren String.
 
 **Modus `path`** (nur `working_directory`):
 
@@ -225,8 +227,8 @@ ohne Wert wird zu einem **leeren String**.
   `working_directory` nur Parameter stehen, die `required` sind oder einen `default` haben.
 - Das Ergebnis muss absolut sein und darf nicht `workspace.base_dir` selbst sein.
 
-**Sicherheit:** Ersetzte Werte (z. B. `{item.title}`, `{result.message}`) stammen aus externen Quellen und sind
-untrusted. In `args` sind sie wegen der fehlenden Shell unkritisch; wer sie über `/bin/sh -c` interpoliert,
+**Sicherheit:** Ersetzte Werte (z. B. `{item.title}`, `{result.message}`, `{item.work_branch}` – Branch-Namen dürfen
+Shell-Metazeichen wie `;`, `$`, `` ` `` enthalten) stammen aus externen Quellen und sind untrusted. In `args` sind sie wegen der fehlenden Shell unkritisch; wer sie über `/bin/sh -c` interpoliert,
 erzeugt eine Injection. In `source.comment.message` wird `<!--` zu `&lt;!--` neutralisiert (§6.9).
 
 ---
@@ -323,11 +325,14 @@ sources:
     owner: example           # GitHub-Owner/Organisation
     repository: project-a    # Repository-Name
     identity: maintainer     # Identity für lesende Aufrufe (und Fallback für Schreiben)
+    vars:                    # optional (seit 0.3.0): freie Variablen, {source.vars.<Name>}
+      base_branch: main
   project_b:
     type: github
     owner: example
     repository: project-b
     identity: maintainer
+    vars: { base_branch: develop }
     project:                 # optional: Felder eines GitHub-Projects-(v2)-Boards als project.<Name>
       owner: example         # User- oder Org-Login des Projekts (Default: owner der Source)
       number: 3              # Projektnummer aus der URL …/projects/3
@@ -353,6 +358,13 @@ sources:
 | `<id>.project.number` | Integer | ja | > 0 | Projektnummer aus `https://github.com/orgs/<org>/projects/<n>` bzw. `…/users/<user>/projects/<n>` |
 | `<id>.project.identity` | Identity-ID | nein | muss existieren; Default = `<id>.identity` | Identity für die Projekt-Abfragen (z. B. eine `github_token`-Identity für User-Projekte, §3.3); **wenn gesetzt**, schreibt sie auch die Projektfelder von `source.update` (§3.4.11, §6.10) |
 | `<id>.project.fields` | Map Feldname → Art | ja | mind. ein Eintrag; Name nicht leer, ohne führende/abschließende Leerzeichen und ohne Steuerzeichen; Art `single_select`, `text`, `number`, `date`, `iteration` | Felder, auf die gefiltert/sortiert werden soll |
+| `<id>.vars` | Map Name → String | nein (Default `{}`) | Name wie Parameternamen (`[A-Za-z_][A-Za-z0-9_-]*`); Werte String, Zahlen/Booleans werden zu Text (`port: 8080` → `"8080"`) | freie Variablen der Source, als `{source.vars.<Name>}` überall dort nutzbar, wo `{source.*}` erlaubt ist (§5) |
+
+**Source-Variablen (`vars`, seit 0.3.0).** Werte, die sich je Repository unterscheiden (Basis-Branch,
+Build-Kommando, Zielumgebung …), stehen an der Source statt in jedem Workflow: `{source.vars.base_branch}` in
+`execute.args`/`env`/`working_directory`, Hook-Templates und `conditions.item[].args`. Die Prüfung beim Laden
+verlangt die Variable in **jeder** Source des Workflows (bei mehreren Sources §3.4.2) und nennt sonst die Sources,
+in denen sie fehlt. Variablen sind keine Secrets (sie stehen in API und Run-Snapshot) – Tokens gehören in `secrets`.
 
 Nur `github.com` wird unterstützt (keine Einstellung für GitHub Enterprise). Gelesen werden Issues **und** Pull
 Requests des Repositories über `GET /repos/{owner}/{repo}/issues`, standardmäßig **nur offene** (siehe §4.5).
@@ -466,7 +478,7 @@ identity: coder                  # Default: Identity der Source; Schreib-Identit
 
 trigger:
   type: source                   # source | schedule | manual
-  source: project_a
+  source: project_a              # oder (seit 0.3.0) sources: [project_a, project_b] – §3.4.2
 
 filter:                          # deklarativ, nur bei trigger.type: source
   all:
@@ -511,6 +523,7 @@ execute:
   env:
     NODE_ENV: production
     ISSUE_URL: '{item.url}'
+    BASE_BRANCH: '{source.vars.base_branch}'   # Variable der Source (§3.2)
   secrets:
     GH_TOKEN: { identity: coder }  # kurzlebiges Installation-Token der Identity (delivery: env, Default)
     REVIEW_TOKEN: { identity: maintainer, delivery: file }  # Token-Datei, Pfad in REVIEW_TOKEN_FILE, wird erneuert
@@ -580,6 +593,7 @@ on_result:                       # benannte Ergebnisse (Ergebnisdatei "outcome")
 | `enabled` | Boolean | nein | `true` | | `false`: keine automatischen Starts (Source/Cron); **manuelle Starts bleiben möglich** |
 | `priority` | Zahl | nein | `0` | | Workflow-Priorität, wird vor der Item-Priorität sortiert (§6.2) |
 | `max_concurrent` | Integer | nein | `1` | ≥ 1 | Limit gleichzeitig aktiver Runs dieses Workflows für automatische Starts |
+| `max_concurrent_per_source` | Integer | nein | (kein Limit) | ≥ 1; nur `trigger.type: source` | zusätzliches Limit je Source (seit 0.3.0, §3.4.2, §6.3); `max_concurrent` bleibt das Limit des Workflows insgesamt |
 | `identity` | Identity-ID | nein | Source-Identity | muss existieren | Schreib-Identity für `source.update`/`source.comment` (§6.10) |
 | `trigger` | Objekt | ja | | §3.4.2 | |
 | `filter` | Filter-AST | nein | (alles passt) | nur `trigger.type: source` | §4 |
@@ -598,9 +612,31 @@ on_result:                       # benannte Ergebnisse (Ergebnisdatei "outcome")
 
 | `type` | weitere Schlüssel | Bedeutung |
 |---|---|---|
-| `source` | `source` (Pflicht, Source-ID, muss existieren) | Items der Source werden jeden Planungsschritt gepollt; ein Run ist an genau ein Item gebunden. |
+| `source` | **entweder** `source` (Source-ID, muss existieren) **oder** (seit 0.3.0) `sources` (Liste von Source-IDs: nicht leer, ohne Duplikate, alle existieren, alle mit demselben Adaptertyp) | Items der Source(s) werden jeden Planungsschritt gepollt; ein Run ist an genau ein Item gebunden. |
 | `schedule` | `cron` (Pflicht, nicht leer), `timezone` (Default `UTC`, IANA-Name wie `Europe/Berlin`) | höchstens ein Run pro Cron-Slot, ohne Item (§6.7). |
 | `manual` | – | nur manuelle Starts (UI/API), ohne Item. |
+
+**Mehrere Sources (`sources`, seit 0.3.0).** Ein Workflow für mehrere Repositories statt fast gleicher Kopien:
+
+- Jede Source wird im Planungsschritt abgefragt (parallel, Pushdown je Source); die Kandidaten aller Sources
+  konkurrieren nach Item-Priorität. Bei gleicher Item-Priorität entscheidet die **Reihenfolge der Liste**, danach die
+  bisherigen Tie-Breaker (§6.2).
+- Lock, Retry-Block, Fehlerzähler und Historie bleiben pro globalem Item-Schlüssel `<source>:<nr>` – gleiche
+  Nummern in zwei Repositories sind zwei Items.
+- `max_concurrent` gilt für den Workflow insgesamt; `max_concurrent_per_source` begrenzt zusätzlich je Source
+  (Entscheidung `source_limit`).
+- Fällt eine Source beim Pollen aus, laufen die anderen weiter; die Diagnose (API, Dry-Run, UI) zeigt Status und
+  Fehler **je Source**.
+- Felder: `project.*` in `filter`, `item_priority` und `source.update.project` nur, wenn **alle** Sources das Feld
+  mit gleicher Art deklarieren (Regel wie bei Views, §4.7.1); die `state`-Regel (§4.5) und der Pushdown gelten je
+  Source. `{source.vars.<Name>}` muss in allen Sources definiert sein.
+- Ein Run kennt nur seine Source: `{source.*}`, `{item.*}`, Lifecycle-Actions, Identity-Fallback und Run-Snapshot
+  beziehen sich auf die Source des Items. Ein eigenes `execute.working_directory` sollte `{source.id}` oder
+  `{item.key}` enthalten (oder beim Default `{workflow.id}/{run.id}` bleiben), damit sich gleiche Nummern aus
+  verschiedenen Repositories nicht dasselbe Verzeichnis teilen.
+- Manueller Start: die Source folgt aus der Item-Referenz (URL, `owner/repo#nr` oder `<source>:<nr>`); eine bloße
+  Nummer ist bei mehreren Sources mehrdeutig und wird mit Hinweis abgelehnt (§6.6).
+- `sources: [x]` mit einem Eintrag verhält sich wie `source: x`.
 
 Cron-Syntax: [croner](https://github.com/hexagon/croner) – 5 Felder (`min std tag monat wochentag`) oder 6 mit
 führenden Sekunden; Listen, Bereiche, Schritte (`*/15`), Namen (`MON`, `JAN`) und croner-Erweiterungen (`L`, `#`)
@@ -923,10 +959,10 @@ sort: { field: updated_at, direction: desc }
 | `filter` | Filter-AST oder ID eines benannten Filters (§3.6) | nein | alles | §4; inkl. `run.last_*` | nur Items mit Ergebnis `true` werden gezeigt |
 | `shell_filter` | – | – | | **verboten** (Fehler) | Views führen nie Skripte aus |
 | `fields` | Liste | ja | | ≥ 1 | Spalten in Reihenfolge |
-| `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen; `project.*` nur, wenn **alle** Sources der View es mit gleicher Art deklarieren (§4.7.1) | Feldname (§4.7, §4.8) |
+| `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen; `project.*` nur, wenn **alle** Sources der View es mit gleicher Art deklarieren (§4.7.1) | Feldname (§4.7, §4.8); `object[]`-Felder (`closing_prs`) erscheinen als Liste, z. B. `#12 open, #9 merged`, jeder Eintrag als Link auf seine `url` |
 | `fields[].label` | String | nein | Feldname | | Spaltenüberschrift |
-| `fields[].link` | String (Feldname, geprüft wie `field`) | nein | `link` der Felddefinition (`number`, `title` → `url`) | | Feld, dessen Wert (nur absolute `http(s)`-URL) als Link dient |
-| `sort.field` | String | ja (wenn `sort`) | | geprüft wie `fields[].field` | Sortierfeld |
+| `fields[].link` | String (Feldname, geprüft wie `field`) | nein | `link` der Felddefinition (`number`, `title` → `url`; `work_pr` → `work_pr_url`, also der PR) | | Feld, dessen Wert (nur absolute `http(s)`-URL) als Link dient |
+| `sort.field` | String | ja (wenn `sort`) | | geprüft wie `fields[].field`; kein `object[]`-Feld (`Views cannot be sorted by "closing_prs" (type object[])`) | Sortierfeld |
 | `sort.direction` | Enum | nein | `asc` | `asc`, `desc` | leere Werte immer zuletzt; Gleichstand nach Item-Schlüssel (natürlich) |
 
 Laden: beim Öffnen/Refresh aus allen Sources (parallel; eine fehlerhafte Source erscheint als Fehlerzeile, die
@@ -1000,6 +1036,8 @@ erscheinen in `GET /api/v1/config/files` (UI: Configuration).
 - Projektfelder: ein Projekt je Source; Metadaten lesen die ersten 100 Felder des Projekts; je Issue/PR werden die
   ersten 20 (nicht archivierten) Projekt-Mitgliedschaften gelesen (mehr → unknown, §4.7.1). Kein Pushdown: die
   Issue-Liste wird wie bisher nur über `state`/`labels` eingeschränkt.
+- Verknüpfte Branches/PRs (§4.7.2): je Issue werden die ersten **20** verlinkten Branches und die ersten **20**
+  schließenden PRs gelesen; mehr → alle fünf Felder unknown. Nur Branches und PRs des Source-Repositorys zählen.
 - Benannte Filter haben keine Parameter (kein `{use: x, value: …}`); Referenzketten höchstens 16 Ebenen tief
   (gezählt ab jedem Workflow-, View- oder Filter-Wurzelknoten).
 - Ein expandierter Filterbaum hat höchstens **10 000 Knoten** je Wurzel (Workflow-`filter`, jede
@@ -1065,6 +1103,7 @@ Datumswerte: `YYYY-MM-DD` oder `YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]`; ohne Of
 | `boolean` | equals, not_equals | Boolean (nicht `'true'`); `null` bei equals/not_equals |
 | `date` | equals, not_equals, greater_than, less_than | ISO-8601-String (s. o.); `null` bei equals/not_equals |
 | `string[]` | contains, in | String bzw. Liste von Strings |
+| `object[]` |  | – (keine Operatoren; in Filtern ein Fehler, §4.7.2) |
 
 **Groß-/Kleinschreibung:** `labels` (GitHub) vergleicht ohne Beachtung der Groß-/Kleinschreibung – wie GitHub
 und `source.update` (`Ready` passt auf `ready`). Alle anderen String-Vergleiche beachten sie.
@@ -1075,6 +1114,9 @@ und `source.update` (`Ready` passt auf `ready`). Alle anderen String-Vergleiche 
   `item_priority.rules[].when`; Views: `filter`, `fields[].field`, `fields[].link`, `sort.field`): unbekannte
   Feldnamen (mit Vorschlag „did you mean …“), nicht erlaubte Operatoren, falsche Werttypen, ungültige Datumswerte.
 - `run.last_*` ist nur in Views erlaubt; in Workflows ist es ein Fehler („only available in views“).
+- Felder vom Typ `object[]` (`closing_prs`) haben keine Operatoren: in `filter`/`item_priority` ein Fehler
+  `Field "closing_prs" (type object[]) cannot be used in filters; use "work_pr" (…) or "work_branch" instead`, als
+  `sort.field` einer View ebenfalls. Als View-Spalte und in der Kontextdatei sind sie erlaubt.
 - Benannte Filter (§3.6) werden am Verwendungsort gegen dessen Kontext geprüft; die Meldung nennt in Klammern den
   Pfad im benannten Filter.
 - `project.<Name>` gibt es je Source genau für die in `sources.yaml` unter `project.fields` deklarierten Namen
@@ -1103,8 +1145,10 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 
 ### 4.5 Auswertungsreihenfolge, teure Felder, Pushdown
 
-- **Teure Felder** (GitHub: `dependencies.*`) stehen nicht in der Listenabfrage und werden lazy nachgeladen – pro
-  Item in **einer** Anfragerunde für alle benötigten teuren Felder, gültig für einen Planungsschritt/View-Aufruf.
+- **Teure Felder** (GitHub: `dependencies.*`, `linked_branches`, `closing_prs`, `work_branch`, `work_pr`,
+  `work_pr_url`) stehen nicht in der Listenabfrage und werden lazy nachgeladen – pro Item in **einer** Anfragerunde
+  für alle benötigten teuren Felder (Dependencies per REST, die verknüpften Branches/PRs mit genau **einer**
+  GraphQL-Abfrage, beide parallel), gültig für einen Planungsschritt/View-Aufruf.
 - Innerhalb von `all`/`any` werden zuerst Kinder ausgewertet, die nur billige Felder brauchen; sobald das Ergebnis
   feststeht, wird abgebrochen (Rest = `not_evaluated` in der Diagnose). Workflow-Filter laufen zweistufig: erst nur
   billige Felder (teure = unknown); ist das Ergebnis schon `true` oder `false`, ist es endgültig, nur bei unknown
@@ -1157,6 +1201,11 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 | `dependencies.blocked_by_open` | number | equals, not_equals, in, greater_than, less_than | | ja | davon offen; unknown ohne Zugriff |
 | `dependencies.blocked` | boolean | equals, not_equals | | ja | mindestens ein Blocker offen; unknown ohne Zugriff |
 | `dependencies.status` | string | equals, not_equals, contains, in | | ja | `ok` = vollständig aufgelöst, sonst `unknown` (dieses Feld selbst ist dann bekannt) |
+| `linked_branches` | string[] | contains, in | | ja | unter „Development“ verlinkte Branches im selben Repository (§4.7.2); PRs: `[]` |
+| `closing_prs` | object[] | – (nicht in Filtern) | | ja | PRs des Repositorys, die das Issue schließen: `{ number, state, head_ref, is_draft, url }` (§4.7.2); PRs: `[]` |
+| `work_branch` | string | equals, not_equals, contains, in | | ja | abgeleiteter Arbeits-Branch (§4.7.2); `null`, wenn keiner |
+| `work_pr` | number | equals, not_equals, in, greater_than, less_than | | ja | Nummer des ersten offenen schließenden PRs (Link → `work_pr_url`); `null`, wenn keiner |
+| `work_pr_url` | string | equals, not_equals, contains, in | | ja | URL des `work_pr`-PRs; `null`, wenn keiner (Link-Ziel von `work_pr` in Views) |
 
 Abhängigkeiten sind unknown, wenn die API-Zusammenfassung fehlt, ein Blocker einen unerwarteten Status hat oder die
 Identity weniger Blocker sieht, als GitHub meldet. „Offen ⇒ kein Start“ gilt nur, wenn der Filter das ausdrücklich
@@ -1199,6 +1248,39 @@ Projektwerten; Projekt-Metadaten dürfen dafür bis zu 5 Minuten alt sein) und p
 Ist er dabei `unknown`, weil ein `project.*`-Feld nicht ermittelt werden konnte, wird der Run **abgebrochen** (wie
 bei `false`, fail closed).
 
+#### 4.7.2 Verknüpfte Branches und PRs
+
+Der Arbeits-Branch eines Issues bzw. der PR, der es schließt – ohne eigene GraphQL-Abfragen im Worker. Alle fünf
+Felder sind **teuer** (nur geladen, wenn verwendet) und kommen aus **einer** GraphQL-Abfrage pro Item:
+`repository(owner, name) { issueOrPullRequest(number) { … } }` mit `owner`, `name`, `number` ausschließlich als
+Variablen; Identity = Source-Identity (braucht Lesezugriff auf Issues, Pull Requests und Inhalte bzw. Branches).
+
+| Feld | Issue | Pull Request |
+|---|---|---|
+| `linked_branches` | Namen der Branches aus `linkedBranches(first: 20)`, nur Branches **dieses** Repositorys; gelöschte Branches (Link ohne `ref`) fehlen | `[]` |
+| `closing_prs` | PRs aus `closedByPullRequestsReferences(first: 20, includeClosedPrs: true)`, nur PRs **dieses** Repositorys; je PR `{ number, state, head_ref, is_draft, url }` mit `state` = `open`/`merged`/`closed`; sortiert: offene, dann gemergte, dann geschlossene, je nach Nummer aufsteigend | `[]` |
+| `work_branch` | erster verlinkter Branch, sonst `head_ref` des ersten offenen, dann des ersten gemergten PRs aus `closing_prs` (PRs aus Forks zählen dafür nicht – ihr Branch liegt nicht im Repository); sonst `null` | eigener `head_ref`; bei PRs aus einem Fork (`isCrossRepository`) `null` |
+| `work_pr` | Nummer des ersten offenen PRs aus `closing_prs` (auch aus einem Fork); sonst `null` | eigene Nummer, solange offen; sonst `null` |
+| `work_pr_url` | URL dieses PRs; sonst `null` | eigene URL, solange offen; sonst `null` |
+
+Verlauf eines Issues: verlinkter Branch `feature/12` → `work_branch: feature/12`, `work_pr: null`; PR mit
+„Closes #12“ geöffnet → `work_branch` bleibt `feature/12`, `work_pr` = Nummer des PRs; nach dem Merge (und Löschen
+des Branches) → `work_pr: null`, `work_branch` = `head_ref` des gemergten PRs.
+
+**unknown** (fail closed, alle fünf Felder zugleich, Grund in Dry-Run/Diagnose): HTTP-/GraphQL-Fehler,
+**Teilfehler** (jeder Eintrag in `errors[]`, z. B. `FORBIDDEN` an `closedByPullRequestsReferences`), Repository oder
+Item nicht gefunden, unerwartete Antwortform, mehr als 20 verlinkte Branches bzw. schließende PRs (mehr Treffer als
+gelesen), Rate-Limit. Nach einem Rate-Limit liefert die Source bis zum Reset ohne GitHub-Aufruf unknown (wie bei
+`project.*`, §4.7.1); Wartezeit eines Retries höchstens 5 s. Warnung im Log nur bei Änderung des Grundes.
+
+Verwendung:
+
+- **Filter:** z. B. „hat einen offenen PR“ `{ field: work_pr, operator: not_equals, value: null }`, „Branch-Präfix“
+  `{ field: work_branch, operator: contains, value: feature/ }`. `closing_prs` ist nicht filterbar (Typ `object[]`).
+- **Platzhalter** `{item.work_branch}`, `{item.work_pr}` in `execute` und Actions (§5.3).
+- **Views:** als Spalten; `work_pr` verlinkt auf den PR, `closing_prs` zeigt `#12 open, #9 merged` mit Link je PR.
+- **Kontextdatei des Workers:** „wenn verwendet“ – siehe §5.3.
+
 ### 4.8 Run-Felder für Views
 
 Pro Item der **zuletzt erzeugte** Run (über alle Workflows, globaler Item-Schlüssel). Ohne Run: alle `null`
@@ -1238,11 +1320,14 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{source.id}` | Source-ID | Run ohne Item |
 | `{source.type}` | `github` | Run ohne Item |
 | `{source.repository}` | `owner/repository` | Run ohne Item |
+| `{source.vars.<name>}` | Variable `vars.<name>` der Source des Items (§3.2, seit 0.3.0) | Run ohne Item |
 | `{item.id}` | Item-ID (GitHub: Nummer als String) | Run ohne Item |
 | `{item.number}` | Nummer (nur bei numerischer Item-ID) | Run ohne Item |
 | `{item.key}` | globaler Schlüssel `<source>:<id>` | Run ohne Item |
 | `{item.url}` | Web-URL | Run ohne Item |
 | `{item.title}` | Titel (frisch gelesen bzw. aus der Planung) | Run ohne Item |
+| `{item.work_branch}` | Feld `work_branch` (§4.7.2), direkt vor dem Rendern frisch gelesen | `null` (kein Branch) → leer; **unknown → kein Rendern** (§5.3) |
+| `{item.work_pr}` | Feld `work_pr` (§4.7.2), direkt vor dem Rendern frisch gelesen | `null` (kein offener PR) → leer; **unknown → kein Rendern** (§5.3) |
 | `{result.status}` | technischer Endstatus (`completed`, `crashed`, `start_error`, `timed_out`, `cancelled`) | – |
 | `{result.result}` | `success` \| `failure` | bei technischem Fehler/Cancel |
 | `{result.message}` | `message` der Ergebnisdatei | keine/ungültige Ergebnisdatei oder ohne `message` |
@@ -1261,12 +1346,50 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 | `run.id`, `run.trigger` | ✓ | ✓ | ✓ | ✓ | – | – |
 | `run.started_at` | ✓ | ✓ | ✓ (leer) | ✓ | – | – |
 | `workspace.path` | – | ✓ | ✓ (leer) | ✓ | – | – |
-| `source.*`, `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | – | ✓ |
+| `source.*` (inkl. `source.vars.<name>`), `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | – | ✓ |
 | `result.*` | – | – | – | ✓ | – | – |
 | `parameters.<name>` | ✓ nur `required` oder mit `default` | ✓ | ✓ | ✓ | – | – |
+| `item.work_branch`, `item.work_pr` | ✓ (s, GitHub; `null` → Fehler) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | – | – |
+
+`{source.vars.<name>}` muss zusätzlich in `vars` **jeder** Source des Workflows stehen (sonst Fehler mit der Liste
+der Sources, in denen sie fehlt); im Pfadmodus wird der Wert wie jeder Platzhalter zu genau einem sicheren
+Pfadsegment.
 
 Nicht als Template ausgewertet (Platzhalter bleiben wörtlich stehen): alle `command`, `source.update.labels`,
 `source.update.project`, `shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
+
+„Übrige Hooks“ schließt `on_result.<outcome>` und `on_error` ein. `{item.work_branch}`/`{item.work_pr}` gelten auch in
+Workflows mit mehreren Sources (`trigger.sources`, alle GitHub); gelesen wird jeweils in der Source des Items.
+Außerhalb dieser Stellen (z. B. in `conditions.item[].args`) oder in Workflows ohne GitHub-Source-Trigger: `Placeholder "{item.work_branch}" is only available in "execute" and lifecycle
+actions of workflows triggered by a GitHub source`.
+
+### 5.3 Teure Platzhalter `{item.work_branch}`, `{item.work_pr}`
+
+Die Werte stammen aus den teuren Feldern `work_branch`/`work_pr` (§4.7.2) und werden **direkt vor dem Rendern frisch**
+gelesen (eine GraphQL-Abfrage), nie aus der Planung übernommen:
+
+- **Run-Start:** nach dem frischen Lesen des Items und vor `on_start` (§6.5 Schritt 2), wenn `execute`
+  (`working_directory`, `args`, `env`) einen der Platzhalter verwendet. Ist ein verwendeter Wert unknown, endet der
+  Run als **`start_error` ohne Hooks** (`on_start` lief nie, am Item wurde nichts geändert; zählt als technischer
+  Fehler) mit Grund `{item.work_pr} is unknown: …` (Fehlercode `run_linked_field_unknown`). Ein bekannt leerer Wert
+  (`null`) ergibt in `args`/`env` einen leeren String; im `working_directory` (Modus `path`) ebenfalls einen
+  **`start_error` ohne Hooks** vor `on_start` (`{item.work_branch} is empty (null) and cannot be used in
+  working_directory`, Fehlercode `run_linked_field_empty`).
+- **Keine doppelte Abfrage:** stehen die Felder im `filter`/`item_priority`, liest der Planungsschritt alle fünf in
+  einer Abfrage, und der unmittelbar folgende Start übernimmt sie, wenn alle bekannt sind (Event
+  `run.linked_resolved` mit `reused: true`); sonst liest der Start frisch. Manuelle Starts lesen immer frisch.
+- **Actions** (`source.comment.message`, `shell` `args`/`env`, in jedem Hook): bei **jedem Versuch** frisch gelesen –
+  z. B. sieht `on_success` den PR, den der Worker gerade geöffnet hat. Unknown → der Versuch scheitert mit
+  `lifecycle_linked_field_unknown` (wiederholbar nach `lifecycle.action_retry`); es wird nichts gepostet.
+- **Kontextdatei des Workers** (`source.attributes`, Entscheidung „wenn verwendet“): die bekannten Werte aller fünf
+  Felder (`linked_branches`, `closing_prs`, `work_branch`, `work_pr`, `work_pr_url`) stehen darin, wenn der Workflow
+  sie verwendet – Platzhalter in `execute` **oder** eines der Felder in `filter`/`item_priority`. Sonst fragt der
+  Start GitHub nicht danach (keine Kosten). Wer nur `closing_prs` im Worker braucht, verwendet z. B.
+  `env: { WORK_PR: '{item.work_pr}' }`. Unknown-Werte fehlen in `attributes` (nur bei verwendetem Platzhalter
+  bricht der Start ab). Kontexte von `shell`-Actions enthalten die Felder, wenn die Action einen der Platzhalter
+  verwendet.
+- Das Run-Event `run.linked_resolved` (`{ known: [...], unknown: [...] }`) zeigt in der Run-Ansicht, welche Felder
+  beim Start gelesen wurden.
 
 ---
 
@@ -1279,15 +1402,17 @@ nach jedem erfolgreichen Reload. Schritte überlappen nie; es gibt keine persist
 
 0. **Gate:** Ist der Controller nicht bereit (Recovery läuft), pausiert oder im Drain/Shutdown, wird der ganze
    Schritt übersprungen.
-1. **Pollen** (alle aktiven Source-Workflows parallel; deaktivierte erscheinen nur als `disabled`): Liste der Source
-   mit dem pushbaren Filterteil (gleiche Source + gleicher Pushdown = ein API-Aufruf pro Schritt). Fehler einer
-   Source betreffen nur deren Workflows (`source_error`).
+1. **Pollen** (alle aktiven Source-Workflows parallel; deaktivierte erscheinen nur als `disabled`): Liste jeder
+   Source des Workflows mit dem pushbaren Filterteil (gleiche Source + gleicher Pushdown = ein API-Aufruf pro
+   Schritt). Fehler einer Source betreffen nur deren Workflows bzw. bei mehreren Sources nur deren Items
+   (`source_error` am Workflow und an der Source; die übrigen Sources werden normal geplant).
 2. **Deduplizieren** pro `(Source, Item, Workflow)`.
 3. **Billiger Filter** (teure Felder = unknown): `false` → verworfen. **Item-Priorität** bestimmen (darf teure
    Felder laden).
 4. **Sortieren** aller Kandidaten aller Workflows (§6.2).
 5. Pro Kandidat **sequentiell** in dieser Reihenfolge:
-   1. freie Kapazität global und für den Workflow? (zuerst, damit volle Limits keine API-Aufrufe kosten)
+   1. freie Kapazität global, für den Workflow und ggf. je Source (`max_concurrent_per_source`)? (zuerst, damit
+      volle Limits keine API-Aufrufe kosten)
    2. aktiver Run desselben Workflows für dieses Item (Lock) → `locked`
    3. aktiver Retry-Block → `blocked`
    4. Workflow-Conditions (einmal pro Schritt und Workflow, ggf. aus dem `cache`)
@@ -1304,14 +1429,23 @@ Diagnose je Workflow (letzter Schritt, max. 500 Kandidaten) unter `GET /api/v1/w
 ### 6.2 Priorität und Tie-Breaker
 
 Totale Ordnung über alle Kandidaten: (1) **Workflow-Priorität** absteigend (effektiv, inkl. Override),
-(2) **Item-Priorität** absteigend, (3) Erstellungszeit des Items aufsteigend (fehlend/ungültig zuletzt),
-(4) Item-Schlüssel natürlich aufsteigend (`repo:9` < `repo:10`), (5) Workflow-ID aufsteigend. Ein Item mit hoher
+(2) **Item-Priorität** absteigend, (3) Position der Source in `trigger.sources` aufsteigend (seit 0.3.0; bei
+`source: <id>` immer 0), (4) Erstellungszeit des Items aufsteigend (fehlend/ungültig zuletzt),
+(5) Item-Schlüssel natürlich aufsteigend (`repo:9` < `repo:10`), (6) Workflow-ID aufsteigend.
+
+Die Source-Position (3) gilt über alle Workflows hinweg, nicht nur innerhalb eines Workflows (sonst wäre die Ordnung
+nicht eindeutig). Nebeneffekt: Bei gleicher Workflow- **und** Item-Priorität verliert ein Item einer späteren Source
+eines Multi-Source-Workflows einen knappen globalen Slot auch gegen gleichrangige Items anderer Workflows (deren
+Items haben Position 0 bzw. eine frühere Position) – unabhängig von der Erstellungszeit. Wer das nicht will, gibt dem
+Workflow bzw. den Items eine passende Priorität. Ein Item mit hoher
 Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität. Kein Aging.
 
 ### 6.3 Limits
 
-- Global `scheduler.max_concurrent` und pro Workflow `max_concurrent` gelten nur für **automatische** Starts
-  (Source, Cron). Aktive Runs **aller** Trigger zählen (inkl. manueller und `recovery_pending`).
+- Global `scheduler.max_concurrent`, pro Workflow `max_concurrent` und (seit 0.3.0) pro Source des Workflows
+  `max_concurrent_per_source` gelten nur für **automatische** Starts (Source, Cron). Aktive Runs **aller** Trigger
+  zählen (inkl. manueller und `recovery_pending`; für das Source-Limit die Runs des Workflows mit Items dieser
+  Source).
 - Aktiv = `reserved`, `starting`, `running`, `cancelling`, `finalizing`, `recovery_pending` (also auch während
   Abschluss-Hooks laufen).
 - Overrides wirken sofort.
@@ -1332,7 +1466,9 @@ Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität.
 
 1. Source-Runs: Item frisch lesen. Nicht mehr vorhanden → `cancelled` (ohne Hooks, nicht gezählt). Bei
    automatischen Runs zusätzlich billiger Filterteil auf dem frischen Item: `false` → `cancelled` ohne Hooks
-   (unknown startet trotzdem). Source fehlt oder Lesefehler → `start_error` **ohne** Hooks (gezählt).
+   (unknown startet trotzdem). Source fehlt oder Lesefehler → `start_error` **ohne** Hooks (gezählt). Verwendet der
+   Workflow `work_branch`/`work_pr` & Co. (§5.3), werden sie jetzt frisch gelesen; ein in `execute` verwendeter,
+   aber unknown Platzhalter → `start_error` **ohne** Hooks (gezählt).
 2. `starting`, `on_start`-Kette. Scheitert sie → Worker startet nicht, `start_error`, `on_start_error`.
 3. Workspace-Pfad, `args`/`env` rendern, Secrets holen, Kontextdatei schreiben; Fehler → `start_error`, `on_start_error`.
 4. Worker als eigene Prozessgruppe starten → `running`.
@@ -1346,9 +1482,12 @@ UI oder `POST /api/v1/workflows/:id/start` `{"item"?: "…", "parameters"?: {…
   den Filter-Recheck vor `on_start`.
 - **Umgeht nicht:** den Lock pro Workflow+Item (HTTP 409 `lock_conflict`), Drain/Shutdown, laufende Recovery,
   Parametervalidierung.
-- Source-Workflow: Item-Referenz Pflicht – `123`, `#123`, `owner/repo#123` oder
+- Source-Workflow: Item-Referenz Pflicht – `123`, `#123`, `owner/repo#123`,
   `https://github.com/owner/repo/issues/123` bzw. `/pull/123` (Owner/Repo ohne Groß-/Kleinschreibung, muss zur
-  Source passen); das Item muss existieren. Andere Trigger: Item verboten.
+  Source passen) oder (seit 0.3.0) `<source>:<ref>` wie `project_a:123`; das Item muss existieren. Bei mehreren
+  Sources wird die Source aus der Referenz abgeleitet (URL, `owner/repo#123`, `<source>:123`); passt keine oder –
+  bei einer bloßen Nummer – mehr als eine Source, folgt `400 manual_item_invalid_ref` mit Hinweis. Andere Trigger:
+  Item verboten.
 - Manuelle Runs zählen zu den Limits automatischer Starts und zum Fehlerzähler.
 
 ### 6.7 Cron
@@ -1453,12 +1592,18 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 `adispatch workflow dry-run <id>` (gegen die laufende Instanz, sonst mit `--config-dir` lokal) bzw.
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
-`project.*`-Felder (`projectFields`), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
+`project.*`-Felder (`projectFields`), die Werte der im Filter verwendeten teuren Felder (z. B.
+`work_pr not_equals null: true (actual 12)`) im Filter-Trace, je Kandidat die verknüpften Branches/PRs
+(`linkedFields`, Textausgabe `linked fields:`), wenn der Workflow sie irgendwo verwendet (Filter, `item_priority`,
+`execute`, Actions; nicht für Items, die schon der billige Filterteil verwirft), den ausgewerteten Filter mit
+eingesetzten benannten Filtern (`source.filter`,
 Textausgabe `filter:`), bei `execute.keep` die Muster samt Größenlimit (unter `notes`), das Hook-Routing
 (`hooks`: die `on_result`-Schlüssel und je technischem Ausgang der Hook, der liefe, z. B. `timed_out → on_error`) sowie
 seit 0.3.0 alle deklarierten Secrets von `execute` und `shell`-Actions mit Ort, Identity, Übergabeart und Variable
 (`secrets`, Textausgabe `secret execute: GH_TOKEN ← identity coder, delivery file (GH_TOKEN_FILE)`; nie Werte, es wird
-kein Token geholt). Reserviert nichts, startet keine Worker oder Actions
+kein Token geholt). Bei mehreren Sources (seit 0.3.0) je Source eine Zeile mit gepollten Items, Pushdown und
+ggf. Fehler (`source.sources`), je Kandidat `sourceId`, bei `max_concurrent_per_source` die Auslastung je Source
+(`capacity.perSource`, Textzeile `capacity per source:`). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 
@@ -1913,6 +2058,128 @@ Der geladene Workflow enthält den eingesetzten Baum
 `all: [ { all: [labels…, is_pull_request…, dependencies…] }, labels contains backend ]`; der Pushdown flacht ihn
 zu `labels=ready-for-coding,backend` ab. Eine Änderung an `filters/ready-for-coding.yaml` wirkt nach
 `config reload` auf Coder und View zugleich.
+
+### 7.9 Ein Workflow für mehrere Repositories
+
+Ein Coder für zwei Repositories mit unterschiedlichem Basis-Branch. Je Repository läuft höchstens ein Run, zusammen
+höchstens zwei; bei gleicher Item-Priorität wird `project_a` vor `project_b` bedient.
+
+```yaml
+# example: multi-source
+# extends: github
+# file: sources.yaml
+sources:
+  project_a:
+    type: github
+    owner: example
+    repository: project-a
+    identity: maintainer
+    vars: { base_branch: main, test_command: npm test }
+  project_b:
+    type: github
+    owner: example
+    repository: project-b
+    identity: maintainer
+    vars: { base_branch: develop, test_command: make check }
+```
+
+```yaml
+# example: multi-source
+# file: workflows/coder-all.yaml
+id: coder-all
+identity: coder
+max_concurrent: 2
+max_concurrent_per_source: 1
+trigger: { type: source, sources: [project_a, project_b] }
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-coding }
+    - { field: is_pull_request, operator: equals, value: false }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  args: ['{item.url}']
+  env:
+    BASE_BRANCH: '{source.vars.base_branch}'
+    TEST_COMMAND: '{source.vars.test_command}'
+  secrets:
+    GH_TOKEN: { identity: coder }
+on_start:
+  - type: source.update
+    labels: { add: [coding], remove: [ready-for-coding] }
+on_success:
+  - type: source.update
+    labels: { add: [ready-for-review], remove: [coding] }
+  - type: source.comment
+    message: 'Fertig für {source.repository} (Basis {source.vars.base_branch}): {result.message}'
+on_failure:     [ { type: source.update, labels: { add: [needs-maintainer], remove: [coding] } } ]
+on_crash:       [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+on_start_error: [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+on_timeout:     [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+on_cancel:      [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+```
+
+Labels, Kommentare und `{source.*}` beziehen sich immer auf das Repository des Items. Manuell gestartet wird mit
+URL oder `project_b:12`. Der Dry-Run zeigt je Source die gepollten Items:
+
+```text
+  trigger: sources project_a, project_b
+  capacity per source: project_a 0/1, project_b 0/1
+  source project_a: 3 item(s) polled, pushdown {…}
+  source project_b: 1 item(s) polled, pushdown {…}
+```
+
+### 7.10 Review auf dem Arbeits-Branch (verknüpfte PRs)
+
+Der Reviewer nimmt Issues mit Label `ready-for-review`, die einen offenen PR haben, und bekommt Branch und PR-Nummer
+direkt als Argumente – ohne eigene GraphQL-Abfrage im Worker. Die View zeigt den Arbeitsstand aller Items (§4.7.2).
+
+```yaml
+# example: linked
+# extends: github
+# file: workflows/pr-reviewer.yaml
+id: pr-reviewer
+identity: reviewer
+trigger: { type: source, source: project_a }
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-review }
+    - { field: work_pr, operator: not_equals, value: null }    # teuer: nur für Items mit dem Label gelesen
+execute:
+  type: shell
+  command: scripts/review-pr.sh
+  args: ['--branch', '{item.work_branch}', '--pr', '{item.work_pr}']
+on_start:
+  - { type: source.update, labels: { add: [reviewing], remove: [ready-for-review] } }
+on_success:
+  - { type: source.comment, message: 'Review von PR #{item.work_pr} abgeschlossen: {result.message}' }
+  - { type: source.update, labels: { remove: [reviewing] } }
+on_failure:     [ { type: source.update, labels: { add: [needs-maintainer], remove: [reviewing] } } ]
+on_crash:       [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+on_start_error: [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+on_timeout:     [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+on_cancel:      [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+```
+
+```yaml
+# example: linked
+# file: views/work-in-progress.yaml
+id: work-in-progress
+title: Arbeitsstand
+sources: [project_a, project_b]
+filter: { field: is_pull_request, operator: equals, value: false }
+fields:
+  - { field: title, link: url }
+  - { field: work_branch, label: Branch }
+  - { field: work_pr, label: PR }                 # Link automatisch auf den PR (work_pr_url)
+  - { field: closing_prs, label: Schließende PRs } # "#12 open, #9 merged", Link je PR
+sort: { field: work_pr, direction: desc }
+```
+
+Kann GitHub die verknüpften PRs eines Items nicht liefern (z. B. Rate-Limit), ist der Filter `unknown` (kein Start)
+und der Dry-Run nennt den Grund. Wird das Item trotzdem gestartet (z. B. manuell) und ist `work_branch` dann unknown,
+endet der Run als `start_error`, bevor `on_start` das Label ändert. Der Kommentar in `on_success` liest `work_pr`
+erneut – er nennt also auch einen PR, den der Worker erst während des Runs geöffnet hat.
 
 ---
 
@@ -2397,6 +2664,42 @@ a string or null`, `empty value; use null to clear the field`, `Expected a strin
 Laufzeit** fallen auf (Action `failed`, nicht wiederholbar): unbekannte/mehrdeutige Option oder Iteration, Feld fehlt
 im Projekt oder hat eine andere Art, fehlendes Schreibrecht – siehe Fehlertext in der Run-Ansicht (*Actions*).
 
+**Verknüpfte PRs falsch verwendet** – `closing_prs` ist eine Liste von Objekten (`object[]`) ohne Operatoren;
+`{item.work_branch}`/`{item.work_pr}` gibt es nur in `execute` und Actions.
+
+```yaml
+# example: err-linked
+# extends: github
+# invalid
+# expect: workflows/review.yaml: filter.any[0].field: Field "closing_prs" (type object[]) cannot be used in filters; use "work_pr" (e.g. { field: work_pr, operator: not_equals, value: null }) or "work_branch" instead
+# expect: workflows/review.yaml: conditions.item[0].args[0]: Placeholder "{item.work_branch}" is only available in "execute" and lifecycle actions of workflows triggered by a GitHub source
+# expect: views/prs.yaml: sort.field: Views cannot be sorted by "closing_prs" (type object[])
+# file: workflows/review.yaml
+id: review
+trigger: { type: source, source: project_a }
+filter:
+  any:
+    - { field: closing_prs, operator: contains, value: 12 }
+conditions:
+  item:
+    - { type: shell, command: scripts/branch-exists.sh, args: ['{item.work_branch}'] }
+execute: { type: shell, command: scripts/review.sh }
+```
+
+```yaml
+# example: err-linked
+# file: views/prs.yaml
+id: prs
+sources: [project_a]
+fields:
+  - { field: closing_prs }
+sort: { field: closing_prs }
+```
+
+Lösung: im Filter `work_pr` (offener PR vorhanden?) oder `work_branch` verwenden; eine Prüfung des Branches in den
+Worker verlegen (Prüfskripte bekommen die Felder nicht); Views nach `work_pr` sortieren. Erst **zur Laufzeit** fallen auf:
+unknown Werte (fehlende Rechte, Rate-Limit) → `start_error` bzw. Action `failed` (§5.3).
+
 **`state` an wirkungsloser Stelle** – die Source liest ohne `state`-Selektor auf oberster Ebene nur offene Items.
 
 ```yaml
@@ -2490,6 +2793,49 @@ to reference a named filter write { use: x }` (Kurzform `x` gibt es nur an der W
 `Duplicate filter ID "x" (already defined in filters/a.yaml)`.
 
 **Null-Intervalle und -Timeouts**
+
+```yaml
+# example: err-multi-source
+# extends: multi-source
+# invalid
+# expect: workflows/both.yaml: trigger.sources: "source" and "sources" are mutually exclusive
+# expect: workflows/dup.yaml: trigger.sources[1]: Source "project_a" is listed more than once
+# expect: workflows/vars.yaml: trigger.sources[2]: Unknown source "project_c"
+# expect: workflows/vars.yaml: execute.env.DEPLOY: Source variable "deploy_target" is not defined in "vars" of sources "project_a", "project_b" (sources.yaml)
+# file: workflows/both.yaml
+id: both
+trigger: { type: source, source: project_a, sources: [project_b] }
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+```yaml
+# example: err-multi-source
+# file: workflows/dup.yaml
+id: dup
+trigger: { type: source, sources: [project_a, project_a] }
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+```yaml
+# example: err-multi-source
+# file: workflows/vars.yaml
+id: vars
+trigger: { type: source, sources: [project_a, project_b, project_c] }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  env:
+    BASE_BRANCH: '{source.vars.base_branch}'   # in beiden bekannten Sources definiert
+    DEPLOY: '{source.vars.deploy_target}'      # fehlt in beiden
+```
+
+`sources: []` → `"sources" must not be empty`; `max_concurrent_per_source: 0` → `Must be greater than 0`; weder `source` noch `sources` → `A source trigger needs "source:
+<id>" or "sources: [<id>, ...]"`; `max_concurrent_per_source` an einem Cron-/Manual-Workflow →
+`"max_concurrent_per_source" is only allowed for workflows with a source trigger`. Projektfelder, die nicht alle
+Sources mit gleicher Art deklarieren: im Filter `… workflows with several sources only offer project fields declared
+by all their sources (missing in "…")`, in `source.update.project` `… it is not declared in "project.fields" of all
+sources of the workflow (missing in "…")` bzw. `Project field "…" has different kinds in the sources of the
+workflow`.
 
 ```yaml
 # example: err-zero-durations
@@ -2601,14 +2947,17 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 
 ## 9. Checkliste „neuen Workflow anlegen“
 
-1. **Trigger wählen:** `source` (Items), `schedule` (Cron) oder `manual`.
+1. **Trigger wählen:** `source` (Items), `schedule` (Cron) oder `manual`. Gleiche Abläufe für mehrere Repositories
+   als **ein** Workflow mit `sources: [...]` (Reihenfolge = Tie-Breaker), Unterschiede je Repository als
+   `vars` an der Source (`{source.vars.<Name>}`), bei Bedarf `max_concurrent_per_source`.
 2. **Voraussetzungen:** Source in `sources.yaml`, Identities in `identities.yaml`, Private Keys/Tokens als
    Umgebungsvariablen des Dienstes (Env-Datei, danach Neustart), App-Rechte prüfen. Für Projektfelder: `project`
    an der Source mit allen benötigten Feldern und passender Art; Org-Projekt → App-Recht **Projects: Read**,
    User-Projekt → `github_token`-Identity als `project.identity`.
 3. **Datei** `workflows/<id>.yaml` anlegen (Dateiname = `id`), am besten mit `enabled: false` beginnen.
 4. **Filter** nur mit Feldern aus §4.7; Labels exakt schreiben; für geschlossene Items ein `state`-Prädikat auf
-   oberster Ebene; teure `dependencies.*` nur wenn nötig; Projektwerte (`project.Status in [...]`) genau so
+   oberster Ebene; teure `dependencies.*`, `work_pr`, `work_branch` (§4.7.2) nur wenn nötig und möglichst hinter
+   einem billigen Kriterium (z. B. Label) – dann werden sie nur für passende Items gelesen; Projektwerte (`project.Status in [...]`) genau so
    schreiben, wie sie im Projekt heißen (Groß-/Kleinschreibung zählt). Filter, die mehrere Workflows/Views teilen
    sollen, als benannten Filter in `filters/<id>.yaml` anlegen und mit `filter: <id>` bzw. `{ use: <id> }`
    verwenden (§3.6).
@@ -2625,7 +2974,8 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 7. **Validieren:** `adispatch config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
 8. **Trockenlauf:** `adispatch workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
    (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität; bei Projektfeldern die Zeilen
-   `project fields:` (Werte oder Unknown-Grund, z. B. fehlende Rechte).
+   `project fields:` (Werte oder Unknown-Grund, z. B. fehlende Rechte); bei mehreren Sources je Source eine Zeile
+   `source <id>: … polled` (und ggf. `SOURCE ERROR`); bei `work_pr`/`work_branch` die Zeilen `linked fields:`.
 9. **Aktivieren:** `enabled: true` setzen und `adispatch config reload --config-dir <dir>` (bei Fehlern
    bleibt die alte Konfiguration aktiv). Alternativ zuerst ein manueller Start über die UI.
 10. **Beobachten:** erster Run in der UI (Status, Logs, Lifecycle-Journal), ggf. `max_concurrent` per Override

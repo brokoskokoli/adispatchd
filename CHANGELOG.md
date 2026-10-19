@@ -65,6 +65,35 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   Identity und Übergabeart (`secrets`, `execute.secretDelivery`) – nie Werte.
 - Hinweis zur Isolation: `0700`/`0600` schützt Token-Dateien vor anderen Systembenutzern, nicht vor anderen Runs desselben
   Dienstes; für getrennte Berechtigungen getrennte Instanzen/Benutzer oder Container verwenden.
+- **Ein Workflow für mehrere Sources:** `trigger: { type: source, sources: [project_a, project_b] }` als Alternative zu
+  `source: <id>` (nicht leer, eindeutig, gleicher Adaptertyp). Der Planer fragt jede Source ab; Kandidaten aller
+  Sources konkurrieren nach Item-Priorität, bei Gleichstand gilt die Reihenfolge der Liste. Locks, Retry-Blocks und
+  Historie bleiben pro Item-Schlüssel `<source>:<nr>`; `max_concurrent` gilt für den Workflow insgesamt, neu ist
+  `max_concurrent_per_source` (Entscheidung `source_limit`). Fällt eine Source aus, laufen die anderen weiter.
+  `project.*` in Filter, `item_priority` und `source.update.project` nur, wenn alle Sources das Feld mit gleicher Art
+  deklarieren.
+- **Source-Variablen:** `sources.<id>.vars` (Name → String) und der Platzhalter `{source.vars.<name>}` überall, wo
+  `{source.*}` erlaubt ist (auch bei einer Source); fehlt die Variable in einer Source des Workflows, nennt die
+  Validierung diese Sources.
+- Dry-Run, Planungsdiagnose, API und Weboberfläche zeigen alle Sources: `trigger.sources`,
+  `maxConcurrentPerSource`, je Source gepollte Items, Pushdown und Fehler (`sources[]` neben den bisherigen Feldern
+  `sourceId`, `polled`, `pushdown`, `error`), `capacity.perSource`; Textausgabe mit einer Zeile je Source.
+- Manuelle Starts akzeptieren `<source>:<nr>` als Item-Referenz; bei mehreren Sources wird die Source aus URL bzw.
+  Präfix abgeleitet, eine mehrdeutige Referenz (`#7`) wird mit Hinweis abgelehnt. Konfigurationsreferenz §3.2,
+  §3.4.2, §5, §6, §7.9, §8.
+- **Verknüpfte Branches und PRs als Item-Felder (GitHub):** neue teure Felder `linked_branches` (unter „Development“
+  verlinkte Branches), `closing_prs` (PRs, die das Issue schließen: `{ number, state, head_ref, is_draft, url }`,
+  offen → gemergt → geschlossen), abgeleitet `work_branch` und `work_pr` sowie `work_pr_url` (Link-Ziel in Views).
+  Für Pull-Request-Items: eigener Branch und eigene Nummer, solange offen. Eine GraphQL-Abfrage pro Item für alle
+  Felder, nur Variablen; jeder Fehler, Teilfehler, mehr als 20 Treffer oder ein Rate-Limit macht alle Felder
+  `unknown` (fail closed, Rate-Limit-Pause wie bei Projektfeldern).
+- Neuer Feldtyp `object[]` (`closing_prs`): ohne Filter-Operatoren (Validierungsfehler mit Hinweis auf `work_pr`), in
+  Views als `#12 open, #9 merged` mit Link je PR; Views können nicht danach sortieren.
+- Platzhalter `{item.work_branch}` und `{item.work_pr}` in `execute` und Actions: direkt vor dem Rendern frisch
+  gelesen (beim Run-Start bzw. je Action-Versuch). Unbekannt → `start_error` vor `on_start` bzw. wiederholbarer
+  Action-Fehler – nie ein leerer String; bekannt leer (`null`) → leerer String. Verwendet ein Workflow die Felder
+  (Platzhalter in `execute` oder Feld in `filter`/`item_priority`), stehen sie in `source.attributes` der
+  Kontextdatei; Run-Event `run.linked_resolved`. Konfigurationsreferenz §4.7.2, §5.3, §7.10, §8; Live-Test T27.
 
 ### Geändert
 

@@ -15,14 +15,21 @@
  *   would take global slots first are not simulated.
  */
 import { selectCompletionHook, systemClock, TECHNICAL_OUTCOME_HOOKS, type Clock } from '../core/index.js';
-import { resultHookOutcomes, UnknownWorkflowError, workflowSecrets, type ConfigManager, type WorkflowConfig } from '../config/index.js';
+import {
+  resultHookOutcomes,
+  triggerSourceIds,
+  UnknownWorkflowError,
+  workflowSecrets,
+  type ConfigManager,
+  type WorkflowConfig,
+} from '../config/index.js';
 import { describeContainerExecute } from '../executors/index.js';
 import { sortCandidates } from '../filters/index.js';
 import { notEvaluatedConditions } from './checks.js';
 import { nextSlots, parseCron } from './cron.js';
-import { checkEligibility, prepareSourceWorkflow, type SourceLookup } from './planner.js';
+import { candidateLinkedFields, checkEligibility, prepareSourceWorkflow, type SourceLookup } from './planner.js';
 import type { SchedulingState } from './state.js';
-import type { CandidateDiagnosis, CronSlotForecast, DryRunResult, GateInfo, HookRouting } from './types.js';
+import type { CandidateDiagnosis, CapacityInfo, CronSlotForecast, DryRunResult, GateInfo, HookRouting } from './types.js';
 
 /** Dependencies of {@link dryRunWorkflow}. */
 export interface DryRunDeps {
@@ -64,10 +71,16 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
 
   const globalActive = deps.state.countActive();
   const workflowActive = deps.state.countActive(workflowId);
-  const capacity = {
+  const capacity: CapacityInfo = {
     global: { active: globalActive, max: deps.config.maxConcurrent },
     workflow: { active: workflowActive, max: eff.maxConcurrent },
   };
+  const perSourceMax = workflow.maxConcurrentPerSource;
+  if (workflow.trigger.type === 'source' && perSourceMax !== undefined) {
+    const active: Record<string, number> = {};
+    for (const id of triggerSourceIds(workflow.trigger)) active[id] = deps.state.countActive(workflowId, id);
+    capacity.perSource = { max: perSourceMax, active };
+  }
   const result: DryRunResult = {
     workflowId,
     name: workflow.name,
@@ -101,6 +114,7 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
     const prepared = await prepareSourceWorkflow(workflow, eff.priority, {
       sources: deps.sources,
       at: result.generatedAt,
+      sourceVars: (id) => deps.config.current.sources[id]?.vars,
       ...(deps.signal ? { signal: deps.signal } : {}),
     });
     result.source = {
@@ -109,9 +123,11 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
       filter: workflow.filter,
       pushdown: prepared.diagnosis.pushdown,
       error: prepared.diagnosis.error,
+      sources: prepared.diagnosis.sources,
     };
     let simGlobal = globalActive;
     let simWorkflow = workflowActive;
+    const simSource = new Map(Object.entries(capacity.perSource?.active ?? {}));
     const ordered: CandidateDiagnosis[] = [];
     for (const candidate of sortCandidates(prepared.candidates)) {
       const eligibility = await checkEligibility(candidate, {
@@ -122,6 +138,9 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
       });
       const diag = candidate.diagnosis;
       ordered.push(diag);
+      // Same memoized batch as the expensive filter part: no extra query when the filter needed them.
+      const linked = await candidateLinkedFields(candidate, 'diagnosis');
+      if (linked) diag.linkedFields = linked;
       if (!eligibility.eligible) continue;
       if (!eff.enabled) {
         diag.decision = 'workflow_unavailable';
@@ -135,9 +154,13 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
       } else if (simWorkflow >= capacity.workflow.max) {
         diag.decision = 'workflow_limit';
         diag.reason = `workflow limit reached (${simWorkflow}/${capacity.workflow.max}, incl. candidates above)`;
+      } else if (capacity.perSource && (simSource.get(diag.sourceId) ?? 0) >= capacity.perSource.max) {
+        diag.decision = 'source_limit';
+        diag.reason = `limit per source reached for '${diag.sourceId}' (${simSource.get(diag.sourceId) ?? 0}/${capacity.perSource.max}, incl. candidates above)`;
       } else {
         simGlobal++;
         simWorkflow++;
+        simSource.set(diag.sourceId, (simSource.get(diag.sourceId) ?? 0) + 1);
         diag.decision = eligibility.pendingChecks ? 'pending_checks' : 'would_start';
         diag.reason = eligibility.pendingChecks
           ? 'declaratively eligible; would start if the shell filter/conditions pass'

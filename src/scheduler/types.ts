@@ -22,6 +22,7 @@ import type { FilterTrace, TraceValue } from '../filters/index.js';
  * - `locked` – an active run of the same workflow holds the item lock.
  * - `blocked` – an active retry block exists for the workflow/item.
  * - `workflow_limit` / `global_limit` – no free slot.
+ * - `source_limit` – `max_concurrent_per_source` reached for the item's source (WI-20).
  * - `workflow_unavailable` – the workflow was disabled/removed/changed during the planning step.
  * - `gate_closed` – automatic starts were paused/stopped during the planning step.
  * - `start_failed` – reservation or controller start failed unexpectedly.
@@ -39,6 +40,7 @@ export type CandidateDecision =
   | 'locked'
   | 'blocked'
   | 'workflow_limit'
+  | 'source_limit'
   | 'global_limit'
   | 'workflow_unavailable'
   | 'gate_closed'
@@ -93,24 +95,45 @@ export interface CandidateDiagnosis {
    * `project.*` for this item; absent when the source declares none.
    */
   projectFields?: Record<string, FieldResolution>;
+  /**
+   * Values (or unknown reasons) of the linked branch/PR fields (WI-21) when
+   * the workflow uses them anywhere (filter, item_priority, templates); dry-run only.
+   */
+  linkedFields?: Record<string, FieldResolution>;
 }
 
 /** Status of a workflow in the last planning step. */
 export type WorkflowPlanningStatus = 'ok' | 'disabled' | 'source_error';
+
+/** Poll result of one source of a source workflow (WI-20: one entry per source). */
+export interface SourcePollDiagnosis {
+  sourceId: string;
+  status: 'ok' | 'source_error';
+  /** Source problem, e.g. API failure or missing adapter. */
+  error: string | null;
+  /** Number of items returned by the source (after de-duplication). */
+  polled: number;
+  /** Pushed-down part of the filter for this source (informational). */
+  pushdown: FilterNode | null;
+}
 
 /** Last planning diagnosis of one source workflow (in memory, Spec §7). */
 export interface WorkflowPlanningDiagnosis {
   workflowId: string;
   /** Planning step start (ISO-8601). */
   at: string;
+  /** `source_error` if at least one source failed (the others are still planned, WI-20). */
   status: WorkflowPlanningStatus;
-  /** Source problem (`source_error`), e.g. API failure or missing adapter. */
+  /** Source problem(s) (`source_error`), e.g. API failure or missing adapter; several joined with "; ". */
   error: string | null;
+  /** The (first) source; see `sources` for multi-source workflows. */
   sourceId: string;
-  /** Number of items returned by the source (after de-duplication). */
+  /** Number of items returned by all sources (after de-duplication). */
   polled: number;
-  /** Pushed-down part of the filter (informational). */
+  /** Pushed-down part of the filter of the first source (informational). */
   pushdown: FilterNode | null;
+  /** Per source in configured order (WI-20; one entry for single-source workflows). */
+  sources: SourcePollDiagnosis[];
   /** Workflow conditions, evaluated at most once per planning step (`not_evaluated` if no candidate needed them). */
   conditions: CheckDiagnosis[];
   /** Candidates in planning order (startable order first, rejected-by-cheap-filter last). */
@@ -182,6 +205,8 @@ export interface CronWorkflowStatus {
 export interface CapacityInfo {
   global: { active: number; max: number };
   workflow: { active: number; max: number };
+  /** `max_concurrent_per_source` (WI-20): active runs per source; absent when not configured. */
+  perSource?: { max: number; active: Record<string, number> };
 }
 
 /** Controller gate as seen by a dry-run (`null` when no controller is available, e.g. CLI). */
@@ -218,7 +243,19 @@ export interface DryRunResult {
    * Source workflows only. `filter` is the declarative filter as evaluated: references to named
    * filters (WI-15) are already expanded.
    */
-  source: { sourceId: string; polled: number; filter: FilterNode | null; pushdown: FilterNode | null; error: string | null } | null;
+  source: {
+    /** The (first) source; per source see `sources` (WI-20). */
+    sourceId: string;
+    /** Items of all sources. */
+    polled: number;
+    filter: FilterNode | null;
+    /** Pushdown of the first source. */
+    pushdown: FilterNode | null;
+    /** Source problem(s), several joined with "; "; `null` if all sources were polled. */
+    error: string | null;
+    /** Per source in configured order (WI-20; one entry for single-source workflows). */
+    sources: SourcePollDiagnosis[];
+  } | null;
   /** Source workflows only; planning order, cheap-filter rejections last. */
   candidates: CandidateDiagnosis[];
   /** Schedule workflows only. */

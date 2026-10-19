@@ -129,4 +129,42 @@ ${executeYaml}
     const noItem = await input(`  type: shell\n  command: /bin/true`, { item: null });
     await expect(buildExecutionSpec(noItem)).rejects.toMatchObject({ code: 'run_item_missing' });
   });
+
+  it('container (WI-19): resolves mounts, workspace target, container paths, linked fields and the out dir', async () => {
+    const i = await input(
+      `  type: container
+  image: busybox
+  command: ['{item.number}', '{workspace.path}', '{item.work_branch}', '{source.repository}']
+  env: { BRANCH: '{item.work_branch}', WS: '{workspace.path}' }
+  mounts:
+    - { source: '{workspace.path}', target: /work/repo, mode: rw }
+    - { source: '{workspace.path}/cache', target: /cache, mode: rw }`,
+      { linked: { work_branch: { known: true, value: 'feature/oauth' } } },
+    );
+    const { spec } = await buildExecutionSpec(i);
+    const workspace = spec.workingDirectory;
+    expect(spec.command).toBe('docker');
+    expect(spec.args).toEqual(['7', '/work/repo', 'feature/oauth', 'example/a']);
+    expect(spec.env).toEqual({ BRANCH: 'feature/oauth', WS: '/work/repo' });
+    expect(spec.files.resultFile).toBe(path.join(env.dataDir, 'runs', i.run.id, 'out', 'result.json'));
+    expect((spec.context as { workspace: { path: string } }).workspace.path).toBe('/work/repo');
+    expect(spec.container).toMatchObject({
+      name: `adispatch-${i.run.id}`,
+      mounts: [
+        { source: workspace, target: '/work/repo', mode: 'rw' },
+        { source: path.join(workspace, 'cache'), target: '/cache', mode: 'rw' },
+      ],
+      workspaceTarget: '/work/repo',
+      workdir: '/work/repo',
+      labels: { 'adispatch.run': i.run.id, 'adispatch.workflow': 'wf' },
+    });
+
+    // Without a workspace mount the workspace is mounted at /work automatically.
+    const auto = await buildExecutionSpec(await input(`  type: container\n  image: busybox\n  workdir: /tmp`));
+    expect(auto.spec.container).toMatchObject({
+      mounts: [{ source: auto.spec.workingDirectory, target: '/work', mode: 'rw' }],
+      workspaceTarget: '/work',
+      workdir: '/tmp',
+    });
+  });
 });

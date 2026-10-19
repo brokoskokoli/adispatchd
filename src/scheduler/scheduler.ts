@@ -23,11 +23,20 @@ import {
   systemTimers,
   type Clock,
   type Logger,
+  type SourceAdapter,
   type TimerHandle,
   type Timers,
   type Unsubscribe,
 } from '../core/index.js';
-import { UnknownWorkflowError, automaticParameterValues, type ConfigManager, type LoadedConfig, type ParameterValue, type WorkflowConfig } from '../config/index.js';
+import {
+  UnknownWorkflowError,
+  automaticParameterValues,
+  triggerSourceIds,
+  type ConfigManager,
+  type LoadedConfig,
+  type ParameterValue,
+  type WorkflowConfig,
+} from '../config/index.js';
 import { ShellCheckRunner, sortCandidates } from '../filters/index.js';
 import {
   BlockedError,
@@ -41,7 +50,7 @@ import { SchedulerChecks, type ChecksOutcome } from './checks.js';
 import { dueSlots, parseCron, type CronSchedule } from './cron.js';
 import { dryRunWorkflow } from './dry-run.js';
 import { SchedulerError } from './errors.js';
-import { checkEligibility, prepareSourceWorkflow, verifyItemFor, type ListCache, type PreparedCandidate, type PreparedWorkflow, type SourceLookup } from './planner.js';
+import { candidateLinkedFields, checkEligibility, prepareSourceWorkflow, verifyItemFor, type ListCache, type PreparedCandidate, type PreparedWorkflow, type SourceLookup } from './planner.js';
 import { repositoryState, type SchedulingState } from './state.js';
 import {
   MAX_DIAGNOSED_CANDIDATES,
@@ -261,16 +270,30 @@ export class Scheduler {
     return { canStartAutomatically: reason === null, reason };
   }
 
-  /** Limit check with live effective values (overrides apply immediately). */
-  private capacityProblem(workflowId: string): { decision: 'global_limit' | 'workflow_limit'; reason: string } | null {
+  /**
+   * Limit check with live effective values (overrides apply immediately).
+   * `sourceId` (source candidates) also checks `max_concurrent_per_source` (WI-20).
+   */
+  private capacityProblem(
+    workflowId: string,
+    sourceId?: string,
+  ): { decision: 'global_limit' | 'workflow_limit' | 'source_limit'; reason: string } | null {
     const globalMax = this.config.maxConcurrent;
     const globalActive = this.state.countActive();
     if (globalActive >= globalMax) {
       return { decision: 'global_limit', reason: `global limit reached (${globalActive}/${globalMax} active)` };
     }
-    const max = this.config.getWorkflow(workflowId)?.maxConcurrent ?? 1;
+    const eff = this.config.getWorkflow(workflowId);
+    const max = eff?.maxConcurrent ?? 1;
     const active = this.state.countActive(workflowId);
     if (active >= max) return { decision: 'workflow_limit', reason: `workflow limit reached (${active}/${max} active)` };
+    const perSource = eff?.config.maxConcurrentPerSource;
+    if (sourceId !== undefined && perSource !== undefined) {
+      const fromSource = this.state.countActive(workflowId, sourceId);
+      if (fromSource >= perSource) {
+        return { decision: 'source_limit', reason: `limit per source reached for '${sourceId}' (${fromSource}/${perSource} active)` };
+      }
+    }
     return null;
   }
 
@@ -305,16 +328,17 @@ export class Scheduler {
     const prepared: PreparedWorkflow[] = await Promise.all(
       workflows.map(async (w): Promise<PreparedWorkflow> => {
         if (!w.enabled) {
-          const sourceId = w.config.trigger.type === 'source' ? w.config.trigger.source : '';
+          const sourceIds = w.config.trigger.type === 'source' ? triggerSourceIds(w.config.trigger) : [];
           return {
             diagnosis: {
               workflowId: w.config.id,
               at: startedAt,
               status: 'disabled',
               error: null,
-              sourceId,
+              sourceId: sourceIds[0] ?? '',
               polled: 0,
               pushdown: null,
+              sources: sourceIds.map((sourceId) => ({ sourceId, status: 'ok', error: null, polled: 0, pushdown: null })),
               conditions: [],
               candidates: [],
               omittedCandidates: 0,
@@ -325,7 +349,12 @@ export class Scheduler {
           };
         }
         // Never rejects: source problems are part of the diagnosis.
-        return prepareSourceWorkflow(w.config, w.priority, { sources: this.sources, at: startedAt, listCache });
+        return prepareSourceWorkflow(w.config, w.priority, {
+          sources: this.sources,
+          at: startedAt,
+          listCache,
+          sourceVars: (id) => cfg.sources[id]?.vars,
+        });
       }),
     );
 
@@ -382,7 +411,7 @@ export class Scheduler {
       return null;
     };
     // Free slot? (checked first so that a full limit costs no API calls / checks)
-    const early = this.capacityProblem(candidate.workflowId);
+    const early = this.capacityProblem(candidate.workflowId, candidate.item.sourceId);
     if (early) return set(early.decision, early.reason);
 
     const eligibility = await checkEligibility(candidate, {
@@ -398,6 +427,8 @@ export class Scheduler {
       },
     });
     if (!eligibility.eligible) return null;
+    // Linked fields already fetched for the filter are handed to the start (no second identical query).
+    const linkedFields = await candidateLinkedFields(candidate, 'start');
 
     // --- synchronous section: re-validate and reserve atomically -------------
     if (this.stopped) return set('gate_closed', 'scheduler is stopping');
@@ -407,7 +438,7 @@ export class Scheduler {
     if (!eff || !eff.enabled || this.config.current.workflowHashes[candidate.workflowId] !== cfg.workflowHashes[candidate.workflowId]) {
       return set('workflow_unavailable', 'workflow was disabled, removed or changed during the planning step');
     }
-    const capacity = this.capacityProblem(candidate.workflowId);
+    const capacity = this.capacityProblem(candidate.workflowId, candidate.item.sourceId);
     if (capacity) return set(capacity.decision, capacity.reason);
     let run: RunRecord;
     try {
@@ -417,7 +448,7 @@ export class Scheduler {
         sourceId: candidate.item.sourceId,
         sourceItemKey: candidate.itemKey,
         sourceUrl: candidate.item.url,
-        configSnapshot: this.config.snapshotWorkflow(candidate.workflowId),
+        configSnapshot: this.config.snapshotWorkflow(candidate.workflowId, candidate.item.sourceId),
         parameters: automaticParameterValues(eff.config),
         failIfBlocked: true,
       });
@@ -436,7 +467,7 @@ export class Scheduler {
     diag.runId = run.id;
     try {
       const verifyItem = verifyItemFor(candidate.workflow, candidate.adapter);
-      this.controller.startRun(run, verifyItem ? { verifyItem } : {});
+      this.controller.startRun(run, { ...(verifyItem ? { verifyItem } : {}), ...(linkedFields ? { linkedFields } : {}) });
     } catch (err) {
       // The controller finalizes a refused reserved run itself (lock released).
       return set('start_failed', `run ${run.id} could not be started: ${errorMessage(err)}`);
@@ -674,14 +705,8 @@ export class Scheduler {
     }
     let item: { sourceId: string; key: string; url: string } | null = null;
     if (workflow.trigger.type === 'source') {
-      const sourceId = workflow.trigger.source;
       if (!ref) throw new SchedulerError('manual_item_required', `Workflow '${workflowId}' needs an item reference (URL or ID)`);
-      const adapter = this.sources(sourceId);
-      if (!adapter) throw new SchedulerError('source_unavailable', `Source '${sourceId}' is not available`, { sourceId });
-      const itemId = adapter.parseItemRef(ref);
-      if (itemId === null) {
-        throw new SchedulerError('manual_item_invalid_ref', `'${ref}' is not an item reference of source '${sourceId}'`, { sourceId, itemRef: ref });
-      }
+      const { sourceId, adapter, itemId } = this.resolveManualRef(workflowId, triggerSourceIds(workflow.trigger), ref);
       let found;
       try {
         found = await adapter.getItem(itemId);
@@ -700,13 +725,66 @@ export class Scheduler {
       sourceId: item?.sourceId ?? null,
       sourceItemKey: item?.key ?? null,
       sourceUrl: item?.url ?? null,
-      configSnapshot: this.config.snapshotWorkflow(workflowId),
+      configSnapshot: this.config.snapshotWorkflow(workflowId, item?.sourceId),
       parameters: Object.keys(values).length > 0 ? values : null,
       failIfBlocked: false,
     });
     this.logger.info('manual run reserved', { workflowId, runId: run.id, item: item?.key ?? null });
     const handle = this.controller.startRun(run);
     return { run, done: handle.done };
+  }
+
+  /**
+   * Source and item ID of a manual item reference. Accepted: `<source>:<ref>`
+   * with one of the workflow's sources (WI-20), or a reference that exactly one
+   * source accepts (URL, `owner/repo#n`; a bare number only for single-source
+   * workflows or when it is unambiguous).
+   *
+   * @throws SchedulerError (`manual_item_invalid_ref`, `source_unavailable`)
+   */
+  private resolveManualRef(
+    workflowId: string,
+    sourceIds: readonly string[],
+    ref: string,
+  ): { sourceId: string; adapter: SourceAdapter; itemId: string } {
+    const prefixed = /^([^:/\s]+):(.+)$/.exec(ref);
+    const explicit = prefixed && sourceIds.includes(prefixed[1] as string) ? (prefixed[1] as string) : undefined;
+    const lookup = (sourceId: string): SourceAdapter => {
+      const adapter = this.sources(sourceId);
+      if (!adapter) throw new SchedulerError('source_unavailable', `Source '${sourceId}' is not available`, { sourceId });
+      return adapter;
+    };
+    if (explicit !== undefined || sourceIds.length === 1) {
+      const sourceId = explicit ?? (sourceIds[0] as string);
+      const adapter = lookup(sourceId);
+      const inner = explicit !== undefined ? (prefixed?.[2] as string) : ref;
+      const itemId = adapter.parseItemRef(inner);
+      if (itemId === null) {
+        throw new SchedulerError('manual_item_invalid_ref', `'${ref}' is not an item reference of source '${sourceId}'`, { sourceId, itemRef: ref });
+      }
+      return { sourceId, adapter, itemId };
+    }
+    const matches: Array<{ sourceId: string; adapter: SourceAdapter; itemId: string }> = [];
+    for (const sourceId of sourceIds) {
+      const adapter = this.sources(sourceId);
+      const itemId = adapter?.parseItemRef(ref) ?? null;
+      if (adapter && itemId !== null) matches.push({ sourceId, adapter, itemId });
+    }
+    const list = sourceIds.map((id) => `'${id}'`).join(', ');
+    const hint = `use a URL or "<source>:<number>" with one of the workflow's sources (${list}), e.g. "${sourceIds[0] ?? 'source'}:12"`;
+    const only = matches.length === 1 ? matches[0] : undefined;
+    if (only) return only;
+    if (matches.length > 1) {
+      throw new SchedulerError(
+        'manual_item_invalid_ref',
+        `'${ref}' is ambiguous for workflow '${workflowId}' with several sources: ${hint}`,
+        { sourceIds: [...sourceIds], itemRef: ref },
+      );
+    }
+    throw new SchedulerError('manual_item_invalid_ref', `'${ref}' is not an item reference of any source of workflow '${workflowId}': ${hint}`, {
+      sourceIds: [...sourceIds],
+      itemRef: ref,
+    });
   }
 
   private assertAcceptsManual(): void {

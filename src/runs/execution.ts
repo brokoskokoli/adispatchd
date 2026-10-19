@@ -15,16 +15,20 @@ import {
   buildTemplateValues,
   dataPaths,
   isWithin,
+  linkedTemplateItem,
   renderTemplate,
   type ContainerExecution,
+  unknownLinkedField,
   type CredentialProvider,
+  type FieldResolution,
+  type FieldValue,
   type ExecutionSpec,
   type SourceItem,
   type TemplateScope,
   type TemplateValues,
   type WorkerContext,
 } from '../core/index.js';
-import type { ContainerExecuteConfig, WorkflowSnapshot } from '../config/index.js';
+import { linkedFieldUsage as workflowLinkedFieldUsage, type ContainerExecuteConfig, type WorkflowSnapshot } from '../config/index.js';
 import type { TokenFileRequest } from '../executors/index.js';
 import type { RunRecord } from '../persistence/index.js';
 import { RunControllerError } from './errors.js';
@@ -46,6 +50,32 @@ export interface ExecutionInput {
   /** `retention.max_log_size_per_run` (bytes). */
   maxLogBytes?: number;
   signal?: AbortSignal;
+  /**
+   * Linked fields (`work_branch`, `work_pr`, … – WI-21) resolved right before
+   * the start, if the workflow uses them (see {@link linkedFieldUsage}).
+   */
+  linked?: Readonly<Record<string, FieldResolution>>;
+}
+
+/**
+ * Which linked fields (WI-21) a run start needs:
+ * - `templates`: fields behind `{item.work_branch}` / `{item.work_pr}` in
+ *   `execute` (working_directory, args, env) – unknown → `start_error`;
+ * - `resolve`: true if the start resolves them at all, i.e. they are used in
+ *   `execute` templates or in the workflow `filter` / `item_priority`. Then
+ *   the known values are also written to `source.attributes` of the worker
+ *   context ("when used"; costs one GraphQL query per run start).
+ */
+export function linkedFieldUsage(snapshot: WorkflowSnapshot): { templates: string[]; workingDirectory: string[]; resolve: boolean } {
+  const usage = workflowLinkedFieldUsage(snapshot.workflow);
+  return { templates: usage.execute, workingDirectory: usage.workingDirectory, resolve: usage.resolveAtStart };
+}
+
+/** Known linked field values for `source.attributes` of a context. */
+export function knownLinkedAttributes(linked: Readonly<Record<string, FieldResolution>> | undefined): Record<string, FieldValue> {
+  const out: Record<string, FieldValue> = {};
+  for (const [name, res] of Object.entries(linked ?? {})) if (res.known) out[name] = res.value;
+  return out;
 }
 
 /** Result of {@link buildExecutionSpec}. */
@@ -82,7 +112,15 @@ export function executionTemplateValues(input: ExecutionInput, workspacePath?: s
     workspace: { baseDir: snapshot.workspace.baseDir, ...(workspacePath !== undefined ? { path: workspacePath } : {}) },
     run: { id: run.id, trigger: run.triggerType, startedAt: input.startedAt },
     ...(source
-      ? { source: { id: source.id, type: source.type, repository: input.repository ?? `${source.owner}/${source.repository}` } }
+      ? {
+          source: {
+            id: source.id,
+            type: source.type,
+            repository: input.repository ?? `${source.owner}/${source.repository}`,
+            // `vars` is missing in snapshots written before 0.3.0 (WI-20).
+            vars: source.vars ?? {},
+          },
+        }
       : {}),
     ...(source && item
       ? {
@@ -92,6 +130,7 @@ export function executionTemplateValues(input: ExecutionInput, workspacePath?: s
             ...(/^\d+$/.test(item.itemId) ? { number: item.itemId } : {}),
             ...(item.url ? { url: item.url } : {}),
             ...(typeof title === 'string' ? { title } : {}),
+            ...linkedTemplateItem(input.linked),
           },
         }
       : {}),
@@ -113,12 +152,21 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
   if (sourceBound && !item) {
     throw new RunControllerError('run_item_missing', `Run ${run.id} of source workflow '${workflow.id}' has no item`);
   }
+  // Fail closed: a used linked placeholder must never render as an empty string because it is unknown.
+  const unknownLinked = unknownLinkedField(linkedFieldUsage(snapshot).templates, input.linked);
+  if (unknownLinked) {
+    throw new RunControllerError(
+      'run_linked_field_unknown',
+      `{${unknownLinked.placeholder}} is unknown: ${unknownLinked.reason}`,
+      { field: unknownLinked.field },
+    );
+  }
 
   // working_directory: path mode, scope run + source + parameters that always have a value (WI-02).
   const pathParams = Object.entries(workflow.parameters)
     .filter(([, def]) => def.required || def.default !== null)
     .map(([name]) => name);
-  const pathScope: TemplateScope = { run: true, source: sourceBound, parameters: pathParams };
+  const pathScope: TemplateScope = { run: true, source: sourceBound, linked: sourceBound, parameters: pathParams };
   const baseValues = executionTemplateValues(input);
   const rendered = renderTemplate(execute.workingDirectory, baseValues, { mode: 'path', scope: pathScope });
   if (!path.isAbsolute(rendered)) {
@@ -135,6 +183,7 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
     run: true,
     workspace: true,
     source: sourceBound,
+    linked: sourceBound,
     parameters: Object.keys(workflow.parameters),
   };
   // Container (WI-19): `{workspace.path}` in `command`/`env` is the path inside the container.
@@ -182,7 +231,7 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
             item_id: item.itemId,
             item_key: item.key,
             url: item.url,
-            attributes: { ...item.fields },
+            attributes: { ...item.fields, ...knownLinkedAttributes(input.linked) },
           },
         }
       : {}),

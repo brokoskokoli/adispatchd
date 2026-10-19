@@ -6,12 +6,16 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  LINKED_ITEM_FIELDS,
   commentMarker,
   dataPaths,
+  linkedFieldsUsed,
+  unknownLinkedField,
   type Clock,
   type CredentialProvider,
   type ExecutionOutcome,
   type Executor,
+  type FieldResolution,
   type Logger,
   type Timers,
   type HookName,
@@ -113,6 +117,34 @@ export async function resolveSourceTarget(
   return { adapter, item };
 }
 
+/**
+ * Linked fields (WI-21) for action templates that use `{item.work_branch}` /
+ * `{item.work_pr}`: resolved freshly at every attempt (a worker may have
+ * opened the PR meanwhile). `undefined` if no template uses them. A used but
+ * unknown field fails the attempt (retryable, e.g. after a rate limit) instead
+ * of rendering an empty string.
+ */
+async function resolveLinkedForTemplates(
+  deps: Pick<PerformerDeps, 'sources'>,
+  input: AttemptInput,
+  templates: readonly string[],
+): Promise<{ target: SourceTarget; linked: Record<string, FieldResolution> } | undefined> {
+  const used = linkedFieldsUsed(templates);
+  if (used.length === 0 || !isSourceWorkflow(input.snapshot)) return undefined;
+  const target = await resolveSourceTarget(deps, input.run, input.snapshot, input.item);
+  const provided = new Set(target.adapter.fieldDefinitions().map((d) => d.name));
+  const names = LINKED_ITEM_FIELDS.filter((f) => provided.has(f));
+  const linked = names.length > 0 ? await target.adapter.resolveFields(target.item, names, input.signal ? { signal: input.signal } : {}) : {};
+  const missing = unknownLinkedField(used, linked);
+  if (missing) {
+    throw new LifecycleError('linked_field_unknown', `{${missing.placeholder}} is unknown: ${missing.reason}`, {
+      retryable: true,
+      details: { field: missing.field },
+    });
+  }
+  return { target, linked };
+}
+
 function requireIdentity(input: AttemptInput, config: SourceCommentActionConfig | SourceUpdateActionConfig): string {
   const identity = resolveActionIdentity(config, input.snapshot);
   if (!identity) throw new LifecycleError('no_identity', `No identity for action "${config.id}" (action → workflow → source)`);
@@ -155,7 +187,9 @@ export async function performSourceComment(
   const probeValues = buildHookTemplateValues({ ...input, item: input.item ?? itemFromRun(input.run) });
   renderHookText(config.message, probeValues, scope);
 
-  const { adapter, item } = await resolveSourceTarget(deps, input.run, input.snapshot, input.item);
+  const resolved = await resolveLinkedForTemplates(deps, input, [config.message]);
+  const { adapter, item } = resolved?.target ?? (await resolveSourceTarget(deps, input.run, input.snapshot, input.item));
+  const linked = resolved?.linked;
   const marker = commentMarker(input.run.id, input.action.id);
   if (input.hadPriorAttempts) {
     const existing = await adapter.findCommentByMarker(item, marker, identity);
@@ -166,7 +200,12 @@ export async function performSourceComment(
       };
     }
   }
-  const values = buildHookTemplateValues({ ...input, item, ...(adapter.repository ? { repository: adapter.repository } : {}) });
+  const values = buildHookTemplateValues({
+    ...input,
+    item,
+    ...(adapter.repository ? { repository: adapter.repository } : {}),
+    ...(linked ? { linked } : {}),
+  });
   const body = neutralizeHtmlComments(renderHookText(config.message, values, scope));
   const ref = await adapter.postComment(item, body, marker, identity);
   return { externalKey: ref.id, details: { marker, ...(ref.url ? { url: ref.url } : {}) } };
@@ -202,9 +241,19 @@ async function isDirectory(p: string | null): Promise<boolean> {
  */
 export async function performShell(deps: PerformerDeps, input: AttemptInput, config: ShellActionConfig): Promise<AttemptResult> {
   const { run, snapshot, hook, action } = input;
-  const item = input.item ?? itemFromRun(run);
+  const resolved = await resolveLinkedForTemplates(deps, input, [...config.args, ...Object.values(config.env)]);
+  const item = resolved?.target.item ?? input.item ?? itemFromRun(run);
+  const linked = resolved?.linked;
   const scope = hookTemplateScope(snapshot, hook);
-  const values = buildHookTemplateValues({ run, snapshot, hook, item, now: input.now });
+  const values = buildHookTemplateValues({
+    run,
+    snapshot,
+    hook,
+    item,
+    now: input.now,
+    ...(resolved?.target.adapter.repository ? { repository: resolved.target.adapter.repository } : {}),
+    ...(linked ? { linked } : {}),
+  });
   const args = config.args.map((a) => renderHookText(a, values, scope));
   const env: Record<string, string> = {};
   for (const [name, template] of Object.entries(config.env)) env[name] = renderHookText(template, values, scope);
@@ -227,6 +276,7 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     hook,
     item,
     action: { id: action.id, name: action.name, ordinal: action.ordinal, attempt: input.attempt },
+    ...(linked ? { linked } : {}),
   });
 
   // Secrets (WI-18). Journal entries from before WI-18 have no `secrets`.
