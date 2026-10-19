@@ -1,0 +1,36 @@
+# workflows/reviewer-project-b.yaml – filters on GitHub Projects fields (WI-14).
+# Disabled example: project_b declares the project fields Status/Priority/Estimate in sources.yaml.
+id: reviewer-project-b
+name: Reviewer – Project B
+enabled: false
+priority: 40
+identity: reviewer
+
+trigger:
+  type: source
+  source: project_b
+
+filter:
+  all:
+    # "A or B": operator "in" (values compare case-sensitively, as written in the project)
+    - { field: project.Status, operator: in, value: [Ready for Review, In Review] }
+    - { field: labels, operator: contains, value: needs-review }
+
+item_priority:
+  rules:
+    - when: { field: project.Priority, operator: equals, value: P0 }
+      value: 100
+    - when: { field: project.Estimate, operator: less_than, value: 3 }
+      value: 10
+  default: 0
+
+execute:
+  type: shell
+  command: /etc/adispatchd/scripts/reviewer.sh
+  args: ['{item.url}']
+  timeout:
+    max_duration: 2h
+
+on_success:
+  - type: source.update
+    labels: { add: [reviewed], remove: [needs-review] }

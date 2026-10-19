@@ -11,3 +11,13 @@ sources:
     owner: example
     repository: project-b
     identity: maintainer
+    # GitHub Projects (v2) board of the organisation (app permission "Organization → Projects: Read").
+    # Declared fields are available as project.<name> (see workflows/reviewer-project-b.yaml).
+    project:
+      number: 3
+      fields:
+        Status: single_select
+        Priority: single_select
+        Estimate: number
+    # A user-owned project needs a github_token identity (see identities.yaml), e.g.:
+    #   project: { owner: some-user, number: 1, identity: project_reader, fields: { Status: single_select } }

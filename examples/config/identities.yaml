@@ -16,3 +16,7 @@ identities:
     app_id: 100003
     installation_id: 200003
     private_key_env: GITHUB_REVIEWER_PRIVATE_KEY
+  # Token identity (fine-grained personal access token), e.g. for user-owned GitHub Projects:
+  # project_reader:
+  #   type: github_token
+  #   token_env: GITHUB_PROJECT_TOKEN

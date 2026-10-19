@@ -67,7 +67,7 @@ describe('loadConfig – spec examples', () => {
     const result = await loadConfig(EXAMPLE_CONFIG_DIR, { dataDir: '/var/lib/adispatchd' });
     const config = expectOk(result);
     expect(result.warnings).toEqual([]);
-    expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'nightly-maintenance']);
+    expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'nightly-maintenance', 'reviewer-project-b']);
     expect(Object.keys(config.views)).toEqual(['needs-maintainer']);
   });
 

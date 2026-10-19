@@ -68,6 +68,17 @@ sources:
     owner: example          # GitHub owner/organisation
     repository: project-a
     identity: maintainer
+    # Optional: fields of a GitHub Projects (v2) board, usable as project.<name> in filters,
+    # item_priority and views (e.g. project.Status in [Todo, Ready]). Org projects need the app
+    # permission "Organization → Projects: Read"; user-owned projects need a github_token identity.
+    # project:
+    #   owner: example        # user/org login of the project (default: owner above)
+    #   number: 3             # from the project URL …/projects/3
+    #   identity: maintainer  # reads the project (default: identity above)
+    #   fields:               # name as in the project (matched case-insensitively) → kind
+    #     Status: single_select
+    #     Priority: single_select
+    #     Estimate: number    # kinds: single_select, text, number, date, iteration
 `;
 
 const IDENTITIES_YAML = `# identities.yaml – GitHub App identities, one per role (Spec §5.3).
@@ -86,6 +97,11 @@ identities:
     app_id: 100002
     installation_id: 200002
     private_key_env: GITHUB_CODER_PRIVATE_KEY
+  # A token identity (e.g. fine-grained personal access token with "Projects: read"), needed to read
+  # user-owned GitHub Projects. token_env names the environment variable holding the token.
+  # project_reader:
+  #   type: github_token
+  #   token_env: GITHUB_PROJECT_TOKEN
 `;
 
 const HELLO_YAML = `# workflows/hello.yaml – a manual workflow that runs without any external source.
@@ -132,6 +148,8 @@ filter:                     # declarative filter (all/any/not; equals, contains,
   all:
     - { field: labels, operator: contains, value: ready-for-coding }
     - { field: dependencies.blocked_by_open, operator: equals, value: 0 }
+    # With a project in sources.yaml: "A or B" via "in", e.g.
+    # - { field: project.Status, operator: in, value: [Todo, Ready] }
 
 item_priority:
   rules:

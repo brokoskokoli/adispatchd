@@ -59,6 +59,8 @@ export function environmentFileTemplate(unitName: string): string {
     '# Keep this file at mode 0640, owner root, group = service group. Never commit it.',
     '# GitHub App private keys referenced by identities.yaml (private_key_env), PEM with \\n escapes or quoted:',
     '# GITHUB_MAINTAINER_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----"',
+    '# Tokens of github_token identities (token_env), e.g. for user-owned GitHub Projects:',
+    '# GITHUB_PROJECT_TOKEN=github_pat_...',
     '# Webhook URLs/headers referenced by notifications.channels (url_env / headers_env):',
     '# SLACK_WEBHOOK_URL=https://hooks.slack.com/services/...',
     '',
