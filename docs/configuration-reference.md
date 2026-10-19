@@ -527,10 +527,12 @@ auth:
 (Delta der `os.cpus()`-Zeiten), Kerne und Load Average, den Arbeitsspeicher (Linux: `MemAvailable` aus
 `/proc/meminfo`; macOS: verfügbar = free + inactive + speculative aus `vm_stat`, sonst `os.freemem()`), den freien
 Platz des data-dir und – falls auf einem anderen Dateisystem – von `workspace.base_dir`, sowie einmal je Intervall die
-Prozessliste (`ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=`, ohne Shell, mit Timeout). Die CPU je Prozess ist die
-Rate der kumulierten CPU-Zeit (100 % = ein Kern); ein Prozess wird über PID, Namen und Startzeit (jetzt − `etime`)
-wiedererkannt, PID-Wiederverwendung startet also eine neue Reihe. Linux-`ps` liefert die CPU-Zeit nur in ganzen Sekunden,
-dort wird die Rate über ein gleitendes Fenster von mindestens 60 s gebildet. Zuordnung:
+Prozessliste (Linux: `/proc/<pid>/stat`, nur `comm`, nie `cmdline`; macOS bzw. ohne lesbares `/proc`:
+`ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=`, ohne Shell, mit Timeout). Die CPU je Prozess ist die
+Rate der kumulierten CPU-Zeit (100 % = ein Kern); ein Prozess wird über PID und Startzeit wiedererkannt (Linux exakt in
+Clock-Ticks, bei `ps` jetzt − `etime` mit 2,5 s Toleranz), PID-Wiederverwendung startet also eine neue Reihe; ein
+Namenswechsel (`exec`, Thread-Name) nicht. Liefert unter Linux nur `ps` die Werte (ganze Sekunden), wird die Rate über ein
+gleitendes Fenster von bis zu 60 s gebildet. Zuordnung:
 eigene PID → Daemon; Prozessgruppe bzw. Vorfahrenkette des Workers → der Run (Container-Runs zusätzlich
 `<engine> stats --no-stream`, das selbst über ein kurzes Fenster von 1–2 s misst); andere Kindprozesse des Daemons →
 „adispatchd (hooks/checks)“; der Rest → fremde Prozesse. Gezeigt werden **nur Befehlsnamen, nie Argumente**: `ucomm` ist

@@ -4,15 +4,23 @@
  * `stats` / `inspect` output. All pure, never throwing.
  */
 
-/** One process of a `ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=` listing. */
+/**
+ * One process of a `ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=` listing
+ * or of `/proc/<pid>/stat` (Linux).
+ */
 export interface PsProcess {
   pid: number;
   ppid: number;
   pgid: number;
-  /** Elapsed time since the process started, in seconds (1-s resolution). */
+  /** Elapsed time since the process started, in seconds (`ps`: 1-s resolution; `/proc`: clock ticks). */
   elapsedSeconds: number;
-  /** Accumulated CPU time in seconds. */
+  /** Accumulated CPU time in seconds (Linux `ps`: whole seconds; macOS `ps`: 10 ms; `/proc`: clock ticks). */
   cpuSeconds: number;
+  /**
+   * Exact start time (`/proc/<pid>/stat` field 22, clock ticks since boot); only set by the
+   * Linux `/proc` reader. Unchanged by `exec` and thread renames, unique per PID incarnation.
+   */
+  startTicks?: number;
   rssBytes: number;
   /** Command name only (accounting name, shortened) – never arguments. */
   name: string;
@@ -84,6 +92,42 @@ export function parsePsOutput(text: string): PsProcess[] {
     });
   }
   return out;
+}
+
+/**
+ * Parse one Linux `/proc/<pid>/stat` line. The name is field 2 (`comm`, the
+ * kernel's task name in parentheses – may itself contain blanks and
+ * parentheses, so the last `)` ends it); never the command line. `hz` =
+ * clock ticks per second (`getconf CLK_TCK`), `pageSize` in bytes,
+ * `uptimeSeconds` = first value of `/proc/uptime` read for this listing.
+ * Returns `null` for malformed input.
+ */
+export function parseProcStat(text: string, hz: number, pageSize: number, uptimeSeconds: number): PsProcess | null {
+  const open = text.indexOf('(');
+  const close = text.lastIndexOf(')');
+  if (open < 0 || close < open) return null;
+  const pid = Number(text.slice(0, open).trim());
+  // Fields 3 … : state ppid pgrp session tty_nr tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime
+  // priority nice num_threads itrealvalue starttime vsize rss …
+  const f = text.slice(close + 1).trim().split(/\s+/);
+  if (!Number.isInteger(pid) || pid <= 0 || f.length < 22) return null;
+  const num = (i: number): number => Number(f[i]);
+  const ppid = num(1);
+  const pgid = num(2);
+  const ticks = num(11) + num(12); // utime + stime
+  const startTicks = num(19);
+  const rssPages = num(21);
+  if (![ppid, pgid, ticks, startTicks, rssPages].every((n) => Number.isFinite(n) && n >= 0) || !(hz > 0)) return null;
+  return {
+    pid,
+    ppid,
+    pgid,
+    elapsedSeconds: Math.max(0, uptimeSeconds - startTicks / hz),
+    cpuSeconds: ticks / hz,
+    startTicks,
+    rssBytes: rssPages * pageSize,
+    name: processName(text.slice(open + 1, close)),
+  };
 }
 
 /** Total and available memory from Linux `/proc/meminfo` (`MemAvailable`); `null` if missing. */

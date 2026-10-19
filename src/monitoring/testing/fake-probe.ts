@@ -3,6 +3,7 @@
  * field the test changes between measurements; calls are counted.
  */
 import type { ContainerEngine } from '../../core/index.js';
+import type { PsProcess } from '../parse.js';
 import type { CpuTimes, FileSystemUsage, ProcessListing, SystemProbe } from '../probe.js';
 
 /** One process line of the fake `ps`. */
@@ -70,6 +71,8 @@ export class FakeProbe implements SystemProbe {
   psFormat: 'linux' | 'darwin' = 'linux';
   /** Raw `ps` output overriding {@link processList}. */
   psText: string | null = null;
+  /** Processes as read from Linux `/proc` (precise; overrides `ps` output). */
+  procProcesses: PsProcess[] | null = null;
   psError: Error | null = null;
   helperPid: number | null = null;
   /** Resolve `processes()` only when this promise resolves (overlap tests). */
@@ -115,6 +118,7 @@ export class FakeProbe implements SystemProbe {
     try {
       if (this.psGate) await this.psGate;
       if (this.psError) throw this.psError;
+      if (this.procProcesses) return { processes: this.procProcesses.map((p) => ({ ...p })), helperPid: null };
       return { text: this.psText ?? renderPs(this.processList, this.psFormat, this.now()), helperPid: this.helperPid };
     } finally {
       this.concurrentPs--;

@@ -10,6 +10,7 @@ export {
   parseEngineStats,
   parseInspectPids,
   parseMeminfo,
+  parseProcStat,
   parsePsOutput,
   parseVmStat,
   processName,
@@ -19,6 +20,7 @@ export {
 export {
   createSystemProbe,
   PS_ARGS,
+  readProcProcesses,
   type CpuTimes,
   type EngineRunner,
   type FileSystemUsage,

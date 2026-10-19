@@ -5,9 +5,11 @@
  * never reports process arguments.
  */
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
-import { afterAll, describe, expect, it } from 'vitest';
-import { createSystemProbe, PS_ARGS } from './probe.js';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { createSystemProbe, PS_ARGS, readProcProcesses } from './probe.js';
 import { ResourceSampler } from './sampler.js';
 
 const SECRET_ARG = `adispatch-secret-arg-${process.pid}-${Date.now()}`;
@@ -31,6 +33,46 @@ afterAll(() => {
       // already gone
     }
   }
+});
+
+describe('Linux /proc reader (synthetic procfs)', () => {
+  const stat = (pid: number, comm: string, ticks: number, start: number): string =>
+    `${pid} (${comm}) S 1 ${pid} ${pid} 0 -1 0 0 0 0 0 ${ticks} 0 0 0 20 0 1 0 ${start} 1000 25 0 0 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0\n`;
+  let root = '';
+  beforeAll(async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), 'adispatch-proc-'));
+    await writeFile(path.join(root, 'uptime'), '1000.50 3000.00\n');
+    for (const [pid, comm, ticks, start] of [[10, 'node', 250, 90_000], [11, 'Web Content', 5, 99_000]] as const) {
+      await mkdir(path.join(root, String(pid)));
+      await writeFile(path.join(root, String(pid), 'stat'), stat(pid, comm, ticks, start));
+      // cmdline is never read
+      await writeFile(path.join(root, String(pid), 'cmdline'), `${comm}\0--token=SECRET9\0`);
+    }
+    await mkdir(path.join(root, '12')); // exited while listing: no stat
+    await mkdir(path.join(root, 'self'));
+    await writeFile(path.join(root, 'meminfo'), 'x');
+  });
+  afterAll(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  it('reads all processes with tick precision, skips vanished ones and non-PID entries', async () => {
+    const list = (await readProcProcesses(root, 100, 4096)).sort((a, b) => a.pid - b.pid);
+    expect(list).toEqual([
+      { pid: 10, ppid: 1, pgid: 10, cpuSeconds: 2.5, startTicks: 90_000, elapsedSeconds: expect.closeTo(100.5, 6), rssBytes: 25 * 4096, name: 'node' },
+      { pid: 11, ppid: 1, pgid: 11, cpuSeconds: 0.05, startTicks: 99_000, elapsedSeconds: expect.closeTo(10.5, 6), rssBytes: 25 * 4096, name: 'Web' },
+    ]);
+    expect(JSON.stringify(list)).not.toContain('SECRET9');
+  });
+
+  it('the Linux probe uses /proc; without a readable procfs it falls back to ps', async () => {
+    const viaProc = await createSystemProbe({ platform: 'linux', procRoot: root }).processes();
+    expect(viaProc.processes?.map((p) => p.pid).sort()).toEqual([10, 11]);
+    expect(viaProc.text).toBeUndefined();
+    const fallback = createSystemProbe({ platform: 'linux', procRoot: path.join(root, 'missing'), psBinary: path.join(root, 'no-such-ps') });
+    await expect(fallback.processes()).rejects.toThrow(/no-such-ps/);
+    await expect(readProcProcesses(path.join(root, '12'), 100, 4096)).rejects.toThrow();
+  });
 });
 
 describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('default system probe (real OS)', () => {
@@ -67,7 +109,7 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     expect(daemon!.rssBytes).toBeGreaterThan(1024 * 1024);
     const run = sample.processes.find((g) => g.kind === 'run');
     expect(run).toMatchObject({ label: 'demo · 0badc0de', count: 1 });
-    // The busy loop uses about one core; ps resolution on Linux is 1 s, the machine may be loaded.
+    // The busy loop uses about one core (Linux: /proc ticks; macOS: ps 10 ms); the machine may be loaded.
     expect(run!.cpuPercent).toBeGreaterThan(5);
     expect(run!.cpuPercent).toBeLessThanOrEqual(sample.cpu.cores * 100);
     expect(sample.processes.filter((g) => g.kind === 'rest' || g.kind === 'other').reduce((n, g) => n + g.count, 0)).toBeGreaterThan(0);
@@ -87,7 +129,9 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     // … but not against the listing the monitor uses.
     const probe = createSystemProbe();
     const listing = await probe.processes();
-    expect(listing.text).not.toMatch(/SECRET123|HUNTER2/);
+    // Linux reads /proc/<pid>/stat (comm only), macOS runs ps.
+    expect(process.platform === 'linux' ? listing.processes?.length : listing.text?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(listing)).not.toMatch(/SECRET123|HUNTER2/);
     const sampler = new ResourceSampler({ probe });
     const settings = { topProcesses: 50, minCpuPercent: 0, diskPaths: [] };
     const targets = { daemonPid: process.pid, runs: [] };

@@ -6,12 +6,17 @@
  * `execFile` with a timeout, a bounded output buffer and `LC_ALL=C` (decimal
  * point in `time`); container engines are called through the engine client
  * of the container executor.
+ *
+ * Linux: the process list is read from `/proc/<pid>/stat` (CPU and start time
+ * in clock ticks, name = kernel task name `comm`; never `cmdline`) instead of
+ * `ps`, whose `time`/`etime` have only whole seconds. If `/proc` cannot be
+ * read, `ps` is used.
  */
 import { execFile } from 'node:child_process';
-import { readFile, stat, statfs } from 'node:fs/promises';
+import { readdir, readFile, stat, statfs } from 'node:fs/promises';
 import os from 'node:os';
 import type { ContainerEngine } from '../core/index.js';
-import { parseMeminfo, parseVmStat } from './parse.js';
+import { parseMeminfo, parseProcStat, parseVmStat, type PsProcess } from './parse.js';
 
 /** Aggregated CPU times of all cores. */
 export interface CpuTimes {
@@ -22,10 +27,12 @@ export interface CpuTimes {
   cores: number;
 }
 
-/** Raw process listing. */
+/** Raw process listing: `ps` output or (Linux) processes already read from `/proc`. */
 export interface ProcessListing {
-  /** Output of `ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=`. */
-  text: string;
+  /** Output of `ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=` (unless {@link processes} is set). */
+  text?: string;
+  /** Processes read from `/proc/<pid>/stat` (precise CPU and start time, see {@link PsProcess.startTicks}). */
+  processes?: PsProcess[];
   /** PID of the `ps` process itself (excluded from the results). */
   helperPid: number | null;
 }
@@ -46,7 +53,7 @@ export interface SystemProbe {
   memory(): Promise<{ totalBytes: number; availableBytes: number }>;
   /** File system usage of `path`; rejects if it cannot be read (e.g. missing). */
   fileSystem(path: string): Promise<FileSystemUsage>;
-  /** Process list; rejects if `ps` cannot be run, times out or fails. */
+  /** Process list (`/proc` on Linux, else `ps`); rejects if it cannot be read, `ps` times out or fails. */
   processes(): Promise<ProcessListing>;
   /** Raw `<engine> stats --no-stream --format '{{json .}}' <names…>`; rejects on failure. */
   engineStats?(engine: ContainerEngine, names: readonly string[]): Promise<string>;
@@ -74,10 +81,40 @@ export interface SystemProbeOptions {
   psBinary?: string;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
+  /** Linux: root of procfs (default `/proc`); `null` = always use `ps`. */
+  procRoot?: string | null;
 }
 
 /** Arguments of the process listing (portable between Linux procps and macOS). */
 export const PS_ARGS: readonly string[] = ['-A', '-o', 'pid=,ppid=,pgid=,etime=,time=,rss=,ucomm='];
+
+/** Max. parallel `/proc/<pid>/stat` reads. */
+const PROC_READ_CONCURRENCY = 32;
+
+/**
+ * Read all processes from procfs (`<root>/<pid>/stat`, `<root>/uptime`).
+ * Processes that exit while reading are skipped. Rejects if the directory or
+ * `uptime` cannot be read or no process could be parsed.
+ */
+export async function readProcProcesses(root: string, hz: number, pageSize: number): Promise<PsProcess[]> {
+  const pids = (await readdir(root)).filter((n) => /^\d+$/.test(n));
+  const uptime = Number.parseFloat((await readFile(`${root}/uptime`, 'utf8')).split(/\s/)[0] ?? '');
+  if (!Number.isFinite(uptime)) throw new Error(`${root}/uptime is not readable`);
+  const out: PsProcess[] = [];
+  for (let i = 0; i < pids.length; i += PROC_READ_CONCURRENCY) {
+    const chunk = await Promise.all(
+      pids.slice(i, i + PROC_READ_CONCURRENCY).map((pid) =>
+        readFile(`${root}/${pid}/stat`, 'utf8').then(
+          (text) => parseProcStat(text, hz, pageSize, uptime),
+          () => null, // exited meanwhile (or not accessible)
+        ),
+      ),
+    );
+    for (const p of chunk) if (p) out.push(p);
+  }
+  if (out.length === 0) throw new Error(`no process readable in ${root}`);
+  return out;
+}
 
 /** `execFile` with timeout and output cap; resolves stdout and the child PID. */
 function run(
@@ -112,6 +149,21 @@ export function createSystemProbe(options: SystemProbeOptions = {}): SystemProbe
   const env: NodeJS.ProcessEnv = { PATH: base.PATH ?? '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin', LC_ALL: 'C' };
   const platform = options.platform ?? process.platform;
   const engines = options.engines;
+  const procRoot = platform === 'linux' ? (options.procRoot === undefined ? '/proc' : options.procRoot) : null;
+  /** Clock ticks per second and page size (once; procfs defaults if `getconf` is missing). */
+  let procUnits: Promise<{ hz: number; pageSize: number }> | undefined;
+  const getconf = async (name: string, fallback: number): Promise<number> => {
+    try {
+      const n = Number((await run('getconf', [name], { timeoutMs: commandTimeoutMs, maxBuffer: 4096, env })).stdout.trim());
+      return Number.isInteger(n) && n > 0 ? n : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+  const ps = async (): Promise<ProcessListing> => {
+    const { stdout, pid } = await run(options.psBinary ?? 'ps', PS_ARGS, { timeoutMs: commandTimeoutMs, maxBuffer, env });
+    return { text: stdout, helperPid: pid };
+  };
   return {
     platform,
     cpuTimes(): CpuTimes {
@@ -151,8 +203,16 @@ export function createSystemProbe(options: SystemProbeOptions = {}): SystemProbe
       return { freeBytes: fs.bavail * fs.bsize, totalBytes: fs.blocks * fs.bsize, device: Number(st.dev) };
     },
     async processes(): Promise<ProcessListing> {
-      const { stdout, pid } = await run(options.psBinary ?? 'ps', PS_ARGS, { timeoutMs: commandTimeoutMs, maxBuffer, env });
-      return { text: stdout, helperPid: pid };
+      if (procRoot !== null) {
+        procUnits ??= Promise.all([getconf('CLK_TCK', 100), getconf('PAGESIZE', 4096)]).then(([hz, pageSize]) => ({ hz, pageSize }));
+        const { hz, pageSize } = await procUnits;
+        try {
+          return { processes: await readProcProcesses(procRoot, hz, pageSize), helperPid: null };
+        } catch {
+          // procfs not mounted or restricted: fall back to ps
+        }
+      }
+      return ps();
     },
     ...(engines
       ? {

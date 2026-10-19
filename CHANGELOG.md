@@ -44,9 +44,10 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   `workspace.base_dir`), aktuellen Werten (CPU, Load, RAM, Platte) als Zahlen und Tabelle, Tooltip je Zeitpunkt,
   Zeitraum-Auswahl und Live-Aktualisierung per SSE. Eigenes SVG-Rendering ohne Bibliotheken, Hell/Dunkel.
 - **Messung:** CPU aus den `os.cpus()`-Zeiten, RAM über `MemAvailable` (Linux) bzw. `vm_stat` (macOS), Platte über
-  `statfs`, Prozesse über eine `ps`-Ausführung je Intervall (`execFile`, Timeout, Ausgabe begrenzt; Namen aus `ucomm`,
-  nicht dem umschreibbaren `argv[0]`); CPU je Prozess als Rate der CPU-Zeit, Prozesse über PID, Name und Startzeit
-  (`etime`) erkannt, unter Linux über mindestens 60 s gemittelt. API mit serverseitigem Downsampling (`range`,
+  `statfs`, Prozesse unter Linux aus `/proc/<pid>/stat` (CPU- und Startzeit in Clock-Ticks), sonst über eine
+  `ps`-Ausführung je Intervall (`execFile`, Timeout, Ausgabe begrenzt); Namen aus `comm`/`ucomm`, nicht dem
+  umschreibbaren `argv[0]` oder der Kommandozeile; CPU je Prozess als Rate der CPU-Zeit, Prozesse über PID und Startzeit
+  erkannt (Namenswechsel wie `exec` behalten die Reihe; mit Linux-`ps` als Fallback über bis zu 60 s gemittelt). API mit serverseitigem Downsampling (`range`,
   `points`, Default höchstens 600 Punkte). Zuordnung zu Runs über Prozessgruppe/Prozessbaum, bei
   Container-Runs zusätzlich `<engine> stats`. **Nur Befehlsnamen, nie Argumente.** Messungen laufen nie parallel;
   Fehler (z. B. fehlendes `ps`) werden gedrosselt geloggt und lassen den Teilwert leer. Werte nur im Speicher

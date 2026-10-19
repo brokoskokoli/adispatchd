@@ -4,24 +4,31 @@
  * processes.
  *
  * - System CPU: delta of the `os.cpus()` times between two measurements.
- * - Process CPU: rate of the accumulated CPU time (`ps -o time`), 100 % = one
- *   core. A process is identified by PID, name and start time (now − `etime`),
- *   so a reused PID – even with the same name – starts a new history. A process
+ * - Process CPU: rate of the accumulated CPU time, 100 % = one core. Linux
+ *   reads `/proc/<pid>/stat` (CPU and start time in clock ticks), otherwise
+ *   (macOS, or Linux without readable `/proc`) `ps -o time,etime`.
+ * - Identity: PID + start time. Exact with `/proc` (start ticks since boot);
+ *   from `ps` the start time is now − `etime` (whole seconds, so it jitters by
+ *   up to ~1 s plus the measurement delay) and matched with a tolerance of
+ *   {@link START_TOLERANCE_MS}. The name is not part of the identity: `exec`
+ *   and thread renames (Node names its main thread `MainThread` right after
+ *   start) keep PID, start time and CPU time. A reused PID has a different
+ *   start time (or a smaller CPU time) and starts a new history. A process
  *   unknown at the previous listing counts as new only if it started after it
- *   (`etime` < wall time); its CPU time is capped at `etime × cores`. A process
- *   that existed before under another identity (e.g. after `exec`) reports 0 once.
- * - Linux `ps` reports CPU time in whole seconds: there the rate is taken over
- *   a sliding window of at least {@link LINUX_RATE_WINDOW_MS} to smooth the
- *   1-s granularity (macOS has 10-ms resolution and uses the last interval).
+ *   (elapsed < wall time); its CPU time is capped at elapsed × cores.
+ * - Linux `ps` (fallback) reports CPU time in whole seconds: there the rate is
+ *   taken over a sliding window of up to {@link LINUX_RATE_WINDOW_MS} (the
+ *   whole history while it is shorter); `/proc` and macOS (10 ms) use the last
+ *   interval.
  * - Attribution: own PID → daemon; process group or ancestor chain of a run's
  *   worker → that run (container runs add `<engine> stats`); other
  *   descendants of the daemon → hooks/checks; the rest → foreign, grouped by
  *   name (top N above `minCpuPercent`, others summed up). On Linux the host-
  *   visible processes of a run's container are skipped (counted via `stats`);
  *   on macOS the `stats` usage is subtracted from the container VM's process.
- * - `ps` runs alone first, then memory/disks/engine commands: helper
- *   processes of the monitor never appear in its own listing (`ps` itself is excluded).
- * - Only command names (`ucomm`) are reported, never arguments.
+ * - The process listing runs alone first, then memory/disks/engine commands:
+ *   helper processes of the monitor never appear in it (`ps` itself is excluded).
+ * - Only command names (`ucomm` / `/proc/<pid>/stat` `comm`) are reported, never arguments.
  *
  * The first call only primes the deltas and returns `null`. Errors of a part
  * (e.g. `ps` missing) leave that part empty and are logged (throttled).
@@ -39,7 +46,7 @@ export const HOOKS_LABEL = 'adispatchd (hooks/checks)';
 export const REST_LABEL = 'Others';
 /** Default minimum time between two log entries of the same failing part. */
 export const DEFAULT_ERROR_LOG_INTERVAL_MS = 10 * 60_000;
-/** Minimum window of the CPU rate on Linux (1-s resolution of `ps -o time`). */
+/** Window of the CPU rate for Linux `ps` listings (1-s resolution of `ps -o time`). */
 export const LINUX_RATE_WINDOW_MS = 60_000;
 /** Process names of container runtimes whose descendants are container processes (Linux de-duplication). */
 const CONTAINER_SHIM = /^(containerd-shim|conmon|crun|runc)/;
@@ -47,7 +54,7 @@ const CONTAINER_SHIM = /^(containerd-shim|conmon|crun|runc)/;
 export const CONTAINER_VM_NAMES = /^(com\.apple\.Virtu|Virtualization|qemu-system|vfkit|krunkit|com\.docker\.virt|com\.docker\.hyper)/;
 /** Max. depth when walking up the parent chain. */
 const MAX_ANCESTRY = 128;
-/** Tolerance when matching start times (`etime` has 1-s resolution, measurement takes time). */
+/** Tolerance when matching start times from `ps` (`etime` has 1-s resolution, measurement takes time). */
 const START_TOLERANCE_MS = 2_500;
 
 /** Options of {@link ResourceSampler}. */
@@ -57,14 +64,15 @@ export interface ResourceSamplerOptions {
   logger?: Logger;
   /** Min. time between two warnings about the same failing part (default 10 min). */
   errorLogIntervalMs?: number;
-  /** Window of the per-process CPU rate (default: Linux {@link LINUX_RATE_WINDOW_MS}, otherwise 0 = last interval). */
+  /** Window of the per-process CPU rate (default: Linux `ps` listing {@link LINUX_RATE_WINDOW_MS}, otherwise 0 = last interval). */
   rateWindowMs?: number;
 }
 
 interface ProcessHistory {
-  name: string;
-  /** Start time (epoch ms) derived from `etime`. */
+  /** Start time (epoch ms) derived from the elapsed time. */
   startMs: number;
+  /** Exact start (clock ticks since boot) from `/proc`. */
+  startTicks: number | undefined;
   /** CPU time at earlier listings, oldest first (bounded by the rate window). */
   points: Array<{ at: number; cpu: number }>;
 }
@@ -85,7 +93,7 @@ export class ResourceSampler {
   private readonly clock: Clock;
   private readonly logger: Logger;
   private readonly errorLogIntervalMs: number;
-  private readonly rateWindowMs: number;
+  private readonly rateWindowMs: number | undefined;
   private readonly lastLogged = new Map<string, number>();
   private prevCpu: CpuTimes | undefined;
   private history: Map<number, ProcessHistory> | undefined;
@@ -96,7 +104,7 @@ export class ResourceSampler {
     this.clock = options.clock ?? systemClock;
     this.logger = (options.logger ?? noopLogger).child({ component: 'monitoring' });
     this.errorLogIntervalMs = options.errorLogIntervalMs ?? DEFAULT_ERROR_LOG_INTERVAL_MS;
-    this.rateWindowMs = options.rateWindowMs ?? (options.probe.platform === 'linux' ? LINUX_RATE_WINDOW_MS : 0);
+    this.rateWindowMs = options.rateWindowMs;
   }
 
   /** Forget previous values (the next call primes again). */
@@ -137,8 +145,10 @@ export class ResourceSampler {
     let processes: ProcessGroup[] = [];
     if (ps.ok) {
       this.recovered('ps');
-      const list = parsePsOutput(ps.listing.text).filter((p) => p.pid !== ps.listing.helperPid);
-      const rates = this.rates(list, ps.at, cpuNow.cores);
+      const fromPs = ps.listing.processes === undefined;
+      const list = (ps.listing.processes ?? parsePsOutput(ps.listing.text ?? '')).filter((p) => p.pid !== ps.listing.helperPid);
+      const windowMs = this.rateWindowMs ?? (fromPs && this.probe.platform === 'linux' ? LINUX_RATE_WINDOW_MS : 0);
+      const rates = this.rates(list, ps.at, cpuNow.cores, windowMs);
       if (rates) processes = this.attribute(list, rates, cpuNow.cores, targets, engineData, settings);
     } else {
       this.warn('ps', 'process list unavailable', { error: ps.error });
@@ -159,7 +169,7 @@ export class ResourceSampler {
    * CPU rate per PID (100 % = one core) and the new history; `null` when
    * there was no previous listing (priming).
    */
-  private rates(list: readonly PsProcess[], at: number, cores: number): Map<number, number> | null {
+  private rates(list: readonly PsProcess[], at: number, cores: number, windowMs: number): Map<number, number> | null {
     const prev = this.history;
     const wallMs = at - this.prevProcsAt;
     const next = new Map<number, ProcessHistory>();
@@ -168,23 +178,27 @@ export class ResourceSampler {
     for (const p of list) {
       const startMs = at - p.elapsedSeconds * 1000;
       const h = prev?.get(p.pid);
-      const same = h !== undefined && h.name === p.name && Math.abs(h.startMs - startMs) <= START_TOLERANCE_MS && p.cpuSeconds >= (h.points.at(-1)?.cpu ?? 0);
+      const same =
+        h !== undefined &&
+        (h.startTicks !== undefined && p.startTicks !== undefined ? h.startTicks === p.startTicks : Math.abs(h.startMs - startMs) <= START_TOLERANCE_MS) &&
+        p.cpuSeconds >= (h.points.at(-1)?.cpu ?? 0);
       let rate = 0;
       let points: ProcessHistory['points'] = [];
       if (same) {
-        // Oldest point inside the window (at least the previous listing).
-        const kept = h.points.filter((pt) => pt.at >= at - this.rateWindowMs - 1000);
+        // Oldest point inside the window (at least the previous listing; the whole history while it is shorter).
+        const kept = h.points.filter((pt) => pt.at >= at - windowMs - 1000);
         const ref = kept[0] ?? h.points.at(-1)!;
         const dt = at - ref.at;
         rate = dt > 0 ? (((p.cpuSeconds - ref.cpu) * 1000) / dt) * 100 : 0;
         points = kept.length > 0 ? kept : [ref];
       } else if (prev && wallMs > 0 && p.elapsedSeconds * 1000 <= wallMs + START_TOLERANCE_MS) {
-        // Started after the previous listing: all its CPU time falls into this interval (at most etime × cores).
+        // Started after the previous listing: all its CPU time falls into this interval (at most elapsed × cores).
         const cpu = Math.min(p.cpuSeconds, Math.max(1, p.elapsedSeconds) * cores);
         rate = ((cpu * 1000) / wallMs) * 100;
       }
       rates.set(p.pid, Math.min(maxPercent, Math.max(0, rate)));
-      next.set(p.pid, { name: p.name, startMs: same ? h.startMs : startMs, points: [...points, { at, cpu: p.cpuSeconds }] });
+      // Keep the first start estimate of a known process (no drift of the `etime` jitter over time).
+      next.set(p.pid, { startMs: same ? h.startMs : startMs, startTicks: p.startTicks, points: [...points, { at, cpu: p.cpuSeconds }] });
     }
     this.history = next;
     this.prevProcsAt = at;

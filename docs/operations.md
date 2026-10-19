@@ -606,11 +606,14 @@ Beispiel [claude-inspect](https://github.com/brokoskokoli/claude_inspect) (Dashb
   `vfkit`, `krunkit`) abgezogen.
 - **macOS-RAM:** „verfügbar“ = free + inactive + speculative Seiten aus `vm_stat` (vergleichbar mit Linux `MemAvailable`;
   komprimierter Speicher zählt als belegt). Linux: `MemAvailable` aus `/proc/meminfo`. Fehlt beides: `os.freemem()`.
-- **Genauigkeit:** CPU je Prozess = Rate der kumulierten CPU-Zeit aus `ps`; Prozesse werden über PID, Name und Startzeit
-  (`etime`) wiedererkannt. Linux-`ps` liefert ganze Sekunden, deshalb wird dort über mindestens 60 s gemittelt (kurze
-  Spitzen erscheinen geglättet). Prozesse, die zwischen zwei Messungen starten und enden, fehlen in der Aufteilung; die
+- **Genauigkeit:** CPU je Prozess = Rate der kumulierten CPU-Zeit. Linux liest `/proc/<pid>/stat` (CPU- und Startzeit
+  in Clock-Ticks, Name = `comm`, nie `cmdline`), macOS `ps` (10 ms). Prozesse werden über PID und Startzeit
+  wiedererkannt (Linux exakt, bei `ps` aus `etime` mit 2,5 s Toleranz); ein Namenswechsel (`exec`, Thread-Name wie Nodes
+  `MainThread`) behält die Reihe. Ist `/proc` nicht lesbar, nutzt Linux `ps` (ganze Sekunden) und mittelt über bis zu
+  60 s (bei jüngeren Prozessen über die vorhandene Historie). Prozesse, die zwischen zwei Messungen starten und enden, fehlen in der Aufteilung; die
   Differenz zur Gesamtauslastung erscheint als „System / unattributed“.
-- **Prozessnamen:** `ps -o ucomm` (Abrechnungsname des Kernels, nicht das umschreibbare `argv[0]`/`process.title`),
+- **Prozessnamen:** `ps -o ucomm` bzw. unter Linux `comm` aus `/proc/<pid>/stat` (Abrechnungsname des Kernels, nicht
+  das umschreibbare `argv[0]`/`process.title`),
   zusätzlich an der ersten Leerstelle abgeschnitten. Restrisiko Linux: `prctl(PR_SET_NAME)` erlaubt einem Prozess, seinen
   Namen (max. 15 Zeichen) selbst zu setzen.
 - **Speicher/Payload:** höchstens 5 000 Messpunkte (`retention` ≤ 5 000 Intervalle) mit je höchstens

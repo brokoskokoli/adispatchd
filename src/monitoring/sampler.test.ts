@@ -56,7 +56,7 @@ describe('ResourceSampler', () => {
     expect(group(s, (g) => g.kind === 'other')).toMatchObject({ label: 'thing', cpuPercent: 25 });
   });
 
-  it('handles PID reuse via start time (etime), also with the same name; new processes count all their CPU time', async () => {
+  it('handles PID reuse via start time (etime), also with the same name; new processes count all their CPU time; renames keep the history', async () => {
     const { twice } = setup();
     const started = Date.parse('2026-10-19T10:00:05Z'); // between the two listings
     const s = await twice(
@@ -72,14 +72,14 @@ describe('ResourceSampler', () => {
         { pid: 602, ppid: 1, cpu: 1, comm: 'fresh', startedAt: started },
         // same PID and name, higher CPU time – but started after the previous listing: a new process
         { pid: 603, ppid: 1, cpu: 4, comm: 'reused', startedAt: started },
-        // existed before under another name (exec): baseline only, no spike
-        { pid: 604, ppid: 1, cpu: 900, comm: 'after' },
+        // existed before under another name (exec / thread rename): same PID and start time → same process
+        { pid: 604, ppid: 1, cpu: 101, comm: 'after' },
       ],
       undefined,
       { ...settings, minCpuPercent: 0, topProcesses: 10 },
     );
     const byName = Object.fromEntries(s.processes.filter((g) => g.kind === 'other').map((g) => [g.name, g.cpuPercent]));
-    expect(byName).toEqual({ new: 30, same: 20, fresh: 10, reused: 40, after: 0 });
+    expect(byName).toEqual({ new: 30, same: 20, fresh: 10, reused: 40, after: 10 });
   });
 
   it('caps the CPU time of a new process at etime × cores', async () => {
@@ -101,6 +101,67 @@ describe('ResourceSampler', () => {
       }
       expect(last, platform).toBe(expected);
     }
+  });
+
+  it('Linux ps: whole-second etime jitter keeps the identity; PID reuse is still detected', async () => {
+    const { probe, sampler, clock } = setup('linux');
+    const s0 = { ...settings, minCpuPercent: 0, topProcesses: 10 };
+    const t = { daemonPid: DAEMON, runs: [] };
+    // etime/time as Linux procps prints them (whole seconds). The derived start (at − etime) moves by up to 2 s
+    // between listings (truncation + ps runtime before the timestamp is taken).
+    probe.psText = ['  500     1   500       01:00 00:00:10   100 busy', '  501     1   501       01:00 00:00:10   100 gone'].join('\n');
+    expect(await sampler.measure(t, s0)).toBeNull();
+    clock.advance(10_000);
+    probe.psText = ['  500     1   500       01:12 00:00:15   100 busy', '  501     1   501       00:03 00:00:01   100 gone'].join('\n');
+    let s = (await sampler.measure(t, s0))!;
+    // 500: start estimate moved by 2 s → same process, 5 s CPU in 10 s; 501: started 3 s ago → reused PID, new process.
+    expect(Object.fromEntries(s.processes.filter((g) => g.kind === 'other').map((g) => [g.name, g.cpuPercent]))).toEqual({ busy: 50, gone: 10 });
+    clock.advance(10_000);
+    probe.psText = ['  500     1   500       01:21 00:00:20   100 busy', '  501     1   501       00:13 00:00:06   100 gone'].join('\n');
+    s = (await sampler.measure(t, s0))!;
+    // still the same processes (no reset of the baseline); the 60-s window uses the whole (shorter) history
+    expect(Object.fromEntries(s.processes.filter((g) => g.kind === 'other').map((g) => [g.name, g.cpuPercent]))).toEqual({ busy: 50, gone: 50 });
+    clock.advance(10_000);
+    // PID 500 reused 4 s ago (start differs by > 2.5 s), even with the same name and a higher CPU time:
+    // a new process, all its CPU time counts, capped at etime × cores = 16 s
+    probe.psText = '  500     1   500       00:04 00:00:21   100 busy';
+    s = (await sampler.measure(t, s0))!;
+    expect(s.processes.find((g) => g.name === 'busy')?.cpuPercent).toBe(160);
+  });
+
+  it('Linux ps: a young process gets a rate from the history it has (window shorter than 60 s)', async () => {
+    const { probe, sampler, clock } = setup('linux');
+    const t = { daemonPid: DAEMON, runs: [] };
+    const start = clock.nowMs() - 500;
+    const values: number[] = [];
+    for (const cpu of [0, 5, 10, 15]) {
+      probe.processList = [{ pid: 700, ppid: 1, cpu, comm: 'young', startedAt: start }];
+      const sample = await sampler.measure(t, { ...settings, minCpuPercent: 0 });
+      if (sample) values.push(sample.processes.find((g) => g.name === 'young')?.cpuPercent ?? -1);
+      clock.advance(10_000);
+    }
+    expect(values).toEqual([50, 50, 50]);
+  });
+
+  it('Linux /proc: exact start ticks identify a process across renames; reused PIDs start anew; no 60-s window', async () => {
+    const { probe, sampler, clock } = setup('linux');
+    const t = { daemonPid: DAEMON, runs: [{ runId: 'run-x-0badc0de', workflowId: 'demo', itemKey: null, pid: 800, pgid: 800 }] };
+    const s0 = { ...settings, minCpuPercent: 0, topProcesses: 10 };
+    const proc = (pid: number, name: string, cpuSeconds: number, startTicks: number, elapsedSeconds: number) => ({ pid, ppid: 1, pgid: pid, name, cpuSeconds, startTicks, elapsedSeconds, rssBytes: 1024 });
+    // Node renames its main thread to "MainThread" right after start (Linux comm).
+    probe.procProcesses = [proc(800, 'node', 0.03, 1_000, 0.05), proc(900, 'svc', 100, 50, 9_000)];
+    expect(await sampler.measure(t, s0)).toBeNull();
+    clock.advance(1_500);
+    probe.procProcesses = [proc(800, 'MainThread', 1.38, 1_000, 1.55), proc(900, 'svc', 100.3, 50, 9_001.5)];
+    let s = (await sampler.measure(t, s0))!;
+    expect(s.processes.find((g) => g.kind === 'run')?.cpuPercent).toBe(90); // 1.35 s in 1.5 s, not truncated to whole seconds
+    expect(s.processes.find((g) => g.name === 'svc')?.cpuPercent).toBe(20);
+    clock.advance(10_000);
+    // svc: same rate per interval (no smoothing window with precise values); 900 reused by a new process (other start ticks)
+    probe.procProcesses = [proc(800, 'MainThread', 11.38, 1_000, 11.55), proc(900, 'svc', 0.5, 905_000, 2)];
+    s = (await sampler.measure(t, s0))!;
+    expect(s.processes.find((g) => g.kind === 'run')?.cpuPercent).toBe(100);
+    expect(s.processes.find((g) => g.name === 'svc')?.cpuPercent).toBe(5);
   });
 
   it('runs ps alone before the other probes (no monitor helper shows up as hooks)', async () => {

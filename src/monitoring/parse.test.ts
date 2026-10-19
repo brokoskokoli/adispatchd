@@ -5,6 +5,7 @@ import {
   parseEngineStats,
   parseInspectPids,
   parseMeminfo,
+  parseProcStat,
   parsePsOutput,
   parseVmStat,
   processName,
@@ -91,6 +92,39 @@ describe('parsePsOutput', () => {
   it('skips headers and malformed lines', () => {
     const text = ['  PID  PPID  PGID ELAPSED  TIME   RSS UCOMM', 'garbage', ' 10 1 10 00:01 bad 5 x', ' 12 1 12 bad 00:00:01 5 x', ' 11 1 11 00:01 00:00:01 5 ok'].join('\n');
     expect(parsePsOutput(text).map((p) => p.pid)).toEqual([11]);
+  });
+});
+
+describe('parseProcStat (Linux /proc/<pid>/stat)', () => {
+  // pid (comm) state ppid pgrp session tty tpgid flags minflt cminflt majflt cmajflt utime stime cutime cstime prio nice threads itreal starttime vsize rss …
+  const line = (comm: string, utime: number, stime: number, starttime: number, rss: number): string =>
+    `4242 (${comm}) R 1 4240 4240 0 -1 4194560 1000 0 0 0 ${utime} ${stime} 7 3 20 0 11 0 ${starttime} 1188000000 ${rss} 18446744073709551615 1 1 0 0 0 0 0 16781312 134235650 0 0 0 17 2 0 0 0 0 0`;
+
+  it('reads CPU and start time in clock ticks (not whole seconds), RSS in pages, the comm name', () => {
+    expect(parseProcStat(line('node', 120, 18, 1_000_000, 13_000), 100, 4096, 10_123.45)).toEqual({
+      pid: 4242,
+      ppid: 1,
+      pgid: 4240,
+      cpuSeconds: 1.38, // utime + stime only (cutime/cstime of waited-for children are not this process's)
+      startTicks: 1_000_000,
+      elapsedSeconds: expect.closeTo(123.45, 6),
+      rssBytes: 13_000 * 4096,
+      name: 'node',
+    });
+  });
+
+  it('comm may contain blanks and parentheses (the last ")" ends it); only the name before the first blank is shown', () => {
+    const p = parseProcStat(line('Web (Content) x', 1, 1, 5, 1), 100, 4096, 1);
+    expect(p).toMatchObject({ pid: 4242, ppid: 1, pgid: 4240, cpuSeconds: 0.02, startTicks: 5, name: 'Web' });
+    expect(parseProcStat(line('a) S 9 9 9', 1, 1, 5, 1), 100, 4096, 1)).toMatchObject({ ppid: 1, name: 'a)' });
+  });
+
+  it('rejects malformed input', () => {
+    expect(parseProcStat('', 100, 4096, 1)).toBeNull();
+    expect(parseProcStat('12 (x) R 1 2 3', 100, 4096, 1)).toBeNull();
+    expect(parseProcStat(line('x', 1, 1, 5, 1).replace('4242', 'abc'), 100, 4096, 1)).toBeNull();
+    expect(parseProcStat(line('x', 1, 1, 5, 1).replace(' 5 1188000000', ' -5 1188000000'), 100, 4096, 1)).toBeNull();
+    expect(parseProcStat(line('x', 1, 1, 5, 1), 0, 4096, 1)).toBeNull();
   });
 });
 
