@@ -17,13 +17,13 @@
  *   (recovery); on doubt the run becomes `recovery_pending` and keeps its lock.
  */
 import {
-  HOOK_NAMES,
   errorMessage,
-  hookForOutcome,
   isOrchestratorError,
   isTerminalStatus,
   noopLogger,
+  outcomeOfHook,
   parseSourceItemKey,
+  selectCompletionHook,
   systemClock,
   systemTimers,
   type BusinessResult,
@@ -84,6 +84,11 @@ export const RUN_EVENTS = {
   recovered: 'recovery.recovered',
   /** Workspace cleanup result. */
   workspaceCleanup: 'workspace.cleanup',
+  /**
+   * Named outcome not used (WI-17): `{code: 'invalid_outcome', message}` (ignored, not an ID) or
+   * `{code: 'unmatched_outcome', outcome, hook, message}` (no `on_result.<outcome>`, fallback hook runs).
+   */
+  outcomeWarning: 'run.outcome_warning',
 } as const;
 
 /** Optional per-start settings. */
@@ -212,6 +217,8 @@ interface FinalizeOptions {
   hooks: boolean;
   item?: SourceItem | null;
   update?: RunUpdate;
+  /** Warnings from the result file (e.g. an ignored invalid `outcome`), persisted with `→ finalizing`. */
+  resultWarnings?: readonly string[];
 }
 
 const CANCELLABLE_TO_CANCELLING: readonly TechnicalStatus[] = ['reserved', 'starting', 'running'];
@@ -789,7 +796,9 @@ export class RunController {
   private async resumeTerminalRunActions(run: RunRecord): Promise<void> {
     if (!tryParseSnapshot(run)) return;
     await this.makeActionsSafe(run.id, { abandonOnStart: true });
-    await this.lifecycle.resumeIncomplete(run.id, { hooks: HOOK_NAMES.filter((h) => h !== 'on_start'), wait: true });
+    // Every journaled chain except `on_start` (incl. `on_result.<outcome>` and `on_error`, WI-17).
+    const hooks = [...new Set(this.repos.actions.listForRun(run.id).map((a) => a.hook))].filter((h) => h !== 'on_start');
+    await this.lifecycle.resumeIncomplete(run.id, { hooks, wait: true });
     this.publisher.flush();
   }
 
@@ -987,12 +996,16 @@ export class RunController {
       classification.status === 'cancelled'
         ? cancelled(entry.cancelReason)
         : { status: classification.status, businessResult: classification.businessResult, reason: classification.reason };
+    const resultWarnings = classification.status === 'completed' && outcome.resultFile.state === 'valid' ? (outcome.resultFile.warnings ?? []) : [];
     return this.finalize(runId, snapshot, target, {
       hooks: true,
       ...ctx,
+      resultWarnings,
       update: {
         exitCode: outcome.exitCode,
         result: classification.result,
+        // Named outcome (WI-17): only a completed run's valid result file counts.
+        outcome: classification.status === 'completed' ? (classification.result?.outcome ?? null) : null,
         ...(classification.status !== 'completed' || outcome.logs.truncated ? { error: outcomeError(outcome, classification.reason) } : {}),
       },
     });
@@ -1030,12 +1043,33 @@ export class RunController {
     target: FinalizationTarget,
     options: FinalizeOptions,
   ): Promise<RunRecord> {
-    this.beginFinalization(runId, snapshot, target, options.update);
+    // WI-17: the completion hook is selected once and persisted with `→ finalizing`,
+    // so that recovery resumes exactly this hook.
+    const outcome = target.status === 'completed' ? (options.update?.outcome ?? null) : null;
+    const completionHook =
+      options.hooks && snapshot ? selectCompletionHook(snapshot.workflow.hooks, target.status, target.businessResult, outcome) : null;
+    const warnings: Array<Record<string, unknown>> = (options.resultWarnings ?? []).map((message) => ({ code: 'invalid_outcome', message }));
+    if (outcome !== null && completionHook !== null && outcomeOfHook(completionHook) !== outcome) {
+      warnings.push({
+        code: 'unmatched_outcome',
+        outcome,
+        hook: completionHook,
+        message: `no "on_result.${outcome}" configured; running "${completionHook}" instead`,
+      });
+    }
+    this.beginFinalization(runId, snapshot, target, { ...options.update, outcome, completionHook }, warnings);
     return this.completeFinalization(runId, snapshot, options);
   }
 
-  private beginFinalization(runId: string, snapshot: WorkflowSnapshot | null, target: FinalizationTarget, update?: RunUpdate): void {
+  private beginFinalization(
+    runId: string,
+    snapshot: WorkflowSnapshot | null,
+    target: FinalizationTarget,
+    update?: RunUpdate,
+    warnings: readonly Record<string, unknown>[] = [],
+  ): void {
     this.repos.transaction(() => {
+      for (const warning of warnings) this.repos.events.append(runId, RUN_EVENTS.outcomeWarning, warning);
       const res = this.repos.runs.beginFinalization(runId, target, {
         ...(update ? { update } : {}),
         ...(snapshot ? { blockPolicy: { maxTechnicalFailures: snapshot.workflow.retry.maxTechnicalFailures } } : {}),
@@ -1068,7 +1102,8 @@ export class RunController {
     const target = finalizationTarget(run);
     if (run.status !== 'finalizing' || !target) return run;
     if (options.hooks && snapshot) {
-      const hook = hookForOutcome(target.status, target.businessResult);
+      // Runs finalized before 0.3.0 have no persisted hook: same selection (their snapshots define every list hook).
+      const hook = run.completionHook ?? selectCompletionHook(snapshot.workflow.hooks, target.status, target.businessResult, run.outcome);
       if (hasActions(snapshot, hook)) {
         try {
           const result = await this.lifecycle.runHook(runId, hook, snapshot, {

@@ -323,6 +323,7 @@ export function runFields(run: RunRecord | null): Record<string, FieldValue> {
     'run.last_status': run?.status ?? null,
     'run.last_result': run?.businessResult ?? null,
     'run.last_result.message': typeof result?.message === 'string' ? result.message : null,
+    'run.last_outcome': run?.outcome ?? null,
     'run.last_status_message': run?.statusMessage ?? null,
     'run.last_started_at': run?.startedAt ?? null,
     'run.last_finished_at': run?.finishedAt ?? null,

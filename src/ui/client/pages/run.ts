@@ -144,6 +144,8 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
             ['Source item', d.sourceUrl ? externalLink(d.sourceUrl) : text(d.sourceItemKey)],
             ['Technical state', badge(d.status, d.active ? 'info' : 'muted')],
             ['Business result', d.businessResult ? badge(d.businessResult, d.businessResult === 'success' ? 'ok' : 'warn') : text(null)],
+            ['Outcome', d.resultOutcome ? badge(d.resultOutcome, 'info') : text(null)],
+            ['Completion hook', d.completionHook ? h('code', null, d.completionHook) : text(null)],
             ['Final reason', text(d.finalReason)],
             ['Lifecycle', d.lifecycleStatus ? (d.lifecycleFailed ? badge('lifecycle failed', 'error') : badge(d.lifecycleStatus, stateTone(d.lifecycleStatus))) : text(null)],
             ['Exit code', text(d.exitCode)],

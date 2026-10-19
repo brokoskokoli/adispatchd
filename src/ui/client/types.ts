@@ -21,6 +21,10 @@ export interface RunSummary {
   businessResult: string | null;
   finalReason: string | null;
   resultMessage: string | null;
+  /** Named outcome from the result file (WI-17). */
+  resultOutcome?: string | null;
+  /** Completion hook that ran / runs (WI-17). */
+  completionHook?: string | null;
   statusMessage: string | null;
   exitCode: number | null;
   lifecycleStatus: string | null;
@@ -236,6 +240,8 @@ export interface DryRunResult {
   cron: { cron: string; timezone: string; nextSlots: string[]; nextSlotForecast: string; forecastReason: string | null; recentFirings: CronFiring[]; blockId: number | null } | null;
   notes: string[];
   summary: { candidates: number; wouldStart: number; pendingChecks: number; notStartable: number };
+  /** Completion hook routing (WI-17; missing before 0.3.0). */
+  hooks?: { onResult: string[]; technical: Record<string, string> };
 }
 
 export interface ViewDef {

@@ -359,11 +359,20 @@ const actionSchema = z.discriminatedUnion('type', [
 export type RawAction = z.output<typeof actionSchema>;
 
 const hookList = z.array(actionSchema).default([]);
+/**
+ * Hooks whose presence matters (WI-17): a technical hook that is configured –
+ * even as `[]` – takes precedence over `on_error`, so "not given" must stay
+ * distinguishable from an empty list.
+ */
+const optionalHookList = z.array(actionSchema).optional();
 
-const hookShape = Object.fromEntries(HOOK_NAMES.map((h) => [h, hookList])) as Record<
-  (typeof HOOK_NAMES)[number],
-  typeof hookList
->;
+/** Hooks that always resolve to a list (`[]` if not given). */
+const ALWAYS_LIST_HOOKS = ['on_start', 'on_success', 'on_failure'] as const satisfies readonly (typeof HOOK_NAMES)[number][];
+
+const hookShape = Object.fromEntries(
+  HOOK_NAMES.map((h) => [h, (ALWAYS_LIST_HOOKS as readonly string[]).includes(h) ? hookList : optionalHookList]),
+) as Record<(typeof ALWAYS_LIST_HOOKS)[number], typeof hookList> &
+  Record<Exclude<(typeof HOOK_NAMES)[number], (typeof ALWAYS_LIST_HOOKS)[number]>, typeof optionalHookList>;
 
 /** Schema of one `workflows/*.yaml` file. */
 export const workflowSchema = z.strictObject({
@@ -389,6 +398,8 @@ export const workflowSchema = z.strictObject({
     .strictObject({ max_technical_failures: positiveInt.default(DEFAULTS.maxTechnicalFailures) })
     .prefault({}),
   ...hookShape,
+  /** Named outcomes (WI-17): `on_result.<outcome>` replaces `on_success`/`on_failure`. */
+  on_result: z.record(configId, z.array(actionSchema)).optional(),
 });
 
 /** Parsed workflow file. */

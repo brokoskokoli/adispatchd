@@ -7,7 +7,7 @@
  * deeply frozen. No secret values are ever part of this model — identities
  * and notification headers only carry the *names* of environment variables.
  */
-import type { FilterNode, HookName, NotificationEventType } from '../core/index.js';
+import { outcomeOfHook, type FilterNode, type HookName, type ListHookName, type NotificationEventType, type ResultHookName } from '../core/index.js';
 import type { ProjectFieldKind } from '../sources/index.js';
 
 // ---------------------------------------------------------------------------
@@ -322,8 +322,41 @@ export interface ShellActionConfig extends ActionBase {
 /** A lifecycle action. */
 export type LifecycleActionConfig = SourceUpdateActionConfig | SourceCommentActionConfig | ShellActionConfig;
 
-/** All seven hooks; missing hooks are empty lists. */
-export type HooksConfig = Readonly<Record<HookName, readonly LifecycleActionConfig[]>>;
+/** Actions of one hook, in order. */
+export type ActionList = readonly LifecycleActionConfig[];
+
+/**
+ * Hooks of a workflow by journal hook name (WI-17):
+ * - `on_start`, `on_success`, `on_failure`: always present (`[]` if not configured).
+ * - `on_crash`, `on_start_error`, `on_cancel`, `on_timeout`, `on_error`: absent
+ *   (`undefined`) if not configured; a present list – even `[]` – is "defined"
+ *   and takes precedence over `on_error` (see `selectCompletionHook`).
+ * - `on_result.<outcome>`: one entry per configured named outcome.
+ *
+ * Snapshots of older versions contain every list hook (empty lists), which
+ * keeps their behaviour (no `on_error`, no `on_result`).
+ */
+export type HooksConfig = Readonly<
+  Record<'on_start' | 'on_success' | 'on_failure', ActionList> &
+    Partial<Record<Exclude<ListHookName, 'on_start' | 'on_success' | 'on_failure'>, ActionList>> &
+    Partial<Record<ResultHookName, ActionList>>
+>;
+
+/** Configured hooks (absent ones skipped) in configuration order: list hooks, then `on_result.*`. */
+export function configuredHooks(hooks: HooksConfig): Array<[HookName, ActionList]> {
+  const out: Array<[HookName, ActionList]> = [];
+  for (const [hook, actions] of Object.entries(hooks) as Array<[HookName, ActionList | undefined]>) {
+    if (actions !== undefined) out.push([hook, actions]);
+  }
+  return out;
+}
+
+/** Named outcomes with a configured `on_result.<outcome>` hook, in configuration order. */
+export function resultHookOutcomes(hooks: HooksConfig): string[] {
+  return configuredHooks(hooks)
+    .map(([hook]) => outcomeOfHook(hook))
+    .filter((o): o is string => o !== null);
+}
 
 /** A validated workflow. */
 export interface WorkflowConfig {

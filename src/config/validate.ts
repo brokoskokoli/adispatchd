@@ -8,8 +8,9 @@ import path from 'node:path';
 import { Cron } from 'croner';
 import {
   extractPlaceholders,
-  HOOK_NAMES,
   isSecretKey,
+  outcomeOfHook,
+  TECHNICAL_OUTCOME_HOOKS,
   validateTemplate,
   type HookName,
   type TemplateMode,
@@ -17,14 +18,16 @@ import {
 } from '../core/index.js';
 import { checkFieldName, checkFilterFields, sourceFieldContext, viewFieldContext, type FieldIssue } from './field-catalog.js';
 import type { RawFilterNode } from './filter-schema.js';
-import type { IssueCollector, IssuePath } from './issues.js';
-import type {
-  GlobalConfig,
-  IdentityConfig,
-  LifecycleActionConfig,
-  SourceConfig,
-  ViewConfig,
-  WorkflowConfig,
+import { formatIssuePath, type IssueCollector, type IssuePath } from './issues.js';
+import {
+  configuredHooks,
+  resultHookOutcomes,
+  type GlobalConfig,
+  type IdentityConfig,
+  type LifecycleActionConfig,
+  type SourceConfig,
+  type ViewConfig,
+  type WorkflowConfig,
 } from './model.js';
 import type { NamedFilters } from './named-filters.js';
 import type { RawParameter } from './schemas.js';
@@ -316,10 +319,13 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
 
   // Hooks
   const actionIds = new Map<string, string>();
-  for (const hook of HOOK_NAMES) {
-    wf.hooks[hook].forEach((action, i) => {
-      const at: IssuePath = [hook, i];
-      const where = `${hook}[${i}]`;
+  for (const [hook, actions] of configuredHooks(wf.hooks)) {
+    const outcome = outcomeOfHook(hook);
+    // YAML path: `on_result.<outcome>[i]` is the map entry `on_result: { <outcome>: [...] }`.
+    const base: IssuePath = outcome !== null ? ['on_result', outcome] : [hook];
+    actions.forEach((action, i) => {
+      const at: IssuePath = [...base, i];
+      const where = formatIssuePath(at);
       const previous = actionIds.get(action.id);
       if (previous !== undefined) {
         issues.error(file, [...at, 'id'], `Duplicate action ID "${action.id}" (also used at ${previous})`);
@@ -328,6 +334,32 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
       validateAction(action, hook, at, isSource, parameterNames, input, issues, file);
     });
   }
+  validateHookRouting(wf, issues, file);
+}
+
+/**
+ * WI-17 checks of `on_result`/`on_error`: named outcomes need a result file;
+ * an `on_error` shadowed by all four technical hooks never runs (warning).
+ */
+function validateHookRouting(wf: WorkflowConfig, issues: IssueCollector, file: string): void {
+  if (resultHookOutcomes(wf.hooks).length > 0 && !hasResultFile(wf.execute)) {
+    issues.error(file, ['on_result'], `"on_result" needs a worker result file; execute type "${wf.execute.type}" has none`);
+  }
+  if (wf.hooks.on_error !== undefined) {
+    const technical = Object.values(TECHNICAL_OUTCOME_HOOKS);
+    if (technical.every((hook) => wf.hooks[hook] !== undefined)) {
+      issues.warning(
+        file,
+        ['on_error'],
+        `"on_error" never runs: ${technical.map((h) => `"${h}"`).join(', ')} are all defined (a defined hook, even [], takes precedence)`,
+      );
+    }
+  }
+}
+
+/** True if the executor of `execute` reads a worker result file (WI-17: needed for `on_result`). */
+function hasResultFile(execute: WorkflowConfig['execute']): boolean {
+  return execute.type === 'shell';
 }
 
 function safePlaceholders(template: string): string[] {

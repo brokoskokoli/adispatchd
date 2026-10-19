@@ -3,7 +3,7 @@
  * workflow (kept in memory for GUI/API), dry-run results and cron status.
  * All types are plain JSON-serializable data.
  */
-import type { FieldResolution, FilterNode } from '../core/index.js';
+import type { FieldResolution, FilterNode, HookName, TECHNICAL_OUTCOME_HOOKS } from '../core/index.js';
 import type { TriggerConfig } from '../config/index.js';
 import type { CronFiringRecord } from '../persistence/index.js';
 import type { FilterTrace, TraceValue } from '../filters/index.js';
@@ -234,6 +234,16 @@ export interface DryRunResult {
   /** Notes about the limits of this dry-run (e.g. no database, no controller). */
   notes: string[];
   summary: { candidates: number; wouldStart: number; pendingChecks: number; notStartable: number };
+  /** Completion hook routing (WI-17); missing in results of instances before 0.3.0. */
+  hooks?: HookRouting;
+}
+
+/** Which completion hook runs for which outcome (WI-17). */
+export interface HookRouting {
+  /** Named outcomes with an `on_result.<outcome>` chain (result file `outcome`). */
+  onResult: string[];
+  /** Hook per technical outcome: the specific hook if defined, else `on_error` if defined, else the specific one. */
+  technical: Record<keyof typeof TECHNICAL_OUTCOME_HOOKS, HookName>;
 }
 
 /** Upper bound of candidate entries kept per workflow diagnosis. */

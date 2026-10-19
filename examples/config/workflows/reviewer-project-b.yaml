@@ -34,3 +34,23 @@ execute:
 on_success:
   - type: source.update
     labels: { add: [reviewed], remove: [needs-review] }
+
+# Named outcomes (WI-17): the reviewer script writes e.g.
+#   {"schema_version": 1, "result": "failure", "outcome": "changes_requested", "message": "..."}
+# into $ADISPATCH_RESULT_FILE. A matching entry runs instead of on_success/on_failure;
+# an outcome without entry falls back to on_success/on_failure (warning on the run).
+on_result:
+  approved:
+    - type: source.update
+      labels: { add: [approved], remove: [needs-review] }
+  changes_requested:
+    - type: source.update
+      labels: { add: [changes-requested], remove: [needs-review] }
+    - type: source.comment
+      message: 'Changes requested: {result.message}'
+
+# One chain for crashed, start_error, timed_out and cancelled (WI-17); a specific hook
+# (e.g. on_timeout, even as []) would take precedence.
+on_error:
+  - type: source.comment
+    message: 'Review run {run.id} ended with {result.status}; it will be retried.'

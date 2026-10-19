@@ -544,7 +544,16 @@ on_cancel:
 on_timeout:
   - type: source.update
     labels: { add: [ready], remove: [in-progress] }
+on_result:                       # benannte Ergebnisse (Ergebnisdatei "outcome"), statt on_success/on_failure
+  needs_maintainer:
+    - type: source.update
+      labels: { add: [needs-maintainer], remove: [in-progress] }
+    - type: source.comment
+      message: 'Rückfrage ({result.outcome}): {result.message}'
+  wont_fix: []                   # definiert, aber ohne Actions: es läuft nichts
 ```
+
+`on_error` fehlt hier bewusst: alle vier technischen Hooks sind definiert, `on_error` liefe nie (Warnung, §3.4.10).
 
 #### 3.4.1 Oberste Ebene
 
@@ -564,7 +573,10 @@ on_timeout:
 | `parameters` | Map | nein | `{}` | §3.4.7 | Parameter für manuelle Starts |
 | `execute` | Objekt | ja | | §3.4.8 | Haupt-Worker |
 | `retry.max_technical_failures` | Integer | nein | `3` | ≥ 1 | aufeinanderfolgende technische Fehler bis zum Retry-Block (§6.4) |
-| `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` | Liste Actions | nein | `[]` | §3.4.10 | Lifecycle-Hooks |
+| `on_start`, `on_success`, `on_failure` | Liste Actions | nein | `[]` | §3.4.10 | Lifecycle-Hooks |
+| `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` | Liste Actions | nein | nicht definiert | §3.4.10 | technische Hooks; definiert (auch als `[]`) haben sie Vorrang vor `on_error` |
+| `on_error` | Liste Actions | nein | nicht definiert | §3.4.10 | Sammel-Hook für `crashed`, `start_error`, `timed_out`, `cancelled` ohne eigenen Hook |
+| `on_result` | Map Ergebnis-ID → Liste Actions | nein | `{}` | Schlüssel sind Konfigurations-IDs; nur mit Ergebnisdatei (`execute.type: shell`); leere Listen erlaubt | benannte Ergebnisse (`outcome` der Ergebnisdatei), §3.4.10 |
 
 #### 3.4.2 `trigger`
 
@@ -675,19 +687,38 @@ Fehlern (`crashed`, `start_error`, `timed_out`) derselben Workflow/Item-Kombinat
 
 #### 3.4.10 Hooks
 
-Sieben Hooks, jeder eine Liste von Actions, die **sequentiell** ausgeführt werden:
+Acht Hooks als Listen von Actions plus die Map `on_result`; die Actions eines Hooks laufen **sequentiell**:
 
 | Hook | läuft … |
 |---|---|
 | `on_start` | vor dem Start des Workers (nach Re-Read des Items). Scheitert die Kette, startet der Worker **nicht** (→ `start_error`). |
-| `on_success` | nach `completed` + `success` |
-| `on_failure` | nach `completed` + `failure` (fachlich, gültige Ergebnisdatei) |
+| `on_success` | nach `completed` + `success` (ohne passendes `on_result.<outcome>`) |
+| `on_failure` | nach `completed` + `failure` (fachlich, gültige Ergebnisdatei; ohne passendes `on_result.<outcome>`) |
+| `on_result.<outcome>` | nach `completed`, wenn die Ergebnisdatei `"outcome": "<outcome>"` enthält und der Eintrag existiert – **statt** `on_success`/`on_failure` |
 | `on_crash` | nach `crashed` |
 | `on_start_error` | nach `start_error` (sofern der Run `starting` erreicht hat) |
 | `on_cancel` | nach `cancelled` (sofern der Run `starting` erreicht hat) |
 | `on_timeout` | nach `timed_out` |
+| `on_error` | nach `crashed`, `start_error`, `timed_out` oder `cancelled`, wenn der jeweilige Hook oben **nicht definiert** ist |
 
 Genau ein Abschluss-Hook pro Run; Details in §6.8. `source.update`/`source.comment` nur in Source-Workflows.
+
+**Benannte Ergebnisse (`on_result`).** Für Workflows mit mehr als zwei fachlichen Ausgängen (z. B. `approved`,
+`changes_requested`, `needs_maintainer`). Der Worker schreibt zusätzlich zu `result` ein `outcome` in die
+Ergebnisdatei ([worker-protocol.md](worker-protocol.md)); `result` bleibt Pflicht und steuert weiter Statistik und
+Retry-Zähler (`success` setzt zurück, `failure` lässt unverändert). Ohne `outcome` oder ohne passenden Eintrag gilt
+das bisherige Verhalten (`on_success`/`on_failure`); ein `outcome` ohne Eintrag ist kein Fehler, der Run bekommt
+eine Warnung (Event `run.outcome_warning`). Ein `outcome` im falschen Format wird ignoriert (ebenfalls Warnung).
+Ein leerer Eintrag (`wont_fix: []`) ist definiert: dann läuft gar nichts. Das Journal nennt die Kette
+`on_result.<outcome>`, generierte Action-IDs lauten `on_result.<outcome>.<index>`.
+
+**Sammel-Hook (`on_error`).** Für einen technischen Ausgang läuft der spezifische Hook (`on_crash`, `on_start_error`,
+`on_timeout`, `on_cancel`), wenn er **definiert** ist – auch eine leere Liste zählt als definiert –, sonst
+`on_error`. Nie beides. Sind alle vier spezifischen Hooks definiert, warnt die Validierung, dass `on_error` nie
+läuft. Typisch: eine gemeinsame Aufräum-Kette in `on_error` und nur Abweichungen (z. B. `on_timeout`) separat.
+
+Der gewählte Abschluss-Hook wird beim Übergang nach `finalizing` am Run gespeichert (`completionHook` in API/UI);
+nach einem Neustart setzt die Recovery genau diese Kette fort.
 
 #### 3.4.11 Actions
 
@@ -696,7 +727,7 @@ Gemeinsame Schlüssel aller Actions:
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
 | `type` | Enum | ja | | `source.update`, `source.comment`, `shell` |
-| `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`) | stabiler Name im Journal; **workflowweit** eindeutig |
+| `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`, `on_result.approved.0`) | stabiler Name im Journal; **workflowweit** eindeutig |
 | `continue_on_error` | Boolean | nein | `false` | nach endgültigem Scheitern trotzdem mit der nächsten Action weitermachen |
 | `retry.max_attempts` | Integer ≥ 1 | nein | `lifecycle.action_retry.max_attempts` | Versuche insgesamt |
 | `retry.delay` | Dauer | nein | `lifecycle.action_retry.delay` | Pause zwischen Versuchen (`0s` erlaubt) |
@@ -1054,6 +1085,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `run.last_status` | string | technischer Status (`running`, `completed`, `crashed`, …) |
 | `run.last_result` | string | fachliches Ergebnis `success`/`failure` (sonst `null`) |
 | `run.last_result.message` | string | `message` der Ergebnisdatei |
+| `run.last_outcome` | string | benanntes Ergebnis (`outcome` der Ergebnisdatei, sonst `null`) |
 | `run.last_status_message` | string | letzte Status-Meldung des Workers (`@@ADISPATCH_EVENT` `status`) |
 | `run.last_started_at` | date | Start |
 | `run.last_finished_at` | date | Ende |
@@ -1085,6 +1117,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{result.status}` | technischer Endstatus (`completed`, `crashed`, `start_error`, `timed_out`, `cancelled`) | – |
 | `{result.result}` | `success` \| `failure` | bei technischem Fehler/Cancel |
 | `{result.message}` | `message` der Ergebnisdatei | keine/ungültige Ergebnisdatei oder ohne `message` |
+| `{result.outcome}` | benanntes Ergebnis (`outcome` der Ergebnisdatei, z. B. `approved`) | ohne/ungültiges `outcome`, bei technischem Fehler/Cancel |
 | `{parameters.<name>}` | Parameterwert (`true`, `5`, Text) | optionaler Parameter ohne Wert und ohne Default |
 
 Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_error`).
@@ -1222,11 +1255,16 @@ UI oder `POST /api/v1/workflows/:id/start` `{"item"?: "…", "parameters"?: {…
 | Exit 0 + keine Ergebnisdatei | `completed` | `success` | `on_success` | nein (setzt Zähler zurück) |
 | Exit 0 + `"result": "success"` | `completed` | `success` | `on_success` | nein (setzt Zähler zurück) |
 | Exit 0 + `"result": "failure"` | `completed` | `failure` | `on_failure` | nein (Zähler unverändert) |
+| Exit 0 + gültiges `"outcome": "x"` und `on_result.x` definiert | `completed` | laut `result` | `on_result.x` (statt `on_success`/`on_failure`) | laut `result` |
 | Controller-Neustart, Worker nachweislich weg | `crashed` (bzw. `cancelled`, wenn Cancel lief) | – | `on_crash` / `on_cancel` | `crashed`: ja |
 | Controller-Neustart, Prozess nicht sicher zuordenbar | `recovery_pending` (hält Lock) | – | – | – |
 
 Eine fachliche `failure` gibt es nur über eine gültige Ergebnisdatei; ein Exit-Code allein ist nie „failure“.
 Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
+
+Die Spalte „Hook“ nennt den spezifischen Hook. Für `crashed`, `start_error`, `timed_out` und `cancelled` läuft
+stattdessen `on_error`, wenn der spezifische Hook nicht definiert ist (§3.4.10). Der gewählte Hook wird mit
+`→ finalizing` gespeichert; die Recovery nach einem Neustart setzt genau ihn fort.
 
 ### 6.9 Action-Ketten
 
@@ -1284,7 +1322,8 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
 `project.*`-Felder (`projectFields`), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
-Textausgabe `filter:`). Reserviert nichts, startet keine Worker oder Actions
+Textausgabe `filter:`) sowie das Hook-Routing (`hooks`: die `on_result`-Schlüssel und je technischem Ausgang der
+Hook, der liefe, z. B. `timed_out → on_error`). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 
@@ -1438,11 +1477,20 @@ on_failure:                                  # Änderungen nötig → zurück an
     labels: { add: [ready-for-coding], remove: [reviewing] }
   - type: source.comment
     message: 'Review: {result.message}'
-on_crash:       [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
-on_start_error: [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
-on_timeout:     [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
-on_cancel:      [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+on_result:                                   # dritter fachlicher Ausgang: {"result": "failure", "outcome": "needs_maintainer"}
+  needs_maintainer:
+    - type: source.update
+      labels: { add: [needs-maintainer], remove: [reviewing] }
+    - type: source.comment
+      message: 'Review braucht eine Entscheidung: {result.message}'
+on_error:                                    # crashed, start_error, timed_out, cancelled: zurück in die Warteschlange
+  - type: source.update
+    labels: { add: [ready-for-review], remove: [reviewing] }
 ```
+
+Der Reviewer kennt drei fachliche Ausgänge: ohne `outcome` gelten `on_success`/`on_failure`, mit
+`"outcome": "needs_maintainer"` läuft nur `on_result.needs_maintainer` (das Review-Skript braucht dafür keine
+eigenen Schreibrechte). Alle technischen Ausgänge teilen sich `on_error`, weil keiner einen eigenen Hook hat.
 
 ### 7.3 View über zwei Repositories
 
@@ -1733,13 +1781,33 @@ ungültig und werden vom Test gegen die angegebene Meldung geprüft.
 # example: err-unknown-key
 # extends: minimal
 # invalid
-# expect: config.yaml: scheduler: Unknown key(s): "max_concurent"
+# expect: config.yaml: scheduler: Unknown key(s): "max_concurent" (did you mean "max_concurrent"?)
 # file: config.yaml
 scheduler:
   max_concurent: 2
 ```
 
-Lösung: Schreibweise laut §3 korrigieren.
+Lösung: Schreibweise laut §3 korrigieren (der Vorschlag nennt den nächstliegenden erlaubten Schlüssel).
+
+**Hooks `on_error`/`on_result`** – Tippfehler im Hook-Namen und Ergebnis-Schlüssel, die keine IDs sind.
+
+```yaml
+# example: err-result-hooks
+# extends: github
+# invalid
+# expect: workflows/reviewer.yaml: Unknown key(s): "on_errors" (did you mean "on_error"?)
+# expect: workflows/reviewer.yaml: on_result.needs maintainer: Invalid key "needs maintainer": Invalid ID (allowed: letters, digits, "_" and "-", must start with a letter or digit, max. 64)
+# file: workflows/reviewer.yaml
+id: reviewer
+trigger: { type: source, source: project_a }
+execute: { type: shell, command: scripts/reviewer.sh }
+on_errors: []
+on_result:
+  "needs maintainer": []
+```
+
+Lösung: `on_error` (Singular); Ergebnis-Schlüssel wie Konfigurations-IDs schreiben (`needs_maintainer`) – genauso
+muss der Worker sie als `outcome` liefern.
 
 **Falsches Dauerformat** – keine zusammengesetzten Dauern, keine Leerzeichen.
 
@@ -2208,6 +2276,21 @@ execute:
 
 ```yaml
 # example: warn-common
+# expect-warning: workflows/janitor.yaml: on_error: "on_error" never runs: "on_crash", "on_start_error", "on_timeout", "on_cancel" are all defined (a defined hook, even [], takes precedence)
+# file: workflows/janitor.yaml
+id: janitor
+trigger: { type: manual }
+execute: { type: shell, command: scripts/hello.sh }
+on_crash: []
+on_start_error: []
+on_timeout: []
+on_cancel: []
+on_error:
+  - { type: shell, command: scripts/cleanup.sh }
+```
+
+```yaml
+# example: warn-common
 # expect-warning: filters/old.yaml: id: Named filter "spare" is not used by any workflow or view
 # expect-warning: filters/old.yaml: id: Filter ID "spare" differs from file name "old.yaml"
 # file: filters/old.yaml
@@ -2258,7 +2341,8 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
    Liste; Timeouts setzen; Secrets nur über `secrets`.
 6. **Hooks:** Label-Übergänge für jeden Ausgang (`on_start`, `on_success`, `on_failure`, `on_crash`,
    `on_start_error`, `on_timeout`, `on_cancel`) so wählen, dass das Item nicht hängen bleibt und nicht sofort wieder
-   matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab).
+   matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab). Gleiche Aufräum-Ketten der technischen
+   Ausgänge einmal in `on_error`; mehr als zwei fachliche Ausgänge über `on_result` (Worker schreibt `outcome`).
 7. **Validieren:** `adispatch config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
 8. **Trockenlauf:** `adispatch workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
    (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität; bei Projektfeldern die Zeilen

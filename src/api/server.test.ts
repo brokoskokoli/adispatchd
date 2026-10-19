@@ -249,6 +249,8 @@ describe('runs', () => {
       exitCode: 0,
       sourceUrl: ITEM_URL,
       resultMessage: 'done 7',
+      resultOutcome: null,
+      completionHook: 'on_success',
       statusMessage: 'working',
       lifecycleStatus: 'succeeded',
       lifecycleFailed: false,

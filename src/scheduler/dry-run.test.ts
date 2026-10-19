@@ -141,6 +141,26 @@ item_priority:
     await expect(dryRunWorkflow(deps, 'nope')).rejects.toMatchObject({ code: 'config_unknown_workflow' });
   });
 
+  it('lists the on_result keys and the hook per technical outcome (WI-17)', async () => {
+    s.workflow(
+      'coder',
+      sourceWorkflow(
+        'coder',
+        s.env.script('ok.sh', 'exit 0'),
+        'on_error:\n  - type: source.update\n    labels: { add: [ready-for-coding] }\non_result:\n  approved: []\n  needs_maintainer: []',
+      ),
+    );
+    const config = await ConfigManager.create({ configDir: s.env.configDir, dataDir: s.env.dataDir });
+    const result = await dryRunWorkflow({ config, sources: () => undefined, state: emptyState() }, 'coder');
+    expect(result.hooks).toEqual({
+      onResult: ['approved', 'needs_maintainer'],
+      technical: { crashed: 'on_crash', start_error: 'on_error', timed_out: 'on_error', cancelled: 'on_cancel' },
+    });
+    const text = formatDryRun(result);
+    expect(text).toContain('  on_result: approved, needs_maintainer');
+    expect(text).toContain('  technical outcomes: crashed → on_crash, start_error → on_error, timed_out → on_error, cancelled → on_cancel');
+  });
+
   it('reports a source error instead of throwing', async () => {
     s.workflow('coder', sourceWorkflow('coder', s.env.script('ok.sh', 'exit 0'), ''));
     const config = await ConfigManager.create({ configDir: s.env.configDir, dataDir: s.env.dataDir });

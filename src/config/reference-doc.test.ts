@@ -182,7 +182,7 @@ describe('docs/configuration-reference.md', () => {
   });
 
   it('documents all hooks, operators and notification events', () => {
-    for (const name of [...HOOK_NAMES, ...FILTER_OPERATORS, ...NOTIFICATION_EVENT_TYPES]) {
+    for (const name of [...HOOK_NAMES, 'on_result', 'on_result.<outcome>', ...FILTER_OPERATORS, ...NOTIFICATION_EVENT_TYPES]) {
       expect(markdown, name).toContain(`\`${name}\``);
     }
   });

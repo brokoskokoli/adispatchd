@@ -3,7 +3,7 @@
  * normalized model (`model.ts`). Pure; semantic checks live in `validate.ts`.
  */
 import path from 'node:path';
-import { dataPaths, HOOK_NAMES, type FilterNode, type HookName } from '../core/index.js';
+import { dataPaths, HOOK_NAMES, resultHookName, type FilterNode, type HookName } from '../core/index.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssuePath } from './issues.js';
 import type {
@@ -188,12 +188,18 @@ export function normalizeWorkflow(
   configDir: string,
   expand: FilterExpander,
 ): WorkflowConfig {
-  const hooks = Object.fromEntries(
-    HOOK_NAMES.map((hook) => [
-      hook,
-      raw[hook].map((action, i) => normalizeAction(action, hook, i, global.lifecycle.actionRetry, configDir)),
-    ]),
-  ) as unknown as HooksConfig;
+  const normalizeList = (hook: HookName, actions: readonly RawAction[]): LifecycleActionConfig[] =>
+    actions.map((action, i) => normalizeAction(action, hook, i, global.lifecycle.actionRetry, configDir));
+  const hooks: Record<string, LifecycleActionConfig[]> = {};
+  // Hooks that are not configured stay absent (WI-17: "defined" vs. "not given").
+  for (const hook of HOOK_NAMES) {
+    const actions = raw[hook];
+    if (actions !== undefined) hooks[hook] = normalizeList(hook, actions);
+  }
+  for (const [outcome, actions] of Object.entries(raw.on_result ?? {})) {
+    const hook = resultHookName(outcome);
+    hooks[hook] = normalizeList(hook, actions);
+  }
   const parameters: Record<string, ParameterDefinition> = {};
   for (const [name, def] of Object.entries(raw.parameters)) parameters[name] = normalizeParameter(def);
   const exec = raw.execute;
@@ -251,7 +257,7 @@ export function normalizeWorkflow(
       cancelGraceMs: exec.cancel_grace,
     },
     retry: { maxTechnicalFailures: raw.retry.max_technical_failures },
-    hooks,
+    hooks: hooks as unknown as HooksConfig,
   };
 }
 

@@ -5,7 +5,7 @@
  * referenced by ID only, notification channels are not included.
  */
 import { OrchestratorError } from '../core/index.js';
-import type { LoadedConfig, SourceConfig, WorkflowConfig, WorkspaceConfig } from './model.js';
+import { configuredHooks, type LoadedConfig, type SourceConfig, type WorkflowConfig, type WorkspaceConfig } from './model.js';
 
 /** Current snapshot format version. */
 export const WORKFLOW_SNAPSHOT_VERSION = 1;
@@ -39,7 +39,7 @@ export function workflowIdentityRefs(workflow: WorkflowConfig, source: SourceCon
   if (source) refs.add(source.identity);
   if (source?.project) refs.add(source.project.identity);
   for (const ref of Object.values(workflow.execute.secrets)) refs.add(ref.identity);
-  for (const actions of Object.values(workflow.hooks)) {
+  for (const [, actions] of configuredHooks(workflow.hooks)) {
     for (const action of actions) if (action.type === 'source.comment' && action.identity) refs.add(action.identity);
   }
   return [...refs].sort();

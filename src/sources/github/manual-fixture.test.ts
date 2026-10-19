@@ -11,7 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
-import { loadConfig } from '../../config/index.js';
+import { configuredHooks, loadConfig } from '../../config/index.js';
 import { parseWorkerResult } from '../../core/worker-protocol.js';
 import { GITHUB_API_VERSION } from './http.js';
 
@@ -38,13 +38,13 @@ describe('manual GitHub test fixture (docs/manual-tests/github-fixture)', () => 
     expect(c.views['needs-maintainer']?.sources).toEqual(['test_a', 'test_b']);
     // The guide refers to actions by explicit IDs (generated `<hook>.<index>` IDs are 0-based and easy to get wrong).
     for (const wf of Object.values(c.workflows)) {
-      for (const actions of Object.values(wf.hooks)) {
+      for (const [, actions] of configuredHooks(wf.hooks)) {
         for (const action of actions) expect(action.id, `${wf.id}: ${action.id}`).not.toMatch(/^on_[a-z_]+\.\d+$/);
       }
     }
-    const coderIds = Object.values(c.workflows['coder-test']?.hooks ?? {}).flat().map((a) => a.id);
+    const coderIds = configuredHooks(c.workflows['coder-test']!.hooks).flatMap(([, a]) => a).map((a) => a.id);
     expect(coderIds).toEqual(expect.arrayContaining(['on_start-labels', 'on_success-labels', 'on_success-comment', 'on_start_error-labels']));
-    const commenterIds = Object.values(c.workflows['commenter-test']?.hooks ?? {}).flat().map((a) => a.id);
+    const commenterIds = configuredHooks(c.workflows['commenter-test']!.hooks).flatMap(([, a]) => a).map((a) => a.id);
     expect(commenterIds).toEqual(expect.arrayContaining(['on_start-labels', 'start-comment', 'done-comment', 'on_success-labels']));
   });
 

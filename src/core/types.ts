@@ -5,6 +5,7 @@
  * owning components (sources, executors, identities, persistence, ...).
  */
 import type { Clock } from './clock.js';
+import { CONFIG_ID_PATTERN } from './ids.js';
 import type { Logger } from './logger.js';
 import type { WorkerContext, WorkerResult } from './worker-protocol.js';
 
@@ -145,7 +146,11 @@ export interface FinalizationTarget {
 /** How a run was triggered. */
 export type TriggerType = 'source' | 'schedule' | 'manual';
 
-/** Lifecycle hooks in declaration order (Spec §10). */
+/**
+ * Lifecycle hooks configured as action lists, in declaration order (Spec §10;
+ * `on_error` since WI-17). Named-outcome hooks (`on_result.<outcome>`) are
+ * configured as a map and are not part of this list.
+ */
 export const HOOK_NAMES = [
   'on_start',
   'on_success',
@@ -154,30 +159,88 @@ export const HOOK_NAMES = [
   'on_start_error',
   'on_cancel',
   'on_timeout',
+  'on_error',
 ] as const;
 
-/** Name of a lifecycle hook. */
-export type HookName = (typeof HOOK_NAMES)[number];
+/** Name of a hook configured as an action list (see {@link HOOK_NAMES}). */
+export type ListHookName = (typeof HOOK_NAMES)[number];
+
+/** Prefix of named-outcome hooks: `on_result.<outcome>` (WI-17). */
+export const RESULT_HOOK_PREFIX = 'on_result.';
+
+/** Name of a named-outcome hook, e.g. `on_result.approved` (WI-17). */
+export type ResultHookName = `on_result.${string}`;
 
 /**
- * The completion hook to run for a final outcome (Spec §8.2 rule 7):
+ * Name of a hook chain as journaled (`run_actions.hook`) and persisted as the
+ * run's completion hook: a list hook or a named-outcome hook.
+ */
+export type HookName = ListHookName | ResultHookName;
+
+/** Technical outcomes and their specific hook (WI-17: falls back to `on_error` if not defined). */
+export const TECHNICAL_OUTCOME_HOOKS = {
+  crashed: 'on_crash',
+  start_error: 'on_start_error',
+  timed_out: 'on_timeout',
+  cancelled: 'on_cancel',
+} as const satisfies Record<Exclude<TerminalStatus, 'completed'>, ListHookName>;
+
+/** Hook name of the named outcome `outcome` (`on_result.<outcome>`). */
+export function resultHookName(outcome: string): ResultHookName {
+  return `${RESULT_HOOK_PREFIX}${outcome}`;
+}
+
+/** Outcome of a named-outcome hook name, or `null` for other hooks. */
+export function outcomeOfHook(hook: string): string | null {
+  return hook.startsWith(RESULT_HOOK_PREFIX) ? hook.slice(RESULT_HOOK_PREFIX.length) : null;
+}
+
+/** True if `value` is a valid journal hook name (list hook or `on_result.<config-id>`). */
+export function isHookName(value: string): value is HookName {
+  if ((HOOK_NAMES as readonly string[]).includes(value)) return true;
+  const outcome = outcomeOfHook(value);
+  return outcome !== null && CONFIG_ID_PATTERN.test(outcome);
+}
+
+/**
+ * The default completion hook for a final outcome (Spec §8.2 rule 7):
  * `completed`+`success` → `on_success`, `completed`+`failure` → `on_failure`,
  * `crashed` → `on_crash`, `start_error` → `on_start_error`,
  * `timed_out` → `on_timeout`, `cancelled` → `on_cancel`.
+ * {@link selectCompletionHook} applies `on_result`/`on_error` on top.
  */
-export function hookForOutcome(status: TerminalStatus, businessResult: BusinessResult): HookName {
-  switch (status) {
-    case 'completed':
-      return businessResult === 'failure' ? 'on_failure' : 'on_success';
-    case 'crashed':
-      return 'on_crash';
-    case 'start_error':
-      return 'on_start_error';
-    case 'timed_out':
-      return 'on_timeout';
-    case 'cancelled':
-      return 'on_cancel';
+export function hookForOutcome(status: TerminalStatus, businessResult: BusinessResult): ListHookName {
+  if (status === 'completed') return businessResult === 'failure' ? 'on_failure' : 'on_success';
+  return TECHNICAL_OUTCOME_HOOKS[status];
+}
+
+/**
+ * Hooks of a workflow as far as hook selection is concerned: a hook is
+ * *defined* if its key is present (an empty list counts as defined).
+ */
+export type DefinedHooks = Readonly<Partial<Record<string, readonly unknown[]>>>;
+
+/**
+ * The completion hook that runs for a final outcome (WI-17):
+ * - `completed` with a named `outcome` and a defined `on_result.<outcome>`
+ *   → that hook (instead of `on_success`/`on_failure`); otherwise the default.
+ * - technical outcomes → the specific hook (`on_crash`, `on_start_error`,
+ *   `on_timeout`, `on_cancel`) if defined, else `on_error` if defined, else
+ *   the specific hook (which then has no actions). Never both.
+ */
+export function selectCompletionHook(
+  hooks: DefinedHooks,
+  status: TerminalStatus,
+  businessResult: BusinessResult,
+  outcome: string | null = null,
+): HookName {
+  if (status === 'completed') {
+    if (outcome !== null && hooks[resultHookName(outcome)] !== undefined) return resultHookName(outcome);
+    return hookForOutcome(status, businessResult);
   }
+  const specific = TECHNICAL_OUTCOME_HOOKS[status];
+  if (hooks[specific] !== undefined) return specific;
+  return hooks.on_error !== undefined ? 'on_error' : specific;
 }
 
 /** Lifecycle action types available in V1 (Spec §10). */
@@ -328,6 +391,7 @@ export const VIEW_RUN_FIELDS: readonly FieldDefinition[] = Object.freeze([
   { name: 'run.last_status', type: 'string', description: 'Technical status of the latest run', operators: OPERATORS_BY_TYPE.string },
   { name: 'run.last_result', type: 'string', description: 'Business result (success/failure) of the latest run', operators: OPERATORS_BY_TYPE.string },
   { name: 'run.last_result.message', type: 'string', description: 'Result message of the latest run', operators: OPERATORS_BY_TYPE.string },
+  { name: 'run.last_outcome', type: 'string', description: 'Named outcome (result file `outcome`) of the latest run', operators: OPERATORS_BY_TYPE.string },
   { name: 'run.last_status_message', type: 'string', description: 'Last worker status message', operators: OPERATORS_BY_TYPE.string },
   { name: 'run.last_started_at', type: 'date', description: 'Start of the latest run', operators: OPERATORS_BY_TYPE.date },
   { name: 'run.last_finished_at', type: 'date', description: 'End of the latest run', operators: OPERATORS_BY_TYPE.date },
@@ -631,7 +695,8 @@ export interface ExecutorDiagnostic {
 /** State of the result file after the worker exited (Spec §8.2). */
 export type ResultFileStatus =
   | { state: 'missing' }
-  | { state: 'valid'; result: WorkerResult }
+  /** `warnings`: non-fatal problems, e.g. an ignored invalid `outcome` (WI-17). */
+  | { state: 'valid'; result: WorkerResult; warnings?: string[] }
   | { state: 'invalid'; error: string };
 
 /** Raw facts about how an execution ended; classified by `classifyOutcome` (WI-05). */

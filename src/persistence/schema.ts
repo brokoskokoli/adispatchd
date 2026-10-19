@@ -12,6 +12,12 @@ export interface Migration {
   name: string;
   /** Apply the migration. Runs inside a transaction; must not COMMIT/ROLLBACK itself. */
   up(db: DatabaseSync): void;
+  /**
+   * Run with `PRAGMA foreign_keys = OFF` (SQLite's procedure for rebuilding a
+   * referenced table: dropping it would otherwise cascade). The runner checks
+   * `PRAGMA foreign_key_check` before committing and re-enables foreign keys.
+   */
+  disableForeignKeys?: boolean;
 }
 
 const ACTIVE_STATUS_SQL = `('reserved','starting','running','cancelling','finalizing','recovery_pending')`;
@@ -182,6 +188,42 @@ CREATE TABLE notification_deliveries (
 CREATE INDEX notification_deliveries_due ON notification_deliveries (state, next_attempt_at);
 `;
 
+/**
+ * v3 (WI-17): named outcomes and the persisted completion hook on runs;
+ * `run_actions.hook` additionally accepts `on_error` and `on_result.<outcome>`
+ * (table rebuild, SQLite cannot alter CHECK constraints).
+ */
+const V3_DDL = `
+ALTER TABLE runs ADD COLUMN outcome TEXT;
+ALTER TABLE runs ADD COLUMN completion_hook TEXT;
+
+CREATE TABLE run_actions_v3 (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id              TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+  hook                TEXT NOT NULL CHECK (
+                        hook IN ('on_start','on_success','on_failure','on_crash','on_start_error','on_cancel','on_timeout','on_error')
+                        OR hook GLOB 'on_result.?*'),
+  ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
+  action_type         TEXT NOT NULL,
+  action_name         TEXT,
+  action_config_json  TEXT NOT NULL,
+  status              TEXT NOT NULL CHECK (status IN ('pending','running','succeeded','failed','skipped')),
+  external_key        TEXT,
+  attempts            INTEGER NOT NULL DEFAULT 0,
+  last_error_json     TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  UNIQUE (run_id, hook, ordinal)
+);
+INSERT INTO run_actions_v3 (id, run_id, hook, ordinal, action_type, action_name, action_config_json, status, external_key,
+                            attempts, last_error_json, created_at, updated_at)
+  SELECT id, run_id, hook, ordinal, action_type, action_name, action_config_json, status, external_key,
+         attempts, last_error_json, created_at, updated_at FROM run_actions;
+DROP TABLE run_actions;
+ALTER TABLE run_actions_v3 RENAME TO run_actions;
+CREATE INDEX run_actions_status ON run_actions (status);
+`;
+
 /** All built-in migrations, in order. */
 export const MIGRATIONS: readonly Migration[] = [
   {
@@ -196,6 +238,14 @@ export const MIGRATIONS: readonly Migration[] = [
     name: 'notification_deliveries',
     up(db) {
       db.exec(V2_DDL);
+    },
+  },
+  {
+    version: 3,
+    name: 'run_outcomes',
+    disableForeignKeys: true,
+    up(db) {
+      db.exec(V3_DDL);
     },
   },
 ];

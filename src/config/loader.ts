@@ -14,6 +14,7 @@ import type { z } from 'zod';
 import { CONFIG_ID_PATTERN, systemClock, toAbsolutePath, type Clock } from '../core/index.js';
 import { formatIssuePath, IssueCollector, sortIssues, type IssuePath } from './issues.js';
 import type { ConfigIssue, GlobalConfig, LoadedConfig, ViewConfig, WorkflowConfig } from './model.js';
+import { suggestField } from './field-catalog.js';
 import { NamedFilters, type NamedFilterEntry } from './named-filters.js';
 import {
   normalizeGlobal,
@@ -302,11 +303,71 @@ function parseWith<S extends z.ZodType>(
     const at = issue.path.filter((p): p is string | number => typeof p !== 'symbol');
     let message = issue.message;
     if (issue.code === 'unrecognized_keys') {
-      message = `Unknown key(s): ${issue.keys.map((k) => `"${k}"`).join(', ')}`;
+      const known = knownKeysAt(schema, at);
+      message = `Unknown key(s): ${issue.keys
+        .map((k) => {
+          const suggestion = known.length > 0 ? suggestField(k, known) : undefined;
+          return suggestion ? `"${k}" (did you mean "${suggestion}"?)` : `"${k}"`;
+        })
+        .join(', ')}`;
+    } else if (issue.code === 'invalid_key') {
+      // Record keys (e.g. `on_result.<outcome>`): report the key's own problem instead of "Invalid key in record".
+      const reason = issue.issues[0]?.message;
+      message = `Invalid key "${String(at[at.length - 1] ?? '')}"${reason ? `: ${reason}` : ''}`;
     }
     issues.error(file, at, message);
   }
   return undefined;
+}
+
+/** Minimal view of zod 4 schema internals used by {@link knownKeysAt}. */
+interface SchemaDef {
+  type?: string;
+  shape?: Record<string, unknown>;
+  innerType?: unknown;
+  in?: unknown;
+  element?: unknown;
+  valueType?: unknown;
+  options?: unknown[];
+}
+
+/**
+ * Keys allowed by the object schema(s) at `at` (best effort, for "did you
+ * mean" hints on unknown keys): unwraps defaults/optionals/pipes, follows
+ * object properties, array elements and record values; for unions the keys of
+ * all object variants are collected.
+ */
+function knownKeysAt(schema: unknown, at: IssuePath): string[] {
+  const unwrap = (s: unknown): SchemaDef[] => {
+    const def = (s as { _zod?: { def?: SchemaDef } } | null)?._zod?.def;
+    if (!def) return [];
+    switch (def.type) {
+      case 'default':
+      case 'prefault':
+      case 'optional':
+      case 'nullable':
+      case 'readonly':
+        return unwrap(def.innerType);
+      case 'pipe':
+        return unwrap(def.in);
+      case 'union':
+        return (def.options ?? []).flatMap(unwrap);
+      default:
+        return [def];
+    }
+  };
+  let current = unwrap(schema);
+  for (const segment of at) {
+    current = current.flatMap((def) => {
+      if (def.type === 'object' && typeof segment === 'string' && def.shape && Object.hasOwn(def.shape, segment)) {
+        return unwrap(def.shape[segment]);
+      }
+      if (def.type === 'array' && typeof segment === 'number') return unwrap(def.element);
+      if (def.type === 'record') return unwrap(def.valueType);
+      return [];
+    });
+  }
+  return [...new Set(current.flatMap((def) => (def.type === 'object' && def.shape ? Object.keys(def.shape) : [])))];
 }
 
 /** Find the 1-based line of the deepest existing node along `issuePath`. */

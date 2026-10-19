@@ -119,6 +119,12 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
       ['Workflow priority', String(r.workflowPriority)],
       ['Capacity', `workflow ${r.capacity.workflow.active}/${r.capacity.workflow.max} · global ${r.capacity.global.active}/${r.capacity.global.max}`],
       ['Automatic starts', r.gate ? (r.gate.canStartAutomatically ? badge('possible', 'ok') : badge(`not possible (${r.gate.reason ?? 'unknown'})`, 'warn')) : text(null)],
+      ...(r.hooks
+        ? ([
+            ['Named outcomes (on_result)', r.hooks.onResult.length ? h('span', null, r.hooks.onResult.map((o) => badge(o, 'info'))) : text(null)],
+            ['Technical outcomes', h('ul', { class: 'plain' }, Object.entries(r.hooks.technical).map(([status, hook]) => h('li', null, `${status} → `, h('code', null, hook))))],
+          ] as Array<[string, HTMLElement]>)
+        : []),
     ]),
   );
   parts.push(
