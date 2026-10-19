@@ -1,10 +1,10 @@
 # Projektstand
 
-Stand: 18. Oktober 2026 · `main`
+Stand: 19. Oktober 2026 · `main` + Branch `wi-14-project-fields` (Version 0.2.0)
 
-Alle Work-Items WI-01 bis WI-13 (siehe `docs/work-items/`) sind umgesetzt. Jedes wurde von einem Reviewer-Agent gegen seine Acceptance Criteria und die Spec geprüft, die Findings wurden behoben, dann wurde es gemergt. Details zu jedem Work-Item stehen in `docs/handoff/WI-NN.md`.
+Alle Work-Items WI-01 bis WI-13 (siehe `docs/work-items/`) sind umgesetzt. WI-14 (Filter auf GitHub-Projects-Felder, `state_reason`/`milestone`/`issue_type`, Identity-Art `github_token`, Version 0.2.0, `CHANGELOG.md`) ist auf `wi-14-project-fields` umgesetzt und wartet auf Review/Merge. Jedes wurde von einem Reviewer-Agent gegen seine Acceptance Criteria und die Spec geprüft, die Findings wurden behoben, dann wurde es gemergt. Details zu jedem Work-Item stehen in `docs/handoff/WI-NN.md`.
 
-- **Gate:** `npm run check` grün auf macOS und Linux (Container `node:24`): 744 Tests.
+- **Gate:** `npm run check` grün auf macOS und Linux (Container `node:24`): 744 Tests; mit WI-14 auf macOS 784 Tests (1 übersprungen).
 - **Paket-Test:** `npm run test:pack` grün (pack → install → init → start → Run → drain → Update).
 - **Dateiformate:** verbindliche Referenz in `docs/configuration-reference.md`; ein Test validiert alle Beispiele darin gegen den echten Loader.
 - **Abschlussprüfung:** Smoke-Test der installierten App erfolgreich (init, start, manueller Run, API, SSE, Dry-Run, drain mit Exit 0). Die Abdeckung der Szenarien aus §22.2 ist unten zusammengefasst.
@@ -26,7 +26,7 @@ Alle Work-Items WI-01 bis WI-13 (siehe `docs/work-items/`) sind umgesetzt. Jedes
 **P1 – blockierend**
 1. Die systemd-Tests auf einer Linux-VM durchführen (`docs/manual-tests/systemd.md`).
 2. Den Prozess-Supervisor-Spike unter Linux durchführen (`docs/manual-tests/process-supervision.md`), auch das Zusammenspiel mit `KillMode=mixed`.
-3. Den GitHub-Integrationstest gegen echte Repos durchführen: Anleitung mit 24 Testfällen, Fixture und `gh`-Befehlen in `docs/manual-tests/github.md`. Dabei die Dependencies-API, die App-Rechte und den Kommentar-Marker über `performed_via_github_app` prüfen und API-Version `2026-03-10` bestätigen.
+3. Den GitHub-Integrationstest gegen echte Repos durchführen: Anleitung mit 25 Testfällen, Fixture und `gh`-Befehlen in `docs/manual-tests/github.md`. Dabei die Dependencies-API, die App-Rechte und den Kommentar-Marker über `performed_via_github_app` prüfen und API-Version `2026-03-10` bestätigen; seit WI-14 auch die GitHub-Projects-Abfragen (GraphQL, org- und user-eigene Projekte, `github_token`, T25 / A12–A17).
 4. Name: **Agent Dispatch Daemon**, Paket `adispatchd`, Befehl `adispatch`, Lizenz MIT. Öffentlich: https://github.com/brokoskokoli/adispatchd und npm `adispatchd`. Optional noch offen: npm-Org `@adispatchd` reservieren.
 
 **P2 – vor Release**
