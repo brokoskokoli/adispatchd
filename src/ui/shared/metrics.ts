@@ -34,6 +34,8 @@ export interface MetricsResponse {
   enabled: boolean;
   intervalMs: number;
   retentionMs: number;
+  /** Bucket size when the server downsampled the samples (averages), else `null`. */
+  bucketMs?: number | null;
   samples: MetricsSample[];
 }
 
@@ -65,8 +67,8 @@ export interface CpuChart {
 
 /** Number of colors for runs (fixed categorical order, assigned by workflow). */
 export const RUN_COLORS = 8;
-/** Number of neutral shades for named foreign processes. */
-export const OTHER_COLORS = 4;
+/** Number of muted hues for named foreign processes (assigned by rank in the visible set). */
+export const OTHER_COLORS = 6;
 /** Max. named foreign series in one chart (the rest is folded into "Others"). */
 export const MAX_NAMED_OTHERS = 6;
 
@@ -80,13 +82,17 @@ export function stableHash(text: string): number {
   return h >>> 0;
 }
 
-/** Color class of a process group: runs by workflow (stable), foreign processes by name. */
-export function seriesClass(kind: SeriesKind, id = ''): string {
+/**
+ * Color class of a process group: runs by workflow (stable hash, saturated
+ * categorical colors), named foreign processes by their rank in the visible
+ * set (muted hues, no collisions), fixed classes for the rest.
+ */
+export function seriesClass(kind: SeriesKind, id = '', rank = 0): string {
   switch (kind) {
     case 'run':
       return `m-wf-${stableHash(id) % RUN_COLORS}`;
     case 'other':
-      return `m-other-${stableHash(id) % OTHER_COLORS}`;
+      return `m-other-${rank % OTHER_COLORS}`;
     default:
       return `m-${kind}`;
   }
@@ -164,6 +170,10 @@ export function buildCpuChart(samples: readonly MetricsSample[]): CpuChart {
     }
   }
   const series: CpuSeries[] = ordered.filter((s) => !folded.has(s.key)).map(({ first: _f, sum: _s, ...rest }) => rest);
+  // Foreign colors by rank (largest first) – distinct within the chart.
+  series.filter((x) => x.kind === 'other').forEach((x, rank) => {
+    x.cls = seriesClass('other', x.key, rank);
+  });
   const system: CpuSeries = { key: 'system', kind: 'system', label: SYSTEM_LABEL, cls: 'm-system', values: [] };
   system.values = samples.map((s, i) => {
     // Only where processes were measured: an empty process list (ps failed) shows no breakdown.
@@ -186,20 +196,66 @@ export function stackSeries(series: readonly CpuSeries[]): Array<{ lower: number
   });
 }
 
-/** Legend entries: every series with its latest value (current sample) and maximum. */
-export function legendEntries(chart: CpuChart): Array<{ key: string; kind: SeriesKind; label: string; cls: string; runId?: string; current: number; max: number }> {
+/** Legend entry of a CPU series. */
+export interface LegendEntry {
+  key: string;
+  kind: SeriesKind;
+  label: string;
+  cls: string;
+  runId?: string;
+  /** Value of the latest sample (share of the total capacity). */
+  current: number;
+  /** Maximum within the shown range. */
+  max: number;
+  /** Foreign series that never reached 0.1 % (shown dimmed). */
+  dim: boolean;
+}
+
+const LEGEND_ORDER: Record<SeriesKind, number> = { daemon: 0, run: 1, hooks: 2, other: 3, rest: 4, system: 5 };
+
+/**
+ * Legend: own groups first (daemon, runs, hooks), then foreign processes by
+ * current value (descending), then "Others" and the unattributed remainder.
+ * Foreign series with a maximum below 0.1 % are dimmed.
+ */
+export function legendEntries(chart: CpuChart): LegendEntry[] {
   const last = chart.times.length - 1;
-  return chart.series
-    .map((s) => ({
-      key: s.key,
-      kind: s.kind,
-      label: s.label,
-      cls: s.cls,
-      ...(s.runId ? { runId: s.runId } : {}),
-      current: last >= 0 ? (s.values[last] ?? 0) : 0,
-      max: s.values.reduce((m, v) => Math.max(m, v), 0),
-    }))
-    .reverse(); // top of the stack first, like the chart
+  const entries = chart.series.map((s, index) => {
+    const current = last >= 0 ? (s.values[last] ?? 0) : 0;
+    const max = s.values.reduce((m, v) => Math.max(m, v), 0);
+    return {
+      entry: {
+        key: s.key,
+        kind: s.kind,
+        label: s.label,
+        cls: s.cls,
+        ...(s.runId ? { runId: s.runId } : {}),
+        current,
+        max,
+        dim: (s.kind === 'other' || s.kind === 'rest') && max < 0.1,
+      },
+      index,
+    };
+  });
+  return entries
+    .sort((a, b) => LEGEND_ORDER[a.entry.kind] - LEGEND_ORDER[b.entry.kind] || (a.entry.kind === 'other' ? b.entry.current - a.entry.current : 0) || a.index - b.index)
+    .map((e) => e.entry);
+}
+
+/**
+ * Time-axis ticks at round local clock boundaries (1, 2, 5, 10, 15, 30 min,
+ * 1, 2, 3, 6, 12, 24 h): the smallest step giving at most `maxTicks` ticks in
+ * `[from, to]`. `offsetMinutes` = local UTC offset (east positive).
+ */
+export function timeTicks(from: number, to: number, maxTicks: number, offsetMinutes = 0): number[] {
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 180, 360, 720, 1440].map((m) => m * 60_000);
+  const span = Math.max(1, to - from);
+  const step = steps.find((st) => span / st <= Math.max(1, maxTicks)) ?? steps[steps.length - 1]!;
+  const offset = offsetMinutes * 60_000;
+  const first = Math.ceil((from + offset) / step) * step - offset;
+  const out: number[] = [];
+  for (let t = first; t <= to && out.length < 1000; t += step) out.push(t);
+  return out;
 }
 
 /**

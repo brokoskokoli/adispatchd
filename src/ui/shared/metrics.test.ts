@@ -13,6 +13,7 @@ import {
   seriesClass,
   stackSeries,
   SYSTEM_LABEL,
+  timeTicks,
   type MetricsProcess,
   type MetricsSample,
 } from './metrics.js';
@@ -76,7 +77,9 @@ describe('CPU chart data', () => {
     expect(cls.rest).toBe('m-rest');
     expect(cls['run:r1']).toBe(seriesClass('run', 'coder'));
     expect(cls['run:r1']).toMatch(/^m-wf-[0-7]$/);
-    expect(cls['other:node']).toMatch(/^m-other-[0-3]$/);
+    // foreign colors by rank in the visible set: java (larger total) before node, no collisions
+    expect(cls['other:java']).toBe('m-other-0');
+    expect(cls['other:node']).toBe('m-other-1');
     // the same workflow keeps its color in another data set (color follows the entity, not the rank)
     const again = buildCpuChart([sample(0, 10, [run('r9', 'coder', 4)])]);
     expect(again.series[0]!.cls).toBe(cls['run:r1']);
@@ -87,12 +90,23 @@ describe('CPU chart data', () => {
     expect(chart.series.map((s) => [s.key, s.values[0]])).toEqual([['system', 42]]);
   });
 
-  it('legend: top of the stack first, current and max value, run links', () => {
-    const entries = legendEntries(buildCpuChart(samples));
-    expect(entries[0]!.key).toBe('system');
-    expect(entries.at(-1)!.key).toBe('daemon');
-    const r1 = entries.find((e) => e.key === 'run:r1')!;
-    expect(r1).toMatchObject({ runId: 'r1', current: 0, max: 20, label: 'coder · r1' });
+  it('legend: own groups first, foreign by current value, then Others and System; now/max; dims idle foreign series', () => {
+    const withIdle = [...samples.slice(0, 2), sample(2, 30, [daemon(4), run('r2', 'reviewer', 60), other('java', 30), other('node', 50), other('idle', 0.2), rest(4)])];
+    const entries = legendEntries(buildCpuChart(withIdle));
+    expect(entries.map((e) => e.key)).toEqual(['daemon', 'run:r1', 'run:r2', 'other:node', 'other:java', 'other:idle', 'rest', 'system']);
+    expect(entries.find((e) => e.key === 'run:r1')).toMatchObject({ runId: 'r1', current: 0, max: 20, label: 'coder · r1', dim: false });
+    expect(entries.find((e) => e.key === 'other:idle')).toMatchObject({ dim: true });
+    expect(entries.find((e) => e.key === 'other:node')).toMatchObject({ current: 12.5, dim: false });
+  });
+
+  it('time ticks at round local clock boundaries', () => {
+    const from = Date.parse('2026-10-19T10:03:20Z');
+    expect(timeTicks(from, from + 60 * 60_000, 6).map((t) => new Date(t).toISOString().slice(11, 16))).toEqual(['10:10', '10:20', '10:30', '10:40', '10:50', '11:00']);
+    expect(timeTicks(from, from + 15 * 60_000, 6).map((t) => new Date(t).toISOString().slice(11, 16))).toEqual(['10:05', '10:10', '10:15']);
+    // local offset +02:00: 1-h ticks fall on full local hours
+    const six = timeTicks(from, from + 6 * 3_600_000, 6, 120);
+    expect(six.every((t) => (t + 120 * 60_000) % 3_600_000 === 0)).toBe(true);
+    expect(six.length).toBeLessThanOrEqual(6);
   });
 });
 

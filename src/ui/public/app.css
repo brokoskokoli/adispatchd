@@ -100,7 +100,7 @@ h3 { font-size: 14px; margin: 16px 0 6px; }
 
 /* ---------- layout ---------- */
 main { padding: 16px; max-width: 1400px; margin: 0 auto; outline: none; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 14px; align-items: start; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 14px; align-items: start; }
 .span-all { grid-column: 1 / -1; }
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
@@ -270,9 +270,10 @@ table.events td:last-child { white-space: nowrap; }
 :root {
   --m-wf-0: #2a78d6; --m-wf-1: #eb6834; --m-wf-2: #1baf7a; --m-wf-3: #eda100;
   --m-wf-4: #e87ba4; --m-wf-5: #008300; --m-wf-6: #6250d6; --m-wf-7: #e34948;
-  --m-daemon: #0d366b; --m-hooks: #5598e7;
-  --m-other-0: #8a8f98; --m-other-1: #a9adb4; --m-other-2: #767b84; --m-other-3: #9a9ea6;
-  --m-rest: #c4c8ce; --m-system: #e3e6ea;
+  /* own groups: saturated; hooks bronze (no run hue); foreign: 6 muted hues; Others grey; System very light */
+  --m-daemon: #0d366b; --m-hooks: #9a6324;
+  --m-other-0: #8ea6c4; --m-other-1: #c9a39a; --m-other-2: #9fbf98; --m-other-3: #c7b98a; --m-other-4: #ad9fc9; --m-other-5: #8fbdbb;
+  --m-rest: #b9bdc4; --m-system: #eceef1;
   --m-mem-used: #2a78d6; --m-mem-free: #cde2fb;
   --m-disk-0: #2a78d6; --m-disk-1: #eb6834; --m-disk-2: #1baf7a; --m-disk-3: #6250d6;
   --chart-grid: #e6e9ee;
@@ -281,9 +282,9 @@ table.events td:last-child { white-space: nowrap; }
   :root {
     --m-wf-0: #3987e5; --m-wf-1: #d95926; --m-wf-2: #199e70; --m-wf-3: #c98500;
     --m-wf-4: #d55181; --m-wf-5: #008300; --m-wf-6: #9085e9; --m-wf-7: #e66767;
-    --m-daemon: #9ec5f4; --m-hooks: #5598e7;
-    --m-other-0: #6c717a; --m-other-1: #565b63; --m-other-2: #7d828b; --m-other-3: #61666e;
-    --m-rest: #444952; --m-system: #2e333c;
+    --m-daemon: #9ec5f4; --m-hooks: #d19a52;
+    --m-other-0: #4f6582; --m-other-1: #82584f; --m-other-2: #577253; --m-other-3: #7a6c42; --m-other-4: #66597f; --m-other-5: #4b7473;
+    --m-rest: #4a4f58; --m-system: #262b33;
     --m-mem-used: #3987e5; --m-mem-free: #1c3150;
     --m-disk-0: #3987e5; --m-disk-1: #d95926; --m-disk-2: #199e70; --m-disk-3: #9085e9;
     --chart-grid: #2a303b;
@@ -292,7 +293,8 @@ table.events td:last-child { white-space: nowrap; }
 .m-wf-0 { --c: var(--m-wf-0); } .m-wf-1 { --c: var(--m-wf-1); } .m-wf-2 { --c: var(--m-wf-2); } .m-wf-3 { --c: var(--m-wf-3); }
 .m-wf-4 { --c: var(--m-wf-4); } .m-wf-5 { --c: var(--m-wf-5); } .m-wf-6 { --c: var(--m-wf-6); } .m-wf-7 { --c: var(--m-wf-7); }
 .m-daemon { --c: var(--m-daemon); } .m-hooks { --c: var(--m-hooks); }
-.m-other-0 { --c: var(--m-other-0); } .m-other-1 { --c: var(--m-other-1); } .m-other-2 { --c: var(--m-other-2); } .m-other-3 { --c: var(--m-other-3); }
+.m-other-0 { --c: var(--m-other-0); } .m-other-1 { --c: var(--m-other-1); } .m-other-2 { --c: var(--m-other-2); }
+.m-other-3 { --c: var(--m-other-3); } .m-other-4 { --c: var(--m-other-4); } .m-other-5 { --c: var(--m-other-5); }
 .m-rest { --c: var(--m-rest); } .m-system { --c: var(--m-system); }
 .m-mem-used { --c: var(--m-mem-used); } .m-mem-free { --c: var(--m-mem-free); }
 .m-disk-0 { --c: var(--m-disk-0); } .m-disk-1 { --c: var(--m-disk-1); } .m-disk-2 { --c: var(--m-disk-2); } .m-disk-3 { --c: var(--m-disk-3); }
@@ -323,5 +325,10 @@ svg.chart .hover-target { fill: transparent; }
 .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; background: var(--c); vertical-align: -1px; flex: none; }
 ul.legend { list-style: none; display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 8px 0 0; padding: 0; font-size: 12.5px; }
 ul.legend li { display: inline-flex; align-items: center; gap: 4px; overflow-wrap: anywhere; }
-.chart-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+.chart-pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 16px; }
+ul.legend li.dim { opacity: 0.5; }
+dl.stats > div { min-width: 0; max-width: 100%; }
+meter.disk-meter { display: block; width: 140px; max-width: 100%; height: 8px; margin-top: 4px; }
+.server { overflow: hidden; }
+svg.chart .area.m-system { stroke: none; }
 details.current-values { margin-top: 12px; }
