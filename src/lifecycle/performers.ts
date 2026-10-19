@@ -8,7 +8,6 @@ import path from 'node:path';
 import {
   commentMarker,
   dataPaths,
-  isWithin,
   type Clock,
   type CredentialProvider,
   type ExecutionOutcome,
@@ -25,7 +24,7 @@ import type {
   SourceUpdateActionConfig,
   WorkflowSnapshot,
 } from '../config/index.js';
-import { TOKEN_DIR_NAME, TokenFileSession, type TokenFileRequest } from '../executors/index.js';
+import { TOKEN_DIR_NAME, TokenFileSession, isTokenDirInWorkspace, type TokenFileRequest } from '../executors/index.js';
 import type { RunActionRecord, RunRecord } from '../persistence/index.js';
 import {
   buildHookTemplateValues,
@@ -244,7 +243,7 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
   try {
     if (tokenFiles.length > 0) {
       const dir = path.join(attemptDir, TOKEN_DIR_NAME);
-      if (isWithin(workingDirectory, dir)) {
+      if (await isTokenDirInWorkspace(workingDirectory, dir)) {
         throw new LifecycleError('token_files_in_workspace', 'Token files must lie outside the workspace; move the workspace out of the data directory', {
           retryable: false,
         });

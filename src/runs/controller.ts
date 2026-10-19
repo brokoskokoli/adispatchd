@@ -24,7 +24,6 @@ import {
   hookForOutcome,
   isOrchestratorError,
   isTerminalStatus,
-  isWithin,
   noopLogger,
   parseSourceItemKey,
   systemClock,
@@ -52,6 +51,7 @@ import {
   TOKEN_DIR_NAME,
   TokenFileSession,
   classifyOutcome,
+  isTokenDirInWorkspace,
   processGroupExists,
   removeTokenDirs,
   terminateProcessGroupIfSame,
@@ -1063,7 +1063,7 @@ export class RunController {
       throw new RunControllerError('run_no_credentials', 'Workflow declares secrets but no credential provider is configured');
     }
     const dir = path.join(dataPaths(this.options.dataDir).run(entry.runId).runDir, TOKEN_DIR_NAME);
-    if (isWithin(spec.workingDirectory, dir)) {
+    if (await isTokenDirInWorkspace(spec.workingDirectory, dir)) {
       throw new RunControllerError('run_invalid_workspace', 'token files must lie outside the workspace; move the workspace out of the data directory');
     }
     const session = new TokenFileSession({

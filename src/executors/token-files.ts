@@ -10,10 +10,12 @@
  * (→ executor redaction) BEFORE it is written to the file.
  */
 import { randomUUID } from 'node:crypto';
-import { chmod, lstat, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
+import { chmod, lstat, mkdir, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
   errorMessage,
+  isWithin,
   noopLogger,
   systemClock,
   systemTimers,
@@ -101,6 +103,10 @@ export class TokenFileSession implements SecretValues {
   private readonly inflight = new Set<Promise<void>>();
   private closed = false;
   private closing: Promise<void> | undefined;
+  /** Device/inode of the directory created by {@link open}; renewals only write into exactly this directory. */
+  private dirIdentity: { dev: number; ino: number } | undefined;
+  /** Set when the directory was replaced or removed behind our back: no further renewals. */
+  private stopped = false;
 
   constructor(private readonly options: TokenFileSessionOptions) {
     this.clock = options.clock ?? systemClock;
@@ -142,7 +148,7 @@ export class TokenFileSession implements SecretValues {
   async open(signal?: AbortSignal): Promise<Record<string, string>> {
     const env: Record<string, string> = {};
     try {
-      await prepareDirectory(this.options.dir);
+      this.dirIdentity = await prepareDirectory(this.options.dir);
       for (const entry of this.entries) {
         const token = await this.options.credentials.getToken(entry.request.identity, {
           ...(signal ? { signal } : {}),
@@ -216,8 +222,24 @@ export class TokenFileSession implements SecretValues {
     entry.token = token;
   }
 
+  /** True if the token directory is still the plain directory created by {@link open} (same dev/inode). */
+  private async directoryUnchanged(): Promise<boolean> {
+    try {
+      const st = await lstat(this.options.dir);
+      return (
+        st.isDirectory() &&
+        !st.isSymbolicLink() &&
+        this.dirIdentity !== undefined &&
+        st.dev === this.dirIdentity.dev &&
+        st.ino === this.dirIdentity.ino
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private schedule(entry: FileEntry): void {
-    if (this.closed || !entry.token) return;
+    if (this.closed || this.stopped || !entry.token) return;
     const remaining = entry.token.expiresAt.getTime() - this.clock.now().getTime();
     let delay = remaining - this.renewBeforeMs;
     if (delay > MAX_TIMER_MS) return; // non-expiring identity (e.g. github_token): written once
@@ -227,7 +249,7 @@ export class TokenFileSession implements SecretValues {
   }
 
   private arm(entry: FileEntry, delay: number): void {
-    if (this.closed) return;
+    if (this.closed || this.stopped) return;
     if (entry.timer) this.timers.clearTimeout(entry.timer);
     entry.timer = this.timers.setTimeout(() => {
       entry.timer = undefined;
@@ -244,17 +266,32 @@ export class TokenFileSession implements SecretValues {
         signal: this.abort.signal,
         minValidityMs: this.renewBeforeMs + MIN_RENEW_DELAY_MS,
       });
-      if (this.closed) return;
+      if (this.closed || this.stopped) return;
       const previous = entry.token;
       if (previous && token.expiresAt.getTime() <= previous.expiresAt.getTime() && token.token === previous.token) {
         throw new Error('identity returned the same token again');
+      }
+      if (!(await this.directoryUnchanged())) {
+        // Never follow a swapped directory (e.g. a symlink planted by another process of the service user).
+        this.stopped = true;
+        this.logger.error('token directory was replaced or removed; renewals stopped, the process keeps its current token', {
+          variable: name,
+          identity,
+          dir: this.options.dir,
+          currentExpiresAt: entry.token?.expiresAt.toISOString(),
+        });
+        for (const e of this.entries) {
+          if (e.timer) this.timers.clearTimeout(e.timer);
+          e.timer = undefined;
+        }
+        return;
       }
       await this.write(entry, token);
       entry.failures = 0;
       this.logger.info('token file renewed', { variable: name, identity, expiresAt: token.expiresAt.toISOString() });
       this.schedule(entry);
     } catch (err) {
-      if (this.closed) return;
+      if (this.closed || this.stopped) return;
       entry.failures++;
       const delay = Math.min(this.maxRetryDelayMs, this.retryDelayMs * 2 ** (entry.failures - 1));
       // The current file stays in place until its token expires; the process keeps running.
@@ -271,37 +308,71 @@ export class TokenFileSession implements SecretValues {
   }
 }
 
-/** Create `dir` fresh with mode 0700 (stale content of an earlier attempt is removed). */
-async function prepareDirectory(dir: string): Promise<void> {
+/** Create `dir` fresh with mode 0700 (stale content of an earlier attempt is removed); returns its dev/inode. */
+async function prepareDirectory(dir: string): Promise<{ dev: number; ino: number }> {
   await rm(dir, { recursive: true, force: true });
   await mkdir(path.dirname(dir), { recursive: true });
   await mkdir(dir, { mode: 0o700 });
   await chmod(dir, 0o700);
   const st = await lstat(dir);
   if (!st.isDirectory() || st.isSymbolicLink()) throw new Error(`token directory is not a plain directory: ${dir}`);
+  return { dev: st.dev, ino: st.ino };
 }
 
 /**
  * Remove left-over token directories of one run: `runs/<id>/secrets` and
  * `runs/<id>/actions/<action>/attempt-<n>/secrets` (recovery after a restart,
- * retention). Returns the number of removed directories; errors are thrown.
+ * retention). `shouldRemove` (optional) is asked right before each removal,
+ * e.g. to re-check that the run is still idle. Returns the number of removed
+ * directories; errors are thrown.
  */
-export async function removeTokenDirs(runDir: string): Promise<number> {
+export async function removeTokenDirs(
+  runDir: string,
+  shouldRemove?: (dir: string, stats: Stats) => boolean | Promise<boolean>,
+): Promise<number> {
   const candidates = [path.join(runDir, TOKEN_DIR_NAME)];
   for (const action of await listDirs(path.join(runDir, 'actions'))) {
     for (const attempt of await listDirs(action)) candidates.push(path.join(attempt, TOKEN_DIR_NAME));
   }
   let removed = 0;
   for (const dir of candidates) {
+    let stats: Stats;
     try {
-      await lstat(dir);
+      stats = await lstat(dir);
     } catch {
       continue;
     }
+    if (shouldRemove && !(await shouldRemove(dir, stats))) continue;
     await rm(dir, { recursive: true, force: true });
     removed++;
   }
   return removed;
+}
+
+/**
+ * True if `tokenDir` would lie inside (or be) `workspace`, comparing resolved
+ * paths (symlinks of existing ancestors followed; parts that do not exist yet
+ * are appended as given). Token files must never be visible in a workspace.
+ */
+export async function isTokenDirInWorkspace(workspace: string, tokenDir: string): Promise<boolean> {
+  const [ws, dir] = await Promise.all([resolveExisting(workspace), resolveExisting(tokenDir)]);
+  return isWithin(ws, dir) || isWithin(path.resolve(workspace), path.resolve(tokenDir));
+}
+
+/** `realpath` of the longest existing ancestor of `p`, with the missing rest appended. */
+async function resolveExisting(p: string): Promise<string> {
+  const rest: string[] = [];
+  let current = path.resolve(p);
+  for (;;) {
+    try {
+      return path.join(await realpath(current), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return path.resolve(p);
+      rest.push(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 async function listDirs(dir: string): Promise<string[]> {

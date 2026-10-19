@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -7,6 +7,7 @@ import { RotatingCredentials } from './testing/rotating-credentials.js';
 import {
   TOKEN_RENEW_BEFORE_MS,
   TokenFileSession,
+  isTokenDirInWorkspace,
   removeTokenDirs,
   tokenFileEnvName,
   type TokenFileSessionOptions,
@@ -147,6 +148,37 @@ describe('TokenFileSession (WI-18)', () => {
     expect(logText()).not.toContain('secretvalue');
   });
 
+  it('stops renewing (no write, error log without token) when the directory was swapped for a symlink', async () => {
+    const creds = new RotatingCredentials(clock, 15 * MIN);
+    const s = session(creds);
+    await s.open();
+    const elsewhere = path.join(root, 'elsewhere');
+    mkdirSync(elsewhere);
+    renameSync(s.dir, path.join(root, 'moved-away'));
+    symlinkSync(elsewhere, s.dir);
+    await clock.advanceAsync(5 * MIN);
+    await s.settled();
+    expect(readdirSync(elsewhere)).toEqual([]); // nothing written through the symlink
+    expect(readFileSync(path.join(root, 'moved-away', 'GH_TOKEN'), 'utf8')).toBe(creds.issued[0]?.token);
+    expect(logger.records.some((r) => r.level === 'error' && r.msg.startsWith('token directory was replaced'))).toBe(true);
+    expect(clock.pendingTimers()).toBe(0);
+    await clock.advanceAsync(60 * MIN);
+    expect(creds.issued).toHaveLength(2); // the one fetched before the check; no further attempts
+    expect(logText()).not.toContain('secretvalue');
+  });
+
+  it('stops renewing when the directory was re-created (different inode)', async () => {
+    const creds = new RotatingCredentials(clock, 15 * MIN);
+    const s = session(creds);
+    await s.open();
+    renameSync(s.dir, path.join(root, 'old-dir')); // keeps the old inode allocated, so the new one differs
+    mkdirSync(s.dir, { mode: 0o700 });
+    await clock.advanceAsync(5 * MIN);
+    await s.settled();
+    expect(readdirSync(s.dir)).toEqual([]);
+    expect(clock.pendingTimers()).toBe(0);
+  });
+
   it('identities without expiry are written once (no timer)', async () => {
     const creds = new RotatingCredentials(clock);
     creds.nonExpiring.add('coder');
@@ -249,6 +281,28 @@ describe('removeTokenDirs (WI-18)', () => {
       expect(statSync(path.join(runDir, 'actions', '3', 'attempt-1', 'context.json')).isFile()).toBe(true);
       expect(await removeTokenDirs(runDir)).toBe(0);
       expect(await removeTokenDirs(path.join(root, 'missing'))).toBe(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('isTokenDirInWorkspace (WI-18)', () => {
+  it('compares resolved paths (symlinks followed, missing parts appended)', async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'orch-token-ws-'));
+    try {
+      const data = path.join(root, 'data');
+      mkdirSync(path.join(data, 'runs', 'run-x'), { recursive: true });
+      const tokenDir = path.join(data, 'runs', 'run-x', 'secrets');
+      // Workspace reached through a symlink pointing at the data dir: textually outside, really inside.
+      symlinkSync(data, path.join(root, 'ws-link'));
+      expect(await isTokenDirInWorkspace(path.join(root, 'ws-link'), tokenDir)).toBe(true);
+      expect(await isTokenDirInWorkspace(path.join(root, 'ws-link', 'runs'), tokenDir)).toBe(true);
+      // Not yet existing workspace inside the data dir.
+      expect(await isTokenDirInWorkspace(path.join(data, 'runs', 'run-x'), tokenDir)).toBe(true);
+      expect(await isTokenDirInWorkspace(path.join(root, 'workspaces', 'wf', 'run-x'), tokenDir)).toBe(false);
+      // Sibling with common prefix is not inside.
+      expect(await isTokenDirInWorkspace(path.join(data, 'run'), tokenDir)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

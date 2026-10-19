@@ -4,10 +4,10 @@
  * at every end status and on recovery, and no token in any log, event or
  * database file.
  */
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FakeClock, MemoryLogger, dataPaths, type TechnicalStatus } from '../core/index.js';
+import { FakeClock, MemoryLogger, dataPaths, type AccessToken, type TechnicalStatus, type TokenRequestOptions } from '../core/index.js';
 import { RotatingCredentials } from '../executors/testing/rotating-credentials.js';
 import { createRunsEnv, waitForRun, type RunsTestEnv } from './testing/helpers.js';
 
@@ -88,7 +88,9 @@ ${extra}`;
         'echo "file=$GH_TOKEN_FILE"',
         'echo "first=$(cat "$GH_TOKEN_FILE")"',
         'i=0',
-        'while [ ! -f "$MARKS/go" ] && [ $i -lt 1500 ]; do',
+        '# waits for the test\'s "go"; the 120 s wall-clock cap only protects against a hanging test run',
+        'end=$(( $(date +%s) + 120 ))',
+        'while [ ! -f "$MARKS/go" ] && [ "$(date +%s)" -lt "$end" ]; do',
         '  # a long-running worker reads the token per call, as with `GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh …`',
         '  cat "$GH_TOKEN_FILE" > "$MARKS/seen.tmp" && mv "$MARKS/seen.tmp" "$MARKS/seen"',
         '  if [ $i -eq 0 ]; then echo \'@@ADISPATCH_EVENT {"type":"status","message":"ready"}\'; fi',
@@ -221,5 +223,82 @@ ${extra}`;
     await h.controller.recover();
     for (const d of dirs) expect(existsSync(d)).toBe(false);
     expect(logger.records.some((r) => r.msg === 'removed left-over token files')).toBe(true);
+  });
+
+  /** Hold the next token exchange until `release()`; optionally honour the abort signal like a real provider. */
+  function gateTokenExchange(honourSignal: boolean): { entered: Promise<void>; release: () => void } {
+    let release!: () => void;
+    let entered!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const enteredP = new Promise<void>((resolve) => (entered = resolve));
+    const original = creds.getToken.bind(creds);
+    creds.getToken = (identity: string, options: TokenRequestOptions = {}): Promise<AccessToken> => {
+      entered();
+      return new Promise<AccessToken>((resolve, reject) => {
+        if (honourSignal) options.signal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        void gate.then(() => original(identity, options).then(resolve, reject));
+      });
+    };
+    return { entered: enteredP, release };
+  }
+
+  for (const honourSignal of [true, false]) {
+    it(`cancel while the token exchange is in progress → cancelled, no file left (provider ${honourSignal ? 'aborts' : 'ignores the signal'})`, async () => {
+      const gate = gateTokenExchange(honourSignal);
+      const snapshot = await env.snapshot(workflow(env.script('worker.sh', 'echo started > "$MARKS/started"')));
+      const h = await harness();
+      const run = env.reserve(snapshot);
+      h.controller.startRun(run.id);
+      await gate.entered;
+      const cancelling = h.controller.cancelRun(run.id);
+      gate.release();
+      const final = await cancelling;
+      expect(final.status).toBe('cancelled');
+      expect(existsSync(tokenDir(run.id))).toBe(false);
+      expect(existsSync(path.join(env.marks, 'started'))).toBe(false);
+      expect(env.p.events.listForRun(run.id).some((e) => e.type === 'run.spawn')).toBe(false);
+      if (!honourSignal) assertNoTokenAnywhere(run.id);
+    });
+  }
+
+  it('the token dir must not lie in the workspace, compared by resolved paths (symlinked workspace) → start_error', async () => {
+    const link = path.join(env.root, 'ws-link');
+    symlinkSync(env.dataDir, link);
+    const yaml = workflow('/bin/true').replace('  cancel_grace: 300ms', `  cancel_grace: 300ms\n  working_directory: '${link}/runs/{run.id}'`);
+    const snapshot = await env.snapshot(yaml);
+    const h = await harness();
+    const run = env.reserve(snapshot);
+    h.controller.startRun(run.id);
+    const final = await waitForRun(h, env.p, run.id, (r) => r.status === 'start_error');
+    expect(final.finalReason).toMatch(/token files must lie outside the workspace/);
+    expect(creds.issued).toEqual([]);
+    expect(existsSync(tokenDir(run.id))).toBe(false);
+  });
+
+  it('recovery also removes token dirs of a finished run whose action was still running at the crash', async () => {
+    // Decision: the old action process (if any) is not ours any more and its token would not be renewed;
+    // recovery marks the shell action failed (WI-07) and removes its token files.
+    const cmd = env.script('action.sh', 'exit 0');
+    const snapshot = await env.snapshot(
+      workflow('/bin/true', `on_success:\n  - type: shell\n    command: ${cmd}\n    secrets:\n      GH_TOKEN: { identity: coder, delivery: file }\n`),
+    );
+    const run = env.reserve(snapshot);
+    env.p.runs.transition(run.id, 'starting');
+    env.p.runs.transition(run.id, 'running', { update: { pid: 999_999 } });
+    env.p.runs.beginFinalization(run.id, { status: 'completed', businessResult: 'success', reason: 'exit code 0' });
+    const journal = env.p.actions.createJournal(
+      run.id,
+      'on_success',
+      snapshot.workflow.hooks.on_success.map((config) => ({ type: config.type, name: config.id, config })),
+    );
+    env.p.runs.finish(run.id);
+    env.p.actions.startAttempt(journal[0]!.id);
+    const attemptSecrets = path.join(dataPaths(env.dataDir).run(run.id).runDir, 'actions', String(journal[0]!.id), 'attempt-1', 'secrets');
+    mkdirSync(attemptSecrets, { recursive: true });
+    writeFileSync(path.join(attemptSecrets, 'GH_TOKEN'), 'ghs_leftover_action_token');
+    const h = env.harness({ credentials: creds, logger });
+    await h.controller.recover();
+    expect(existsSync(attemptSecrets)).toBe(false);
+    expect(env.p.actions.listForHook(run.id, 'on_success').map((a) => a.status)).toEqual(['failed']);
   });
 });

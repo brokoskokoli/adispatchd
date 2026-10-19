@@ -116,7 +116,8 @@ ${extra}`;
     const cmd = script(
       [
         'echo \'@@ADISPATCH_EVENT {"type":"status","message":"ready"}\'',
-        'i=0; while [ ! -f "$OUT/go" ] && [ $i -lt 1500 ]; do i=$((i + 1)); sleep 0.02; done',
+        // Waits for the test's "go"; the 120 s wall-clock cap only protects against a hanging test run.
+        'end=$(( $(date +%s) + 120 )); while [ ! -f "$OUT/go" ] && [ "$(date +%s)" -lt "$end" ]; do sleep 0.02; done',
         'cat "$GH_TOKEN_FILE" > "$OUT/seen"',
         'echo "token=$(cat "$GH_TOKEN_FILE")"',
         'exit 4',

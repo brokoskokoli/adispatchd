@@ -38,6 +38,7 @@ export {
   TOKEN_RENEW_MAX_RETRY_MS,
   TOKEN_RENEW_RETRY_MS,
   TokenFileSession,
+  isTokenDirInWorkspace,
   removeTokenDirs,
   tokenFileEnvName,
   type TokenFileRequest,
