@@ -35,6 +35,12 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Deklarative Filter und Prioritäten** auf Labels, Zustand, Milestone, Issue-Typ, native Abhängigkeiten („blocked by“)
   und Felder aus **GitHub Projects** (Status, Priorität, eigene Felder; „A oder B“ per `in`) – fehlender Zugriff ergibt
   `unknown` statt eines falschen Starts. **Benannte Filter** (`filters/<id>.yaml`) einmal definieren, überall verwenden.
+- **Sichtbare Startbedingungen:** Shell-Prüfungen (`conditions`, `shell_filter`) bekommen optionale Namen; die UI zeigt
+  jede Prüfung mit ihrem letzten Ergebnis (ok / nicht jetzt / Prüffehler, Zeitpunkt, Cache, erste stderr-Zeile) und je
+  Planungsschritt, wie viele Items die Item-Prüfungen bestanden haben.
+- **Info-Kacheln im Dashboard:** `dashboard.yaml` definiert kleine Skripte (Text, Zahl oder Prozent mit Warn- und
+  Kritisch-Schwellen), die der Daemon im Hintergrund nach Cache-Ablauf ausführt – z. B. Plattenbelegung, offene PRs,
+  Guthaben.
 - **Arbeits-Branch und PR eines Issues** als Felder (`work_branch`, `work_pr`, `linked_branches`, `closing_prs`):
   filtern („hat offenen PR“), in Views mit Link auf den PR anzeigen und per `{item.work_branch}`/`{item.work_pr}`
   direkt an Worker und Actions übergeben – frisch gelesen, nie leer geraten, wenn GitHub sie nicht liefern kann.
@@ -193,7 +199,7 @@ item_priority:
     - when: { field: project.Priority, operator: in, value: [P0, P1] }
       value: 100
 conditions:
-  workflow: [ { type: shell, command: scripts/check-credits.sh, cache: 60s } ]
+  workflow: [ { name: Credits verfügbar, type: shell, command: scripts/check-credits.sh, cache: 60s } ]
 execute:
   type: shell
   command: scripts/coder.sh          # relativ zum config-dir; ohne Shell, Argumente als Liste
