@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
+import { APP_VERSION } from '../app.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const ENABLED = process.env.ADISPATCH_PACK_TEST === '1';
@@ -96,7 +97,7 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     expect(existsSync(bin1)).toBe(true);
     expect(readFileSync(path.join(prefix1, 'node_modules', 'adispatchd', 'dist', 'cli', 'main.js'), 'utf8').startsWith('#!/usr/bin/env node')).toBe(true);
     const version = await run(bin1, ['--version'], { cwd: root });
-    expect(version.stdout.trim()).toBe('0.4.0');
+    expect(version.stdout.trim()).toBe(APP_VERSION);
 
     // 3. init (twice: nothing is overwritten).
     const configDir = path.join(root, 'config');

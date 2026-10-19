@@ -66,7 +66,7 @@ import { createSystemProbe, ResourceMonitor, type SystemProbe } from './monitori
 import type { FastifyInstance } from 'fastify';
 
 /** Package version reported by `/api/v1/status`. */
-export const APP_VERSION = '0.4.0';
+export const APP_VERSION = '0.5.0';
 /** Default drain timeout on SIGTERM before cancel-all (see docs/handoff/WI-08.md). */
 export const DEFAULT_DRAIN_TIMEOUT_MS = 10 * 60_000;
 /** Default time for cancelled runs (incl. `on_cancel`) before hooks are interrupted. */

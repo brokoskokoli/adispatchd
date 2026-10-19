@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startAppEnv, type AppEnv } from '../api/testing/helpers.js';
+import { APP_VERSION } from '../app.js';
 import type { DryRunResult } from '../scheduler/index.js';
 import { createConfigReloadHandler, createSchedulerHandler, createShutdownHandler, createStatusHandler } from './control.js';
 import { ApiClient, EXIT_UNREACHABLE, resolveBaseUrl, urlForBind } from './http-client.js';
@@ -71,7 +72,7 @@ describe('cli control commands over HTTP', () => {
     expect(io.out).toContain('scheduler:  running');
 
     io = await cli(['status', '--url', env.url, '--json'], allHandlers);
-    expect(JSON.parse(io.out)).toMatchObject({ version: '0.4.0', scheduler: { state: 'running' } });
+    expect(JSON.parse(io.out)).toMatchObject({ version: APP_VERSION, scheduler: { state: 'running' } });
 
     io = await cli(['pause', '--url', env.url], allHandlers);
     expect(io.code, io.err).toBe(0);
