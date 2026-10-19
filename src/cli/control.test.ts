@@ -71,7 +71,7 @@ describe('cli control commands over HTTP', () => {
     expect(io.out).toContain('scheduler:  running');
 
     io = await cli(['status', '--url', env.url, '--json'], allHandlers);
-    expect(JSON.parse(io.out)).toMatchObject({ version: '0.3.0', scheduler: { state: 'running' } });
+    expect(JSON.parse(io.out)).toMatchObject({ version: '0.3.1', scheduler: { state: 'running' } });
 
     io = await cli(['pause', '--url', env.url], allHandlers);
     expect(io.code, io.err).toBe(0);

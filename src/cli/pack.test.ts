@@ -96,7 +96,7 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     expect(existsSync(bin1)).toBe(true);
     expect(readFileSync(path.join(prefix1, 'node_modules', 'adispatchd', 'dist', 'cli', 'main.js'), 'utf8').startsWith('#!/usr/bin/env node')).toBe(true);
     const version = await run(bin1, ['--version'], { cwd: root });
-    expect(version.stdout.trim()).toBe('0.3.0');
+    expect(version.stdout.trim()).toBe('0.3.1');
 
     // 3. init (twice: nothing is overwritten).
     const configDir = path.join(root, 'config');
