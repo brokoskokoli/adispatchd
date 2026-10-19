@@ -16,6 +16,7 @@ import {
   type TemplateScope,
 } from '../core/index.js';
 import { checkFieldName, checkFilterFields, sourceFieldContext, viewFieldContext, type FieldIssue } from './field-catalog.js';
+import type { RawFilterNode } from './filter-schema.js';
 import type { IssueCollector, IssuePath } from './issues.js';
 import type {
   GlobalConfig,
@@ -25,6 +26,7 @@ import type {
   ViewConfig,
   WorkflowConfig,
 } from './model.js';
+import type { NamedFilters } from './named-filters.js';
 import type { RawParameter } from './schemas.js';
 
 /** Files of the top-level documents. */
@@ -39,12 +41,17 @@ export const RESERVED_ENV_PREFIX = 'ADISPATCH_';
 export interface WorkflowEntry {
   workflow: WorkflowConfig;
   rawParameters: Readonly<Record<string, RawParameter>>;
+  /** Filter trees as written (with references to named filters), to locate field issues. */
+  rawFilter: RawFilterNode | null;
+  rawPriorityRules: readonly RawFilterNode[];
 }
 
 /** A view together with raw flags. */
 export interface ViewEntry {
   view: ViewConfig;
   hasShellFilter: boolean;
+  /** Filter tree as written (with references to named filters). */
+  rawFilter: RawFilterNode | null;
 }
 
 /** Input of {@link validateSemantics}. */
@@ -54,6 +61,7 @@ export interface SemanticInput {
   identities: Readonly<Record<string, IdentityConfig>>;
   workflows: readonly WorkflowEntry[];
   views: readonly ViewEntry[];
+  namedFilters: NamedFilters;
 }
 
 /** True if `tz` is a valid IANA time zone for this runtime. */
@@ -213,9 +221,21 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
     const source = input.sources[wf.trigger.source];
     if (source) {
       const ctx = sourceFieldContext(source);
-      if (wf.filter) addFieldIssues(checkFilterFields(wf.filter, ctx, { listing: true }), issues, file, ['filter']);
+      const target = (raw: RawFilterNode | undefined, at: IssuePath): FieldIssueTarget => ({
+        issues,
+        file,
+        at,
+        raw: raw ?? null,
+        named: input.namedFilters,
+      });
+      if (wf.filter) {
+        addFieldIssues(checkFilterFields(wf.filter, ctx, { listing: true }), target(entry.rawFilter ?? undefined, ['filter']));
+      }
       wf.itemPriority?.rules.forEach((rule, i) =>
-        addFieldIssues(checkFilterFields(rule.when, ctx, { listing: false }), issues, file, ['item_priority', 'rules', i, 'when']),
+        addFieldIssues(
+          checkFilterFields(rule.when, ctx, { listing: false }),
+          target(entry.rawPriorityRules[i], ['item_priority', 'rules', i, 'when']),
+        ),
       );
     }
   }
@@ -430,7 +450,15 @@ function validateView(entry: ViewEntry, input: SemanticInput, issues: IssueColle
   }
   if (types.size === 1) {
     const ctx = viewFieldContext(known);
-    if (view.filter) addFieldIssues(checkFilterFields(view.filter, ctx, { listing: true }), issues, file, ['filter']);
+    if (view.filter) {
+      addFieldIssues(checkFilterFields(view.filter, ctx, { listing: true }), {
+        issues,
+        file,
+        at: ['filter'],
+        raw: entry.rawFilter,
+        named: input.namedFilters,
+      });
+    }
     const checkName = (field: string, at: IssuePath): void => {
       const message = checkFieldName(field, ctx);
       if (message) issues.error(file, at, message);
@@ -443,6 +471,26 @@ function validateView(entry: ViewEntry, input: SemanticInput, issues: IssueColle
   }
 }
 
-function addFieldIssues(found: readonly FieldIssue[], issues: IssueCollector, file: string, at: IssuePath): void {
-  for (const issue of found) issues.error(file, [...at, ...issue.path], issue.message);
+/** Where field issues of one filter tree are reported. */
+interface FieldIssueTarget {
+  issues: IssueCollector;
+  file: string;
+  /** Path of the filter tree in `file`. */
+  at: IssuePath;
+  /** The tree as written, to map issues inside named filters back to the place of use (WI-15). */
+  raw: RawFilterNode | null;
+  named: NamedFilters;
+}
+
+function addFieldIssues(found: readonly FieldIssue[], target: FieldIssueTarget): void {
+  for (const issue of found) {
+    const loc = target.raw ? target.named.locate(target.raw, issue.path) : { path: issue.path };
+    target.issues.add({
+      severity: 'error',
+      file: target.file,
+      path: [...target.at, ...loc.path],
+      message: issue.message,
+      ...(loc.via !== undefined ? { via: loc.via } : {}),
+    });
+  }
 }

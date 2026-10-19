@@ -7,6 +7,7 @@
 export * from './model.js';
 export { formatConfigIssue } from './issues.js';
 export {
+  FILTERS_DIR,
   loadConfig,
   MAX_CONFIG_FILE_BYTES,
   VIEWS_DIR,
@@ -16,6 +17,7 @@ export {
 } from './loader.js';
 export { CONFIG_FILE, IDENTITIES_FILE, RESERVED_ENV_PREFIX, SOURCES_FILE, cronError, isValidTimeZone } from './validate.js';
 export { DEFAULT_WORKING_DIRECTORY, DEFAULTS } from './schemas.js';
+export { MAX_FILTER_USE_DEPTH } from './named-filters.js';
 export {
   ConfigLoadError,
   ConfigManager,

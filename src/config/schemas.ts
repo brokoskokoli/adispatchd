@@ -425,3 +425,17 @@ export const viewSchema = z.strictObject({
 
 /** Parsed view file. */
 export type RawView = z.output<typeof viewSchema>;
+
+// ---------------------------------------------------------------------------
+// filters/*.yaml (WI-15)
+// ---------------------------------------------------------------------------
+
+/** Schema of one `filters/*.yaml` file: a named, reusable filter. */
+export const namedFilterSchema = z.strictObject({
+  id: configId,
+  description: z.string().optional(),
+  filter: filterNodeSchema,
+});
+
+/** Parsed named filter file. */
+export type RawNamedFilter = z.output<typeof namedFilterSchema>;

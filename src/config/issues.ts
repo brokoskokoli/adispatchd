@@ -13,6 +13,11 @@ export interface PendingIssue {
   path: IssuePath;
   message: string;
   line?: number;
+  /**
+   * Hops through named filters (WI-15), appended to the formatted path:
+   * `filter.all[0] (use "x" → filters/x.yaml: filter.all[1].field)`.
+   */
+  via?: string;
 }
 
 /** Mutable collector used during one load. */
@@ -25,6 +30,11 @@ export class IssueCollector {
 
   warning(file: string, path: IssuePath, message: string, line?: number): void {
     this.items.push({ severity: 'warning', file, path, message, ...(line !== undefined ? { line } : {}) });
+  }
+
+  /** Add an issue as is (e.g. with {@link PendingIssue.via}). */
+  add(issue: PendingIssue): void {
+    this.items.push(issue);
   }
 
   get hasErrors(): boolean {

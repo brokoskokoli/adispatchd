@@ -11,9 +11,10 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { isMap, isSeq, LineCounter, parseDocument, type Document } from 'yaml';
 import type { z } from 'zod';
-import { systemClock, toAbsolutePath, type Clock } from '../core/index.js';
+import { CONFIG_ID_PATTERN, systemClock, toAbsolutePath, type Clock } from '../core/index.js';
 import { formatIssuePath, IssueCollector, sortIssues, type IssuePath } from './issues.js';
 import type { ConfigIssue, GlobalConfig, LoadedConfig, ViewConfig, WorkflowConfig } from './model.js';
+import { NamedFilters, type NamedFilterEntry } from './named-filters.js';
 import {
   normalizeGlobal,
   normalizeIdentities,
@@ -24,6 +25,7 @@ import {
 import {
   globalConfigSchema,
   identitiesFileSchema,
+  namedFilterSchema,
   sourcesFileSchema,
   viewSchema,
   workflowSchema,
@@ -41,6 +43,8 @@ import {
 export const WORKFLOWS_DIR = 'workflows';
 /** Sub-directory with one file per view. */
 export const VIEWS_DIR = 'views';
+/** Sub-directory with one file per named filter (WI-15). */
+export const FILTERS_DIR = 'filters';
 
 /** Maximum accepted size of a single YAML file. */
 export const MAX_CONFIG_FILE_BYTES = 1024 * 1024;
@@ -96,6 +100,7 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
   const identitiesFile = await readTop(IDENTITIES_FILE, false);
   const workflowFiles = await readDir(dir, WORKFLOWS_DIR, issues, files);
   const viewFiles = await readDir(dir, VIEWS_DIR, issues, files);
+  const filterFiles = await readDir(dir, FILTERS_DIR, issues, files);
 
   const rawGlobal = parseWith(globalConfigSchema, configFile, CONFIG_FILE, issues);
   const rawSources = parseWith(sourcesFileSchema, sourcesFile, SOURCES_FILE, issues);
@@ -110,20 +115,48 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
   const sources = rawSources ? normalizeSources(rawSources) : {};
   const identities = rawIdentities ? normalizeIdentities(rawIdentities) : {};
 
+  // Named filters first: workflows and views contain them expanded.
+  const filterEntries: NamedFilterEntry[] = [];
+  const brokenFilters = new Map<string, string>();
+  for (const parsed of filterFiles) {
+    const raw = parseWith(namedFilterSchema, parsed, parsed.file, issues);
+    if (raw) {
+      filterEntries.push({ id: raw.id, file: parsed.file, description: raw.description ?? null, filter: raw.filter });
+    } else {
+      const id = (parsed.data as { id?: unknown } | null)?.id;
+      if (typeof id === 'string' && CONFIG_ID_PATTERN.test(id)) brokenFilters.set(id, parsed.file);
+    }
+  }
+  const namedFilters = new NamedFilters(filterEntries, brokenFilters, issues);
+
+  // Usage of named filters is only complete if every workflow and view could be parsed.
+  let allUsersParsed = true;
   const workflowEntries: WorkflowEntry[] = [];
   for (const parsed of workflowFiles) {
     const raw = parseWith(workflowSchema, parsed, parsed.file, issues);
     if (raw) {
-      workflowEntries.push({ workflow: normalizeWorkflow(raw, parsed.file, global, dir), rawParameters: raw.parameters });
-    }
+      workflowEntries.push({
+        workflow: normalizeWorkflow(raw, parsed.file, global, dir, (node, at) => namedFilters.expandAt(node, parsed.file, at)),
+        rawParameters: raw.parameters,
+        rawFilter: raw.filter ?? null,
+        rawPriorityRules: raw.item_priority?.rules.map((r) => r.when) ?? [],
+      });
+    } else allUsersParsed = false;
   }
   const viewEntries: ViewEntry[] = [];
   for (const parsed of viewFiles) {
     const raw = parseWith(viewSchema, parsed, parsed.file, issues);
-    if (raw) viewEntries.push({ view: normalizeView(raw, parsed.file), hasShellFilter: raw.shell_filter !== undefined });
+    if (raw) {
+      viewEntries.push({
+        view: normalizeView(raw, parsed.file, (node, at) => namedFilters.expandAt(node, parsed.file, at)),
+        hasShellFilter: raw.shell_filter !== undefined,
+        rawFilter: raw.filter ?? null,
+      });
+    } else allUsersParsed = false;
   }
+  if (allUsersParsed) namedFilters.reportUnused();
 
-  validateSemantics({ global, sources, identities, workflows: workflowEntries, views: viewEntries }, issues);
+  validateSemantics({ global, sources, identities, workflows: workflowEntries, views: viewEntries, namedFilters }, issues);
 
   if (issues.hasErrors) return finish(issues, files);
 
@@ -136,7 +169,7 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
   const views: Record<string, ViewConfig> = {};
   for (const { view } of viewEntries) views[view.id] = view;
 
-  const content = { global, sources, identities, workflows, views };
+  const content = { global, sources, identities, workflows, views, filters: namedFilters.list() };
   const config: LoadedConfig = {
     configDir: dir,
     version: options.version ?? 1,
@@ -158,7 +191,7 @@ function finish(
     return {
       severity: item.severity,
       file: item.file,
-      path: formatIssuePath(item.path),
+      path: item.via !== undefined ? `${formatIssuePath(item.path)} (${item.via})` : formatIssuePath(item.path),
       message: item.message,
       ...(line !== undefined ? { line } : {}),
     };

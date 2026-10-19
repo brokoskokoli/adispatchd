@@ -377,6 +377,24 @@ export interface ViewConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Named filters (filters/*.yaml, WI-15)
+// ---------------------------------------------------------------------------
+
+/**
+ * A named, reusable filter. Workflows and views reference it with
+ * `{ use: <id> }` or `filter: <id>`; their normalized filters already contain
+ * the expanded tree, so this entry is informational (API, UI).
+ */
+export interface NamedFilterConfig {
+  id: string;
+  /** File relative to the config dir (`filters/<id>.yaml`). */
+  file: string;
+  description: string | null;
+  /** Expanded tree (references to other named filters are replaced). */
+  filter: FilterNode;
+}
+
+// ---------------------------------------------------------------------------
 // Loaded configuration
 // ---------------------------------------------------------------------------
 
@@ -395,6 +413,8 @@ export interface LoadedConfig {
   identities: Readonly<Record<string, IdentityConfig>>;
   workflows: Readonly<Record<string, WorkflowConfig>>;
   views: Readonly<Record<string, ViewConfig>>;
+  /** Named filters (`filters/*.yaml`); already expanded into workflows and views. */
+  filters: Readonly<Record<string, NamedFilterConfig>>;
   /** SHA-256 per workflow definition (detects changed workflows on reload). */
   workflowHashes: Readonly<Record<string, string>>;
 }

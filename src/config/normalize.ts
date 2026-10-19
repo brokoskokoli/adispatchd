@@ -3,7 +3,9 @@
  * normalized model (`model.ts`). Pure; semantic checks live in `validate.ts`.
  */
 import path from 'node:path';
-import { dataPaths, HOOK_NAMES, type HookName } from '../core/index.js';
+import { dataPaths, HOOK_NAMES, type FilterNode, type HookName } from '../core/index.js';
+import type { RawFilterNode } from './filter-schema.js';
+import type { IssuePath } from './issues.js';
 import type {
   GlobalConfig,
   HooksConfig,
@@ -24,6 +26,12 @@ import type {
   RawView,
   RawWorkflow,
 } from './schemas.js';
+
+/**
+ * Expands references to named filters in a filter tree used at `at` of the
+ * file being normalized (WI-15, see `named-filters.ts`).
+ */
+export type FilterExpander = (node: RawFilterNode, at: IssuePath) => FilterNode;
 
 /** Resolve a configured directory: absolute stays, relative is taken relative to the config dir. */
 export function resolveConfigPath(configDir: string, value: string): string {
@@ -178,6 +186,7 @@ export function normalizeWorkflow(
   file: string,
   global: GlobalConfig,
   configDir: string,
+  expand: FilterExpander,
 ): WorkflowConfig {
   const hooks = Object.fromEntries(
     HOOK_NAMES.map((hook) => [
@@ -202,10 +211,13 @@ export function normalizeWorkflow(
         : raw.trigger.type === 'source'
           ? { type: 'source', source: raw.trigger.source }
           : { type: 'manual' },
-    filter: raw.filter ?? null,
+    filter: raw.filter ? expand(raw.filter, ['filter']) : null,
     shellFilter: raw.shell_filter ? { command: resolveCommand(configDir, raw.shell_filter.command), timeoutMs: raw.shell_filter.timeout } : null,
     itemPriority: raw.item_priority
-      ? { rules: raw.item_priority.rules.map((r) => ({ when: r.when, value: r.value })), default: raw.item_priority.default }
+      ? {
+          rules: raw.item_priority.rules.map((r, i) => ({ when: expand(r.when, ['item_priority', 'rules', i, 'when']), value: r.value })),
+          default: raw.item_priority.default,
+        }
       : null,
     conditions: {
       workflow: raw.conditions.workflow.map((c) => ({
@@ -244,13 +256,13 @@ export function normalizeWorkflow(
 }
 
 /** Normalize one view file. */
-export function normalizeView(raw: RawView, file: string): ViewConfig {
+export function normalizeView(raw: RawView, file: string, expand: FilterExpander): ViewConfig {
   return {
     id: raw.id,
     title: raw.title ?? raw.id,
     file,
     sources: [...raw.sources],
-    filter: raw.filter ?? null,
+    filter: raw.filter ? expand(raw.filter, ['filter']) : null,
     fields: raw.fields.map((f) => ({ field: f.field, label: f.label ?? f.field, link: f.link ?? null })),
     sort: raw.sort ? { field: raw.sort.field, direction: raw.sort.direction } : null,
   };
