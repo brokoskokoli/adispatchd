@@ -4,7 +4,16 @@ import { h, replaceChildren } from '../dom.js';
 import { cellText, nextSort, objectText, sortRows, type SortDirection } from '../../shared/sort.js';
 import { itemPanelLink } from './item.js';
 import type { Page, PageContext } from '../page.js';
-import { describeSort, groupLabel, groupRows, needsJumpLinks, sectionHeading, visibleSections } from '../../shared/view-layout.js';
+import {
+  describeSort,
+  groupLabel,
+  groupRows,
+  jumpTo,
+  needsJumpLinks,
+  sectionHeading,
+  tableSortKey,
+  visibleSections,
+} from '../../shared/view-layout.js';
 import type { ViewColumnDef, ViewDef, ViewItems, ViewRowData } from '../types.js';
 import { button, errorBox, externalLink, loading, routeLink, runLink, table, time } from '../ui.js';
 
@@ -118,7 +127,7 @@ export const viewPage = (ctx: PageContext, id: string): Page => {
               h(
                 'tbody',
                 null,
-                h('tr', { class: 'group-row' }, h('th', { scope: 'colgroup', colspan: span }, groupLabel(g.group, g.rows.length))),
+                h('tr', { class: 'group-row' }, h('th', { scope: 'rowgroup', colspan: span }, groupLabel(g.group, g.rows.length))),
                 g.rows.map((r) => h('tr', null, rowCells(r).map((c) => h('td', null, c)))),
               ),
             ),
@@ -140,13 +149,14 @@ export const viewPage = (ctx: PageContext, id: string): Page => {
       d.truncated ? h('div', { class: 'alert alert-warn' }, 'Result truncated.') : null,
     ];
     if (!d.sections) {
-      replaceChildren(body, ...alerts, renderTableFor('view', d.columns, d.rows, d.groupBy !== undefined, 'No items match this view.'));
+      replaceChildren(body, ...alerts, renderTableFor(tableSortKey(null), d.columns, d.rows, d.groupBy !== undefined, 'No items match this view.'));
       return;
     }
     const shown = visibleSections(d.sections, d.hideEmptySections ?? false);
     const headings: HTMLElement[] = [];
     const blocks = shown.map((s, i) => {
-      const heading = h('h2', { class: 'view-section-title' }, sectionHeading(s.title, s.counts.rows));
+      // tabindex -1: jump links move the focus here (keyboard and screen reader users continue in the section).
+      const heading = h('h2', { class: 'view-section-title', tabindex: '-1' }, sectionHeading(s.title, s.counts.rows));
       headings.push(heading);
       return h(
         'section',
@@ -156,7 +166,7 @@ export const viewPage = (ctx: PageContext, id: string): Page => {
         s.counts.filterUnknown > 0
           ? h('div', { class: 'alert alert-info' }, `${s.counts.filterUnknown} item(s) not placed here because the section filter could not be evaluated (unknown).`)
           : null,
-        renderTableFor(`section-${i}`, s.fields, s.rows, s.groupBy !== null, 'No entries.'),
+        renderTableFor(tableSortKey(s.title), s.fields, s.rows, s.groupBy !== null, 'No entries.'),
       );
     });
     // Jump links (buttons: hash links would change the route).
@@ -165,7 +175,7 @@ export const viewPage = (ctx: PageContext, id: string): Page => {
           'nav',
           { class: 'view-jumps', 'aria-label': 'Sections' },
           shown.map((s, i) =>
-            h('button', { type: 'button', class: 'btn btn-plain', on: { click: () => headings[i]?.scrollIntoView({ behavior: 'smooth', block: 'start' }) } }, sectionHeading(s.title, s.counts.rows)),
+            h('button', { type: 'button', class: 'btn btn-plain', on: { click: () => jumpTo(headings[i]) } }, sectionHeading(s.title, s.counts.rows)),
           ),
         )
       : null;

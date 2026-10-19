@@ -55,6 +55,28 @@ export function needsJumpLinks(count: number): boolean {
   return count > 3;
 }
 
+/**
+ * Key of the browser-only column sort of a table: by section title (unique per
+ * view), so a sort survives a refresh even if empty sections are hidden or the
+ * section list changes; the plain view uses a fixed key.
+ */
+export function tableSortKey(sectionTitle: string | null): string {
+  return sectionTitle === null ? 'view' : `section:${sectionTitle}`;
+}
+
+/** Target of a jump link (a section heading with `tabindex="-1"`). */
+export interface JumpTarget {
+  scrollIntoView(options?: { behavior?: 'smooth' | 'auto'; block?: 'start' }): void;
+  focus(options?: { preventScroll?: boolean }): void;
+}
+
+/** Scroll to a section heading and move the keyboard focus there. */
+export function jumpTo(target: JumpTarget | undefined): void {
+  if (!target) return;
+  target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  target.focus({ preventScroll: true });
+}
+
 /** Short description of the configured sort, e.g. `project.Status (custom order), created_at ↑`. */
 export function describeSort(keys: readonly SortKeyLike[]): string {
   if (keys.length === 0) return 'item key';

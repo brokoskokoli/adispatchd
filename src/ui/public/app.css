@@ -133,6 +133,7 @@ button.sort:hover { color: var(--text); }
 /* views: sections and row groups (WI-28) */
 .view-section { margin-top: 22px; }
 .view-section-title { font-size: 16px; margin: 0 0 2px; scroll-margin-top: 12px; }
+.view-section-title:focus:not(:focus-visible) { outline: none; }
 .view-section-meta { margin: 0 0 6px; font-size: 12.5px; }
 .view-jumps { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
 .view-sort-reset { margin: 0 0 6px; }
