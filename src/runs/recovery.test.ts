@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ProcessStartIdentity } from '../core/index.js';
@@ -256,6 +256,24 @@ describe.runIf(supported)('RunController recovery (Spec §14, variant A)', () =>
     expect(env.github.comments(REPO, ISSUE).map((c) => c.body.split('\n')[0])).toEqual(['Needs maintainer: Needs input']);
     // Counted exactly once (at the original → finalizing transition): failure never counts.
     expect(env.p.blocks.counter('wf', ITEM_KEY).consecutive).toBe(0);
+  });
+
+  it('keeps files when resuming a finalizing run, exactly once (WI-22)', async () => {
+    const snapshot = await env.snapshot(workflowYaml('/bin/true').replace('  cancel_grace: 300ms', "  cancel_grace: 300ms\n  keep: ['*.log']"));
+    const run = env.reserve(snapshot);
+    const ws = path.join(env.workspaces, 'wf', run.id);
+    mkdirSync(ws, { recursive: true });
+    writeFileSync(path.join(ws, 'gate.log'), 'gate');
+    env.p.runs.update(run.id, { workspacePath: ws });
+    env.p.runs.transition(run.id, 'starting');
+    env.p.runs.transition(run.id, 'running', { update: { pid: 999_999 } });
+    env.p.runs.beginFinalization(run.id, { status: 'completed', businessResult: 'success', reason: 'exit code 0' });
+    const h = env.harness();
+    await h.controller.recover();
+    expect(env.p.runs.require(run.id).status).toBe('completed');
+    expect(readFileSync(path.join(env.dataDir, 'runs', run.id, 'kept', 'gate.log'), 'utf8')).toBe('gate');
+    expect(existsSync(ws)).toBe(false);
+    expect(env.p.events.listForRun(run.id).filter((e) => e.type === RUN_EVENTS.keptFiles)).toHaveLength(1);
   });
 
   it('a reserved run is released as cancelled without hooks; cancelling runs end as cancelled', async () => {

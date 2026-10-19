@@ -19,7 +19,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { FILTER_OPERATORS, HOOK_NAMES, NOTIFICATION_EVENT_TYPES, OPERATORS_BY_TYPE, PLACEHOLDERS } from '../core/index.js';
 import { GITHUB_FIELD_DEFINITIONS, PROJECT_FIELD_DATA_TYPES, PROJECT_FIELD_KINDS, PROJECT_FIELD_TYPES } from '../sources/github/index.js';
 import { VIEW_RUN_FIELDS } from '../views/index.js';
-import { DEFAULT_WORKING_DIRECTORY, loadConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
+import { KEEP_MAX_ENTRIES, KEEP_MAX_FILES } from '../runs/index.js';
+import { DEFAULT_WORKING_DIRECTORY, DEFAULTS, loadConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
 import { createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
 
 const DOC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../docs/configuration-reference.md');
@@ -166,6 +167,13 @@ describe('docs/configuration-reference.md', () => {
     }
   });
 
+  it('documents the value of every project field kind in source.update and the write mutations (WI-16)', () => {
+    for (const kind of PROJECT_FIELD_KINDS) expect(markdown, kind).toMatch(new RegExp(`\\| \`${kind}\` \\| (String|Zahl|Datum)`));
+    for (const name of ['addProjectV2ItemById', 'updateProjectV2ItemFieldValue', 'clearProjectV2ItemFieldValue', 'Projects: Read and write']) {
+      expect(markdown, name).toContain(name);
+    }
+  });
+
   it('documents the allowed operators per field type (validated since WI-13)', () => {
     for (const [type, operators] of Object.entries(OPERATORS_BY_TYPE)) {
       expect(markdown, type).toContain(`| \`${type}\` | ${operators.join(', ')} |`);
@@ -179,6 +187,16 @@ describe('docs/configuration-reference.md', () => {
     const cap = String(MAX_EXPANDED_FILTER_NODES).replace(/\B(?=(\d{3})+$)/g, ' ');
     expect(markdown).toContain(`höchstens **${cap} Knoten** je Wurzel`);
     expect(markdown).toContain(`Expanded filter would exceed ${MAX_EXPANDED_FILTER_NODES} nodes`);
+  });
+
+  it('documents execute.keep: keys, default, glob syntax, event, API and limits (WI-22)', () => {
+    expect(markdown).toContain('| `keep` | Liste String | nein | `[]` |');
+    expect(markdown).toContain(`| \`keep_max_size\` | Größe | nein | \`${DEFAULTS.keepMaxSize}\` |`);
+    expect(markdown).toContain('`run.kept_files`');
+    expect(markdown).toContain('**Secrets werden beim Kopieren redigiert** – best effort, wie Logs');
+    expect(markdown).toContain('GET /api/v1/runs/:id/kept');
+    const fmt = (n: number): string => String(n).replace(/\B(?=(\d{3})+$)/g, ' ');
+    expect(markdown).toContain(`höchstens ${fmt(KEEP_MAX_FILES)} Dateien und ${fmt(KEEP_MAX_ENTRIES)} untersuchte Verzeichniseinträge`);
   });
 
   it('documents all hooks, operators and notification events', () => {

@@ -178,6 +178,8 @@ export function toWorkflowView(
       workingDirectory: c.execute.workingDirectory,
       timeout: c.execute.timeout,
       secrets: Object.keys(c.execute.secrets),
+      keep: c.execute.keep,
+      keepMaxSizeBytes: c.execute.keepMaxSizeBytes,
     },
     hasFilter: c.filter !== null,
     hasShellFilter: c.shellFilter !== null,

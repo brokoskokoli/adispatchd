@@ -477,12 +477,27 @@ export interface IdentityDescription {
   appId?: string;
 }
 
-/** Declarative change to an item (`source.update`, Spec §10). */
+/** Desired value of a project field in a {@link SourceUpdate}: option name, text, number, `YYYY-MM-DD`, iteration title; `null` clears. */
+export type ProjectFieldUpdateValue = string | number | null;
+
+/** Declarative change to an item (`source.update`, Spec §10). Labels are applied first, then project fields. */
 export interface SourceUpdate {
   labels?: {
     add?: readonly string[];
     remove?: readonly string[];
   };
+  /** Project fields (WI-16): declared field name (without `project.`) → desired value. */
+  project?: Readonly<Record<string, ProjectFieldUpdateValue>>;
+}
+
+/** What {@link SourceAdapter.applyUpdate} actually changed (action journal). */
+export interface SourceUpdateApplied {
+  labelsAdded?: string[];
+  labelsRemoved?: string[];
+  /** Project fields that were changed: declared name → new value (`null` = cleared). */
+  projectFields?: Record<string, ProjectFieldUpdateValue>;
+  /** True if the item had to be added to the project first. */
+  projectItemAdded?: boolean;
 }
 
 /** Outcome of {@link SourceAdapter.applyUpdate}. */
@@ -490,7 +505,7 @@ export interface SourceUpdateResult {
   /** False if the item already was in the desired state (idempotent no-op). */
   changed: boolean;
   /** What was actually changed, for the action journal. */
-  applied?: { labelsAdded?: string[]; labelsRemoved?: string[] };
+  applied?: SourceUpdateApplied;
 }
 
 /** Reference to a posted comment. */

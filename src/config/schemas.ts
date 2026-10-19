@@ -48,6 +48,7 @@ export const DEFAULTS = {
   checkTimeout: '30s',
   shellActionTimeout: '5m',
   cancelGrace: '30s',
+  keepMaxSize: '100MB',
   scheduleTimezone: 'UTC',
 } as const;
 
@@ -95,6 +96,8 @@ const sizeSchema = z.string('Expected a size such as 100MB').transform((value, c
     return z.NEVER;
   }
 });
+
+const positiveSize = sizeSchema.refine((bytes) => bytes > 0, 'Must be greater than 0');
 
 const positiveInt = z.number().int('Must be an integer').positive('Must be greater than 0');
 const nonNegativeInt = z.number().int('Must be an integer').min(0, 'Must not be negative');
@@ -319,6 +322,9 @@ const executeSchema = z.discriminatedUnion('type', [
       })
       .default({}),
     cancel_grace: durationSchema.default(parseDuration(DEFAULTS.cancelGrace)),
+    // Patterns are checked in validate.ts (path + message per entry).
+    keep: z.array(z.string('Expected a pattern such as .agent/*.log')).default([]),
+    keep_max_size: positiveSize.optional(),
   }),
 ]);
 
@@ -333,11 +339,26 @@ const actionCommon = {
     .optional(),
 };
 
+/**
+ * Desired value of a project field in `source.update` (WI-16): string,
+ * number or `null` (= clear). A YAML timestamp parsed as Date (YAML 1.1
+ * documents) becomes `YYYY-MM-DD` at UTC midnight, otherwise its ISO string
+ * (which the date check then rejects). Checked per kind in validate.ts.
+ */
+const projectUpdateValue = z
+  .union([z.string(), z.number(), z.null(), z.date()], { error: 'Expected a string, a number, a date or null' })
+  .transform((value) => {
+    if (!(value instanceof Date)) return value;
+    const iso = value.toISOString();
+    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso;
+  });
+
 const actionSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('source.update'),
     ...actionCommon,
-    labels: z.strictObject({ add: stringList, remove: stringList }),
+    labels: z.strictObject({ add: stringList, remove: stringList }).optional(),
+    project: z.record(z.string(), projectUpdateValue).optional(),
   }),
   z.strictObject({
     type: z.literal('source.comment'),

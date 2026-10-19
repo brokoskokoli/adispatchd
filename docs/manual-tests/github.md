@@ -18,7 +18,7 @@ Inhalt:
 
 ## 0 Annahmen und Doku-Stand
 
-### 0.1 Annahmen im Code (A1–A11)
+### 0.1 Annahmen im Code (A1–A21)
 
 | # | Annahme (im Code umgesetzt) | Stelle | Doku-Stand 2026-10-17 | Testfall |
 |---|---|---|---|---|
@@ -39,6 +39,10 @@ Inhalt:
 | A16 | GraphQL-Rate-Limits kommen als HTTP 200 mit `errors[].type = "RATE_LIMITED"` oder als 403/429 mit `x-ratelimit-*`. | `GitHubHttpClient.graphql` | nur teilweise dokumentiert | T25e |
 | A17 | Kommentare mit dem Token einer `github_token`-Identity tragen `user.login` = Token-User; `GET /user` liefert diesen Login. | `authorPredicate`, `userLogin` in `adapter.ts` | nicht geprüft | T25d |
 | A11 | Von einer App per Installation-Token erstellte Kommentare tragen `performed_via_github_app.id = <App-ID>` und `user.type = "Bot"`. Sonst findet `findCommentByMarker` eigene Kommentare nicht (Folge: Duplikat statt Unterdrückung). | `authorPredicate` in `adapter.ts` | Feld im Schema dokumentiert, `Bot`/`[bot]` **nicht** ([R7](#r7)) | T6, T7 |
+| A18 | Schreib-Metadaten: `ProjectV2SingleSelectField.options { id name }` und `ProjectV2IterationField.configuration { iterations { id title } completedIterations { id title } }` liefern alle Optionen bzw. Iterationen; `ProjectV2ItemFieldSingleSelectValue.optionId` und `ProjectV2ItemFieldIterationValue.iterationId` stehen am gelesenen Wert. | `src/sources/github/project-write.ts` (`WRITE_METADATA_QUERY`, `projectItemQuery`) | Schema laut GraphQL-Doku, nicht live geprüft | T26a |
+| A19 | `addProjectV2ItemById(input: {projectId, contentId})` ist idempotent und liefert für ein schon vorhandenes Item dessen ID; `node(id: <Item-ID>)` liefert danach das `ProjectV2Item`. | `addItem`, `readItem` | Idempotenz laut Doku, nicht live geprüft | T26b |
+| A20 | `updateProjectV2ItemFieldValue` mit `value: { singleSelectOptionId \| text \| number \| date \| iterationId }` (genau ein Schlüssel, `number` als Float, `date` als `YYYY-MM-DD`) und `clearProjectV2ItemFieldValue` ändern genau ein Feld. Fehler kommen als HTTP 200 + `errors[]` (`FORBIDDEN`, `NOT_FOUND`, sonst ohne `type`). | `writeField`, `writeErrorKind` | Schema laut Doku, Fehlerform **nicht** geprüft | T26a, T26c, T26d |
+| A21 | Schreibrechte: App „Organization → Projects: Read and write“ (Org-Projekt), klassischer PAT `project` (+ `repo`) für User-Projekte; fine-grained PAT unbestätigt. | Doku (`configuration-reference.md` §3.2) | nicht geprüft | T26 |
 
 ### 0.2 Rechercheergebnisse (offizielle GitHub-Doku, abgerufen 2026-10-17)
 
@@ -1312,6 +1316,76 @@ nach einem Poll; Kosten pro Poll notieren (erwartet: wenige Punkte für Metadate
 
 **Ist:** ☐ OK ☐ Abweichung: ……
 
+### T26 – Projektfelder setzen (WI-16, A18–A21)
+
+Prüft `source.update` → `project` gegen das Org-Projekt aus T25 (per App) und optional das User-Projekt (per
+`github_token`).
+
+**Vorbereitung:**
+1. Der Maintainer-App unter *Organization permissions* **Projects: Read and write** geben und in der Installation
+   bestätigen. Für den User-Teil einen klassischen Token mit **`project`** (statt `read:project`) und `repo` als
+   `ADISPATCH_TEST_PROJECT_TOKEN` exportieren.
+2. Im Projekt das *Status*-Feld mit den Optionen `Todo`, `In Progress`, `Review` und ein Textfeld `Notes` anlegen
+   (`gh project field-create … --name Notes --data-type TEXT`); in `sources.yaml` deklarieren:
+   `fields: { Status: single_select, Notes: text, Estimate: number, Due: date }`.
+3. Workflow anlegen und aktivieren:
+   ```bash
+   cat > "$ADISPATCH_CFG/workflows/project-write-test.yaml" <<'EOF'
+   id: project-write-test
+   trigger: { type: source, source: test_a }
+   filter: { field: labels, operator: contains, value: project-write }
+   execute: { type: shell, command: scripts/test-worker.sh }
+   on_start:
+     - type: source.update
+       labels: { remove: [project-write] }
+       project: { Status: In Progress, Estimate: 5, Due: 2026-12-24, Notes: started }
+   on_success:
+     - type: source.update
+       project: { Status: Review, Notes: null }
+   EOF
+   # Zweiter Workflow für den No-op-Fall: on_start ändert nur Labels, on_success setzt Werte, die nach T26a schon stehen.
+   cat > "$ADISPATCH_CFG/workflows/project-noop-test.yaml" <<'EOF'
+   id: project-noop-test
+   trigger: { type: source, source: test_a }
+   filter: { field: labels, operator: contains, value: project-noop }
+   execute: { type: shell, command: scripts/test-worker.sh }
+   on_start:
+     - type: source.update
+       labels: { remove: [project-noop] }
+   on_success:
+     - type: source.update
+       project: { Status: Review, Notes: null }
+   EOF
+   orch config validate --config-dir "$ADISPATCH_CFG" && orch config reload --config-dir "$ADISPATCH_CFG"
+   ```
+
+**T26a – Status setzen:** Issue `$P1` (im Projekt) mit Label `project-write` versehen. **Erwartet:** nach dem Start
+im Projekt *Status* `In Progress`, *Estimate* 5, *Due* 24.12., *Notes* `started`; nach Erfolg *Status* `Review`,
+*Notes* leer. Run → *Events*: `lifecycle.action … succeeded (-project-write, Status=In Progress, …)`; Payload
+`details.applied.projectFields`. **No-op:** danach `$P1` mit Label `project-noop` versehen (Status steht schon auf
+`Review`, *Notes* ist leer). **Erwartet:** die `on_success`-Action von `project-noop-test` ist `succeeded` mit
+`details: { changed: false }`, im Log kein „Applied project field update“, in der GitHub-Projekt-Historie des Items
+kein neuer Eintrag.
+
+**T26b – Item automatisch hinzufügen:** Issue `$P3` (nicht im Projekt) mit `project-write` versehen. **Erwartet:**
+das Issue erscheint im Projekt mit *Status* `In Progress`; Journal `projectItemAdded: true`. Rohantwort von
+`addProjectV2ItemById` für ein schon vorhandenes Item notieren (gleiche Item-ID?).
+
+**T26c – Feld leeren:** in T26a ist *Notes* nach `on_start` `started` und nach `on_success` leer
+(`clearProjectV2ItemFieldValue`, Journal `projectFields: { …, Notes: null }`). Ein `null` auf ein schon leeres Feld
+erzeugt keinen Mutation-Request: das prüft der No-op-Lauf aus T26a (`Notes: null` bei leerem *Notes*).
+
+**T26d – Unbekannte Option / fehlende Rechte:** `on_success` auf `Status: Blocked` ändern (Option existiert nicht).
+**Erwartet:** Action `failed` nach **einem** Versuch, Fehler „option "Blocked" not found (available: "Todo", "In
+Progress", "Review")“, Notification `lifecycle_action_failed`. Danach der App das Projekt-Schreibrecht entziehen
+(*Read-only*) und T26a wiederholen: `on_start` scheitert mit `forbidden` („… needs write access to the project“), der
+Worker startet nicht (`start_error`); Rohantwort notieren.
+
+**T26e – User-Projekt (optional):** `project: { owner: <USER_LOGIN>, number: $USER_PROJECT, identity: project_reader,
+fields: {…} }` → T26a wiederholen; geschrieben wird mit dem Token (`project`-Scope), Labels weiter mit der App.
+
+**Ist:** ☐ OK ☐ Abweichung: ……
+
 ---
 
 ## 5 Auswertung und Aufräumen
@@ -1338,6 +1412,7 @@ Zusätzlich die offenen Fragen beantworten:
 | POST `blocked_by` gibt welches Issue zurück? | T12 | |
 | Reduktion von App-Rechten sofort wirksam? | T19d | |
 | User-Projekt mit App-Token: Fehlertyp/Meldung? Fine-grained PAT für User-Projekte möglich? | T25c | |
+| `addProjectV2ItemById` für vorhandenes Item: gleiche ID? Fehlerform bei unbekannter Option-ID / fehlendem Schreibrecht? | T26b, T26d | |
 | `fieldValueByName` case-sensitiv? | T25b | |
 | GraphQL-Kosten je Poll? | T25e | |
 

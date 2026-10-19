@@ -28,8 +28,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.2.0
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.2.0.tgz
+sudo npm install -g adispatchd@0.3.0
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.3.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -66,7 +66,9 @@ Tokens werden beim Start gelesen und in allen Logs redigiert; eine fehlende/leer
 nach `systemctl restart adispatchd`. Für Projektfelder org-eigener Projekte braucht die lesende GitHub App zusätzlich
 die Berechtigung **Organization → Projects: Read** (nach dem Ändern der App-Rechte die Installation bestätigen). Für
 user-eigene Projekte empfohlen: klassischer PAT des Owners mit `read:project`, bei privaten Repos zusätzlich `repo`
-(der Token liest auch die Issues/PRs); fine-grained Tokens sind dafür nicht verifiziert.
+(der Token liest auch die Issues/PRs); fine-grained Tokens sind dafür nicht verifiziert. Setzt ein Workflow
+Projektfelder (`source.update` → `project`, seit 0.3.0), braucht die schreibende Identity **Projects: Read and write**
+(App) bzw. den Scope **`project`** statt `read:project` (klassischer PAT).
 
 Optionen von `service install`: `--user`/`--group` (Default `adispatchd`), `--create-user`, `--name` (Unit-Name),
 `--node`/`--entry` (absolute Pfade, Default: das laufende Node und diese Installation), `--env-file <pfad|none>`,
@@ -197,7 +199,7 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 | config-dir | Versionsverwaltung (git) oder Dateikopie; enthält keine Secrets |
 | Env-Datei | sicher (verschlüsselt) aufbewahren – enthält Private Keys |
 | `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
-| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal) |
+| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal; `runs/<id>/kept/` enthält die per `execute.keep` gesicherten Dateien) |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
 **`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
@@ -285,6 +287,8 @@ Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen i
 | `GITHUB_…_PRIVATE_KEY is not set` | Env-Datei fehlt/unvollständig (`systemctl show adispatchd -p EnvironmentFiles`). |
 | `Token for identity "…" missing: environment variable … is not set or empty` | `token_env` einer `github_token`-Identity fehlt in der Env-Datei → eintragen, Neustart. |
 | Warnung „GitHub project field unavailable“, Dry-Run `project.* unknown – GitHub project … unavailable` | Projekt nicht gefunden oder kein Zugriff: Nummer/Owner prüfen; Org-Projekt → App-Recht *Projects: Read*; User-Projekt → `github_token`-Identity als `project.identity`. Feld fehlt / falsche Art → `project.fields` an das Projekt anpassen. |
+| Action `source.update` `failed`: `option "…" not found (available: …)` / `is ambiguous` | Optionsname bzw. Iterationstitel im Workflow genau wie im Projekt schreiben (oder die Option im Projekt anlegen); danach Action in der UI wiederholen. |
+| Action `source.update` `failed` mit `forbidden` „… needs write access to the project“ | Schreibrecht fehlt: App-Recht *Projects: Read and write* (Installation bestätigen) bzw. PAT mit Scope `project`; schreibende Identity ist `project.identity` (wenn gesetzt), sonst die der Action. |
 
 ## Bekannte Grenzen
 

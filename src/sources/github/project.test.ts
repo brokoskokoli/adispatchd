@@ -231,7 +231,7 @@ describe('listCandidates with project fields', () => {
     expect(warnings.map((w) => w.fields.field)).toEqual(['project.Estimate', 'project.Sprint']);
 
     // Fixed in the project → info once, values come back (after the shared listing metadata expired).
-    project.fields.push({ name: 'Sprint', dataType: 'ITERATION' });
+    github.addProjectField(project, { name: 'Sprint', dataType: 'ITERATION' });
     clock.advance(PROJECT_METADATA_LISTING_TTL_MS);
     github.setProjectValue(project, REPO, 1, 'Sprint', 'S1');
     const [fixed] = await adapter.listCandidates();

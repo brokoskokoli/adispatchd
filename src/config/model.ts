@@ -7,7 +7,15 @@
  * deeply frozen. No secret values are ever part of this model — identities
  * and notification headers only carry the *names* of environment variables.
  */
-import { outcomeOfHook, type FilterNode, type HookName, type ListHookName, type NotificationEventType, type ResultHookName } from '../core/index.js';
+import {
+  outcomeOfHook,
+  type FilterNode,
+  type HookName,
+  type ListHookName,
+  type NotificationEventType,
+  type ProjectFieldUpdateValue,
+  type ResultHookName,
+} from '../core/index.js';
 import type { ProjectFieldKind } from '../sources/index.js';
 
 // ---------------------------------------------------------------------------
@@ -126,6 +134,8 @@ export interface GithubProjectConfig {
   number: number;
   /** Identity reading the project (default: the source identity). */
   identity: string;
+  /** Explicitly configured `project.identity` (writes project fields, WI-16); `null` = writes use the action identity. */
+  writeIdentity: string | null;
   /** Declared field name (case as written) → kind. */
   fields: Readonly<Record<string, ProjectFieldKind>>;
 }
@@ -275,6 +285,14 @@ export interface ShellExecuteConfig {
   };
   /** Grace period between SIGTERM and SIGKILL on cancel/timeout (default 30s). */
   cancelGraceMs: number;
+  /**
+   * Workspace files copied to `runs/<run-id>/kept/` after the completion hook
+   * and before the workspace cleanup (WI-22): relative glob patterns
+   * (`*`, `?`, `**`). Empty = nothing is kept.
+   */
+  keep: readonly string[];
+  /** Max. total size of kept files per run in bytes (`keep_max_size`, default 100MB). */
+  keepMaxSizeBytes: number;
 }
 
 /** Execution configuration (V1: shell only). */
@@ -292,10 +310,13 @@ interface ActionBase {
   retry: RetryPolicy;
 }
 
-/** `source.update` action (V1: labels). */
+/** `source.update` action: labels and (WI-16) project fields; labels are applied first. */
 export interface SourceUpdateActionConfig extends ActionBase {
   type: 'source.update';
+  /** Empty lists when `labels` is not configured. */
   labels: { add: readonly string[]; remove: readonly string[] };
+  /** Project fields to set: declared name (without `project.`) → value, `null` = clear. Absent = none. */
+  project?: Readonly<Record<string, ProjectFieldUpdateValue>>;
 }
 
 /**

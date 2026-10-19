@@ -119,6 +119,8 @@ export interface RunPaths {
   contextFile: string;
   /** `runs/<run-id>/result.json` (`ADISPATCH_RESULT_FILE`) */
   resultFile: string;
+  /** `runs/<run-id>/kept/`: files kept from the workspace (`execute.keep`, WI-22) */
+  keptDir: string;
   /** `logs/<run-id>/` */
   logDir: string;
   /** `logs/<run-id>/stdout.log` */
@@ -167,6 +169,7 @@ export function dataPaths(dataDir: string): DataPaths {
         runDir,
         contextFile: path.join(runDir, 'context.json'),
         resultFile: path.join(runDir, 'result.json'),
+        keptDir: path.join(runDir, 'kept'),
         logDir,
         stdoutLog: path.join(logDir, 'stdout.log'),
         stderrLog: path.join(logDir, 'stderr.log'),

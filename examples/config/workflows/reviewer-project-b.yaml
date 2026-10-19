@@ -1,5 +1,6 @@
-# workflows/reviewer-project-b.yaml – filters on GitHub Projects fields (WI-14).
+# workflows/reviewer-project-b.yaml – filters on GitHub Projects fields (WI-14) and sets them (WI-16).
 # Disabled example: project_b declares the project fields Status/Priority/Estimate in sources.yaml.
+# Setting project fields needs write access to the project ("Organization → Projects: Read and write").
 id: reviewer-project-b
 name: Reviewer – Project B
 enabled: false
@@ -31,9 +32,14 @@ execute:
   timeout:
     max_duration: 2h
 
+on_start:
+  - type: source.update
+    project: { Status: In Review }
+
 on_success:
   - type: source.update
     labels: { add: [reviewed], remove: [needs-review] }
+    project: { Status: Done }
 
 # Named outcomes (WI-17): the reviewer script writes e.g.
 #   {"schema_version": 1, "result": "failure", "outcome": "changes_requested", "message": "..."}
@@ -43,6 +49,7 @@ on_result:
   approved:
     - type: source.update
       labels: { add: [approved], remove: [needs-review] }
+      project: { Status: Done }
   changes_requested:
     - type: source.update
       labels: { add: [changes-requested], remove: [needs-review] }

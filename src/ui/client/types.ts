@@ -109,10 +109,42 @@ export interface RunDetail extends RunSummary {
   eventsTruncated: boolean;
   logs: { stdout: { size: number | null; truncated: boolean }; stderr: { size: number | null; truncated: boolean } };
   block: Block | null;
+  /** Summary of the `run.kept_files` event (WI-22), `null` if nothing was kept. */
+  kept: { files: number; bytes: number; skippedCount: number; message: string | null; error: string | null } | null;
   supervised: boolean;
   configVersion: number | null;
   configHash: string | null;
   updatedAt: string;
+}
+
+/** One kept file (`GET /api/v1/runs/:id/kept`). */
+export interface KeptFile {
+  path: string;
+  size: number;
+}
+
+export interface KeptSkip {
+  path: string;
+  reason: string;
+  size?: number;
+  message?: string;
+}
+
+export interface KeptListing {
+  runId: string;
+  files: KeptFile[];
+  totalBytes: number;
+  truncated: boolean;
+  report: {
+    message?: string;
+    patterns?: string[];
+    maxBytes?: number;
+    unmatched?: string[];
+    notSearched?: string[];
+    skipped?: KeptSkip[];
+    skippedCount?: number;
+    error?: string;
+  } | null;
 }
 
 export interface LogPage {
@@ -172,7 +204,17 @@ export interface Workflow {
   activeRuns: number;
   activeBlocks: number;
   parameters: Record<string, ParameterDef>;
-  execute: { type: string; command: string; args: unknown[]; workingDirectory: string | null; timeout: unknown; secrets: string[] };
+  execute: {
+    type: string;
+    command: string;
+    args: unknown[];
+    workingDirectory: string | null;
+    timeout: unknown;
+    secrets: string[];
+    /** `execute.keep` patterns (WI-22). */
+    keep?: string[];
+    keepMaxSizeBytes?: number;
+  };
   hasFilter: boolean;
   hasShellFilter: boolean;
   conditions: { workflow: number; item: number };

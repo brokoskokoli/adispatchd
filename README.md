@@ -3,17 +3,23 @@
 Konfigurationsgetriebener Orchestrator für Shell-Prozesse und KI-Agenten. Er findet Aufgaben in externen Quellen
 (V1: GitHub Issues/PRs), wählt sie über Filter und Prioritäten aus, prüft Startbedingungen, führt unabhängige
 Shell-Workflows in eigenen Workspaces aus, überwacht und protokolliert jeden Run, führt Lifecycle-Aktionen aus
-(Labels, Kommentare, Shell-Hooks) und zeigt alles in einer kleinen Weboberfläche mit Live-Updates.
+(Labels, GitHub-Projects-Felder, Kommentare, Shell-Hooks) und zeigt alles in einer kleinen Weboberfläche mit
+Live-Updates.
 
 - **GitHub bleibt Source of Truth** – kein eigener Ticketstore; SQLite hält nur Runs, Locks, Events, Blocks, Aktionsjournale.
 - **Unabhängige Workflows** mit Source-, Cron- oder manuellem Trigger, globalen und workflowbezogenen Limits.
 - **Deklarative Filter und Prioritäten** auf Labels, Zustand, Milestone, Issue-Typ, native Abhängigkeiten („blocked by“)
   und Felder aus **GitHub Projects** (Status, Priorität, eigene Felder; „A oder B“ per `in`) – fehlender Zugriff ergibt
   `unknown` statt eines falschen Starts.
+- **Lifecycle-Aktionen** setzen Labels und **Projektfelder** (z. B. `Status: In Progress` beim Start, `Review` nach
+  Erfolg; Items werden bei Bedarf dem Projekt hinzugefügt), schreiben Kommentare und rufen Shell-Hooks auf –
+  idempotent (erst lesen, dann schreiben) mit Journal und Retries.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per
   Prozessgruppe, Drain, Crash-Recovery, systemd-Integration.
 - **Mehr als zwei Ausgänge:** benannte Ergebnisse (`outcome` in der Ergebnisdatei → `on_result.<outcome>`) und ein
   Sammel-Hook `on_error` für alle technischen Ausgänge.
+- **Dateien sichern:** `execute.keep` kopiert Mitschnitte und Logs (Glob-Muster) vor dem Workspace-Cleanup nach
+  `runs/<run-id>/kept/` – mit Größenlimit, ohne Symlinks zu folgen; Download in UI und API, gelöscht mit dem Run.
 
 Dokumentation: [Änderungen](CHANGELOG.md) · [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-protocol.md) · [HTTP-API/SSE](docs/api.md) ·
 [Cron-Semantik](docs/cron-semantics.md) · [Spezifikation](docs/spec-v0.1.md) · Manuelle Tests:
@@ -28,13 +34,13 @@ Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 2
 Paket `adispatchd` auf npm, Befehl `adispatch`. Für Dienste immer eine **feste Version** global installieren (kein `npx`):
 
 ```bash
-npm install -g adispatchd@0.2.0                 # aus der npm-Registry
+npm install -g adispatchd@0.3.0                 # aus der npm-Registry
 
 # alternativ aus dem Repository-Checkout:
 git clone https://github.com/brokoskokoli/adispatchd.git && cd adispatchd
 npm install
-npm pack                                        # baut (prepack) und erzeugt adispatchd-0.2.0.tgz
-npm install -g ./adispatchd-0.2.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
+npm pack                                        # baut (prepack) und erzeugt adispatchd-0.3.0.tgz
+npm install -g ./adispatchd-0.3.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
 # lokal ohne globale Installation: npm run build && node dist/cli/main.js <kommando> …
 ```
 
@@ -57,8 +63,9 @@ adispatch start --config-dir ./config --data-dir ./data     # Vordergrund, Ctrl-
   `identities.yaml`, Repo in `sources.yaml`, Private Key als Umgebungsvariable (`export GITHUB_CODER_PRIVATE_KEY="$(cat key.pem)"`),
   dann in `workflows/coder.yaml` `enabled: true` setzen und `adispatch config reload --config-dir ./config`.
 - Projektfelder (`project.Status` …): `project`-Block an der Source in `sources.yaml` (siehe Kommentar nach `init`); Org-Projekte
-  brauchen das App-Recht *Organization → Projects: Read*, user-eigene Projekte eine `github_token`-Identity
-  ([Konfigurationsreferenz §3.2/§3.3](docs/configuration-reference.md#32-sourcesyaml)).
+  brauchen das App-Recht *Organization → Projects: Read* (zum Setzen per `source.update` → `project`: *Read and
+  write*), user-eigene Projekte eine `github_token`-Identity
+  ([Konfigurationsreferenz §3.2/§3.3/§3.4.11](docs/configuration-reference.md#32-sourcesyaml)).
 
 `init` überschreibt nie bestehende Dateien (vorhandene werden als „kept“ gemeldet) und validiert danach die Konfiguration.
 
@@ -149,6 +156,8 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
   kein technischer Fehler. Ohne Datei gilt Exit 0 als `success`. Optional `"outcome": "needs_maintainer"` wählt
   `on_result.needs_maintainer`.
 - **Events:** Zeilen `@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}` auf stdout/stderr – nur informativ.
+- **Dateien behalten:** Was im Workspace unter `execute.keep` passt (z. B. `.agent/transcript.jsonl`, `.agent/gate/*.log`),
+  sichert der Daemon nach dem Run – auch wenn der Workspace danach gelöscht wird.
 - **Cancel/Timeout:** SIGTERM an die Prozessgruppe, nach `cancel_grace` (30 s) SIGKILL. Eigene Sessions/Container räumt das
   Skript selbst auf.
 
