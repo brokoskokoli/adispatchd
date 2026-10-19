@@ -352,3 +352,26 @@ meter.disk-meter { display: block; width: 140px; max-width: 100%; height: 8px; m
 svg.chart .area.m-system { stroke: none; }
 details.current-values { margin-top: 12px; }
 .server h3 .span-label { font-weight: normal; font-size: 12.5px; }
+
+/* ---------- compact resource strip on the dashboard (WI-29) ---------- */
+.resource-strip { padding: 8px 14px; overflow: hidden; }
+.resource-strip.strip-note { font-size: 13px; }
+.strip-link { display: block; color: inherit; border-radius: 4px; }
+.strip-link:hover .strip-more, .strip-link:focus-visible .strip-more { text-decoration: underline; }
+.strip-cells { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 28px; }
+.strip-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+.strip-label { color: var(--muted); font-size: 12px; }
+.strip-value { font-weight: 600; font-variant-numeric: tabular-nums; }
+.strip-more { margin-left: auto; color: var(--accent); font-size: 12.5px; white-space: nowrap; }
+svg.sparkline { display: block; width: 96px; height: 22px; flex: none; }
+svg.sparkline .spark-area { fill: var(--m-mem-free); stroke: none; }
+svg.sparkline .spark-line { fill: none; stroke: var(--m-mem-used); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+meter.strip-meter { display: block; width: 72px; height: 8px; flex: none; }
+.strip-top { margin-top: 3px; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.strip-top .strip-proc b { font-weight: 600; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  .strip-cells { gap: 4px 18px; }
+  .strip-more { margin-left: 0; }
+  meter.strip-meter { width: 56px; }
+  svg.sparkline { width: 72px; }
+}

@@ -1,14 +1,19 @@
-/** Dashboard (Spec §16): scheduler state, limit/usage, pause/resume, drain, cancel all, active runs, server resources (WI-23). */
+/**
+ * Dashboard (Spec §16): compact resource strip (WI-29; full charts on the
+ * "Resources" tab), info tiles (WI-24), scheduler state, limit/usage,
+ * pause/resume, drain, cancel all, active and recent runs.
+ */
 import { currentAuth } from '../auth.js';
 import { api, qs, seg } from '../api.js';
-import { h, replaceChildren, rerender } from '../dom.js';
+import { h, replaceChildren, rerender, svg } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { formatDuration, formatRelative } from '../../shared/format.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
-import { serverSection } from './server.js';
 import type { RunSummary, Status } from '../types.js';
 import { act, badge, button, confirmDialog, errorBox, isEditing, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, externalLink } from '../ui.js';
 import { createInfoSection } from './dashboard-info.js';
+import { createStripFeed, renderResourceStrip } from '../../shared/resource-strip.js';
+import type { MetricsResponse } from '../../shared/metrics.js';
 
 export function schedulerStateBadge(s: Status['scheduler']): HTMLElement {
   const tone = s.state === 'running' ? 'ok' : s.state === 'paused' ? 'warn' : s.state === 'recovering' ? 'info' : 'error';
@@ -52,13 +57,18 @@ export const dashboardPage = (ctx: PageContext): Page => {
   ctx.setTitle('Dashboard');
   const el = h('div', { class: 'page' }, h('h1', null, 'Dashboard'));
   const body = h('div', { class: 'grid' }, loading());
+  // WI-29: compact resource strip first (own data with few points, live via `system.metrics`,
+  // independent of the 1/s state refreshes below); click → "Resources" tab.
+  const strip = h('div', { class: 'strip-slot' }, renderResourceStrip(h, svg, { kind: 'loading' }));
+  const feed = createStripFeed({
+    fetch: (path) => api.get<MetricsResponse>(path),
+    onChange: (state) => replaceChildren(strip, renderResourceStrip(h, svg, state)),
+  });
+  el.appendChild(strip);
   // WI-24: info tiles (own module, own live handling).
   const info = createInfoSection();
   el.appendChild(info.el);
   el.appendChild(body);
-  // Rendered independently of the 1/s state refreshes above (own data, live via `system.metrics`).
-  const server = serverSection();
-  el.appendChild(server.el);
 
   const load = async (): Promise<void> => {
     if (isEditing(body)) {
@@ -249,20 +259,21 @@ export const dashboardPage = (ctx: PageContext): Page => {
 
   void load();
   void info.load();
+  void feed.load();
   return {
     el,
     onLive: (msg) => {
+      feed.onLive(msg);
       info.onLive(msg);
-      server.onLive(msg);
       if (isStateChange(msg)) refresher.trigger();
     },
     onResync: () => {
+      feed.onResync();
       void info.load();
-      server.onResync();
       void refresher.now();
     },
     dispose: () => {
-      server.dispose();
+      feed.dispose();
       refresher.dispose();
     },
   };

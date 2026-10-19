@@ -58,13 +58,14 @@ who picks which issue, what happens when an agent crashes, how do labels get res
 - **Keep files** – `execute.keep` copies transcripts and logs (glob patterns) to `runs/<run-id>/kept/` before the
   workspace is cleaned up; download them in the UI or via the API.
 - **Web UI with live updates** – workflows, runs, live output, events, kept files and views (read-only tables across
-  repositories), streamed via Server-Sent Events; plus a JSON HTTP API.
-- **Server resources on the dashboard** – CPU over time stacked by the daemon, each run (click through to the run),
-  hooks/checks and the busiest foreign processes, plus memory, load and free disk space; sampled in memory
-  (`monitoring` in `config.yaml`), only command names are shown, never arguments.
   repositories), streamed via Server-Sent Events; plus a JSON HTTP API. Optional toolbar links to other local tools
   (e.g. the [claude-inspect](https://github.com/brokoskokoli/claude_inspect) dashboard), opened in a new tab or embedded
   (`ui.external_links`).
+- **Server resources** – a compact strip at the top of the dashboard (CPU with a 15-minute sparkline, memory, the
+  fullest disk, load and the busiest process groups, own runs first); the **Resources** tab shows CPU over time stacked
+  by the daemon, each run (click through to the run), hooks/checks and the busiest foreign processes, plus memory and
+  disk charts and a value table. Sampled in memory (`monitoring` in `config.yaml`), only command names are shown, never
+  arguments.
 - **Optional login** – `auth.mode: password` (built-in users, scrypt hashes, session cookie) or `trusted_header`
   (identity from Tailscale Serve, oauth2-proxy, …), roles `viewer` / `operator` / `admin` per endpoint, audit of every
   write; the CLI keeps working through a local control token.
@@ -255,7 +256,7 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
   endpoint requires a role (`viewer`, `operator`, `admin`); see [operations → login](docs/operations.md#anmeldung-web-ui-und-api-seit-040)
   for Tailscale Serve, oauth2-proxy and the password mode behind an HTTPS proxy (`adispatch auth hash-password`).
   Mutating requests need the header `X-Adispatch-Request: 1`; there is no CORS.
-  The dashboard shows the command names of all processes on the server (never their arguments) – one more reason to
+  The dashboard and the Resources tab show the command names of all processes on the server (never their arguments) – one more reason to
   expose the UI only behind authentication (or set `monitoring.enabled: false`).
 - **Scripts and YAML are trusted code** running with the service's permissions – there is no sandbox. Write access
   to the config dir equals code execution.

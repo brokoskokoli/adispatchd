@@ -1,5 +1,6 @@
 /**
- * Dashboard section "Server" (WI-23): stacked CPU chart by daemon / runs /
+ * Tab "Resources" (`#/resources`, WI-29; until 0.4.0 the section "Server" at
+ * the bottom of the dashboard, WI-23): stacked CPU chart by daemon / runs /
  * hooks / foreign processes, memory and disk charts on the same time axis,
  * current values as text and table. Own SVG rendering (no libraries); names
  * are text nodes only.
@@ -30,6 +31,7 @@ import {
   type MetricsSample,
 } from '../../shared/metrics.js';
 import type { LiveMessage } from '../../shared/sse.js';
+import type { Page, PageContext } from '../page.js';
 import { errorBox, loading, routeLink, table } from '../ui.js';
 
 const RANGE_KEY = 'adispatch.server.range';
@@ -157,7 +159,7 @@ function meterBar(fraction: number, label: string): HTMLElement {
   return h('meter', { class: 'disk-meter', min: 0, max: 1, low: 0.8, high: 0.9, optimum: 0, value: pct.toFixed(3), title: label, 'aria-label': label });
 }
 
-/** Mounted "Server" section of the dashboard. */
+/** Mounted "Server" section (content of the "Resources" tab). */
 export interface ServerSection {
   el: HTMLElement;
   onLive(msg: LiveMessage): void;
@@ -166,7 +168,7 @@ export interface ServerSection {
 }
 
 export function serverSection(): ServerSection {
-  const el = h('section', { class: 'card span-all server' }, h('h2', null, 'Server'), loading());
+  const el = h('section', { class: 'card server' }, h('h2', null, 'Server'), loading());
   let data: MetricsResponse | null = null;
   let error: unknown = null;
   let rangeMs = 60 * 60_000;
@@ -516,3 +518,16 @@ export function serverSection(): ServerSection {
     },
   };
 }
+
+/** Tab "Resources" (WI-29): the full charts, time range and value table; live via SSE `system.metrics`. */
+export const resourcesPage = (ctx: PageContext): Page => {
+  ctx.setTitle('Resources');
+  const server = serverSection();
+  const el = h('div', { class: 'page' }, h('h1', null, 'Resources'), server.el);
+  return {
+    el,
+    onLive: (msg) => server.onLive(msg),
+    onResync: () => server.onResync(),
+    dispose: () => server.dispose(),
+  };
+};

@@ -274,7 +274,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `auth.trusted_proxies` | Liste IP/CIDR | `[127.0.0.1, ::1]` | | `mode: password`: Proxys, deren `X-Forwarded-Proto` (Cookie-Flag `Secure`) und `X-Forwarded-For` (Login-Rate-Limit je IP) geglaubt werden. |
 | `auth.session_ttl` | Dauer | `12h` | 1 m – 30 d | Gültigkeit einer Session ab Anmeldung (`mode: password`). |
 | `auth.read_requires_login` | Boolean | `true` | | `false`: Lesen (`GET`, inkl. Live-Updates) ohne Anmeldung als `viewer`, Schreiben nur angemeldet. |
-| `monitoring.enabled` | Boolean | `true` | | Bereich „Server“ im Dashboard: CPU, RAM, Platte und Prozesse messen (seit 0.4.0). `false` → keine Messung, Dashboard zeigt einen Hinweis. |
+| `monitoring.enabled` | Boolean | `true` | | CPU, RAM, Platte und Prozesse messen (seit 0.4.0) – für die Kompaktleiste oben im Dashboard und den Reiter „Resources“ (seit 0.5.0; in 0.4.0 Bereich „Server“ im Dashboard). `false` → keine Messung, Dashboard und Reiter zeigen einen Hinweis. |
 | `monitoring.interval` | Dauer | `scheduler.polling_interval`, höchstens `60s` | ≥ 5 s | Abtastintervall. Ohne Angabe gilt das Polling-Intervall, begrenzt auf 5 s … 60 s. Messungen laufen nie parallel. |
 | `monitoring.retention` | Dauer | `6h` | ≥ 10 und ≤ 5 000 Intervalle | wie lange Messpunkte **im Speicher** gehalten werden (Ringpuffer; geht beim Neustart verloren). |
 | `monitoring.top_processes` | Integer | `5` | 0–20 | fremde Prozesse (weder Daemon noch Run noch Hook), die einzeln mit Namen gezeigt werden; gleichnamige werden zusammengefasst (`node ×3`). `0` = keine. |
@@ -495,7 +495,7 @@ notifications:
       on: [retry_block_created, recovery_failed]
 container:
   engine: docker                                     # docker | podman (für execute.type: container)
-monitoring:                                          # Server-Ressourcen im Dashboard (seit 0.4.0)
+monitoring:                                          # Server-Ressourcen: Dashboard-Leiste + Reiter Resources
   enabled: true
   interval: 30s                                      # Default: scheduler.polling_interval, 5s … 60s
   retention: 6h                                      # nur im Speicher
@@ -540,7 +540,10 @@ der Abrechnungsname des Kernels (nicht das umschreibbare `argv[0]`), zusätzlich
 abgeschnitten (bei Pfaden: Basename). Restrisiko unter Linux: Ein Prozess kann seinen Namen selbst setzen
 (`prctl(PR_SET_NAME)`, max. 15 Zeichen) – fremde Prozessnamen sind in der UI sichtbar (UI nur hinter Authentifizierung
 freigeben). Fehler einer Messung (z. B. `ps` fehlt) werden gedrosselt geloggt und lassen den
-Teilwert leer. API: `GET /api/v1/system/metrics`, SSE-Event `system.metrics` ([api.md](api.md)).
+Teilwert leer. API: `GET /api/v1/system/metrics`, SSE-Event `system.metrics` ([api.md](api.md)). UI: kompakte Leiste
+oben im Dashboard (CPU gesamt mit Verlauf der letzten 15 min, RAM, am stärksten belegter Pfad, Load, größte
+Prozessgruppen – eigene zuerst; Klick → Reiter), ausführliche Diagramme, Zeitraumwahl und Wertetabelle im Reiter
+„Resources“ (`#/resources`, ab Rolle `viewer`).
 
 ### 3.2 sources.yaml
 

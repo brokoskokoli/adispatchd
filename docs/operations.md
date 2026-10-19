@@ -595,6 +595,9 @@ Beispiel [claude-inspect](https://github.com/brokoskokoli/claude_inspect) (Dashb
   und die Prozessliste (`ps`, einmal je `monitoring.interval`, ohne Shell, Timeout 10 s). Die Werte liegen nur im
   Speicher (`monitoring.retention`, Default 6 h) und **gehen beim Neustart verloren**; es gibt keine DB-Migration.
   API: `GET /api/v1/system/metrics`, live per SSE `system.metrics`.
+- **UI (seit 0.5.0):** oben im Dashboard eine kompakte Leiste (CPU gesamt mit Verlauf der letzten 15 min, RAM, am
+  stärksten belegter Pfad, Load, größte Prozessgruppen); ein Klick öffnet den Reiter **Resources** (`#/resources`) mit
+  den gestapelten Diagrammen, der Zeitraumwahl und der Wertetabelle. Beides ab Rolle `viewer`.
 - **Sichtbarkeit:** Die UI zeigt die **Befehlsnamen fremder Prozesse** des Servers (nie Argumente – die können Secrets
   enthalten). Die UI daher nur hinter Authentifizierung/Reverse Proxy freigeben; wer das nicht will, setzt
   `monitoring.enabled: false` (keine Messung, kein `ps`).
