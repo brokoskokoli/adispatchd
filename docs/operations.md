@@ -42,6 +42,14 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
   (Cleanup) und Kontext-/Token-Dateien (`0600`) lesbar sind. Ein anderer `user` braucht passende Rechte auf dem
   Workspace; Kontext- und Token-Dateien sind für ihn auf Linux dann nicht lesbar. Bei Podman setzt der Daemon
   `--userns keep-id` (Podman ≥ 4.3 auch rootful).
+- **Rootless Docker:** Die UID des Dienstbenutzers auf dem Host entspricht dort **root im Container** (UID 0 wird auf
+  den Dienstbenutzer abgebildet, andere UIDs auf Sub-UIDs). Deshalb `user: '0:0'` setzen – dann gehören Dateien im
+  Workspace dem Dienst, und Kontext-/Token-Dateien (`0600`) sind lesbar; der Default (UID des Dienstes) würde im
+  Container zu einer Sub-UID ohne Zugriff. Der Daemon erkennt rootless Docker nicht automatisch. Rootless Podman
+  braucht das nicht (dort sorgt `--userns keep-id` für dieselbe UID).
+- **`network: host`** gibt dem Container den Netzwerk-Namensraum des Hosts – er erreicht damit die API des Daemons auf
+  `127.0.0.1` (ohne Anmeldung) und kann Runs starten/abbrechen. Nur für vertrauenswürdige Images; sonst `default`
+  oder `none`.
 - **Images** baut und aktualisiert der Betreiber; `pull: missing` (Default) zieht fehlende Images beim ersten Run,
   `never` verlangt ein lokales Image, `always` zieht jedes Mal.
 - **Aufräumen:** Container heißen `adispatch-<run-id>` und tragen die Labels `adispatch.run`, `adispatch.workflow`,
@@ -49,7 +57,11 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
   (andere Instanzen und fremde Container bleiben unberührt). Manuell:
   `docker ps -a --filter label=adispatch.instance=<hash>`; den Hash zeigt `workflow dry-run` im Engine-Aufruf.
 - **Isolation:** Container trennen Runs voneinander (eigene Mounts, eigene Token-Dateien, `--cap-drop ALL`,
-  `no-new-privileges`), aber nur so weit wie die Engine – Netzwerk standardmäßig offen (`network: none` schließt es).
+  `no-new-privileges`), aber nur so weit wie die Engine – Netzwerk standardmäßig offen (`network: none` schließt es),
+  `network: host` hebt die Trennung zur Daemon-API auf. Mounts, die das data-dir enthalten oder darin liegen (außer im
+  Workspace), und Symlinks in `{workspace.path}/<pfad>`-Quellen lehnt der Daemon vor dem Start ab; die Ergebnisdatei
+  wird ohne Symlinks gelesen. Variablen, die die Engine-CLI steuern (Proxy, `LD_*`, `GODEBUG` …), gelangen nie in die
+  Umgebung des Engine-Prozesses.
 
 ## Installation als systemd-Dienst (Linux)
 

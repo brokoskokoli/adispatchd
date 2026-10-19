@@ -211,7 +211,12 @@ Secrets sind nicht zwischen Runs/Actions desselben Dienstes isoliert: Die Rechte
 Mit `execute.type: container` sieht ein Worker nur seine eigenen Mounts: den eigenen Workspace, die eigene Kontextdatei,
 das eigene Ausgabeverzeichnis und die eigenen Token-Dateien (plus konfigurierte `mounts`) – nicht die Token-Dateien
 oder Umgebungen anderer Runs. Die Grenze ist die Engine (Container-Isolation, Rechte des Engine-Daemons), nicht der
-Daemon; wer `docker` nutzen darf, ist faktisch root ([operations.md](operations.md) „Container-Executor“).
+Daemon; wer `docker` nutzen darf, ist faktisch root ([operations.md](operations.md) „Container-Executor“). Mit
+`network: host` erreicht der Container die API des Daemons auf `127.0.0.1`.
+
+Die Ergebnisdatei wird bei **allen** Executors ohne Symlinks gelesen (`lstat`, `O_NOFOLLOW`, Prüfung des Handles,
+aufgelöster Pfad im erwarteten Verzeichnis): Symlink, FIFO oder ein ausgetauschtes Verzeichnis ergeben `crashed`
+(Protokollfehler), ungültiges JSON wird nur mit Position gemeldet.
 
 ## Shell-Lifecycle-Actions und Prüfskripte
 

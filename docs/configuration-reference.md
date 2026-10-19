@@ -808,7 +808,7 @@ den Container gemountet (Cleanup und `keep` arbeiten auf dem Host-Pfad). Zusätz
 | `resources.cpus` | Zahl | nein | Engine-Default | > 0, z. B. `3`, `1.5` | `--cpus` |
 | `resources.pids` | Integer | nein | Engine-Default | ≥ 1 | `--pids-limit` |
 | `user` | String | nein | `<uid>:<gid>` des Dienstbenutzers | `name`, `uid`, `name:group`, `uid:gid` | `--user`; bei `podman` zusätzlich `--userns keep-id` |
-| `network` | String | nein | `default` | `default` (Engine-Default, kein Flag), `none` oder ein Netzwerkname | `--network` |
+| `network` | String | nein | `default` | `default` (Engine-Default, kein Flag), `none` oder ein Netzwerkname (`[A-Za-z0-9][A-Za-z0-9_.-]*`; `container:<x>` ist damit ausgeschlossen) | `--network`. **Vorsicht `host`:** Der Container erreicht dann alles auf `127.0.0.1` des Hosts – auch die API des Daemons (ohne Anmeldung, §3.1) und damit Start/Cancel beliebiger Runs. |
 | `pull` | Enum | nein | `missing` | `never`, `missing`, `always` | `--pull` |
 
 Aufruf (immer): `--rm --init --name adispatch-<run-id>`, Labels `adispatch.run=<run-id>`,
@@ -832,16 +832,31 @@ Kontextdatei sind der Container-Pfad des Workspaces. **Platzhalter:** In `comman
 **Umgebung:** Nur explizit. `env`-Einträge und `secrets` (`delivery: env`) gehen als `-e NAME` an die Engine, der
 Wert steht nur in der Prozessumgebung des Engine-Aufrufs – **nie auf der Kommandozeile** (nicht in `ps`, nicht im
 gespeicherten Run-Kommando). Ausnahme: `env`-Namen, die der Engine-Prozess selbst braucht (`PATH`, `HOME`, `LANG`,
-`TZ`, `USER`, `LOGNAME`, `TMPDIR`, `DOCKER_*`-/`CONTAINER*`-/`XDG_*`-Variablen u. a.), stehen als
-`-e NAME=wert` auf der Kommandozeile; als `secrets`-Name sind sie verboten. `ADISPATCH_*` stehen ebenfalls als
+`TZ`, `USER`, `LOGNAME`, `TMPDIR`, `DBUS_SESSION_BUS_ADDRESS`, `REGISTRY_AUTH_FILE`) und alle Namen, die die
+Engine-CLI steuern würden (Präfixe `LD_`, `DYLD_`, `SSL_CERT_`, `DOCKER_`, `CONTAINER_`, `CONTAINERS_`, `XDG_`; Endung
+`_PROXY`/`_proxy`, `NO_PROXY`/`no_proxy`; `GODEBUG`, `GOGC`, `GOMAXPROCS`, `GOMEMLIMIT`, `GOTRACEBACK`, `GORACE`,
+`GOEXPERIMENT`), stehen als `-e NAME=wert` auf der Kommandozeile – im Container sind sie also gesetzt, beeinflussen
+aber nie den Engine-Prozess; als `secrets`-Name sind sie verboten (Validierungsfehler). `ADISPATCH_*` stehen ebenfalls als
 `-e NAME=wert` auf der Kommandozeile (keine Secrets). Der Engine-Prozess selbst bekommt die Minimalumgebung (§6.11)
 plus `DOCKER_HOST`, `DOCKER_CONTEXT`, `DOCKER_CONFIG`, `DOCKER_CERT_PATH`, `DOCKER_TLS_VERIFY`, `DOCKER_API_VERSION`,
 `CONTAINER_HOST`, `CONTAINER_CONNECTION`, `CONTAINERS_CONF`, `CONTAINERS_STORAGE_CONF`, `XDG_RUNTIME_DIR`,
 `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `DBUS_SESSION_BUS_ADDRESS` aus der Dienstumgebung, falls gesetzt.
 
+**Prüfungen direkt vor dem Start** (Verstoß → `start_error`, die Engine wird nicht aufgerufen): Quellen müssen
+existieren; bei `{workspace.path}/<pfad>` darf kein Pfadsegment unterhalb des Workspaces ein Symlink sein und der
+aufgelöste Pfad muss im Workspace liegen (`ln -s / ws/cache` wird abgelehnt); keine Quelle (auch nicht der Workspace)
+darf das data-dir enthalten oder darin liegen – ausgenommen Pfade im Workspace, und ein Workspace unter dem data-dir
+nur außerhalb von `runs/`, `logs/` und `backups/` (der Default `<data-dir>/workspaces` ist erlaubt).
+
 **Cancel und Timeout:** `<engine> stop -t <cancel_grace in s> adispatch-<run-id>`; endet der Engine-Prozess danach
 nicht innerhalb von 10 s, wird er wie ein Shell-Worker behandelt (SIGTERM → `cancel_grace` → SIGKILL an seine
-Prozessgruppe), anschließend `<engine> rm -f`. **Recovery nach Neustart:** Container dieser Instanz werden am Label
+Prozessgruppe). Nach **jedem** Ende des Engine-Prozesses folgt `<engine> rm -f adispatch-<run-id>` (ein bereits
+entfernter Container ist kein Fehler); nach einem Stopp/Abbruch sucht der Daemon zusätzlich sofort und nach 2 s noch
+einmal per `ps -a --filter label=adispatch.run=<run-id>` und entfernt, was die Engine noch spät angelegt hat (z. B.
+Abbruch während des Image-Pulls).
+
+**Ergebnisdatei:** Wie bei `shell` wird sie nie über Symlinks gelesen (Symlink, FIFO, ausgetauschtes Verzeichnis →
+`crashed` mit Protokollfehler); Meldungen zu ungültigem JSON nennen nur die Position, nie den Inhalt. **Recovery nach Neustart:** Container dieser Instanz werden am Label
 `adispatch.instance` gefunden (`<engine> ps -a --filter label=…`) und gestoppt – sowohl die von Runs, die als aktiv
 galten (diese enden wie Shell-Runs nach einem Neustart, i. d. R. `crashed`; Event `recovery.container_stopped`), als
 auch solche ohne aktiven Run. Laufende Container werden **nie übernommen** (wie beim Shell-Executor). Ist die Engine

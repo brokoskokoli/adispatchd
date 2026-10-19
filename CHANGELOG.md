@@ -25,6 +25,15 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   existieren, Ziele absolut/normalisiert/eindeutig/nicht unter `/adispatch`, Formate von `resources`/`user`/`network`.
   Beim Daemon-Start wird das Engine-Binary geprüft (Warnung). `workflow dry-run` (CLI, API, UI) und die
   Workflow-Ansicht zeigen den Engine-Aufruf (Secrets nur mit Namen); das Run-Kommando ist der Engine-Aufruf.
+  Vor dem Start abgelehnt (`start_error`): Symlinks in `{workspace.path}/<pfad>`-Quellen und Mounts, die das data-dir
+  enthalten oder darin liegen. Nach jedem Ende `rm -f`, nach einem Abbruch zusätzlich Suche nach spät angelegten
+  Containern des Runs. Variablen, die die Engine-CLI steuern (Proxy, `LD_*`, `GODEBUG`, `DOCKER_*` …), gehen nie über
+  die Engine-Umgebung; als Secret-Name sind sie verboten. Beim Reload wird das Binary einer neu verwendeten Engine
+  geprüft (Warnung). `GET /api/v1/runs/:id` zeigt die Ergebnisdatei auch bei Container-Runs.
+- **Ergebnisdatei ohne Symlinks lesen (alle Executors):** `lstat`, `O_NOFOLLOW|O_NONBLOCK`, `fstat` auf dem Handle,
+  aufgelöster Pfad im erwarteten Verzeichnis – ein Worker kann so keine Host-Datei oder die Ergebnisdatei eines anderen
+  Runs unterschieben; Fehler zu ungültigem JSON nennen nur noch die Position (vorher Teile des Inhalts). Gilt auch für
+  Kontext- und Ergebnisdatei in `GET /api/v1/runs/:id`.
 - **Benannte Ergebnisse (`on_result`):** Die Ergebnisdatei kann zusätzlich zu `result` ein `outcome` liefern
   (Format der Konfigurations-IDs, z. B. `"outcome": "needs_maintainer"`). Ist `on_result.<outcome>` im Workflow
   konfiguriert, läuft genau diese Kette **statt** `on_success`/`on_failure`; sonst bleibt alles wie bisher (ein
