@@ -20,7 +20,14 @@
  * with HTTP 200) are mapped to {@link SourceError} kinds; problems with the
  * configuration (unknown field/option, kind mismatch) are not retryable.
  */
-import { SourceError, type Clock, type IdentityRef, type Logger, type ProjectFieldUpdateValue } from '../../core/index.js';
+import {
+  SourceError,
+  type Clock,
+  type IdentityRef,
+  type Logger,
+  type ProjectFieldUpdateValue,
+  type SourceUpdateApplied,
+} from '../../core/index.js';
 import { PROJECT_FIELD_DATA_TYPES, type ProjectFieldKind } from './fields.js';
 import type { GitHubHttpClient, GraphQLErrorJson, GraphQLResponse } from './http.js';
 import { PROJECT_ITEMS_PER_NODE, type WithToken } from './project.js';
@@ -193,9 +200,40 @@ export class GitHubProjectWriter {
     if (names.length === 0) return { changed: {}, itemAdded: false };
     this.checkDesired(desired);
     const writer = this.settings.writeIdentity ?? identity;
+    const progress: ProjectWriteResult = { changed: {}, itemAdded: false };
+    try {
+      // A NOT_FOUND for an ID from cached metadata (e.g. a deleted and re-created option): reload once and redo.
+      if (await this.pass(content, desired, writer, false, progress)) await this.pass(content, desired, writer, true, progress);
+    } catch (err) {
+      throw withApplied(err, progress);
+    }
+    if (progress.itemAdded || Object.keys(progress.changed).length > 0) {
+      this.deps.logger.info('Applied project field update', {
+        item: content.key,
+        project: this.label,
+        fields: Object.keys(progress.changed),
+        itemAdded: progress.itemAdded,
+      });
+    }
+    return progress;
+  }
 
+  /**
+   * One read-then-write pass; records applied changes in `progress`. Returns
+   * true if it stopped because a mutation answered NOT_FOUND for IDs taken
+   * from cached metadata (the caller retries with fresh metadata); throws
+   * otherwise. A failed mutation always drops the cached metadata so later
+   * attempts (also manual retries) reload option and field IDs.
+   */
+  private async pass(
+    content: { contentId: string; key: string },
+    desired: Readonly<Record<string, ProjectFieldUpdateValue>>,
+    writer: IdentityRef,
+    fresh: boolean,
+    progress: ProjectWriteResult,
+  ): Promise<boolean> {
     // Resolve against (possibly cached) metadata; unresolvable → reload once.
-    let metadata = await this.metadata(writer, false);
+    let metadata = await this.metadata(writer, fresh);
     let resolved = this.resolve(metadata.metadata, desired);
     if ('problems' in resolved && metadata.cached) {
       metadata = await this.metadata(writer, true);
@@ -207,31 +245,31 @@ export class GitHubProjectWriter {
     const { projectId } = metadata.metadata;
     const writes = resolved.writes;
 
-    // Fresh item (read first, then write).
-    let item = await this.readItem(writer, content.contentId, projectId, writes);
-    let itemAdded = false;
-    if (!item) {
-      const itemId = await this.addItem(writer, projectId, content.contentId);
-      itemAdded = true;
-      item = await this.readItem(writer, itemId, projectId, writes);
-      if (!item) throw new SourceError('transient', `Item ${content.key} was added to GitHub project ${this.label} but cannot be read back`);
+    try {
+      // Fresh item (read first, then write).
+      let item = await this.readItem(writer, content.contentId, projectId, writes);
+      if (!('itemId' in item)) {
+        const itemId = await this.addItem(writer, projectId, content.contentId);
+        // Only claim "added" when absence was proven; otherwise GitHub may have returned an existing item.
+        if (item.absent === 'proven') progress.itemAdded = true;
+        const added = await this.readItem(writer, itemId, projectId, writes);
+        if (!('itemId' in added)) {
+          throw new SourceError('transient', `Item ${content.key} was added to GitHub project ${this.label} but cannot be read back`);
+        }
+        item = added;
+      }
+      for (const [index, write] of writes.entries()) {
+        if (sameValue(item.values[index], write.target)) continue;
+        await this.writeField(writer, projectId, item.itemId, write);
+        progress.changed[write.name] = targetValue(write.target);
+      }
+      return false;
+    } catch (err) {
+      if (!(err instanceof MutationError)) throw err;
+      this.cached = undefined;
+      if (metadata.cached && err.cause instanceof SourceError && err.cause.kind === 'not_found') return true;
+      throw err.cause;
     }
-
-    const changed: Record<string, ProjectFieldUpdateValue> = {};
-    for (const [index, write] of writes.entries()) {
-      if (sameValue(item.values[index], write.target)) continue;
-      await this.writeField(writer, projectId, item.itemId, write);
-      changed[write.name] = targetValue(write.target);
-    }
-    if (itemAdded || Object.keys(changed).length > 0) {
-      this.deps.logger.info('Applied project field update', {
-        item: content.key,
-        project: this.label,
-        fields: Object.keys(changed),
-        itemAdded,
-      });
-    }
-    return { changed, itemAdded };
   }
 
   /** Runtime check of names and value types (the config validation normally guarantees them). */
@@ -320,15 +358,17 @@ export class GitHubProjectWriter {
   /**
    * Item ID and current values (by index of `writes`) of `id` in the project:
    * `id` is an issue/PR (its project items are searched) or a project item.
-   * `undefined` if the issue/PR has no item in the project (or it could not
-   * be found among the memberships read – adding it is idempotent).
+   * `{ absent: 'proven' }` if the issue/PR has no item in the project,
+   * `{ absent: 'unknown' }` if it was not found among the memberships read
+   * (more than {@link PROJECT_ITEMS_PER_NODE} or unreadable ones – adding it
+   * is idempotent anyway).
    */
   private async readItem(
     identity: IdentityRef,
     id: string,
     projectId: string,
     writes: readonly ResolvedWrite[],
-  ): Promise<{ itemId: string; values: unknown[] } | undefined> {
+  ): Promise<{ itemId: string; values: unknown[] } | { absent: 'proven' | 'unknown' }> {
     const variables: Record<string, unknown> = { id };
     writes.forEach((w, i) => {
       variables[`f${i}`] = w.field.name;
@@ -342,18 +382,23 @@ export class GitHubProjectWriter {
     }
     let entry: ItemJson | undefined;
     let entryPath: Array<string | number> = ['node'];
+    let absent: 'proven' | 'unknown' = 'unknown';
     if (node.__typename === 'ProjectV2Item') {
       if (node.project?.id === projectId) entry = node;
     } else {
-      const nodes = node.projectItems?.nodes;
+      const items = node.projectItems;
+      const nodes = items?.nodes;
       if (!Array.isArray(nodes)) throw this.graphqlError(res.errors, `reading the project items of ${id} failed`, 'invalid');
       const index = nodes.findIndex((n) => n?.project?.id === projectId);
       if (index >= 0) {
         entry = nodes[index] as ItemJson;
         entryPath = ['node', 'projectItems', 'nodes', index];
+      } else {
+        const total = typeof items?.totalCount === 'number' ? items.totalCount : Infinity;
+        if (nodes.every((n) => typeof n?.project?.id === 'string') && total <= nodes.length) absent = 'proven';
       }
     }
-    if (!entry) return undefined;
+    if (!entry) return { absent };
     // Errors below the entry make its values unreliable (errors of other memberships do not matter).
     const entryErrors = res.errors.filter((e) => entryPath.every((p, i) => e.path?.[i] === p));
     if (entryErrors.length > 0) throw this.graphqlError(entryErrors, `reading item ${id} in GitHub project ${this.label} failed`, 'transient');
@@ -371,7 +416,7 @@ export class GitHubProjectWriter {
     const id = data.addProjectV2ItemById?.item?.id;
     if (typeof id !== 'string') {
       // Repeating is safe: GitHub returns the existing item.
-      throw new SourceError('transient', `Adding the item to GitHub project ${this.label} returned no item ID`);
+      throw new MutationError(new SourceError('transient', `Adding the item to GitHub project ${this.label} returned no item ID`));
     }
     return id;
   }
@@ -381,7 +426,9 @@ export class GitHubProjectWriter {
     const what = `setting field "${write.field.name}" in`;
     if (write.target.kind === 'clear') {
       const data = await this.mutate<{ clearProjectV2ItemFieldValue?: unknown }>(identity, CLEAR_FIELD_MUTATION, base, what);
-      if (!data.clearProjectV2ItemFieldValue) throw new SourceError('transient', `Clearing field "${write.field.name}" in GitHub project ${this.label} returned no item`);
+      if (!data.clearProjectV2ItemFieldValue) {
+        throw new MutationError(new SourceError('transient', `Clearing field "${write.field.name}" in GitHub project ${this.label} returned no item`));
+      }
       return;
     }
     const data = await this.mutate<{ updateProjectV2ItemFieldValue?: unknown }>(
@@ -390,15 +437,22 @@ export class GitHubProjectWriter {
       { ...base, value: fieldValueInput(write.target) },
       what,
     );
-    if (!data.updateProjectV2ItemFieldValue) throw new SourceError('transient', `Setting field "${write.field.name}" in GitHub project ${this.label} returned no item`);
+    if (!data.updateProjectV2ItemFieldValue) {
+      throw new MutationError(new SourceError('transient', `Setting field "${write.field.name}" in GitHub project ${this.label} returned no item`));
+    }
   }
 
   /** Run one mutation; GraphQL errors (also with HTTP 200) become a {@link SourceError}. */
   private async mutate<T>(identity: IdentityRef, mutation: string, variables: Record<string, unknown>, what: string): Promise<T> {
     // `graphql()` treats the request as idempotent: the mutations converge on the desired state.
-    const res = await this.deps.withToken(identity, undefined, (token) => this.deps.http.graphql<T>(mutation, variables, { token }));
+    let res: GraphQLResponse<T>;
+    try {
+      res = await this.deps.withToken(identity, undefined, (token) => this.deps.http.graphql<T>(mutation, variables, { token }));
+    } catch (err) {
+      throw new MutationError(err);
+    }
     if (res.errors.length > 0 || !res.data) {
-      throw this.graphqlError(res.errors, `${what} GitHub project ${this.label} failed`, 'transient');
+      throw new MutationError(this.graphqlError(res.errors, `${what} GitHub project ${this.label} failed`, 'transient'));
     }
     return res.data;
   }
@@ -412,6 +466,40 @@ export class GitHubProjectWriter {
       details: { project: this.label },
     });
   }
+}
+
+/** Internal wrapper marking a failed mutation (the original error is `cause`). */
+class MutationError extends Error {
+  constructor(override readonly cause: unknown) {
+    super('project mutation failed');
+  }
+}
+
+/**
+ * `err` with what was applied before it attached as `details.applied` (shape
+ * of {@link SourceUpdateApplied}; entries already attached win). Non-source
+ * errors are returned unchanged.
+ */
+export function withApplied(err: unknown, applied: SourceUpdateApplied | ProjectWriteResult): unknown {
+  if (!(err instanceof SourceError)) return err;
+  const normalized: SourceUpdateApplied =
+    'changed' in applied
+      ? {
+          ...(Object.keys(applied.changed).length > 0 ? { projectFields: { ...applied.changed } } : {}),
+          ...(applied.itemAdded ? { projectItemAdded: true } : {}),
+        }
+      : applied;
+  const previous = (err.details?.applied ?? {}) as SourceUpdateApplied;
+  const merged: SourceUpdateApplied = { ...normalized, ...previous };
+  if (Object.keys(merged).length === 0) return err;
+  return new SourceError(err.kind, err.message, {
+    cause: err.cause,
+    details: { ...(err.details ?? {}), applied: merged },
+    retryable: err.retryable,
+    outcomeUnknown: err.outcomeUnknown,
+    ...(err.retryAfterMs !== undefined ? { retryAfterMs: err.retryAfterMs } : {}),
+    ...(err.status !== undefined ? { status: err.status } : {}),
+  });
 }
 
 /** Problem of a value for a field of `kind`, or `undefined` if valid. */

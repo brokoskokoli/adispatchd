@@ -309,6 +309,80 @@ describe('source.update with project fields', () => {
     expect(github.projectValues(project, REPO, 1)).toMatchObject({ Status: 'Done' });
   });
 
+  it('a failed mutation drops the cached metadata, so the next attempt uses fresh option IDs', async () => {
+    github.addProjectItem(project, REPO, 1, { Status: 'Todo' });
+    const adapter = source();
+    const meta = () => github.requests.filter((r) => r.graphql?.query.includes('repositoryOwner(')).length;
+    await adapter.applyUpdate(itemOf(1), { project: { Status: 'Review' } }, 'maintainer');
+    expect(meta()).toBe(1);
+    // The option was deleted and re-created on GitHub: the cached option ID is stale.
+    const status = field('Status');
+    status.options[1] = { id: 'opt-recreated', name: 'In Progress' };
+    const err = await failure(adapter.applyUpdate(itemOf(1), { project: { Status: 'In Progress' } }, 'maintainer'));
+    expect(err).toMatchObject({ kind: 'transient', retryable: true });
+    expect(meta()).toBe(1);
+    // Retry (automatic or manual): metadata is reloaded and the write succeeds.
+    await adapter.applyUpdate(itemOf(1), { project: { Status: 'In Progress' } }, 'maintainer');
+    expect(meta()).toBe(2);
+    expect(github.projectValues(project, REPO, 1)).toMatchObject({ Status: 'In Progress' });
+    expect(mutations().at(-1)?.variables.value).toEqual({ singleSelectOptionId: 'opt-recreated' });
+  });
+
+  it('NOT_FOUND for a cached field ID → reload once and retry within the same update', async () => {
+    github.addProjectItem(project, REPO, 1, { Notes: 'old' });
+    const adapter = source();
+    await adapter.applyUpdate(itemOf(1), { project: { Notes: 'a' } }, 'maintainer');
+    // The field was re-created on GitHub with a new ID.
+    field('Notes').id = 'PVTF_recreated';
+    const result = await adapter.applyUpdate(itemOf(1), { project: { Notes: 'b' } }, 'maintainer');
+    expect(result).toEqual({ changed: true, applied: { projectFields: { Notes: 'b' } } });
+    expect(github.projectValues(project, REPO, 1)).toMatchObject({ Notes: 'b' });
+    expect(github.projectMutations().map((m) => [m.variables.fieldId, m.status])).toEqual([
+      [expect.stringMatching(/^PVTF_kw/), 200],
+      [expect.stringMatching(/^PVTF_kw/), 200],
+      ['PVTF_recreated', 200],
+    ]);
+    expect(github.requests.filter((r) => r.graphql?.query.includes('repositoryOwner(')).length).toBe(2);
+  });
+
+  it('a failure carries what was applied before it (labels, project fields, item added)', async () => {
+    const adapter = source();
+    await adapter.applyUpdate(itemOf(1), { project: { Sprint: 'Sprint 12' } }, 'maintainer');
+    // The second write (Sprint) uses a stale iteration ID and fails; Status was already set.
+    field('Sprint').iterations[1] = { id: 'it-recreated', title: 'Sprint 13' };
+    github.requests.length = 0;
+    const err = await failure(
+      adapter.applyUpdate(itemOf(1), { labels: { add: ['in-progress'], remove: ['ready'] }, project: { Status: 'Review', Sprint: 'Sprint 13' } }, 'maintainer'),
+    );
+    expect(err.kind).toBe('transient');
+    expect(err.details?.applied).toEqual({ labelsAdded: ['in-progress'], labelsRemoved: ['ready'], projectFields: { Status: 'Review' } });
+
+    // The item was added before the failure: reported as well (metadata cached again, Done's option ID now stale).
+    await adapter.applyUpdate(itemOf(1), { project: { Status: 'Todo' } }, 'maintainer');
+    github.createIssue(REPO, { number: 2 });
+    field('Status').options[3] = { id: 'opt-recreated', name: 'Done' };
+    const added = await failure(adapter.applyUpdate(itemOf(2), { project: { Status: 'Done' } }, 'maintainer'));
+    expect(added.details?.applied).toEqual({ projectItemAdded: true });
+    expect(github.projectValues(project, REPO, 2)).toEqual({});
+  });
+
+  it('an item beyond the memberships read is not reported as added (GitHub returns the existing item)', async () => {
+    for (let n = 10; n < 31; n++) {
+      const other = github.createProject('example', { number: n, fields: [{ name: 'Status', dataType: 'SINGLE_SELECT', options: ['A'] }] });
+      github.addProjectItem(other, REPO, 1);
+    }
+    const late = github.createProject('example', { number: 40, fields: [{ name: 'Status', dataType: 'SINGLE_SELECT', options: ['Todo', 'Done'] }] });
+    github.addProjectItem(late, REPO, 1, { Status: 'Todo' });
+    const result = await source({ number: 40, fields: { Status: 'single_select' } }).applyUpdate(itemOf(1), { project: { Status: 'Done' } }, 'maintainer');
+    expect(result).toEqual({ changed: true, applied: { projectFields: { Status: 'Done' } } });
+    expect(github.projectMutations().map((m) => m.name)).toEqual(['addProjectV2ItemById', 'updateProjectV2ItemFieldValue']);
+
+    // Proven absence (all memberships read) → reported as added.
+    github.createIssue(REPO, { number: 2 });
+    const fresh = await source({ number: 40, fields: { Status: 'single_select' } }).applyUpdate(itemOf(2), { project: { Status: 'Done' } }, 'maintainer');
+    expect(fresh.applied).toEqual({ projectFields: { Status: 'Done' }, projectItemAdded: true });
+  });
+
   it('the item query uses only generated identifiers', () => {
     const query = projectItemQuery(2);
     expect(query).toContain('query($id: ID!, $f0: String!, $f1: String!)');
