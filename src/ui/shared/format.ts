@@ -228,6 +228,12 @@ export function eventSummary(e: RunEventLike): string {
       (err ? `: ${err}` : '')
     );
   }
+  if (e.type === 'run.linked_resolved') {
+    // WI-21: linked branch/PR fields read before the start.
+    const list = (v: unknown): string => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').join(', ') : '');
+    const unknown = list(p.unknown);
+    return `linked fields read${list(p.known) ? `: ${list(p.known)}` : ''}${unknown ? `; unknown: ${unknown}` : ''}`;
+  }
   const message = str(p.message) ?? str(p.reason) ?? str(p.error);
   if (message !== null) return message;
   const keys = Object.keys(p).filter((k) => k !== 'type');

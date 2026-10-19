@@ -22,6 +22,19 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   fassen geänderte Labels und Projektfelder zusammen.
 - Beispiele: `examples/config/workflows/reviewer-project-b.yaml` setzt den Status, Coder-Workflows in `init` und
   `examples/config` enthalten ein auskommentiertes `project:`-Beispiel; Konfigurationsreferenz §3.4.11, §7.7, §8.
+- **Verknüpfte Branches und PRs als Item-Felder (GitHub):** neue teure Felder `linked_branches` (unter „Development“
+  verlinkte Branches), `closing_prs` (PRs, die das Issue schließen: `{ number, state, head_ref, is_draft, url }`,
+  offen → gemergt → geschlossen), abgeleitet `work_branch` und `work_pr` sowie `work_pr_url` (Link-Ziel in Views).
+  Für Pull-Request-Items: eigener Branch und eigene Nummer, solange offen. Eine GraphQL-Abfrage pro Item für alle
+  Felder, nur Variablen; jeder Fehler, Teilfehler, mehr als 20 Treffer oder ein Rate-Limit macht alle Felder
+  `unknown` (fail closed, Rate-Limit-Pause wie bei Projektfeldern).
+- Neuer Feldtyp `object[]` (`closing_prs`): ohne Filter-Operatoren (Validierungsfehler mit Hinweis auf `work_pr`), in
+  Views als `#12 open, #9 merged` mit Link je PR; Views können nicht danach sortieren.
+- Platzhalter `{item.work_branch}` und `{item.work_pr}` in `execute` und Actions: direkt vor dem Rendern frisch
+  gelesen (beim Run-Start bzw. je Action-Versuch). Unbekannt → `start_error` vor `on_start` bzw. wiederholbarer
+  Action-Fehler – nie ein leerer String; bekannt leer (`null`) → leerer String. Verwendet ein Workflow die Felder
+  (Platzhalter in `execute` oder Feld in `filter`/`item_priority`), stehen sie in `source.attributes` der
+  Kontextdatei; Run-Event `run.linked_resolved`. Konfigurationsreferenz §4.7.2, §5.3, §7.9, §8; Live-Test T27.
 
 ### Geändert
 

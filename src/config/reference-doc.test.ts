@@ -17,7 +17,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { FILTER_OPERATORS, HOOK_NAMES, NOTIFICATION_EVENT_TYPES, OPERATORS_BY_TYPE, PLACEHOLDERS } from '../core/index.js';
-import { GITHUB_FIELD_DEFINITIONS, PROJECT_FIELD_DATA_TYPES, PROJECT_FIELD_KINDS, PROJECT_FIELD_TYPES } from '../sources/github/index.js';
+import {
+  CLOSING_PRS_FIRST,
+  GITHUB_FIELD_DEFINITIONS,
+  LINKED_BRANCHES_FIRST,
+  PROJECT_FIELD_DATA_TYPES,
+  PROJECT_FIELD_KINDS,
+  PROJECT_FIELD_TYPES,
+} from '../sources/github/index.js';
 import { VIEW_RUN_FIELDS } from '../views/index.js';
 import { DEFAULT_WORKING_DIRECTORY, loadConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
 import { createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
@@ -109,7 +116,7 @@ async function load(name: string): Promise<Awaited<ReturnType<typeof loadConfig>
 
 describe('docs/configuration-reference.md', () => {
   it('contains the documented example sets', () => {
-    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters']) {
+    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters', 'linked']) {
       expect(sets.get(name)?.invalid, name).toBe(false);
     }
     expect([...sets.values()].filter((s) => s.invalid).length).toBeGreaterThanOrEqual(10);
@@ -171,6 +178,14 @@ describe('docs/configuration-reference.md', () => {
     for (const name of ['addProjectV2ItemById', 'updateProjectV2ItemFieldValue', 'clearProjectV2ItemFieldValue', 'Projects: Read and write']) {
       expect(markdown, name).toContain(name);
     }
+  });
+
+  it('documents the linked branch/PR query limits and the unknown rule of the placeholders (WI-21)', () => {
+    expect(markdown).toContain(`linkedBranches(first: ${LINKED_BRANCHES_FIRST})`);
+    expect(markdown).toContain(`closedByPullRequestsReferences(first: ${CLOSING_PRS_FIRST}, includeClosedPrs: true)`);
+    expect(markdown).toContain('### 5.3 Teure Platzhalter `{item.work_branch}`, `{item.work_pr}`');
+    expect(markdown).toContain('run_linked_field_unknown');
+    expect(markdown).toContain('lifecycle_linked_field_unknown');
   });
 
   it('documents the allowed operators per field type (validated since WI-13)', () => {

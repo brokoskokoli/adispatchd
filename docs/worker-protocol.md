@@ -48,7 +48,11 @@ Der Worker erbt **nicht** die Umgebung des Orchestrators. Er bekommt nur:
 }
 ```
 
-`source` fehlt bei Cron-/Manual-Runs ohne Item; `run.scheduled_for` gibt es bei Cron-Runs; `parameters` enthält die validierten
+`source.attributes` enthält die billigen Item-Felder; bei GitHub-Items zusätzlich `linked_branches`, `closing_prs`
+(`[{ "number": 12, "state": "open", "head_ref": "feature/12", "is_draft": false, "url": "…" }]`), `work_branch`,
+`work_pr` und `work_pr_url`, **wenn der Workflow sie verwendet** (`{item.work_branch}`/`{item.work_pr}` in `execute`
+oder eines der Felder in `filter`/`item_priority`; Konfigurationsreferenz §5.3) – frisch beim Start gelesen,
+unbekannte Werte fehlen. `source` fehlt bei Cron-/Manual-Runs ohne Item; `run.scheduled_for` gibt es bei Cron-Runs; `parameters` enthält die validierten
 Parameter manueller Starts (inkl. Defaults). Die Datei enthält **nie** Secrets.
 
 ## Output

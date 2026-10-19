@@ -103,6 +103,10 @@ describe('dry-run / events', () => {
   it('summarizes events', () => {
     expect(eventSummary({ type: 'run.status', payload: { from: 'starting', to: 'running' } })).toBe('starting → running');
     expect(eventSummary({ type: 'run.status', payload: { from: null, to: 'reserved' } })).toBe('→ reserved');
+    expect(eventSummary({ type: 'run.linked_resolved', payload: { known: ['work_branch', 'work_pr'], unknown: [] } })).toBe(
+      'linked fields read: work_branch, work_pr',
+    );
+    expect(eventSummary({ type: 'run.linked_resolved', payload: { known: [], unknown: ['work_pr'] } })).toBe('linked fields read; unknown: work_pr');
     expect(eventSummary({ type: 'progress', payload: { value: 60 } })).toBe('60%');
     expect(eventSummary({ type: 'status', payload: { message: 'Tests laufen' } })).toBe('Tests laufen');
     expect(eventSummary({ type: 'lifecycle.action', payload: { hook: 'on_success', name: 'label', type: 'source.update', status: 'failed', error: 'x' } })).toBe('on_success label failed: x');

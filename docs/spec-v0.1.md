@@ -325,6 +325,8 @@ Eine gemeinsame deklarative Filter-AST unterstützt `all`, `any`, `not` sowie mi
 
 **Nachtrag 0.2.0 (WI-15) – Benannte Filter:** Filter können einmal in `filters/<id>.yaml` (`id`, optional `description`, `filter`) definiert und überall im Filterbaum per `{ use: <id> }` bzw. als Kurzform `filter: <id>` verwendet werden (Workflow-`filter`, `item_priority.rules[].when`, View-`filter`, andere benannte Filter). Referenzen werden beim Laden expandiert; Scheduler, Views, Pushdown und Dry-Run sehen nur den eingesetzten Baum (Position nach dem Einsetzen zählt). Unbekannte IDs, Zyklen und Ketten tiefer als 16 Ebenen sind Konfigurationsfehler; Feldprüfungen laufen am Verwendungsort; unbenutzte Filter ergeben eine Warnung. Details: [configuration-reference.md](configuration-reference.md) §3.6.
 
+**Nachtrag 0.3.0 (WI-21) – Verknüpfte Branches und PRs:** Teure GitHub-Felder `linked_branches` (string[]: unter „Development“ verlinkte Branches des Repositorys), `closing_prs` (neuer Feldtyp `object[]`: `{ number, state, head_ref, is_draft, url }` der PRs des Repositorys, die das Issue schließen; offen → gemergt → geschlossen, je nach Nummer), abgeleitet `work_branch` (erster verlinkter Branch, sonst Branch des ersten offenen, dann des ersten gemergten PRs) und `work_pr` (erster offener PR) sowie `work_pr_url` als Link-Ziel in Views. Pull-Request-Items: eigener Branch, eigene Nummer solange offen. Alle aus **einer** GraphQL-Abfrage pro Item (`linkedBranches(first: 20)`, `closedByPullRequestsReferences(first: 20, includeClosedPrs: true)`); jeder Fehler, Teilfehler, mehr Treffer als gelesen oder ein Rate-Limit macht alle unknown (Rate-Limit-Pause wie WI-14). `object[]`-Felder haben keine Operatoren (Validierungsfehler mit Hinweis auf `work_pr`), sind aber in Views und der Kontextdatei verfügbar. Platzhalter `{item.work_branch}`/`{item.work_pr}` in `execute` und Actions werden direkt vor dem Rendern frisch gelesen; unknown → `start_error` vor `on_start` bzw. scheiternde Action, nie ein leerer String. Details: [configuration-reference.md](configuration-reference.md) §4.7.2, §5.3.
+
 **Shell-Filter:** Nur für Workflows. Jeder Aufruf bekommt den einzelnen Item-Kontext; Exit `0` = passt, Exit `1` = passt nicht, Exit `>=2` = Prüffehler. Shell-Conditions verwenden dieselbe Konvention, sind aber eigenständige Startprüfungen. Die Exit-Code-Semantik gilt für diese Prüfskripte, **nicht automatisch für den Haupt-Worker**. Workflow-Conditions können gecacht werden; itembezogene nicht notwendigerweise. Timeouts sind konfigurierbar. Views führen keine Shell-Skripte aus.
 
 ## 7. Scheduler
@@ -460,6 +462,8 @@ Zusätzlich steht eine JSON-Kontextdatei zur Verfügung:
   "workspace": { "path": "/var/lib/adispatchd/workspaces/coder-project-a/run-123" }
 }
 ```
+
+**Nachtrag 0.3.0 (WI-21):** `attributes` enthält zusätzlich `linked_branches`, `closing_prs`, `work_branch`, `work_pr`, `work_pr_url`, wenn der Workflow sie verwendet (Platzhalter in `execute` oder Feld in `filter`/`item_priority`); sie werden dann beim Start frisch gelesen.
 
 Der Worker erhält ausschließlich eine Minimalumgebung und **ausdrücklich deklarierte** Env-Variablen/Secrets. Secrets werden nicht in Kontext-/Ergebnisdateien persistiert. Für GitHub CLI darf das für den Workflow erzeugte App-Installation-Token bei Bedarf als `GH_TOKEN` exponiert werden. Das verhindert keine Einsicht in Secrets durch den gestarteten Worker selbst; Shell-Executor sind als **vertrauenswürdige Programme mit begrenzten Rechten** zu behandeln.
 
@@ -627,7 +631,7 @@ fields:
 sort: { field: updated_at, direction: desc }
 ```
 
-Filter nur deklarativ, keine Shell-Filter, keine zusätzlichen UI-Filter/Textsuche. Spaltensortierung im Browser ist erlaubt. Daten werden beim Öffnen/Refresh aus Sources geladen; optional kurzer Cache. Source-Adapter liefern deklarierte Felddefinitionen samt Typ, optionalem Link und unterstützten Operatoren. Nicht verfügbare Spalten bleiben erkennbar leer. `run.last_*` bezieht sich auf den letzten passenden, zeitlich eindeutig bestimmten Run; bei Bedarf später workflowbezogene Selektoren ergänzen. Auch bei mehreren Repositories muss die Item-ID global eindeutig sein.
+Filter nur deklarativ, keine Shell-Filter, keine zusätzlichen UI-Filter/Textsuche. Spaltensortierung im Browser ist erlaubt. Daten werden beim Öffnen/Refresh aus Sources geladen; optional kurzer Cache. Source-Adapter liefern deklarierte Felddefinitionen samt Typ, optionalem Link und unterstützten Operatoren. Nicht verfügbare Spalten bleiben erkennbar leer. **Nachtrag 0.3.0 (WI-21):** Felder vom Typ `object[]` (`closing_prs`) werden als Liste dargestellt (`#12 open`, Link je Eintrag), `work_pr` verlinkt auf den PR; nach `object[]` kann nicht sortiert werden. `run.last_*` bezieht sich auf den letzten passenden, zeitlich eindeutig bestimmten Run; bei Bedarf später workflowbezogene Selektoren ergänzen. Auch bei mehreren Repositories muss die Item-ID global eindeutig sein.
 
 ## 18. Benachrichtigungen
 

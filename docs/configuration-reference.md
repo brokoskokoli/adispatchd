@@ -211,7 +211,9 @@ Template; Platzhalter in `command` werden nicht ersetzt. Existenz/Ausführbarkei
   Projektfeldwerte in `source.update`, Filterwerte, `secrets`, alle übrigen Felder.
 
 **Modus `text`:** Werte werden unverändert eingesetzt (Zahlen/Booleans als `5`, `true`). Ein erlaubter Platzhalter
-ohne Wert wird zu einem **leeren String**.
+ohne Wert wird zu einem **leeren String**. Ausnahme `{item.work_branch}`/`{item.work_pr}` (§5.3): ist der Wert
+**unknown** (z. B. GitHub nicht erreichbar), wird gar nicht gerendert – der Run endet als `start_error` bzw. die
+Action scheitert; nur ein bekannt leerer Wert (`null`) wird zum leeren String.
 
 **Modus `path`** (nur `working_directory`):
 
@@ -824,10 +826,10 @@ sort: { field: updated_at, direction: desc }
 | `filter` | Filter-AST oder ID eines benannten Filters (§3.6) | nein | alles | §4; inkl. `run.last_*` | nur Items mit Ergebnis `true` werden gezeigt |
 | `shell_filter` | – | – | | **verboten** (Fehler) | Views führen nie Skripte aus |
 | `fields` | Liste | ja | | ≥ 1 | Spalten in Reihenfolge |
-| `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen; `project.*` nur, wenn **alle** Sources der View es mit gleicher Art deklarieren (§4.7.1) | Feldname (§4.7, §4.8) |
+| `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen; `project.*` nur, wenn **alle** Sources der View es mit gleicher Art deklarieren (§4.7.1) | Feldname (§4.7, §4.8); `object[]`-Felder (`closing_prs`) erscheinen als Liste, z. B. `#12 open, #9 merged`, jeder Eintrag als Link auf seine `url` |
 | `fields[].label` | String | nein | Feldname | | Spaltenüberschrift |
-| `fields[].link` | String (Feldname, geprüft wie `field`) | nein | `link` der Felddefinition (`number`, `title` → `url`) | | Feld, dessen Wert (nur absolute `http(s)`-URL) als Link dient |
-| `sort.field` | String | ja (wenn `sort`) | | geprüft wie `fields[].field` | Sortierfeld |
+| `fields[].link` | String (Feldname, geprüft wie `field`) | nein | `link` der Felddefinition (`number`, `title` → `url`; `work_pr` → `work_pr_url`, also der PR) | | Feld, dessen Wert (nur absolute `http(s)`-URL) als Link dient |
+| `sort.field` | String | ja (wenn `sort`) | | geprüft wie `fields[].field`; kein `object[]`-Feld (`Views cannot be sorted by "closing_prs" (type object[])`) | Sortierfeld |
 | `sort.direction` | Enum | nein | `asc` | `asc`, `desc` | leere Werte immer zuletzt; Gleichstand nach Item-Schlüssel (natürlich) |
 
 Laden: beim Öffnen/Refresh aus allen Sources (parallel; eine fehlerhafte Source erscheint als Fehlerzeile, die
@@ -901,6 +903,8 @@ erscheinen in `GET /api/v1/config/files` (UI: Configuration).
 - Projektfelder: ein Projekt je Source; Metadaten lesen die ersten 100 Felder des Projekts; je Issue/PR werden die
   ersten 20 (nicht archivierten) Projekt-Mitgliedschaften gelesen (mehr → unknown, §4.7.1). Kein Pushdown: die
   Issue-Liste wird wie bisher nur über `state`/`labels` eingeschränkt.
+- Verknüpfte Branches/PRs (§4.7.2): je Issue werden die ersten **20** verlinkten Branches und die ersten **20**
+  schließenden PRs gelesen; mehr → alle fünf Felder unknown. Nur Branches und PRs des Source-Repositorys zählen.
 - Benannte Filter haben keine Parameter (kein `{use: x, value: …}`); Referenzketten höchstens 16 Ebenen tief
   (gezählt ab jedem Workflow-, View- oder Filter-Wurzelknoten).
 - Ein expandierter Filterbaum hat höchstens **10 000 Knoten** je Wurzel (Workflow-`filter`, jede
@@ -966,6 +970,7 @@ Datumswerte: `YYYY-MM-DD` oder `YYYY-MM-DDTHH:MM[:SS[.fff]][Z|±HH:MM]`; ohne Of
 | `boolean` | equals, not_equals | Boolean (nicht `'true'`); `null` bei equals/not_equals |
 | `date` | equals, not_equals, greater_than, less_than | ISO-8601-String (s. o.); `null` bei equals/not_equals |
 | `string[]` | contains, in | String bzw. Liste von Strings |
+| `object[]` |  | – (keine Operatoren; in Filtern ein Fehler, §4.7.2) |
 
 **Groß-/Kleinschreibung:** `labels` (GitHub) vergleicht ohne Beachtung der Groß-/Kleinschreibung – wie GitHub
 und `source.update` (`Ready` passt auf `ready`). Alle anderen String-Vergleiche beachten sie.
@@ -976,6 +981,9 @@ und `source.update` (`Ready` passt auf `ready`). Alle anderen String-Vergleiche 
   `item_priority.rules[].when`; Views: `filter`, `fields[].field`, `fields[].link`, `sort.field`): unbekannte
   Feldnamen (mit Vorschlag „did you mean …“), nicht erlaubte Operatoren, falsche Werttypen, ungültige Datumswerte.
 - `run.last_*` ist nur in Views erlaubt; in Workflows ist es ein Fehler („only available in views“).
+- Felder vom Typ `object[]` (`closing_prs`) haben keine Operatoren: in `filter`/`item_priority` ein Fehler
+  `Field "closing_prs" (type object[]) cannot be used in filters; use "work_pr" (…) or "work_branch" instead`, als
+  `sort.field` einer View ebenfalls. Als View-Spalte und in der Kontextdatei sind sie erlaubt.
 - Benannte Filter (§3.6) werden am Verwendungsort gegen dessen Kontext geprüft; die Meldung nennt in Klammern den
   Pfad im benannten Filter.
 - `project.<Name>` gibt es je Source genau für die in `sources.yaml` unter `project.fields` deklarierten Namen
@@ -1004,8 +1012,10 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 
 ### 4.5 Auswertungsreihenfolge, teure Felder, Pushdown
 
-- **Teure Felder** (GitHub: `dependencies.*`) stehen nicht in der Listenabfrage und werden lazy nachgeladen – pro
-  Item in **einer** Anfragerunde für alle benötigten teuren Felder, gültig für einen Planungsschritt/View-Aufruf.
+- **Teure Felder** (GitHub: `dependencies.*`, `linked_branches`, `closing_prs`, `work_branch`, `work_pr`,
+  `work_pr_url`) stehen nicht in der Listenabfrage und werden lazy nachgeladen – pro Item in **einer** Anfragerunde
+  für alle benötigten teuren Felder (Dependencies per REST, die verknüpften Branches/PRs mit genau **einer**
+  GraphQL-Abfrage, beide parallel), gültig für einen Planungsschritt/View-Aufruf.
 - Innerhalb von `all`/`any` werden zuerst Kinder ausgewertet, die nur billige Felder brauchen; sobald das Ergebnis
   feststeht, wird abgebrochen (Rest = `not_evaluated` in der Diagnose). Workflow-Filter laufen zweistufig: erst nur
   billige Felder (teure = unknown); ist das Ergebnis schon `true` oder `false`, ist es endgültig, nur bei unknown
@@ -1058,6 +1068,11 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 | `dependencies.blocked_by_open` | number | equals, not_equals, in, greater_than, less_than | | ja | davon offen; unknown ohne Zugriff |
 | `dependencies.blocked` | boolean | equals, not_equals | | ja | mindestens ein Blocker offen; unknown ohne Zugriff |
 | `dependencies.status` | string | equals, not_equals, contains, in | | ja | `ok` = vollständig aufgelöst, sonst `unknown` (dieses Feld selbst ist dann bekannt) |
+| `linked_branches` | string[] | contains, in | | ja | unter „Development“ verlinkte Branches im selben Repository (§4.7.2); PRs: `[]` |
+| `closing_prs` | object[] | – (nicht in Filtern) | | ja | PRs des Repositorys, die das Issue schließen: `{ number, state, head_ref, is_draft, url }` (§4.7.2); PRs: `[]` |
+| `work_branch` | string | equals, not_equals, contains, in | | ja | abgeleiteter Arbeits-Branch (§4.7.2); `null`, wenn keiner |
+| `work_pr` | number | equals, not_equals, in, greater_than, less_than | | ja | Nummer des ersten offenen schließenden PRs (Link → `work_pr_url`); `null`, wenn keiner |
+| `work_pr_url` | string | equals, not_equals, contains, in | | ja | URL des `work_pr`-PRs; `null`, wenn keiner (Link-Ziel von `work_pr` in Views) |
 
 Abhängigkeiten sind unknown, wenn die API-Zusammenfassung fehlt, ein Blocker einen unerwarteten Status hat oder die
 Identity weniger Blocker sieht, als GitHub meldet. „Offen ⇒ kein Start“ gilt nur, wenn der Filter das ausdrücklich
@@ -1099,6 +1114,39 @@ Projekt-Items zählen als „nicht im Projekt“. Vor `on_start` liest der Run-C
 Projektwerten; Projekt-Metadaten dürfen dafür bis zu 5 Minuten alt sein) und prüft den billigen Filterteil erneut.
 Ist er dabei `unknown`, weil ein `project.*`-Feld nicht ermittelt werden konnte, wird der Run **abgebrochen** (wie
 bei `false`, fail closed).
+
+#### 4.7.2 Verknüpfte Branches und PRs
+
+Der Arbeits-Branch eines Issues bzw. der PR, der es schließt – ohne eigene GraphQL-Abfragen im Worker. Alle fünf
+Felder sind **teuer** (nur geladen, wenn verwendet) und kommen aus **einer** GraphQL-Abfrage pro Item:
+`repository(owner, name) { issueOrPullRequest(number) { … } }` mit `owner`, `name`, `number` ausschließlich als
+Variablen; Identity = Source-Identity (braucht Lesezugriff auf Issues, Pull Requests und Inhalte bzw. Branches).
+
+| Feld | Issue | Pull Request |
+|---|---|---|
+| `linked_branches` | Namen der Branches aus `linkedBranches(first: 20)`, nur Branches **dieses** Repositorys; gelöschte Branches (Link ohne `ref`) fehlen | `[]` |
+| `closing_prs` | PRs aus `closedByPullRequestsReferences(first: 20, includeClosedPrs: true)`, nur PRs **dieses** Repositorys; je PR `{ number, state, head_ref, is_draft, url }` mit `state` = `open`/`merged`/`closed`; sortiert: offene, dann gemergte, dann geschlossene, je nach Nummer aufsteigend | `[]` |
+| `work_branch` | erster verlinkter Branch, sonst `head_ref` des ersten offenen, dann des ersten gemergten PRs aus `closing_prs` (PRs aus Forks zählen dafür nicht – ihr Branch liegt nicht im Repository); sonst `null` | eigener `head_ref` |
+| `work_pr` | Nummer des ersten offenen PRs aus `closing_prs` (auch aus einem Fork); sonst `null` | eigene Nummer, solange offen; sonst `null` |
+| `work_pr_url` | URL dieses PRs; sonst `null` | eigene URL, solange offen; sonst `null` |
+
+Verlauf eines Issues: verlinkter Branch `feature/12` → `work_branch: feature/12`, `work_pr: null`; PR mit
+„Closes #12“ geöffnet → `work_branch` bleibt `feature/12`, `work_pr` = Nummer des PRs; nach dem Merge (und Löschen
+des Branches) → `work_pr: null`, `work_branch` = `head_ref` des gemergten PRs.
+
+**unknown** (fail closed, alle fünf Felder zugleich, Grund in Dry-Run/Diagnose): HTTP-/GraphQL-Fehler,
+**Teilfehler** (jeder Eintrag in `errors[]`, z. B. `FORBIDDEN` an `closedByPullRequestsReferences`), Repository oder
+Item nicht gefunden, unerwartete Antwortform, mehr als 20 verlinkte Branches bzw. schließende PRs (mehr Treffer als
+gelesen), Rate-Limit. Nach einem Rate-Limit liefert die Source bis zum Reset ohne GitHub-Aufruf unknown (wie bei
+`project.*`, §4.7.1); Wartezeit eines Retries höchstens 5 s. Warnung im Log nur bei Änderung des Grundes.
+
+Verwendung:
+
+- **Filter:** z. B. „hat einen offenen PR“ `{ field: work_pr, operator: not_equals, value: null }`, „Branch-Präfix“
+  `{ field: work_branch, operator: contains, value: feature/ }`. `closing_prs` ist nicht filterbar (Typ `object[]`).
+- **Platzhalter** `{item.work_branch}`, `{item.work_pr}` in `execute` und Actions (§5.3).
+- **Views:** als Spalten; `work_pr` verlinkt auf den PR, `closing_prs` zeigt `#12 open, #9 merged` mit Link je PR.
+- **Kontextdatei des Workers:** „wenn verwendet“ – siehe §5.3.
 
 ### 4.8 Run-Felder für Views
 
@@ -1143,6 +1191,8 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{item.key}` | globaler Schlüssel `<source>:<id>` | Run ohne Item |
 | `{item.url}` | Web-URL | Run ohne Item |
 | `{item.title}` | Titel (frisch gelesen bzw. aus der Planung) | Run ohne Item |
+| `{item.work_branch}` | Feld `work_branch` (§4.7.2), direkt vor dem Rendern frisch gelesen | `null` (kein Branch) → leer; **unknown → kein Rendern** (§5.3) |
+| `{item.work_pr}` | Feld `work_pr` (§4.7.2), direkt vor dem Rendern frisch gelesen | `null` (kein offener PR) → leer; **unknown → kein Rendern** (§5.3) |
 | `{result.status}` | technischer Endstatus (`completed`, `crashed`, `start_error`, `timed_out`, `cancelled`) | – |
 | `{result.result}` | `success` \| `failure` | bei technischem Fehler/Cancel |
 | `{result.message}` | `message` der Ergebnisdatei | keine/ungültige Ergebnisdatei oder ohne `message` |
@@ -1163,9 +1213,37 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 | `source.*`, `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | – | ✓ |
 | `result.*` | – | – | – | ✓ | – | – |
 | `parameters.<name>` | ✓ nur `required` oder mit `default` | ✓ | ✓ | ✓ | – | – |
+| `item.work_branch`, `item.work_pr` | ✓ (s, GitHub; `null` → Fehler) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | – | – |
 
 Nicht als Template ausgewertet (Platzhalter bleiben wörtlich stehen): alle `command`, `source.update.labels`,
 `source.update.project`, `shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
+
+`{item.work_branch}`/`{item.work_pr}` außerhalb dieser Stellen (z. B. in `conditions.item[].args`) oder in
+Workflows ohne GitHub-Source-Trigger: `Placeholder "{item.work_branch}" is only available in "execute" and lifecycle
+actions of workflows triggered by a GitHub source`.
+
+### 5.3 Teure Platzhalter `{item.work_branch}`, `{item.work_pr}`
+
+Die Werte stammen aus den teuren Feldern `work_branch`/`work_pr` (§4.7.2) und werden **direkt vor dem Rendern frisch**
+gelesen (eine GraphQL-Abfrage), nie aus der Planung übernommen:
+
+- **Run-Start:** nach dem frischen Lesen des Items und vor `on_start` (§6.5 Schritt 2), wenn `execute`
+  (`working_directory`, `args`, `env`) einen der Platzhalter verwendet. Ist ein verwendeter Wert unknown, endet der
+  Run als **`start_error` ohne Hooks** (`on_start` lief nie, am Item wurde nichts geändert; zählt als technischer
+  Fehler) mit Grund `{item.work_pr} is unknown: …` (Fehlercode `run_linked_field_unknown`). Ein bekannt leerer Wert
+  (`null`) ergibt in `args`/`env` einen leeren String, im `working_directory` (Modus `path`) einen `start_error`.
+- **Actions** (`source.comment.message`, `shell` `args`/`env`, in jedem Hook): bei **jedem Versuch** frisch gelesen –
+  z. B. sieht `on_success` den PR, den der Worker gerade geöffnet hat. Unknown → der Versuch scheitert mit
+  `lifecycle_linked_field_unknown` (wiederholbar nach `lifecycle.action_retry`); es wird nichts gepostet.
+- **Kontextdatei des Workers** (`source.attributes`, Entscheidung „wenn verwendet“): die bekannten Werte aller fünf
+  Felder (`linked_branches`, `closing_prs`, `work_branch`, `work_pr`, `work_pr_url`) stehen darin, wenn der Workflow
+  sie verwendet – Platzhalter in `execute` **oder** eines der Felder in `filter`/`item_priority`. Sonst fragt der
+  Start GitHub nicht danach (keine Kosten). Wer nur `closing_prs` im Worker braucht, verwendet z. B.
+  `env: { WORK_PR: '{item.work_pr}' }`. Unknown-Werte fehlen in `attributes` (nur bei verwendetem Platzhalter
+  bricht der Start ab). Kontexte von `shell`-Actions enthalten die Felder, wenn die Action einen der Platzhalter
+  verwendet.
+- Das Run-Event `run.linked_resolved` (`{ known: [...], unknown: [...] }`) zeigt in der Run-Ansicht, welche Felder
+  beim Start gelesen wurden.
 
 ---
 
@@ -1231,7 +1309,9 @@ Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität.
 
 1. Source-Runs: Item frisch lesen. Nicht mehr vorhanden → `cancelled` (ohne Hooks, nicht gezählt). Bei
    automatischen Runs zusätzlich billiger Filterteil auf dem frischen Item: `false` → `cancelled` ohne Hooks
-   (unknown startet trotzdem). Source fehlt oder Lesefehler → `start_error` **ohne** Hooks (gezählt).
+   (unknown startet trotzdem). Source fehlt oder Lesefehler → `start_error` **ohne** Hooks (gezählt). Verwendet der
+   Workflow `work_branch`/`work_pr` & Co. (§5.3), werden sie jetzt frisch gelesen; ein in `execute` verwendeter,
+   aber unknown Platzhalter → `start_error` **ohne** Hooks (gezählt).
 2. `starting`, `on_start`-Kette. Scheitert sie → Worker startet nicht, `start_error`, `on_start_error`.
 3. Workspace-Pfad, `args`/`env` rendern, Secrets holen, Kontextdatei schreiben; Fehler → `start_error`, `on_start_error`.
 4. Worker als eigene Prozessgruppe starten → `running`.
@@ -1346,7 +1426,8 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 `adispatch workflow dry-run <id>` (gegen die laufende Instanz, sonst mit `--config-dir` lokal) bzw.
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
-`project.*`-Felder (`projectFields`), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
+`project.*`-Felder (`projectFields`), die Werte der im Filter verwendeten teuren Felder (z. B.
+`work_pr not_equals null: true (actual 12)`) im Filter-Trace, den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
 Textausgabe `filter:`). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
@@ -1794,6 +1875,58 @@ Der geladene Workflow enthält den eingesetzten Baum
 zu `labels=ready-for-coding,backend` ab. Eine Änderung an `filters/ready-for-coding.yaml` wirkt nach
 `config reload` auf Coder und View zugleich.
 
+### 7.9 Review auf dem Arbeits-Branch (verknüpfte PRs)
+
+Der Reviewer nimmt Issues mit Label `ready-for-review`, die einen offenen PR haben, und bekommt Branch und PR-Nummer
+direkt als Argumente – ohne eigene GraphQL-Abfrage im Worker. Die View zeigt den Arbeitsstand aller Items (§4.7.2).
+
+```yaml
+# example: linked
+# extends: github
+# file: workflows/pr-reviewer.yaml
+id: pr-reviewer
+identity: reviewer
+trigger: { type: source, source: project_a }
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-review }
+    - { field: work_pr, operator: not_equals, value: null }    # teuer: nur für Items mit dem Label gelesen
+execute:
+  type: shell
+  command: scripts/review-pr.sh
+  args: ['--branch', '{item.work_branch}', '--pr', '{item.work_pr}']
+on_start:
+  - { type: source.update, labels: { add: [reviewing], remove: [ready-for-review] } }
+on_success:
+  - { type: source.comment, message: 'Review von PR #{item.work_pr} abgeschlossen: {result.message}' }
+  - { type: source.update, labels: { remove: [reviewing] } }
+on_failure:     [ { type: source.update, labels: { add: [needs-maintainer], remove: [reviewing] } } ]
+on_crash:       [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+on_start_error: [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+on_timeout:     [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+on_cancel:      [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+```
+
+```yaml
+# example: linked
+# file: views/work-in-progress.yaml
+id: work-in-progress
+title: Arbeitsstand
+sources: [project_a, project_b]
+filter: { field: is_pull_request, operator: equals, value: false }
+fields:
+  - { field: title, link: url }
+  - { field: work_branch, label: Branch }
+  - { field: work_pr, label: PR }                 # Link automatisch auf den PR (work_pr_url)
+  - { field: closing_prs, label: Schließende PRs } # "#12 open, #9 merged", Link je PR
+sort: { field: work_pr, direction: desc }
+```
+
+Kann GitHub die verknüpften PRs eines Items nicht liefern (z. B. Rate-Limit), ist der Filter `unknown` (kein Start)
+und der Dry-Run nennt den Grund. Wird das Item trotzdem gestartet (z. B. manuell) und ist `work_branch` dann unknown,
+endet der Run als `start_error`, bevor `on_start` das Label ändert. Der Kommentar in `on_success` liest `work_pr`
+erneut – er nennt also auch einen PR, den der Worker erst während des Runs geöffnet hat.
+
 ---
 
 ## 8. Häufige Validierungsfehler
@@ -2212,6 +2345,42 @@ a string or null`, `empty value; use null to clear the field`, `Expected a strin
 Laufzeit** fallen auf (Action `failed`, nicht wiederholbar): unbekannte/mehrdeutige Option oder Iteration, Feld fehlt
 im Projekt oder hat eine andere Art, fehlendes Schreibrecht – siehe Fehlertext in der Run-Ansicht (*Actions*).
 
+**Verknüpfte PRs falsch verwendet** – `closing_prs` ist eine Liste von Objekten (`object[]`) ohne Operatoren;
+`{item.work_branch}`/`{item.work_pr}` gibt es nur in `execute` und Actions.
+
+```yaml
+# example: err-linked
+# extends: github
+# invalid
+# expect: workflows/review.yaml: filter.any[0].field: Field "closing_prs" (type object[]) cannot be used in filters; use "work_pr" (e.g. { field: work_pr, operator: not_equals, value: null }) or "work_branch" instead
+# expect: workflows/review.yaml: conditions.item[0].args[0]: Placeholder "{item.work_branch}" is only available in "execute" and lifecycle actions of workflows triggered by a GitHub source
+# expect: views/prs.yaml: sort.field: Views cannot be sorted by "closing_prs" (type object[])
+# file: workflows/review.yaml
+id: review
+trigger: { type: source, source: project_a }
+filter:
+  any:
+    - { field: closing_prs, operator: contains, value: 12 }
+conditions:
+  item:
+    - { type: shell, command: scripts/branch-exists.sh, args: ['{item.work_branch}'] }
+execute: { type: shell, command: scripts/review.sh }
+```
+
+```yaml
+# example: err-linked
+# file: views/prs.yaml
+id: prs
+sources: [project_a]
+fields:
+  - { field: closing_prs }
+sort: { field: closing_prs }
+```
+
+Lösung: im Filter `work_pr` (offener PR vorhanden?) oder `work_branch` verwenden; für Prüfskripte die Kontextdatei
+lesen bzw. die Prüfung in den Worker verlegen; Views nach `work_pr` sortieren. Erst **zur Laufzeit** fallen auf:
+unknown Werte (fehlende Rechte, Rate-Limit) → `start_error` bzw. Action `failed` (§5.3).
+
 **`state` an wirkungsloser Stelle** – die Source liest ohne `state`-Selektor auf oberster Ebene nur offene Items.
 
 ```yaml
@@ -2385,7 +2554,8 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
    User-Projekt → `github_token`-Identity als `project.identity`.
 3. **Datei** `workflows/<id>.yaml` anlegen (Dateiname = `id`), am besten mit `enabled: false` beginnen.
 4. **Filter** nur mit Feldern aus §4.7; Labels exakt schreiben; für geschlossene Items ein `state`-Prädikat auf
-   oberster Ebene; teure `dependencies.*` nur wenn nötig; Projektwerte (`project.Status in [...]`) genau so
+   oberster Ebene; teure `dependencies.*`, `work_pr`, `work_branch` (§4.7.2) nur wenn nötig und möglichst hinter
+   einem billigen Kriterium (z. B. Label) – dann werden sie nur für passende Items gelesen; Projektwerte (`project.Status in [...]`) genau so
    schreiben, wie sie im Projekt heißen (Groß-/Kleinschreibung zählt). Filter, die mehrere Workflows/Views teilen
    sollen, als benannten Filter in `filters/<id>.yaml` anlegen und mit `filter: <id>` bzw. `{ use: <id> }`
    verwenden (§3.6).
@@ -2399,7 +2569,8 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 7. **Validieren:** `adispatch config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
 8. **Trockenlauf:** `adispatch workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
    (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität; bei Projektfeldern die Zeilen
-   `project fields:` (Werte oder Unknown-Grund, z. B. fehlende Rechte).
+   `project fields:` (Werte oder Unknown-Grund, z. B. fehlende Rechte); bei `work_pr`/`work_branch` im Filter den
+   Wert im Filter-Trace.
 9. **Aktivieren:** `enabled: true` setzen und `adispatch config reload --config-dir <dir>` (bei Fehlern
    bleibt die alte Konfiguration aktiv). Alternativ zuerst ein manueller Start über die UI.
 10. **Beobachten:** erster Run in der UI (Status, Logs, Lifecycle-Journal), ggf. `max_concurrent` per Override

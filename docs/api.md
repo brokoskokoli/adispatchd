@@ -184,6 +184,9 @@ clearedAt, clearedBy, active, affectedRunIds, sourceUrl`.
   "fetchedAt": "…", "cached": false }
 ```
 `cells` hat die Reihenfolge von `columns`. Nicht verfügbare Felder: `value: null, known: false`. Links nur `http(s)`.
+Spalten vom Typ `object[]` (z. B. `closing_prs`, WI-21) liefern `value` als Liste flacher Objekte
+(`[{ "number": 12, "state": "open", "head_ref": "feature/12", "is_draft": false, "url": "…" }]`); `work_pr` hat
+als `link` die PR-URL (`work_pr_url`).
 Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_result`, `run.last_result.message`,
 `run.last_status_message`, `run.last_started_at`, `run.last_finished_at` (letzter Run des Items nach Erstellzeit, workflowübergreifend).
 
