@@ -1,0 +1,19 @@
+/* Login page and user entry in the toolbar (WI-26). */
+.user-slot:empty { display: none; }
+.user-entry { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 13px; }
+.user-name { font-weight: 600; max-width: 18em; overflow: hidden; text-overflow: ellipsis; }
+.btn-small { padding: 3px 8px; font-size: 12.5px; }
+
+.login-page {
+  display: flex; justify-content: center; align-items: flex-start;
+  padding: 10vh 16px 24px; min-height: calc(100vh - 60px);
+}
+.login-card { width: 100%; max-width: 360px; padding: 24px; }
+.login-card h1 { margin: 0; font-size: 20px; }
+.login-sub { margin: 2px 0 18px; }
+.login-card .field { margin: 0 0 14px; }
+.login-card .input { width: 100%; padding: 8px 10px; }
+.login-card .alert { margin: 0 0 14px; }
+.login-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-top: 6px; }
+.login-actions .btn { min-width: 8em; padding: 8px 14px; }
+[hidden] { display: none !important; }

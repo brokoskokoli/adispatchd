@@ -4,6 +4,8 @@
  */
 import { h, type Child } from './dom.js';
 import { ApiError } from './api.js';
+import { denied } from './auth.js';
+import type { Role } from '../shared/auth.js';
 import { buildHash } from '../shared/route.js';
 import { formatDateTime, formatRelative, prettyJson, runBadges, safeHttpUrl, type BadgeInfo, type Tone } from '../shared/format.js';
 import type { RunSummary } from './types.js';
@@ -92,13 +94,34 @@ export function table(headers: Array<Child | HeaderCell>, rows: Child[][], opts:
   );
 }
 
-/** Button. */
-export function button(label: string, onClick: () => void, opts: { kind?: 'primary' | 'danger' | 'plain'; disabled?: boolean; title?: string } = {}): HTMLButtonElement {
+/**
+ * Button. `requires` (WI-26): minimum role of the request the button sends –
+ * without it the button is disabled and its tooltip says why.
+ */
+export function button(
+  label: string,
+  onClick: () => void,
+  opts: { kind?: 'primary' | 'danger' | 'plain'; disabled?: boolean; title?: string; requires?: Role } = {},
+): HTMLButtonElement {
+  const reason = opts.requires ? denied(opts.requires) : null;
   return h(
     'button',
-    { type: 'button', class: `btn btn-${opts.kind ?? 'plain'}`, disabled: opts.disabled ?? false, title: opts.title ?? null, on: { click: () => onClick() } },
+    {
+      type: 'button',
+      class: `btn btn-${opts.kind ?? 'plain'}`,
+      disabled: (opts.disabled ?? false) || reason !== null,
+      title: reason ?? opts.title ?? null,
+      'data-requires': opts.requires ?? null,
+      on: { click: () => onClick() },
+    },
     label,
   ) as HTMLButtonElement;
+}
+
+/** Re-enable a button after an action, unless its role is missing. */
+function enable(btn: HTMLButtonElement): void {
+  const required = btn.getAttribute('data-requires') as Role | null;
+  btn.disabled = required ? denied(required) !== null : false;
 }
 
 /** Error message box. */
@@ -218,6 +241,6 @@ export async function act<T>(btn: HTMLButtonElement | null, fn: () => Promise<T>
     toastError(err);
     return undefined;
   } finally {
-    if (btn) btn.disabled = false;
+    if (btn) enable(btn);
   }
 }

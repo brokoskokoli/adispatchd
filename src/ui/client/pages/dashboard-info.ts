@@ -27,6 +27,7 @@ function tileElement(t: InfoTile, onRefresh: (btn: HTMLButtonElement) => void): 
   const refresh: HTMLButtonElement = button(t.refreshing ? 'Refreshing…' : 'Refresh', () => onRefresh(refresh), {
     disabled: t.refreshing,
     title: 'Fetch the value now (throttled)',
+    requires: 'operator',
   });
   refresh.setAttribute('aria-label', `Refresh ${t.title}`);
   refresh.setAttribute('data-info-refresh', t.id);

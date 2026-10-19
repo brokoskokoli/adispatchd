@@ -1,7 +1,9 @@
 /**
  * HTTP client for `/api/v1` (docs/api.md). Mutating requests always carry
- * the CSRF header `X-Adispatch-Request: 1` and a JSON body.
+ * the CSRF header `X-Adispatch-Request: 1` and a JSON body. A 401 (session
+ * expired, WI-26) is announced with the window event `adispatch:unauthorized`.
  */
+import { UNAUTHORIZED_EVENT } from './auth.js';
 
 /** Error returned by the API (`{error:{code,message,details}}`) or the network. */
 export class ApiError extends Error {
@@ -43,6 +45,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
       json = null;
     }
   }
+  if (res.status === 401 && !path.startsWith('/api/v1/auth/')) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   if (!res.ok) {
     const e = (json as { error?: { code?: unknown; message?: unknown; details?: unknown } } | null)?.error;
     throw new ApiError(

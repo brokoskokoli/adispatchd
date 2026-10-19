@@ -50,7 +50,7 @@ export const configPage = (ctx: PageContext): Page => {
         ),
       );
     })();
-  });
+  }, { requires: 'viewer' });
   const reloadBtn: HTMLButtonElement = button(
     'Reload',
     () => {
@@ -92,7 +92,7 @@ export const configPage = (ctx: PageContext): Page => {
         }
       })();
     },
-    { kind: 'primary' },
+    { kind: 'primary', requires: 'operator' },
   );
   const systemBox = h('div');
   const filesBox = h('div', null, loading());
@@ -177,7 +177,7 @@ export const configPage = (ctx: PageContext): Page => {
             res.notifications.map((n) => {
               const retry: HTMLButtonElement | null =
                 n.deliveryState === 'failed'
-                  ? button('Retry', () => void act(retry, () => api.post(`/api/v1/notifications/${n.id}/retry`), 'Delivery re-queued').then(() => loadNotifications()), { kind: 'primary' })
+                  ? button('Retry', () => void act(retry, () => api.post(`/api/v1/notifications/${n.id}/retry`), 'Delivery re-queued').then(() => loadNotifications()), { kind: 'primary', requires: 'operator' })
                   : null;
               return [
                 String(n.id),

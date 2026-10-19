@@ -344,7 +344,7 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
   const overridesBox = h('section', { class: 'card' }, h('h2', null, 'Runtime overrides'));
   const startBox = h('section', { class: 'card' }, h('h2', null, 'Manual start'));
   const dryRunOut = h('div');
-  const dryBtn: HTMLButtonElement = button('Run dry-run', () => void dryRun(), { kind: 'primary' });
+  const dryBtn: HTMLButtonElement = button('Run dry-run', () => void dryRun(), { kind: 'primary', requires: 'viewer' });
   const dryBox = h('section', { class: 'card span-all' }, h('h2', null, 'Dry-run'), h('div', { class: 'actions' }, dryBtn), dryRunOut);
   const runsBox = h('section', { class: 'card span-all' }, h('h2', null, 'Recent runs'), loading());
   const conditionsBox = h('section', { class: 'card span-all', hidden: true }, h('h2', null, 'Conditions'));
@@ -387,14 +387,14 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
         errors.replaceChildren();
         void act(save, () => api.patch(`/api/v1/workflows/${seg(id)}/runtime`, res.body), 'Overrides applied').then(() => refresher.now());
       },
-      { kind: 'primary' },
+      { kind: 'primary', requires: 'operator' },
     );
     const reset: HTMLButtonElement = button('Reset all to YAML', () => {
       enabled.value = '';
       priority.value = '';
       maxC.value = '';
       void act(reset, () => api.patch(`/api/v1/workflows/${seg(id)}/runtime`, { enabled: null, priority: null, maxConcurrent: null }), 'Overrides removed').then(() => refresher.now());
-    });
+    }, { requires: 'operator' });
     overridesBox.append(
       h('div', { class: 'form' }, h('label', { class: 'field', for: 'ov-enabled' }, h('span', null, 'Enabled'), enabled), h('label', { class: 'field' }, h('span', null, 'Priority'), priority), h('label', { class: 'field' }, h('span', null, 'Max parallel'), maxC)),
       errors,
@@ -467,7 +467,7 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
           }
         })();
       },
-      { kind: 'primary' },
+      { kind: 'primary', requires: 'operator' },
     );
     startBox.append(
       h('p', { class: 'hint' }, 'A manual start bypasses filters, conditions, limits, blocks and pause – but not the active lock of an item.'),

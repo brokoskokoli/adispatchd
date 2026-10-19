@@ -23,7 +23,7 @@ export function actionButtons(a: Action, after: () => void): HTMLElement | null 
   const retry: HTMLButtonElement = button(
     'Retry',
     () => void act(retry, () => api.post(`/api/v1/actions/${a.id}/retry`), 'Retry started').then(after),
-    { kind: 'primary', disabled: a.busy === true, title: a.busy ? 'The lifecycle chain of this run is busy' : 'Run the action again (fresh attempt budget)' },
+    { kind: 'primary', disabled: a.busy === true, title: a.busy ? 'The lifecycle chain of this run is busy' : 'Run the action again (fresh attempt budget)', requires: 'operator' },
   );
   const skip: HTMLButtonElement = button(
     'Skip',
@@ -39,7 +39,7 @@ export function actionButtons(a: Action, after: () => void): HTMLElement | null 
         after();
       })();
     },
-    { disabled: a.busy === true },
+    { disabled: a.busy === true, requires: 'operator' },
   );
   return h('span', { class: 'actions' }, retry, skip);
 }
@@ -113,7 +113,7 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
             refresher.trigger();
           })();
         },
-        { kind: 'primary' },
+        { kind: 'primary', requires: 'operator' },
       );
       btns.appendChild(b);
     }

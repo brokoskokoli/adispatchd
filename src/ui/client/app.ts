@@ -1,8 +1,11 @@
 /**
  * Entry point of the web UI (WI-11, Spec §16): navigation, hash router, one
- * shared SSE connection with reconnect + REST resync.
+ * shared SSE connection with reconnect + REST resync. With authentication
+ * (WI-26) `/api/v1/auth/me` decides first: app, login page or "access denied".
  */
-import { api } from './api.js';
+import { api, ApiError } from './api.js';
+import { currentAuth, loadAuth, UNAUTHORIZED_EVENT } from './auth.js';
+import { authScreen, deniedPage, loginPage, userEntry } from '../shared/auth.js';
 import { h, replaceChildren, $ } from './dom.js';
 import { parseHash, type Route } from '../shared/route.js';
 import { LiveConnection, type EventSourceLike, type LiveState } from '../shared/sse.js';
@@ -28,7 +31,77 @@ const MAX_DIRECT_VIEWS = 8;
 const main = $('#main');
 const nav = $('#nav');
 const liveIndicator = $('#live');
+const userSlot = $('#user');
 let current: Page | null = null;
+let appStarted = false;
+
+// ----------------------------------------------------------------- auth
+/** Show the login page (password mode) in place of the app. */
+function showLogin(opts: { error?: string | null; notice?: string | null; name?: string } = {}): void {
+  current?.dispose?.();
+  current = null;
+  const me = currentAuth();
+  const page = loginPage(h, {
+    error: opts.error ?? null,
+    notice: opts.notice ?? null,
+    canSkip: appStarted && me.role !== null,
+    onSubmit: (ev: Event) => {
+      ev.preventDefault();
+      const form = ev.currentTarget as HTMLFormElement;
+      const data = new FormData(form);
+      const name = String(data.get('name') ?? '').trim();
+      const password = String(data.get('password') ?? '');
+      if (!name || !password) {
+        showLogin({ error: 'Enter user name and password.', name });
+        return;
+      }
+      const submit = form.querySelector('button[type=submit]') as HTMLButtonElement | null;
+      if (submit) submit.disabled = true;
+      void api
+        .post('/api/v1/auth/login', { name, password })
+        .then(() => {
+          // Fresh start with the session cookie (SSE, roles, navigation).
+          if (location.hash.startsWith('#/login')) location.hash = '#/';
+          location.reload();
+        })
+        .catch((err: unknown) => {
+          const msg =
+            err instanceof ApiError && err.status === 429
+              ? 'Too many failed attempts. Please wait a few minutes and try again.'
+              : err instanceof ApiError && err.status === 401
+                ? 'Invalid user name or password.'
+                : err instanceof Error
+                  ? err.message
+                  : String(err);
+          showLogin({ error: msg, name });
+        });
+    },
+  });
+  replaceChildren(main, page);
+  document.title = 'Sign in · adispatchd';
+  const nameInput = main.querySelector('input[name=name]') as HTMLInputElement | null;
+  const passwordInput = main.querySelector('input[name=password]') as HTMLInputElement | null;
+  if (nameInput && opts.name) nameInput.value = opts.name;
+  (opts.name ? passwordInput : nameInput)?.focus();
+}
+
+/** Toolbar: logged-in user, role and logout (WI-26). */
+function renderUser(): void {
+  replaceChildren(
+    userSlot,
+    userEntry(h, currentAuth(), {
+      onLogout: () => {
+        void api
+          .post('/api/v1/auth/logout')
+          .catch(() => undefined)
+          .then(() => {
+            location.hash = '#/';
+            location.reload();
+          });
+      },
+    }),
+  );
+}
 
 // ------------------------------------------------------------------ nav
 const counters = { blocks: h('span', { class: 'count' }), actions: h('span', { class: 'count' }) };
@@ -112,6 +185,12 @@ const ctxFor = (route: Route): PageContext => ({
 function pageFor(route: Route, ctx: PageContext): Page {
   const [a, b] = route.segments;
   switch (a) {
+    case 'login': {
+      if (currentAuth().mode !== 'password' || currentAuth().user) return dashboardPage(ctx);
+      const holder = h('div');
+      queueMicrotask(() => showLogin());
+      return { el: holder };
+    }
     case undefined:
       return dashboardPage(ctx);
     case 'runs':
@@ -151,11 +230,10 @@ function render(): void {
   window.scrollTo(0, 0);
 }
 
-window.addEventListener('hashchange', render);
-
 // ----------------------------------------------------------------- live
 const STATE_LABEL: Record<LiveState, string> = { connecting: 'connecting…', open: 'live', reconnecting: 'reconnecting…', closed: 'offline' };
-const live = new LiveConnection({
+let live: LiveConnection | null = null;
+const createLive = (): LiveConnection => new LiveConnection({
   url: '/api/v1/events',
   // The DOM EventSource is structurally compatible (handler parameter types differ only nominally).
   create: (url) => new EventSource(url) as unknown as EventSourceLike,
@@ -181,10 +259,42 @@ const live = new LiveConnection({
     liveIndicator.title = state === 'open' ? 'Live updates via SSE' : 'Live updates interrupted; data is reloaded after reconnecting';
   },
 });
-window.addEventListener('online', () => live.reconnectNow());
+window.addEventListener('online', () => live?.reconnectNow());
 
-void reloadExternalLinks();
-render();
-void loadNav();
-void renderExternalLinks();
-live.start();
+// A 401 while the app runs (session expired, logged out in another tab): back to the login page.
+window.addEventListener(UNAUTHORIZED_EVENT, () => {
+  if (!appStarted) return;
+  void loadAuth().then((me) => {
+    renderUser();
+    if (authScreen(me) === 'app' && me.user) return; // e.g. a stale request; still logged in
+    live?.stop();
+    liveIndicator.textContent = STATE_LABEL.closed;
+    liveIndicator.className = 'live live-closed';
+    if (me.mode === 'password') showLogin({ notice: 'Your session has ended. Please sign in again.' });
+    else replaceChildren(main, deniedPage(h, me));
+  });
+});
+
+function startApp(): void {
+  appStarted = true;
+  nav.hidden = false;
+  window.addEventListener('hashchange', render);
+  live = createLive();
+  void reloadExternalLinks();
+  render();
+  void loadNav();
+  void renderExternalLinks();
+  live.start();
+}
+
+void loadAuth().then((me) => {
+  renderUser();
+  const screen = authScreen(me);
+  if (screen === 'app') startApp();
+  else {
+    nav.hidden = true;
+    liveIndicator.hidden = true;
+    if (screen === 'login') showLogin();
+    else replaceChildren(main, deniedPage(h, me));
+  }
+});

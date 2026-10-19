@@ -52,7 +52,7 @@ export const blockedPage = (ctx: PageContext): Page => {
         table(
           ['Block key', 'Reason', 'Failures', 'Created', 'Runs', 'Source item', ''],
           res.blocks.map((b) => {
-            const btn: HTMLButtonElement = button('Remove Block', () => void clear(b, btn), { kind: 'danger' });
+            const btn: HTMLButtonElement = button('Remove Block', () => void clear(b, btn), { kind: 'danger', requires: 'operator' });
             const runs = [...new Set([...(b.runId ? [b.runId] : []), ...b.affectedRunIds])];
             return [
               h('span', null, routeLink(['workflows', b.workflowId], b.workflowName ?? b.workflowId), h('br'), h('code', null, b.itemKey ?? '(workflow scope)')),

@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { authEnvSetup, FAST_AUTH, PASSWORD_AUTH_CONFIG } from '../api/testing/auth.js';
 import { startAppEnv, type AppEnv } from '../api/testing/helpers.js';
 import { UI_ENTRY, isUiDir, resolveUiDir } from './index.js';
 
@@ -91,6 +92,24 @@ describe('web UI build + delivery', () => {
   it('static UI is subject to the Host allowlist (DNS rebinding)', async () => {
     const res = await env!.request('GET', '/', undefined, { host: 'evil.example:8787' });
     expect(res.status).toBe(421);
+  });
+});
+
+describe('web UI with authentication (WI-26)', () => {
+  it('serves the UI shell and its assets without login (login page), while the API needs a session', async () => {
+    const authed = await startAppEnv({ configExtra: PASSWORD_AUTH_CONFIG, app: { ...FAST_AUTH, uiDir: outDir } }, authEnvSetup);
+    try {
+      const index = await authed.request('GET', '/');
+      expect(index.status).toBe(200);
+      expect(String(index.json)).toContain('id="user"');
+      expect(String(index.json)).toContain('href="auth.css"');
+      expect((await authed.request('GET', `/${UI_ENTRY}`)).status).toBe(200);
+      expect((await authed.request('GET', '/js/shared/auth.js')).status).toBe(200);
+      expect((await authed.request('GET', '/api/v1/status')).status).toBe(401);
+      expect((await authed.request('GET', '/api/v1/auth/me')).json).toMatchObject({ mode: 'password', user: null });
+    } finally {
+      await authed.cleanup();
+    }
   });
 });
 

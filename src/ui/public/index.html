@@ -10,12 +10,14 @@
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
     <link rel="stylesheet" href="app.css" />
     <link rel="stylesheet" href="tools.css" />
+    <link rel="stylesheet" href="auth.css" />
     <script type="module" src="js/client/app.js"></script>
   </head>
   <body>
     <header class="top">
       <a class="brand" href="#/" title="Agent Dispatch Daemon">adispatchd</a>
       <nav id="nav" aria-label="Main"></nav>
+      <span id="user" class="user-slot"></span>
       <span id="live" class="live live-connecting" role="status" aria-live="polite">connecting…</span>
     </header>
     <main id="main" tabindex="-1">

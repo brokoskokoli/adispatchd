@@ -1,4 +1,5 @@
 /** Dashboard (Spec §16): scheduler state, limit/usage, pause/resume, drain, cancel all, active runs. */
+import { currentAuth } from '../auth.js';
 import { api, qs, seg } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
@@ -41,7 +42,7 @@ export function cancelRunButton(run: { id: string; status: string; active: boole
         after();
       })();
     },
-    { kind: 'danger' },
+    { kind: 'danger', requires: 'operator' },
   );
   return btn;
 }
@@ -77,12 +78,13 @@ export const dashboardPage = (ctx: PageContext): Page => {
     const sch = s.scheduler;
     const controls = h('div', { class: 'actions' });
     if (sch.paused) {
-      const b: HTMLButtonElement = button('Resume', () => void act(b, () => api.post('/api/v1/scheduler/resume'), 'Scheduler resumed').then(() => refresher.now()), { kind: 'primary' });
+      const b: HTMLButtonElement = button('Resume', () => void act(b, () => api.post('/api/v1/scheduler/resume'), 'Scheduler resumed').then(() => refresher.now()), { kind: 'primary', requires: 'operator' });
       controls.appendChild(b);
     } else {
       const b: HTMLButtonElement = button('Pause', () => void act(b, () => api.post('/api/v1/scheduler/pause'), 'Automatic starts paused').then(() => refresher.now()), {
         disabled: sch.stopping || sch.draining,
         title: 'Pause automatic starts (manual starts still possible)',
+        requires: 'operator',
       });
       controls.appendChild(b);
     }
@@ -105,7 +107,7 @@ export const dashboardPage = (ctx: PageContext): Page => {
           await refresher.now();
         })();
       },
-      { kind: 'danger', disabled: sch.draining || sch.stopping },
+      { kind: 'danger', disabled: sch.draining || sch.stopping, requires: 'operator' },
     );
     const cancelAll: HTMLButtonElement = button(
       'Cancel All',
@@ -127,7 +129,7 @@ export const dashboardPage = (ctx: PageContext): Page => {
           await refresher.now();
         })();
       },
-      { kind: 'danger', disabled: sch.stopping },
+      { kind: 'danger', disabled: sch.stopping, requires: 'operator' },
     );
     controls.append(drain, cancelAll);
 
@@ -135,7 +137,7 @@ export const dashboardPage = (ctx: PageContext): Page => {
     if (sch.draining) notices.push(h('div', { class: 'alert alert-warn' }, 'Drain in progress: no new runs; the process exits when active runs have finished.'));
     if (sch.stopping) notices.push(h('div', { class: 'alert alert-error' }, 'Shutdown in progress.'));
     if (!s.readiness.ready) notices.push(h('div', { class: 'alert alert-info' }, 'Not ready (recovery or startup in progress).'));
-    if (!s.server.loopback) {
+    if (!s.server.loopback && currentAuth().mode === 'none') {
       notices.push(h('div', { class: 'alert alert-warn' }, `The API is bound to ${s.server.host} without authentication – only expose it behind an authenticating proxy/VPN.`));
     }
 
@@ -151,11 +153,11 @@ export const dashboardPage = (ctx: PageContext): Page => {
       }
       limitInput.setCustomValidity('');
       void act(setLimit, () => api.patch('/api/v1/scheduler/runtime', { maxConcurrent: n }), 'Limit override set').then(() => refresher.now());
-    });
+    }, { requires: 'operator' });
     const resetLimit: HTMLButtonElement = button(
       'Reset to YAML',
       () => void act(resetLimit, () => api.patch('/api/v1/scheduler/runtime', { maxConcurrent: null }), 'Limit reset to YAML value').then(() => refresher.now()),
-      { disabled: s.limits.override === null },
+      { disabled: s.limits.override === null, requires: 'operator' },
     );
 
     const byWf = Object.entries(s.usage.byWorkflow).map(([id, u]) => [routeLink(['workflows', id], id), meter(u.active, u.max)]);
