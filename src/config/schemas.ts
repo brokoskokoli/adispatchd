@@ -210,12 +210,38 @@ const githubProjectSchema = z.strictObject({
     }),
 });
 
+/** Pattern for source variable names (usable as `{source.vars.<name>}`, WI-20). */
+export const SOURCE_VAR_NAME_PATTERN = PARAMETER_NAME_PATTERN;
+
+/**
+ * Free per-source variables (WI-20): name → string. YAML scalars are
+ * stringified like `env` values (`version: 2` → `"2"`).
+ */
+const sourceVarsSchema = z
+  .record(
+    z.string(),
+    z.union([z.string(), z.number(), z.boolean()], { error: 'Expected a string (numbers and booleans are converted)' }).transform((v) => String(v)),
+  )
+  .superRefine((vars, ctx) => {
+    // Checked here (not as record key schema) to keep the precise message and path.
+    for (const name of Object.keys(vars)) {
+      if (!SOURCE_VAR_NAME_PATTERN.test(name)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [name],
+          message: 'Invalid variable name (allowed: letters, digits, "_" and "-", must start with a letter or "_")',
+        });
+      }
+    }
+  });
+
 const githubSourceSchema = z.strictObject({
   type: z.literal('github'),
   owner: nonEmpty,
   repository: nonEmpty,
   identity: configId,
   project: githubProjectSchema.optional(),
+  vars: sourceVarsSchema.optional(),
 });
 
 /** Schema of `sources.yaml`. */
@@ -251,8 +277,36 @@ export type RawIdentitiesFile = z.output<typeof identitiesFileSchema>;
 // workflows/*.yaml
 // ---------------------------------------------------------------------------
 
+/**
+ * Source trigger: exactly one of `source: <id>` or (WI-20) `sources: [<id>, ...]`
+ * (non-empty, unique; the list order is the tie-breaker between sources).
+ */
+const sourceTriggerSchema = z
+  .strictObject({ type: z.literal('source'), source: configId.optional(), sources: z.array(configId).optional() })
+  .superRefine((trigger, ctx) => {
+    if (trigger.source !== undefined && trigger.sources !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['sources'],
+        message: '"source" and "sources" are mutually exclusive: use "source: <id>" for one source or "sources: [<id>, ...]" for several',
+      });
+      return;
+    }
+    if (trigger.source === undefined && trigger.sources === undefined) {
+      ctx.addIssue({ code: 'custom', message: 'A source trigger needs "source: <id>" or "sources: [<id>, ...]"' });
+      return;
+    }
+    if (trigger.sources === undefined) return;
+    if (trigger.sources.length === 0) ctx.addIssue({ code: 'custom', path: ['sources'], message: '"sources" must not be empty' });
+    const seen = new Set<string>();
+    trigger.sources.forEach((id, i) => {
+      if (seen.has(id)) ctx.addIssue({ code: 'custom', path: ['sources', i], message: `Source "${id}" is listed more than once` });
+      seen.add(id);
+    });
+  });
+
 const triggerSchema = z.discriminatedUnion('type', [
-  z.strictObject({ type: z.literal('source'), source: configId }),
+  sourceTriggerSchema,
   z.strictObject({
     type: z.literal('schedule'),
     cron: nonEmpty,
@@ -387,6 +441,8 @@ export const workflowSchema = z.strictObject({
   enabled: z.boolean().default(true),
   priority: z.number().default(DEFAULTS.workflowPriority),
   max_concurrent: positiveInt.default(DEFAULTS.workflowMaxConcurrent),
+  /** Optional limit per source of a source workflow (WI-20); `max_concurrent` stays the overall limit. */
+  max_concurrent_per_source: positiveInt.optional(),
   identity: configId.optional(),
   trigger: triggerSchema,
   filter: filterNodeSchema.optional(),

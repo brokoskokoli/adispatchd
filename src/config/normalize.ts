@@ -106,6 +106,7 @@ export function normalizeSources(raw: RawSourcesFile): Record<string, SourceConf
             fields: { ...source.project.fields },
           }
         : null,
+      vars: { ...(source.vars ?? {}) },
     };
   }
   return out;
@@ -211,12 +212,15 @@ export function normalizeWorkflow(
     enabled: raw.enabled,
     priority: raw.priority,
     maxConcurrent: raw.max_concurrent,
+    ...(raw.max_concurrent_per_source !== undefined ? { maxConcurrentPerSource: raw.max_concurrent_per_source } : {}),
     identity: raw.identity ?? null,
     trigger:
       raw.trigger.type === 'schedule'
         ? { type: 'schedule', cron: raw.trigger.cron, timezone: raw.trigger.timezone }
         : raw.trigger.type === 'source'
-          ? { type: 'source', source: raw.trigger.source }
+          ? raw.trigger.sources !== undefined
+            ? { type: 'source', source: raw.trigger.sources[0] ?? '', sources: [...raw.trigger.sources] }
+            : { type: 'source', source: raw.trigger.source ?? '' }
           : { type: 'manual' },
     filter: raw.filter ? expand(raw.filter, ['filter']) : null,
     shellFilter: raw.shell_filter ? { command: resolveCommand(configDir, raw.shell_filter.command), timeoutMs: raw.shell_filter.timeout } : null,

@@ -117,6 +117,11 @@ export interface GithubSourceConfig {
   identity: string;
   /** GitHub Projects (v2) project whose declared fields are available as `project.<name>`; `null` = none. */
   project: GithubProjectConfig | null;
+  /**
+   * Free variables of the source (WI-20), available as `{source.vars.<name>}`;
+   * empty when not configured. Missing in run snapshots written before 0.3.0.
+   */
+  vars: Readonly<Record<string, string>>;
 }
 
 /** Project settings of a GitHub source (defaults resolved). */
@@ -163,10 +168,25 @@ export type IdentityConfig = GithubAppIdentityConfig | GithubTokenIdentityConfig
 // Workflows (Spec §5.4, §5.5, §6, §10)
 // ---------------------------------------------------------------------------
 
-/** Source trigger: polls one source. */
+/**
+ * Source trigger: polls one source (`source: <id>`) or several (WI-20,
+ * `sources: [<id>, ...]`). Use {@link triggerSourceIds} to read the list.
+ */
 export interface SourceTriggerConfig {
   type: 'source';
+  /** The (first) source; for multi-source workflows the first entry of `sources`. */
   source: string;
+  /**
+   * All sources in the configured order (the order is the tie-breaker between
+   * equally prioritized items). Present only when configured as `sources:`
+   * (also with a single entry); absent for `source: <id>`.
+   */
+  sources?: readonly string[];
+}
+
+/** Sources of a source trigger in configured order (`[source]` for `source: <id>`). */
+export function triggerSourceIds(trigger: SourceTriggerConfig): readonly string[] {
+  return trigger.sources ?? [trigger.source];
 }
 
 /** Cron trigger. */
@@ -340,6 +360,12 @@ export interface WorkflowConfig {
   priority: number;
   /** Per-workflow limit for automatic starts (default 1). */
   maxConcurrent: number;
+  /**
+   * Limit of active runs per source of a source workflow (WI-20); absent =
+   * none (only `maxConcurrent`). Absent rather than `null` so the hashes of
+   * existing workflows stay unchanged.
+   */
+  maxConcurrentPerSource?: number;
   /** Default write identity of the workflow; `null` = source identity. */
   identity: string | null;
   trigger: TriggerConfig;

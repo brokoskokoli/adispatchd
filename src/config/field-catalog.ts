@@ -7,7 +7,8 @@
  *
  * The catalogue is extended per source by the declared GitHub Projects
  * fields `project.<name>` (WI-14): a workflow sees the fields of its trigger
- * source, a view only the fields that ALL its sources declare with the same kind.
+ * source, a view (and a multi-source workflow, WI-20) only the fields that ALL
+ * its sources declare with the same kind.
  */
 import {
   VIEW_RUN_FIELDS,
@@ -83,29 +84,56 @@ export function sourceFieldContext(source: SourceConfig): FieldContext {
 }
 
 /**
- * Field context of a view over `sources` (all of the same type): only
- * `project.*` fields declared by every source with the same kind.
+ * `project.*` field definitions declared by every source with the same kind
+ * (rule of views, also used by multi-source workflows, WI-20).
  */
-export function viewFieldContext(sources: readonly SourceConfig[]): FieldContext {
+function commonProjectFields(sources: readonly SourceConfig[]): FieldDefinition[] {
   const first = sources[0];
-  const common = (first?.project ? projectFieldDefinitions(first.project.fields) : []).filter((def) => {
+  return (first?.project ? projectFieldDefinitions(first.project.fields) : []).filter((def) => {
     const name = def.name.slice(PROJECT_FIELD_PREFIX.length);
     const kind = first?.project?.fields[name];
     return sources.every((s) => s.project !== null && Object.hasOwn(s.project.fields, name) && s.project.fields[name] === kind);
   });
+}
+
+/** Why `project.<name>` is not common to `sources` (`owner`: "the view" / "the workflow"). */
+function commonProjectHint(sources: readonly SourceConfig[], field: string, owner: 'view' | 'workflow'): string {
+  const name = field.slice(PROJECT_FIELD_PREFIX.length);
+  const declaring = sources.filter((s) => s.project && Object.hasOwn(s.project.fields, name));
+  if (declaring.length === 0) return `no source of the ${owner} declares it in "project.fields"`;
+  const missing = sources.filter((s) => !declaring.includes(s)).map((s) => `"${s.id}"`);
+  const who = owner === 'view' ? 'views' : 'workflows with several sources';
+  if (missing.length > 0) return `${who} only offer project fields declared by all their sources (missing in ${missing.join(', ')})`;
+  const kinds = declaring.map((s) => `"${s.id}": ${s.project?.fields[name] ?? '?'}`);
+  return `its kind differs between the sources of the ${owner} (${kinds.join(', ')}); declare it with the same kind everywhere`;
+}
+
+/**
+ * Field context of a view over `sources` (all of the same type): only
+ * `project.*` fields declared by every source with the same kind.
+ */
+export function viewFieldContext(sources: readonly SourceConfig[]): FieldContext {
   return {
-    sourceType: first?.type ?? '',
+    sourceType: sources[0]?.type ?? '',
     view: true,
-    extra: common,
-    projectHint: (field) => {
-      const name = field.slice(PROJECT_FIELD_PREFIX.length);
-      const declaring = sources.filter((s) => s.project && Object.hasOwn(s.project.fields, name));
-      if (declaring.length === 0) return `no source of the view declares it in "project.fields"`;
-      const missing = sources.filter((s) => !declaring.includes(s)).map((s) => `"${s.id}"`);
-      if (missing.length > 0) return `views only offer project fields declared by all their sources (missing in ${missing.join(', ')})`;
-      const kinds = declaring.map((s) => `"${s.id}": ${s.project?.fields[name] ?? '?'}`);
-      return `its kind differs between the sources of the view (${kinds.join(', ')}); declare it with the same kind everywhere`;
-    },
+    extra: commonProjectFields(sources),
+    projectHint: (field) => commonProjectHint(sources, field, 'view'),
+  };
+}
+
+/**
+ * Field context of a source workflow over `sources` (all of the same type,
+ * WI-20). One source: exactly {@link sourceFieldContext}; several: like
+ * views, only `project.*` fields declared by every source with the same kind.
+ */
+export function workflowFieldContext(sources: readonly SourceConfig[]): FieldContext {
+  const only = sources.length === 1 ? sources[0] : undefined;
+  if (only) return sourceFieldContext(only);
+  return {
+    sourceType: sources[0]?.type ?? '',
+    view: false,
+    extra: commonProjectFields(sources),
+    projectHint: (field) => commonProjectHint(sources, field, 'workflow'),
   };
 }
 

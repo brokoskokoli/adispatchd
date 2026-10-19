@@ -16,16 +16,17 @@ import {
   type TemplateScope,
 } from '../core/index.js';
 import { PROJECT_FIELD_PREFIX, valueProblem } from '../sources/index.js';
-import { checkFieldName, checkFilterFields, sourceFieldContext, suggestField, viewFieldContext, type FieldIssue } from './field-catalog.js';
+import { checkFieldName, checkFilterFields, suggestField, viewFieldContext, workflowFieldContext, type FieldIssue } from './field-catalog.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssueCollector, IssuePath } from './issues.js';
-import type {
-  GlobalConfig,
-  IdentityConfig,
-  LifecycleActionConfig,
-  SourceConfig,
-  ViewConfig,
-  WorkflowConfig,
+import {
+  triggerSourceIds,
+  type GlobalConfig,
+  type IdentityConfig,
+  type LifecycleActionConfig,
+  type SourceConfig,
+  type ViewConfig,
+  type WorkflowConfig,
 } from './model.js';
 import type { NamedFilters } from './named-filters.js';
 import type { RawParameter } from './schemas.js';
@@ -209,8 +210,27 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   checkIdentity(wf.identity, input, issues, file, ['identity']);
 
   const isSource = wf.trigger.type === 'source';
-  if (wf.trigger.type === 'source' && !input.sources[wf.trigger.source]) {
-    issues.error(file, ['trigger', 'source'], `Unknown source "${wf.trigger.source}"`);
+  // Known trigger sources in configured order (WI-20: several; unknown ones are reported here).
+  const triggerSources: SourceConfig[] = [];
+  let sameType = true;
+  if (wf.trigger.type === 'source') {
+    const multi = wf.trigger.sources !== undefined;
+    triggerSourceIds(wf.trigger).forEach((id, i) => {
+      const source = input.sources[id];
+      if (!source) issues.error(file, multi ? ['trigger', 'sources', i] : ['trigger', 'source'], `Unknown source "${id}"`);
+      else triggerSources.push(source);
+    });
+    const types = [...new Set(triggerSources.map((s) => s.type))];
+    if (types.length > 1) {
+      sameType = false;
+      issues.error(file, ['trigger', 'sources'], `All sources of a workflow must have the same adapter type (found: ${types.join(', ')})`);
+    }
+  } else if (wf.maxConcurrentPerSource !== undefined) {
+    issues.error(
+      file,
+      ['max_concurrent_per_source'],
+      `"max_concurrent_per_source" is only allowed for workflows with a source trigger (trigger is "${wf.trigger.type}")`,
+    );
   }
   if (wf.trigger.type === 'schedule') {
     const tzOk = isValidTimeZone(wf.trigger.timezone);
@@ -218,28 +238,32 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
     const err = cronError(wf.trigger.cron, tzOk ? wf.trigger.timezone : undefined);
     if (err) issues.error(file, ['trigger', 'cron'], err);
   }
-  if (wf.trigger.type === 'source') {
-    const source = input.sources[wf.trigger.source];
-    if (source) {
-      const ctx = sourceFieldContext(source);
-      const target = (raw: RawFilterNode | undefined, at: IssuePath): FieldIssueTarget => ({
-        issues,
-        file,
-        at,
-        raw: raw ?? null,
-        named: input.namedFilters,
-      });
-      if (wf.filter) {
-        addFieldIssues(checkFilterFields(wf.filter, ctx, { listing: true }), target(entry.rawFilter ?? undefined, ['filter']));
-      }
-      wf.itemPriority?.rules.forEach((rule, i) =>
-        addFieldIssues(
-          checkFilterFields(rule.when, ctx, { listing: false }),
-          target(entry.rawPriorityRules[i], ['item_priority', 'rules', i, 'when']),
-        ),
-      );
+  if (triggerSources.length > 0 && sameType) {
+    const ctx = workflowFieldContext(triggerSources);
+    const target = (raw: RawFilterNode | undefined, at: IssuePath): FieldIssueTarget => ({
+      issues,
+      file,
+      at,
+      raw: raw ?? null,
+      named: input.namedFilters,
+    });
+    if (wf.filter) {
+      addFieldIssues(checkFilterFields(wf.filter, ctx, { listing: true }), target(entry.rawFilter ?? undefined, ['filter']));
     }
+    wf.itemPriority?.rules.forEach((rule, i) =>
+      addFieldIssues(
+        checkFilterFields(rule.when, ctx, { listing: false }),
+        target(entry.rawPriorityRules[i], ['item_priority', 'rules', i, 'when']),
+      ),
+    );
   }
+  // `{source.vars.<name>}` must be defined in every (known) source of the workflow (WI-20).
+  const sourceVar = (name: string): string | undefined => {
+    const missing = triggerSources.filter((s) => !Object.hasOwn(s.vars, name)).map((s) => `"${s.id}"`);
+    if (missing.length === 0) return undefined;
+    const where = missing.length === 1 ? `source ${missing[0] ?? ''}` : `sources ${missing.join(', ')}`;
+    return `Source variable "${name}" is not defined in "vars" of ${where} (sources.yaml)`;
+  };
   if (!isSource) {
     const why = `is only allowed for workflows with a source trigger (trigger is "${wf.trigger.type}")`;
     if (wf.filter) issues.error(file, ['filter'], `"filter" ${why}`);
@@ -261,7 +285,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   );
   wf.conditions.item.forEach((c, i) =>
     c.args.forEach((arg, j) =>
-      checkTemplate(arg, 'text', { source: true }, issues, file, ['conditions', 'item', i, 'args', j]),
+      checkTemplate(arg, 'text', { source: true, sourceVar }, issues, file, ['conditions', 'item', i, 'args', j]),
     ),
   );
 
@@ -274,7 +298,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   // Execute
   const exec = wf.execute;
   const wdIssues = issues.items.length;
-  checkTemplate(exec.workingDirectory, 'path', { run: true, source: isSource, parameters: parameterNames }, issues, file, [
+  checkTemplate(exec.workingDirectory, 'path', { run: true, source: isSource, sourceVar, parameters: parameterNames }, issues, file, [
     'execute',
     'working_directory',
   ]);
@@ -296,7 +320,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   ) {
     issues.error(file, ['execute', 'working_directory'], 'Must be absolute: start with "/" or "{workspace.base_dir}"');
   }
-  const runScope: TemplateScope = { run: true, workspace: true, source: isSource, parameters: parameterNames };
+  const runScope: TemplateScope = { run: true, workspace: true, source: isSource, sourceVar, parameters: parameterNames };
   exec.args.forEach((arg, i) => checkTemplate(arg, 'text', runScope, issues, file, ['execute', 'args', i]));
   for (const [name, value] of Object.entries(exec.env)) {
     checkTemplate(value, 'text', runScope, issues, file, ['execute', 'env', name]);
@@ -316,7 +340,6 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   }
 
   // Hooks
-  const triggerSource = wf.trigger.type === 'source' ? input.sources[wf.trigger.source] : undefined;
   const actionIds = new Map<string, string>();
   for (const hook of HOOK_NAMES) {
     wf.hooks[hook].forEach((action, i) => {
@@ -327,7 +350,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
         issues.error(file, [...at, 'id'], `Duplicate action ID "${action.id}" (also used at ${previous})`);
       }
       actionIds.set(action.id, where);
-      validateAction(action, hook, at, isSource, parameterNames, input, issues, file, triggerSource);
+      validateAction(action, hook, at, { isSource, sourceVar, sources: triggerSources }, parameterNames, input, issues, file);
     });
   }
 }
@@ -340,21 +363,30 @@ function safePlaceholders(template: string): string[] {
   }
 }
 
+/** Source context of a workflow for its actions. */
+interface ActionSourceContext {
+  isSource: boolean;
+  sourceVar: (name: string) => string | undefined;
+  /** Known trigger sources (several for multi-source workflows, WI-20). */
+  sources: readonly SourceConfig[];
+}
+
 function validateAction(
   action: LifecycleActionConfig,
   hook: HookName,
   at: IssuePath,
-  isSource: boolean,
+  sourceCtx: ActionSourceContext,
   parameterNames: string[],
   input: SemanticInput,
   issues: IssueCollector,
   file: string,
-  source: SourceConfig | undefined,
 ): void {
+  const { isSource } = sourceCtx;
   const scope: TemplateScope = {
     run: true,
     workspace: true,
     source: isSource,
+    sourceVar: sourceCtx.sourceVar,
     result: hook !== 'on_start',
     parameters: parameterNames,
   };
@@ -363,7 +395,7 @@ function validateAction(
   }
   switch (action.type) {
     case 'source.update':
-      if (action.project !== undefined) checkProjectUpdate(action.project, source, issues, file, [...at, 'project']);
+      if (action.project !== undefined) checkProjectUpdate(action.project, sourceCtx.sources, issues, file, [...at, 'project']);
       if (action.labels.add.length === 0 && action.labels.remove.length === 0 && action.project === undefined) {
         issues.error(file, [...at, 'labels'], '"source.update" must add or remove at least one label or set a project field');
       }
@@ -392,12 +424,13 @@ function validateAction(
 /**
  * `source.update.project` (WI-16): at least one field, every key declared in
  * `project.fields` of the trigger source, value type per kind. Values are no
- * templates (like labels). Without a known trigger source other errors are
- * reported already.
+ * templates (like labels). Multi-source workflows (WI-20): every source must
+ * declare the field with the same kind (rule of views). Without a known
+ * trigger source other errors are reported already.
  */
 function checkProjectUpdate(
   project: Readonly<Record<string, unknown>>,
-  source: SourceConfig | undefined,
+  sources: readonly SourceConfig[],
   issues: IssueCollector,
   file: string,
   at: IssuePath,
@@ -407,28 +440,46 @@ function checkProjectUpdate(
     issues.error(file, at, '"project" must set at least one field');
     return;
   }
-  if (!source) return;
-  if (!source.project) {
-    issues.error(file, at, `Source "${source.id}" has no "project" in sources.yaml; project fields cannot be set`);
+  if (sources.length === 0) return;
+  const withoutProject = sources.filter((s) => !s.project);
+  if (withoutProject.length > 0) {
+    const list = withoutProject.map((s) => `"${s.id}"`).join(', ');
+    issues.error(
+      file,
+      at,
+      withoutProject.length === 1
+        ? `Source ${list} has no "project" in sources.yaml; project fields cannot be set`
+        : `Sources ${list} have no "project" in sources.yaml; project fields cannot be set`,
+    );
     return;
   }
-  const declared = source.project.fields;
   for (const name of names) {
-    const kind = Object.hasOwn(declared, name) ? declared[name] : undefined;
-    if (!kind) {
+    const declaring = sources.filter((s) => s.project && Object.hasOwn(s.project.fields, name));
+    if (declaring.length < sources.length) {
       const bare = name.startsWith(PROJECT_FIELD_PREFIX) ? name.slice(PROJECT_FIELD_PREFIX.length) : undefined;
       // `project.<Name>` written as key: suggest on the name without the prefix.
-      const suggestion = suggestField(bare ?? name, Object.keys(declared));
+      const known = [...new Set(sources.flatMap((s) => Object.keys(s.project?.fields ?? {})))];
+      const suggestion = declaring.length === 0 ? suggestField(bare ?? name, known) : undefined;
       const hint = suggestion ? ` (did you mean "${suggestion}"?)` : '';
-      issues.error(
-        file,
-        [...at, name],
-        `Unknown project field "${name}": it is not declared in "project.fields" of source "${source.id}"${hint}`,
-      );
+      const missing = sources.filter((s) => !declaring.includes(s)).map((s) => `"${s.id}"`);
+      const where =
+        sources.length === 1
+          ? `source ${missing[0] ?? ''}`
+          : declaring.length === 0
+            ? `any source of the workflow (${missing.join(', ')})`
+            : `all sources of the workflow (missing in ${missing.join(', ')})`;
+      issues.error(file, [...at, name], `Unknown project field "${name}": it is not declared in "project.fields" of ${where}${hint}`);
       continue;
     }
-    const problem = valueProblem(kind, project[name]);
-    if (problem) issues.error(file, [...at, name], `Invalid value for project field "${name}" (${kind}): ${problem}`);
+    const kinds = new Set(sources.map((s) => s.project?.fields[name]));
+    if (kinds.size > 1) {
+      const list = sources.map((s) => `"${s.id}": ${s.project?.fields[name] ?? '?'}`).join(', ');
+      issues.error(file, [...at, name], `Project field "${name}" has different kinds in the sources of the workflow (${list}); declare it with the same kind everywhere`);
+      continue;
+    }
+    const kind = [...kinds][0];
+    const problem = kind ? valueProblem(kind, project[name]) : undefined;
+    if (kind && problem) issues.error(file, [...at, name], `Invalid value for project field "${name}" (${kind}): ${problem}`);
   }
 }
 
