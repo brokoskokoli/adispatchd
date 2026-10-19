@@ -417,7 +417,8 @@ function checkProjectUpdate(
     const kind = Object.hasOwn(declared, name) ? declared[name] : undefined;
     if (!kind) {
       const bare = name.startsWith(PROJECT_FIELD_PREFIX) ? name.slice(PROJECT_FIELD_PREFIX.length) : undefined;
-      const suggestion = bare !== undefined && Object.hasOwn(declared, bare) ? bare : suggestField(name, Object.keys(declared));
+      // `project.<Name>` written as key: suggest on the name without the prefix.
+      const suggestion = suggestField(bare ?? name, Object.keys(declared));
       const hint = suggestion ? ` (did you mean "${suggestion}"?)` : '';
       issues.error(
         file,

@@ -79,6 +79,7 @@ describe('config: source.update with project fields (WI-16)', () => {
           '    project:',
           '      Statsu: Done',
           '      project.Sprint: Sprint 12',
+          '      project.Estimat: 2',
           '      Estimate: three',
           '      Due: 2026-13-01',
           '      Notes: ""',
@@ -94,6 +95,7 @@ describe('config: source.update with project fields (WI-16)', () => {
     expect(errors).toEqual([
       'workflows/w.yaml: on_start[0].project.Statsu: Unknown project field "Statsu": it is not declared in "project.fields" of source "repo_a" (did you mean "Status"?)',
       'workflows/w.yaml: on_start[0].project.project.Sprint: Unknown project field "project.Sprint": it is not declared in "project.fields" of source "repo_a" (did you mean "Sprint"?)',
+      'workflows/w.yaml: on_start[0].project.project.Estimat: Unknown project field "project.Estimat": it is not declared in "project.fields" of source "repo_a" (did you mean "Estimate"?)',
       'workflows/w.yaml: on_start[0].project.Estimate: Invalid value for project field "Estimate" (number): expected a number or null',
       'workflows/w.yaml: on_start[0].project.Due: Invalid value for project field "Due" (date): expected a date YYYY-MM-DD or null',
       'workflows/w.yaml: on_start[0].project.Notes: Invalid value for project field "Notes" (text): empty value; use null to clear the field',
