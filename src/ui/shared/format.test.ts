@@ -96,6 +96,11 @@ describe('run outcome badges (Spec §21)', () => {
   });
   it('active runs show their technical state', () => {
     expect(runBadges({ status: 'running', outcome: 'active', lifecycleStatus: null })[0]).toMatchObject({ label: 'running', tone: 'info' });
+    // WI-17: the named outcome is an extra badge next to the business result.
+    expect(runBadges({ ...base, outcome: 'failure', resultOutcome: 'needs_maintainer', completionHook: 'on_result.needs_maintainer' })).toEqual([
+      expect.objectContaining({ label: 'failure (business)' }),
+      { label: 'outcome: needs_maintainer', tone: 'info', title: 'Named outcome reported by the worker; completion hook on_result.needs_maintainer' },
+    ]);
     expect(runBadges({ status: 'recovery_pending', outcome: 'active' })[0]).toMatchObject({ label: 'recovery pending', tone: 'warn' });
   });
 });

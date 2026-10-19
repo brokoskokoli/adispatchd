@@ -117,6 +117,27 @@ describe('GitHubAppCredentialProvider', () => {
     expect(gh.tokenRequestCount()).toBe(3);
   });
 
+  it('minValidityMs demands a token that stays valid long enough (token files, WI-18)', async () => {
+    const localClock = new FakeClock('2026-10-16T12:00:00Z');
+    const gh = new FakeGitHub({ clock: localClock });
+    const a = gh.createApp();
+    const p = new GitHubAppCredentialProvider(
+      { coder: { appId: a.appId, installationId: a.installationId, privateKeyEnv: 'KEY' } },
+      { clock: localClock, timers: localClock, fetch: gh.fetch, env: { KEY: a.privateKeyPem } },
+    );
+    const t1 = await p.getToken('coder');
+    localClock.advance(45 * 60_000); // 15 min left
+    expect((await p.getToken('coder', { minValidityMs: 11 * 60_000 })).token).toBe(t1.token);
+    localClock.advance(5 * 60_000); // 10 min left: enough for normal callers, too little for a token file
+    expect((await p.getToken('coder')).token).toBe(t1.token);
+    const t2 = await p.getToken('coder', { minValidityMs: 11 * 60_000 });
+    expect(t2.token).not.toBe(t1.token);
+    expect(t2.expiresAt.getTime()).toBe(localClock.nowMs() + 60 * 60_000);
+    expect(gh.tokenRequestCount()).toBe(2);
+    // The fresh token is cached for everybody.
+    expect((await p.getToken('coder')).token).toBe(t2.token);
+  });
+
   it('deduplicates concurrent requests and refetches after invalidate', async () => {
     const localClock = new FakeClock('2026-10-16T12:00:00Z');
     const gh = new FakeGitHub({ clock: localClock });

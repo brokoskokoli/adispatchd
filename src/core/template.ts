@@ -66,6 +66,7 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'result.status', group: 'result', description: 'Technical final status' },
   { name: 'result.result', group: 'result', description: 'Business result (success|failure|empty)' },
   { name: 'result.message', group: 'result', description: 'Message from the worker result file' },
+  { name: 'result.outcome', group: 'result', description: 'Named outcome from the worker result file (empty if none)' },
 ];
 
 /** Prefix of parameter placeholders: `{parameters.<name>}`. */
@@ -342,7 +343,7 @@ export interface TemplateInput {
   run?: { id: string; trigger?: TriggerType; startedAt?: Date };
   source?: { id: string; type: string; repository?: string; vars?: Readonly<Record<string, string>> };
   item?: { id: string; key?: string; number?: number | string; url?: string; title?: string };
-  result?: { status?: TerminalStatus; result?: BusinessResult; message?: string };
+  result?: { status?: TerminalStatus; result?: BusinessResult; message?: string; outcome?: string };
   parameters?: Readonly<Record<string, string | number | boolean>>;
   /** Time used for `{timestamp}`. */
   now: Date;
@@ -370,6 +371,7 @@ export function buildTemplateValues(input: TemplateInput): TemplateValues {
     'result.status': input.result?.status,
     'result.result': input.result?.result ?? undefined,
     'result.message': input.result?.message,
+    'result.outcome': input.result?.outcome,
   };
   for (const [name, value] of Object.entries(input.parameters ?? {})) {
     values[`${PARAMETER_PLACEHOLDER_PREFIX}${name}`] = value;

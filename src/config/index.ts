@@ -16,7 +16,7 @@ export {
   type LoadConfigResult,
 } from './loader.js';
 export { CONFIG_FILE, IDENTITIES_FILE, RESERVED_ENV_PREFIX, SOURCES_FILE, cronError, isValidTimeZone } from './validate.js';
-export { DEFAULT_WORKING_DIRECTORY, DEFAULTS } from './schemas.js';
+export { DEFAULT_WORKING_DIRECTORY, DEFAULTS, SECRET_DELIVERIES } from './schemas.js';
 export { MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH } from './named-filters.js';
 export {
   ConfigLoadError,
@@ -37,6 +37,8 @@ export {
   UnknownWorkflowError,
   WORKFLOW_SNAPSHOT_VERSION,
   workflowIdentityRefs,
+  workflowSecrets,
+  type WorkflowSecretInfo,
   type WorkflowSnapshot,
 } from './snapshot.js';
 export {

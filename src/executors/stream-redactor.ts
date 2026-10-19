@@ -28,17 +28,37 @@ export const MIN_STREAM_SECRET_LENGTH = 4;
  */
 export class StreamRedactor {
   /** Secrets as latin1 strings of their UTF-8 bytes, longest first. */
-  private readonly secrets: string[];
+  private secrets: string[] = [];
   private carry = '';
 
   constructor(secretValues: Iterable<string>) {
-    const set = new Set<string>();
-    for (const value of secretValues) {
-      if (typeof value !== 'string' || value.length < MIN_STREAM_SECRET_LENGTH) continue;
-      set.add(toLatin1(value));
-      if (value.includes('\n')) set.add(toLatin1(value.replace(/\n/g, '\\n')));
+    for (const value of secretValues) this.addValue(value);
+    this.sort();
+  }
+
+  /**
+   * Register a further secret (e.g. a renewed token, WI-18). Applies to data
+   * pushed from now on; register a value before the process can know it.
+   */
+  add(value: string): void {
+    if (this.addValue(value)) this.sort();
+  }
+
+  private addValue(value: string): boolean {
+    if (typeof value !== 'string' || value.length < MIN_STREAM_SECRET_LENGTH) return false;
+    const forms = [toLatin1(value)];
+    if (value.includes('\n')) forms.push(toLatin1(value.replace(/\n/g, '\\n')));
+    let added = false;
+    for (const form of forms) {
+      if (this.secrets.includes(form)) continue;
+      this.secrets.push(form);
+      added = true;
     }
-    this.secrets = [...set].sort((a, b) => b.length - a.length);
+    return added;
+  }
+
+  private sort(): void {
+    this.secrets.sort((a, b) => b.length - a.length);
   }
 
   /** True if at least one secret is registered (otherwise data passes unchanged). */

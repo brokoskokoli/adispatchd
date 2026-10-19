@@ -20,6 +20,11 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
   Mehrere Instanzen mit getrennten data-dirs koordinieren sich nicht.
 - `workspace.base_dir` (Default `<data-dir>/workspaces`) muss für den Dienst schreibbar sein; liegt es außerhalb von
   data-dir, Rechte selbst setzen.
+- **Token-Dateien** (`delivery: file`, seit 0.3.0): `runs/<run-id>/secrets/<NAME>` bzw.
+  `runs/<run-id>/actions/<action>/attempt-<n>/secrets/<NAME>`, Verzeichnis 0700, Datei 0600 (Dienstbenutzer). Sie
+  existieren nur, solange der Worker bzw. die Action läuft; Reste nach einem Absturz löscht die Recovery beim nächsten
+  Start, die Retention bei jedem Lauf. Das Token-Verzeichnis darf nicht im Workspace liegen; verglichen werden die aufgelösten Pfade (Symlinks werden verfolgt). Liegt es darin (z. B. Workspace unter `<data-dir>/runs/` oder ein Symlink dorthin), endet der Run mit `start_error` bzw. die Action scheitert.
+  Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
 
 ## Installation als systemd-Dienst (Linux)
 
@@ -113,14 +118,14 @@ das nächste `service install`.
 
 | Ereignis | Verhalten | Exit | systemd |
 |---|---|---|---|
-| `systemctl stop` / `restart` | SIGTERM an den **Hauptprozess** → Drain bis `--drain-timeout`, dann Cancel-All (`on_cancel`) bis `--cancel-timeout`, danach werden Hooks unterbrochen (Recovery setzt sie beim nächsten Start fort) | 0 | gestoppt |
+| `systemctl stop` / `restart` | SIGTERM an den **Hauptprozess** → Drain bis `--drain-timeout`, dann Cancel-All (`on_cancel` bzw. `on_error`) bis `--cancel-timeout`, danach werden Hooks unterbrochen (Recovery setzt sie beim nächsten Start fort) | 0 | gestoppt |
 | zweites SIGTERM (`systemctl kill --kill-whom=main --signal=SIGTERM adispatchd`) | sofort Cancel-All | 0 | gestoppt |
 | drittes Signal | sofortiger Exit (Recovery räumt beim nächsten Start auf) | 1 | – |
 | `adispatch drain` / UI „Drain“ | keine neuen Runs, aktive laufen zu Ende, dann Ende | 0 | inactive, **kein** Neustart |
-| `adispatch cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel`, dann Ende | 0 | inactive, **kein** Neustart |
+| `adispatch cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel` bzw. `on_error`, dann Ende | 0 | inactive, **kein** Neustart |
 | Konfigurations-/Startfehler (ungültige YAML, Instanz-Lock belegt, DB-Schema neuer als der Code) | Start abgebrochen | 78 (EX_CONFIG) | **kein** Neustart (`RestartPreventExitStatus=78`) – Fehler beheben, dann `systemctl start` |
 | Absturz / Exit ≠ 0 | – | ≠ 0 | Neustart nach 5 s → Recovery |
-| `TimeoutStopSec` abgelaufen | systemd SIGKILLt die ganze cgroup inkl. Worker | – | gestoppt; nächster Start: Runs `crashed` + `on_crash` |
+| `TimeoutStopSec` abgelaufen | systemd SIGKILLt die ganze cgroup inkl. Worker | – | gestoppt; nächster Start: Runs `crashed` + `on_crash` bzw. `on_error` |
 
 - **`KillMode=mixed`**: SIGTERM geht nur an den Orchestrator, Worker laufen während des Drains weiter. Mit dem Default
   `control-group` bekämen alle Worker sofort SIGTERM (gleiche cgroup trotz eigener Prozessgruppe) → kein Drain möglich.
@@ -135,9 +140,12 @@ das nächste `service install`.
   und erst danach `systemctl stop`/Update/Reboot.
 - **Absturz unter systemd:** Stirbt der Hauptprozess, beendet systemd (bei `KillMode=mixed`) auch alle Worker der cgroup per
   SIGKILL. Die Recovery findet beim Neustart die Prozessgruppen daher i. d. R. bereits beendet und finalisiert die Runs als
-  `crashed` mit `on_crash` (zählt als technischer Fehler, ggf. Retry-Block). Verwaiste, noch lebende Worker (Recovery tötet
+  `crashed` mit `on_crash` bzw. `on_error` (zählt als technischer Fehler, ggf. Retry-Block). Verwaiste, noch lebende Worker (Recovery tötet
   sie nur bei sicher verifizierter Identität) entstehen v. a. außerhalb von systemd (lokaler Start, `KillMode=process`).
-- **Reboot:** wie Absturz – alle Worker sind weg → `crashed` + `on_crash`. Geplante Reboots daher vorher drainen.
+- **Reboot:** wie Absturz – alle Worker sind weg → `crashed` + `on_crash` bzw. `on_error`. Geplante Reboots daher vorher drainen.
+
+Überall gilt: Ist der spezifische Hook (`on_cancel`, `on_crash`, …) im Workflow nicht definiert, läuft `on_error`
+(ab 0.3.0; Konfigurationsreferenz §3.4.10).
 
 ## Pause, Drain, Cancel-All
 
@@ -178,9 +186,12 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 ```
 
 - **DB-Migrationen** sind versioniert und laufen beim Start automatisch. Existiert die DB und stehen Migrationen aus, wird
-  **vorher** eine konsistente Kopie geschrieben: `data-dir/backups/orchestrator-<alte-version>-<zeitstempel>.sqlite`
+  **vorher** eine konsistente Kopie geschrieben: `data-dir/backups/adispatchd-<alte-schemaversion>-<zeitstempel>.sqlite`
   (`VACUUM INTO`, auch im WAL-Modus konsistent). Schlägt eine Migration fehl, wird sie zurückgerollt und der Start abgebrochen.
 - Eine DB mit **neuerer** Schemaversion als der Code kennt wird abgelehnt (kein stilles Downgrade).
+- **0.3.0 hebt das Schema auf v3** (benannte Ergebnisse, gespeicherter Abschluss-Hook). Das ist eine Einbahnstraße:
+  0.2.x startet mit einer v3-DB nicht mehr. Zurück auf 0.2.x nur über das vor der Migration geschriebene Backup
+  (`backups/adispatchd-2-<zeitstempel>.sqlite`, siehe Rollback).
 - **Rollback:** Dienst stoppen, alte Paketversion installieren, `adispatchd.sqlite`, `adispatchd.sqlite-wal` und
   `adispatchd.sqlite-shm` beiseitelegen, das passende Backup als `adispatchd.sqlite` zurückkopieren (Eigentümer
   `adispatchd`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).
@@ -193,7 +204,7 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 | config-dir | Versionsverwaltung (git) oder Dateikopie; enthält keine Secrets |
 | Env-Datei | sicher (verschlüsselt) aufbewahren – enthält Private Keys |
 | `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
-| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal) |
+| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal; `runs/<id>/kept/` enthält die per `execute.keep` gesicherten Dateien); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien; nur diese, nicht jedes `secrets/`-Verzeichnis, z. B. in Workspaces) |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
 **`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
@@ -202,8 +213,13 @@ irgendeinen Deskriptor auf die Datei schließt – deshalb öffnet der Orchestra
 ein zweites Mal. Externe Werkzeuge, die die Datei als SQLite-DB öffnen (`sqlite3`, Backup-Agenten mit SQLite-Support),
 konkurrieren um die Sperre und scheitern bzw. blockieren; eine kopierte Lock-Datei ist wertlos. Beim Sichern ausschließen, z. B.:
 
+Die Token-Ausschlüsse sind am Quellverzeichnis verankert (führendes `/`), damit gleichnamige Verzeichnisse in
+Workspaces gesichert werden.
+
 ```bash
-rsync -a --exclude 'adispatchd.lock*' --exclude 'adispatchd.sqlite*' /var/lib/adispatchd/ /backup/orch-data/
+rsync -a --exclude 'adispatchd.lock*' --exclude 'adispatchd.sqlite*' \
+  --exclude '/runs/*/secrets/' --exclude '/runs/*/actions/*/*/secrets/' \
+  /var/lib/adispatchd/ /backup/orch-data/
 sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch-data/adispatchd.sqlite'"
 ```
 
@@ -214,8 +230,11 @@ Wiederherstellen nur bei gestopptem Dienst; die Lock-Dateien legt der Orchestrat
 Beim Start erfasst die Recovery alle zuvor aktiven Runs, **bevor** der Scheduler startet (`/ready` erst danach `200`):
 
 - noch lebende, sicher identifizierte Worker-Prozessgruppen (PID + Startzeit/Boot-ID) werden beendet; verschwundene Runs
-  werden `crashed` mit `on_crash` (zählt als technischer Fehler); halb abgearbeitete Lifecycle-Ketten werden fortgesetzt
+  werden `crashed` mit `on_crash` bzw. `on_error` (zählt als technischer Fehler); halb abgearbeitete Lifecycle-Ketten
+  werden fortgesetzt – ab 0.3.0 genau der beim Übergang nach `finalizing` gespeicherte Abschluss-Hook
   (bereits erfolgreiche Actions laufen nicht erneut; Kommentare werden über Marker abgeglichen).
+- Übrig gebliebene Token-Dateien (`delivery: file`) der zuvor aktiven Runs werden zuerst gelöscht – sie würden nicht
+  mehr erneuert. Ein noch laufender, nicht beendbarer Worker (`recovery_pending`) verliert damit seine Token-Datei.
 - **`recovery_pending`**: Prozess nicht sicher identifizierbar oder nicht beendbar → der Run bleibt sichtbar aktiv, hält
   seinen Lock (kein Doppelstart) und erzeugt die Notification `recovery_failed`. Lösung: Prozess prüfen/beenden, dann in der
   UI „Retry Recovery“ bzw. `POST /api/v1/runs/<id>/recovery/retry` (mit `{"assumeGone": true}`, wenn sicher ist, dass der

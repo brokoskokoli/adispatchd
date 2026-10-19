@@ -48,6 +48,7 @@ export const DEFAULTS = {
   checkTimeout: '30s',
   shellActionTimeout: '5m',
   cancelGrace: '30s',
+  keepMaxSize: '100MB',
   scheduleTimezone: 'UTC',
 } as const;
 
@@ -96,6 +97,8 @@ const sizeSchema = z.string('Expected a size such as 100MB').transform((value, c
   }
 });
 
+const positiveSize = sizeSchema.refine((bytes) => bytes > 0, 'Must be greater than 0');
+
 const positiveInt = z.number().int('Must be an integer').positive('Must be greater than 0');
 const nonNegativeInt = z.number().int('Must be an integer').min(0, 'Must not be negative');
 
@@ -107,6 +110,14 @@ const envMap = z
   .default({});
 
 const stringList = z.array(z.string()).default([]);
+
+/** How a secret reaches the process (WI-18): `env` = value in the variable, `file` = path in `<NAME>_FILE`. */
+export const SECRET_DELIVERIES = ['env', 'file'] as const;
+
+/** `secrets` of `execute` and `shell` actions: env name → identity whose token is handed over. */
+const secretsMap = z
+  .record(envName, z.strictObject({ identity: configId, delivery: z.enum(SECRET_DELIVERIES).default('env') }))
+  .default({});
 
 const notificationEvent = z.enum(NOTIFICATION_EVENT_TYPES);
 
@@ -365,7 +376,7 @@ const executeSchema = z.discriminatedUnion('type', [
     working_directory: nonEmpty.default(DEFAULT_WORKING_DIRECTORY),
     create_directory: z.boolean().default(true),
     env: envMap,
-    secrets: z.record(envName, z.strictObject({ identity: configId })).default({}),
+    secrets: secretsMap,
     timeout: z
       .strictObject({
         max_duration: positiveDuration.optional(),
@@ -373,6 +384,9 @@ const executeSchema = z.discriminatedUnion('type', [
       })
       .default({}),
     cancel_grace: durationSchema.default(parseDuration(DEFAULTS.cancelGrace)),
+    // Patterns are checked in validate.ts (path + message per entry).
+    keep: z.array(z.string('Expected a pattern such as .agent/*.log')).default([]),
+    keep_max_size: positiveSize.optional(),
   }),
 ]);
 
@@ -421,6 +435,7 @@ const actionSchema = z.discriminatedUnion('type', [
     args: stringList,
     timeout: positiveDuration.default(parseDuration(DEFAULTS.shellActionTimeout)),
     env: envMap,
+    secrets: secretsMap,
   }),
 ]);
 
@@ -428,11 +443,20 @@ const actionSchema = z.discriminatedUnion('type', [
 export type RawAction = z.output<typeof actionSchema>;
 
 const hookList = z.array(actionSchema).default([]);
+/**
+ * Hooks whose presence matters (WI-17): a technical hook that is configured –
+ * even as `[]` – takes precedence over `on_error`, so "not given" must stay
+ * distinguishable from an empty list.
+ */
+const optionalHookList = z.array(actionSchema).optional();
 
-const hookShape = Object.fromEntries(HOOK_NAMES.map((h) => [h, hookList])) as Record<
-  (typeof HOOK_NAMES)[number],
-  typeof hookList
->;
+/** Hooks that always resolve to a list (`[]` if not given). */
+const ALWAYS_LIST_HOOKS = ['on_start', 'on_success', 'on_failure'] as const satisfies readonly (typeof HOOK_NAMES)[number][];
+
+const hookShape = Object.fromEntries(
+  HOOK_NAMES.map((h) => [h, (ALWAYS_LIST_HOOKS as readonly string[]).includes(h) ? hookList : optionalHookList]),
+) as Record<(typeof ALWAYS_LIST_HOOKS)[number], typeof hookList> &
+  Record<Exclude<(typeof HOOK_NAMES)[number], (typeof ALWAYS_LIST_HOOKS)[number]>, typeof optionalHookList>;
 
 /** Schema of one `workflows/*.yaml` file. */
 export const workflowSchema = z.strictObject({
@@ -460,6 +484,8 @@ export const workflowSchema = z.strictObject({
     .strictObject({ max_technical_failures: positiveInt.default(DEFAULTS.maxTechnicalFailures) })
     .prefault({}),
   ...hookShape,
+  /** Named outcomes (WI-17): `on_result.<outcome>` replaces `on_success`/`on_failure`. */
+  on_result: z.record(configId, z.array(actionSchema)).optional(),
 });
 
 /** Parsed workflow file. */

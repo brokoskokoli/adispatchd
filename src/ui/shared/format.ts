@@ -118,6 +118,10 @@ export interface RunOutcomeLike {
   finalStatus?: string | null;
   lifecycleStatus?: string | null;
   lifecycleFailed?: boolean;
+  /** Named outcome from the result file (WI-17). */
+  resultOutcome?: string | null;
+  /** Completion hook selected at finalization (WI-17). */
+  completionHook?: string | null;
 }
 
 /** Badge description. */
@@ -163,6 +167,13 @@ export function runBadges(run: RunOutcomeLike): BadgeInfo[] {
       break;
     default:
       badges.push({ label: String(run.outcome), tone: 'muted', title: '' });
+  }
+  if (run.resultOutcome) {
+    badges.push({
+      label: `outcome: ${run.resultOutcome}`,
+      tone: 'info',
+      title: `Named outcome reported by the worker${run.completionHook ? `; completion hook ${run.completionHook}` : ''}`,
+    });
   }
   if (run.lifecycleFailed || run.lifecycleStatus === 'failed') {
     badges.push({ label: 'lifecycle failed', tone: 'error', title: 'A lifecycle action failed; see Failed Actions' });

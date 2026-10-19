@@ -8,7 +8,12 @@ import path from 'node:path';
 import {
   commentMarker,
   dataPaths,
+  type Clock,
+  type CredentialProvider,
+  type ExecutionOutcome,
   type Executor,
+  type Logger,
+  type Timers,
   type HookName,
   type SourceAdapter,
   type SourceItem,
@@ -19,6 +24,7 @@ import type {
   SourceUpdateActionConfig,
   WorkflowSnapshot,
 } from '../config/index.js';
+import { TOKEN_DIR_NAME, TokenFileSession, isTokenDirInWorkspace, type TokenFileRequest } from '../executors/index.js';
 import type { RunActionRecord, RunRecord } from '../persistence/index.js';
 import {
   buildHookTemplateValues,
@@ -65,6 +71,13 @@ export interface PerformerDeps {
   dataDir: string;
   shellCancelGraceMs: number;
   maxShellLogBytes: number;
+  /** Token source for `secrets` of `shell` actions (WI-18). */
+  credentials: CredentialProvider | undefined;
+  clock: Clock;
+  timers: Timers;
+  logger: Logger;
+  /** Tuning of token files (tests). */
+  tokenFiles: { renewBeforeMs?: number; retryDelayMs?: number; maxRetryDelayMs?: number };
 }
 
 interface SourceTarget {
@@ -180,8 +193,10 @@ async function isDirectory(p: string | null): Promise<boolean> {
 
 /**
  * `shell`: runs the command via the executor with the minimal environment
- * (no controller env), the rendered `env`/`args`, a JSON context file with
- * run + result (`ADISPATCH_CONTEXT_FILE`) and the action timeout. Exit code 0 =
+ * (no controller env), the rendered `env`/`args`, declared `secrets` (WI-18:
+ * `env` → token in the variable, `file` → token file in the attempt directory,
+ * renewed while the action runs and deleted afterwards), a JSON context file
+ * with run + result (`ADISPATCH_CONTEXT_FILE`) and the action timeout. Exit code 0 =
  * success; anything else (exit ≠ 0, signal, timeout, start error) fails the attempt.
  * Working directory: the run workspace if it exists, else a per-attempt directory.
  */
@@ -213,28 +228,77 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     item,
     action: { id: action.id, name: action.name, ordinal: action.ordinal, attempt: input.attempt },
   });
-  const proc = await deps.executor.start({
-    runId: run.id,
-    workflowId: snapshot.workflow.id,
-    command: config.command,
-    args,
-    workingDirectory,
-    createDirectory: !useWorkspace,
-    env,
-    secrets: {},
-    context,
-    files,
-    timeouts: { maxDurationMs: config.timeoutMs },
-    cancelGraceMs: deps.shellCancelGraceMs,
-    maxLogBytes: deps.maxShellLogBytes,
-  });
-  const onAbort = (): void => {
-    proc.cancel().catch(() => undefined);
-  };
-  input.signal?.addEventListener('abort', onAbort, { once: true });
-  if (input.signal?.aborted) onAbort();
-  const outcome = await proc.wait().finally(() => input.signal?.removeEventListener('abort', onAbort));
 
+  // Secrets (WI-18). Journal entries from before WI-18 have no `secrets`.
+  const secrets: Record<string, string> = {};
+  const tokenFiles: TokenFileRequest[] = [];
+  const secretRefs = Object.entries(config.secrets ?? {});
+  if (secretRefs.length > 0 && !deps.credentials) {
+    throw new LifecycleError('no_credentials', 'Shell action declares secrets but no credential provider is configured', {
+      retryable: false,
+    });
+  }
+  for (const [name, ref] of secretRefs) {
+    if (ref.delivery === 'file') {
+      tokenFiles.push({ name, identity: ref.identity });
+      continue;
+    }
+    const token = await deps.credentials!.getToken(ref.identity, input.signal ? { signal: input.signal } : {});
+    secrets[name] = token.token;
+  }
+  let session: TokenFileSession | undefined;
+  try {
+    if (tokenFiles.length > 0) {
+      const dir = path.join(attemptDir, TOKEN_DIR_NAME);
+      if (await isTokenDirInWorkspace(workingDirectory, dir)) {
+        throw new LifecycleError('token_files_in_workspace', 'Token files must lie outside the workspace; move the workspace out of the data directory', {
+          retryable: false,
+        });
+      }
+      session = new TokenFileSession({
+        dir,
+        requests: tokenFiles,
+        credentials: deps.credentials!,
+        clock: deps.clock,
+        timers: deps.timers,
+        logger: deps.logger.child({ runId: run.id, actionId: action.id }),
+        ...deps.tokenFiles,
+      });
+      Object.assign(env, await session.open(input.signal));
+    }
+    const proc = await deps.executor.start({
+      runId: run.id,
+      workflowId: snapshot.workflow.id,
+      command: config.command,
+      args,
+      workingDirectory,
+      createDirectory: !useWorkspace,
+      env,
+      secrets,
+      ...(session ? { redactSecrets: session } : {}),
+      context,
+      files,
+      timeouts: { maxDurationMs: config.timeoutMs },
+      cancelGraceMs: deps.shellCancelGraceMs,
+      maxLogBytes: deps.maxShellLogBytes,
+    });
+    const onAbort = (): void => {
+      proc.cancel().catch(() => undefined);
+    };
+    input.signal?.addEventListener('abort', onAbort, { once: true });
+    if (input.signal?.aborted) onAbort();
+    const outcome = await proc.wait().finally(() => input.signal?.removeEventListener('abort', onAbort));
+    return shellAttemptResult(outcome, config, files);
+  } finally {
+    await session?.close();
+  }
+}
+
+function shellAttemptResult(
+  outcome: ExecutionOutcome,
+  config: ShellActionConfig,
+  files: { stdoutLog: string; stderrLog: string },
+): AttemptResult {
   const logs = { stdout: files.stdoutLog, stderr: files.stderrLog };
   const base = { exitCode: outcome.exitCode, signal: outcome.signal, logs };
   if (outcome.spawnError) {

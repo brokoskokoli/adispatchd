@@ -8,6 +8,7 @@ import {
   type CredentialProvider,
   type IdentityDescription,
   type IdentityRef,
+  type TokenRequestOptions,
 } from '../core/index.js';
 
 /** {@link CredentialProvider} delegating by identity ID. */
@@ -19,7 +20,7 @@ export class CompositeCredentialProvider implements CredentialProvider {
     this.routes = new Map(Object.entries(routes));
   }
 
-  getToken(identity: IdentityRef, options?: { signal?: AbortSignal }): Promise<AccessToken> {
+  getToken(identity: IdentityRef, options?: TokenRequestOptions): Promise<AccessToken> {
     const provider = this.routes.get(identity);
     if (!provider) return Promise.reject(new SourceError('auth', `Unknown identity "${identity}"`, { retryable: false }));
     return provider.getToken(identity, options);

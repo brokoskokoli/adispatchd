@@ -7,10 +7,10 @@ import { ApiError, api, qs, seg } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { buildRuntimeBody, buildStartBody } from '../../shared/params.js';
-import { checkValueLabel, decisionTone, formatDuration, triggerSummary } from '../../shared/format.js';
+import { checkValueLabel, decisionTone, formatBytes, formatDuration, triggerSummary } from '../../shared/format.js';
 import { buildHash } from '../../shared/route.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
-import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, SourcePoll, Workflow } from '../types.js';
+import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, SecretInfo, SourcePoll, Workflow } from '../types.js';
 import { act, badge, button, errorBox, externalLink, isEditing, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, toast } from '../ui.js';
 
 function timeoutText(t: unknown): string {
@@ -114,6 +114,15 @@ export function traceNode(t: FilterTrace): HTMLElement {
   }
 }
 
+/** Table of declared secrets (WI-18): where, name, identity, delivery, variable – never values. */
+function secretsTable(secrets: readonly SecretInfo[]): HTMLElement {
+  return table(
+    ['Where', 'Secret', 'Identity', 'Delivery', 'Variable'],
+    secrets.map((x) => [h('code', null, x.where), h('code', null, x.name), x.identity, x.delivery, h('code', null, x.variable)]),
+    { empty: 'No secrets.' },
+  );
+}
+
 export function renderDryRun(r: DryRunResult): HTMLElement {
   const parts: HTMLElement[] = [];
   parts.push(
@@ -126,6 +135,12 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
         ? ([['Per source', Object.entries(r.capacity.perSource.active).map(([sid, n]) => `${sid} ${n}/${r.capacity.perSource?.max ?? 0}`).join(' · ')]] as Array<[string, string]>)
         : []),
       ['Automatic starts', r.gate ? (r.gate.canStartAutomatically ? badge('possible', 'ok') : badge(`not possible (${r.gate.reason ?? 'unknown'})`, 'warn')) : text(null)],
+      ...(r.hooks
+        ? ([
+            ['Named outcomes (on_result)', r.hooks.onResult.length ? h('span', null, r.hooks.onResult.map((o) => badge(o, 'info'))) : text(null)],
+            ['Technical outcomes', h('ul', { class: 'plain' }, Object.entries(r.hooks.technical).map(([status, hook]) => h('li', null, `${status} → `, h('code', null, hook))))],
+          ] as Array<[string, HTMLElement]>)
+        : []),
     ]),
   );
   parts.push(
@@ -136,6 +151,7 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
     ),
   );
   if (r.conditions.length) parts.push(h('h3', null, 'Workflow conditions'), h('ul', { class: 'checks' }, r.conditions.map(checkRow)));
+  if (r.secrets?.length) parts.push(h('h3', null, 'Secrets'), secretsTable(r.secrets));
   if (r.source) {
     const polls: SourcePoll[] = r.source.sources ?? [{ sourceId: r.source.sourceId, status: r.source.error ? 'source_error' : 'ok', error: r.source.error, polled: r.source.polled }];
     if (polls.length === 1) parts.push(h('h3', null, `Source ${r.source.sourceId}: ${r.source.polled} item(s) polled`));
@@ -363,7 +379,18 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
             ['Identity', text(wf.identity)],
             ['Command', h('code', { class: 'wrap' }, [wf.execute.command, ...wf.execute.args.map(String)].join(' '))],
             ['Timeout', timeoutText(wf.execute.timeout)],
-            ['Secrets', wf.execute.secrets.length ? wf.execute.secrets.join(', ') : text(null)],
+            [
+              'Secrets',
+              // `secrets` (execute + shell actions, WI-18) is missing on older instances.
+              wf.secrets
+                ? wf.secrets.length
+                  ? secretsTable(wf.secrets)
+                  : text(null)
+                : wf.execute.secrets.length
+                  ? wf.execute.secrets.join(', ')
+                  : text(null),
+            ],
+            ['Kept files', wf.execute.keep?.length ? h('span', null, h('code', { class: 'wrap' }, wf.execute.keep.join(', ')), h('small', { class: 'muted' }, ` (max ${formatBytes(wf.execute.keepMaxSizeBytes ?? null)} per run)`)) : text(null)],
             ['Filter', `${wf.hasFilter ? 'declarative' : 'none'}${wf.hasShellFilter ? ' + shell filter' : ''}; conditions: ${wf.conditions.workflow} workflow, ${wf.conditions.item} item`],
             ['Max technical failures', String(wf.maxTechnicalFailures)],
             ['File', h('code', null, wf.file)],

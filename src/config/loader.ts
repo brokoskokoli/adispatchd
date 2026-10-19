@@ -14,6 +14,7 @@ import type { z } from 'zod';
 import { CONFIG_ID_PATTERN, systemClock, toAbsolutePath, type Clock } from '../core/index.js';
 import { formatIssuePath, IssueCollector, sortIssues, type IssuePath } from './issues.js';
 import type { ConfigIssue, GlobalConfig, LoadedConfig, ViewConfig, WorkflowConfig } from './model.js';
+import { editDistance, suggestField } from './field-catalog.js';
 import { NamedFilters, type NamedFilterEntry } from './named-filters.js';
 import {
   normalizeGlobal,
@@ -302,11 +303,123 @@ function parseWith<S extends z.ZodType>(
     const at = issue.path.filter((p): p is string | number => typeof p !== 'symbol');
     let message = issue.message;
     if (issue.code === 'unrecognized_keys') {
-      message = `Unknown key(s): ${issue.keys.map((k) => `"${k}"`).join(', ')}`;
+      const known = knownKeysAt(schema, data, at);
+      message = `Unknown key(s): ${issue.keys
+        .map((k) => {
+          const suggestion = known.length > 0 ? suggestKey(k, known) : undefined;
+          return suggestion ? `"${k}" (did you mean "${suggestion}"?)` : `"${k}"`;
+        })
+        .join(', ')}`;
+    } else if (issue.code === 'invalid_key') {
+      // Record keys (e.g. `on_result.<outcome>`): report the key's own problem instead of "Invalid key in record".
+      const reason = issue.issues[0]?.message;
+      message = `Invalid key "${String(at[at.length - 1] ?? '')}"${reason ? `: ${reason}` : ''}`;
+    } else if (issue.code === 'invalid_value') {
+      message += enumSuggestion(valueAt(data, at), issue.values);
     }
     issues.error(file, at, message);
   }
   return undefined;
+}
+
+/** Value at `at` inside parsed YAML data (`undefined` if absent). */
+function valueAt(data: unknown, at: readonly (string | number)[]): unknown {
+  let node = data;
+  for (const segment of at) {
+    if (node === null || typeof node !== 'object') return undefined;
+    node = (node as Record<string | number, unknown>)[segment];
+  }
+  return node;
+}
+
+/** ` (did you mean "x"?)` for a mistyped enum string, else `''`. */
+function enumSuggestion(value: unknown, options: readonly unknown[]): string {
+  if (typeof value !== 'string') return '';
+  const names = options.filter((o): o is string => typeof o === 'string');
+  const suggestion = suggestField(value, names);
+  return suggestion ? ` (did you mean "${suggestion}"?)` : '';
+}
+
+/** Minimal view of zod 4 schema internals used by {@link knownKeysAt}. */
+interface SchemaDef {
+  type?: string;
+  shape?: Record<string, unknown>;
+  innerType?: unknown;
+  in?: unknown;
+  element?: unknown;
+  valueType?: unknown;
+  options?: unknown[];
+  /** Discriminated unions: name of the discriminator key. */
+  discriminator?: string;
+  /** Literals: allowed values. */
+  values?: unknown[];
+}
+
+function defOf(schema: unknown): SchemaDef | undefined {
+  return (schema as { _zod?: { def?: SchemaDef } } | null)?._zod?.def;
+}
+
+/** Strip wrappers (default, optional, pipe, …) that do not change the allowed keys. */
+function unwrapDef(schema: unknown): SchemaDef | undefined {
+  let def = defOf(schema);
+  for (let i = 0; def && i < 32; i++) {
+    if (def.type === 'default' || def.type === 'prefault' || def.type === 'optional' || def.type === 'nullable' || def.type === 'readonly') {
+      def = defOf(def.innerType);
+    } else if (def.type === 'pipe') def = defOf(def.in);
+    else break;
+  }
+  return def;
+}
+
+/** Variants of a union that match the input's discriminator value (discriminated unions only). */
+function matchingVariants(def: SchemaDef, data: unknown): unknown[] | null {
+  const key = def.discriminator;
+  if (key === undefined || typeof data !== 'object' || data === null || !Object.hasOwn(data, key)) return null;
+  const value = (data as Record<string, unknown>)[key];
+  const matches = (def.options ?? []).filter((option) => {
+    const literal = unwrapDef(unwrapDef(option)?.shape?.[key]);
+    return literal?.type === 'literal' && (literal.values ?? []).includes(value);
+  });
+  return matches.length > 0 ? matches : null;
+}
+
+/**
+ * Keys allowed by the object schema at `at` of `data` (best effort, for "did
+ * you mean" hints on unknown keys): follows object properties, array elements
+ * and record values alongside the parsed data. For a discriminated union only
+ * the variant selected by the input's discriminator counts; without a match
+ * (or for plain unions) only keys shared by all variants are offered.
+ */
+export function knownKeysAt(schema: unknown, data: unknown, at: IssuePath): string[] {
+  const def = unwrapDef(schema);
+  if (!def) return [];
+  if (def.type === 'union') {
+    const selected = matchingVariants(def, data);
+    if (selected) return [...new Set(selected.flatMap((v) => knownKeysAt(v, data, at)))];
+    const all = (def.options ?? []).map((v) => knownKeysAt(v, data, at));
+    if (all.length === 0) return [];
+    return (all[0] ?? []).filter((k) => all.every((keys) => keys.includes(k)));
+  }
+  const [segment, ...rest] = at;
+  if (segment === undefined) return def.type === 'object' && def.shape ? Object.keys(def.shape) : [];
+  const child = typeof data === 'object' && data !== null ? (data as Record<string | number, unknown>)[segment] : undefined;
+  if (def.type === 'object' && typeof segment === 'string' && def.shape && Object.hasOwn(def.shape, segment)) {
+    return knownKeysAt(def.shape[segment], child, rest);
+  }
+  if (def.type === 'array' && typeof segment === 'number') return knownKeysAt(def.element, child, rest);
+  if (def.type === 'record') return knownKeysAt(def.valueType, child, rest);
+  return [];
+}
+
+/**
+ * "Did you mean" for an unknown key: the closest allowed key within about a
+ * third of the key's length (at least 1 edit). Stricter than field
+ * suggestions so that short keys (`on` → `id`) get no misleading hint.
+ */
+export function suggestKey(key: string, known: readonly string[]): string | undefined {
+  const suggestion = suggestField(key, known);
+  if (suggestion === undefined) return undefined;
+  return editDistance(key.toLowerCase(), suggestion.toLowerCase()) <= Math.max(1, Math.floor(key.length * 0.34)) ? suggestion : undefined;
 }
 
 /** Find the 1-based line of the deepest existing node along `issuePath`. */

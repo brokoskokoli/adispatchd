@@ -5,7 +5,7 @@
  * referenced by ID only, notification channels are not included.
  */
 import { OrchestratorError } from '../core/index.js';
-import { triggerSourceIds, type LoadedConfig, type SourceConfig, type WorkflowConfig, type WorkspaceConfig } from './model.js';
+import { configuredHooks, triggerSourceIds, type LoadedConfig, type SourceConfig, type WorkflowConfig, type WorkspaceConfig } from './model.js';
 
 /** Current snapshot format version. */
 export const WORKFLOW_SNAPSHOT_VERSION = 1;
@@ -35,6 +35,36 @@ export class UnknownWorkflowError extends OrchestratorError {
   }
 }
 
+/** One declared secret (names and identity only – never a value), see {@link workflowSecrets}. */
+export interface WorkflowSecretInfo {
+  /** `execute` or the action, e.g. `on_success.notify` / `on_success.1` (default ID). */
+  where: string;
+  name: string;
+  identity: string;
+  delivery: 'env' | 'file';
+  /** Variable the process sees: `<NAME>` (env) or `<NAME>_FILE` (file). */
+  variable: string;
+}
+
+/** All secrets a workflow declares (`execute.secrets` and `shell` action `secrets`, WI-18), in config order. */
+export function workflowSecrets(workflow: WorkflowConfig): WorkflowSecretInfo[] {
+  const out: WorkflowSecretInfo[] = [];
+  const add = (where: string, secrets: WorkflowConfig['execute']['secrets'] | undefined): void => {
+    for (const [name, ref] of Object.entries(secrets ?? {})) {
+      // Snapshots/configs from before WI-18 have no `delivery`.
+      const delivery = ref.delivery ?? 'env';
+      out.push({ where, name, identity: ref.identity, delivery, variable: delivery === 'file' ? `${name}_FILE` : name });
+    }
+  };
+  add('execute', workflow.execute.secrets);
+  for (const [hook, actions] of configuredHooks(workflow.hooks)) {
+    for (const action of actions) {
+      if (action.type === 'shell') add(action.id.startsWith(`${hook}.`) ? action.id : `${hook}.${action.id}`, action.secrets);
+    }
+  }
+  return out;
+}
+
 /** Identities a workflow may use, sorted. */
 export function workflowIdentityRefs(workflow: WorkflowConfig, source: SourceConfig | null): string[] {
   const refs = new Set<string>();
@@ -42,8 +72,11 @@ export function workflowIdentityRefs(workflow: WorkflowConfig, source: SourceCon
   if (source) refs.add(source.identity);
   if (source?.project) refs.add(source.project.identity);
   for (const ref of Object.values(workflow.execute.secrets)) refs.add(ref.identity);
-  for (const actions of Object.values(workflow.hooks)) {
-    for (const action of actions) if (action.type === 'source.comment' && action.identity) refs.add(action.identity);
+  for (const [, actions] of configuredHooks(workflow.hooks)) {
+    for (const action of actions) {
+      if (action.type === 'source.comment' && action.identity) refs.add(action.identity);
+      if (action.type === 'shell') for (const ref of Object.values(action.secrets ?? {})) refs.add(ref.identity);
+    }
   }
   return [...refs].sort();
 }

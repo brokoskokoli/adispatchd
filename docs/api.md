@@ -101,7 +101,7 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 | POST | `/api/v1/scheduler/resume` | – | `200` Status; sofortiger Planungsschritt |
 | PATCH | `/api/v1/scheduler/runtime` | `{"maxConcurrent": 3}` bzw. `null` = YAML-Wert | `200` Status |
 | POST | `/api/v1/shutdown/drain` | – | `202 {"accepted":true,"mode":"drain","activeRuns":[…]}` – keine neuen Runs, aktive laufen zu Ende, dann Prozessende (Exit 0) |
-| POST | `/api/v1/shutdown/cancel-all` | `{"reason"?}` | `202` – alle Runs abbrechen (`on_cancel`), dann stoppen. Ein Cancel-All während eines Drains eskaliert ihn |
+| POST | `/api/v1/shutdown/cancel-all` | `{"reason"?}` | `202` – alle Runs abbrechen (`on_cancel` bzw. `on_error`, wenn `on_cancel` nicht definiert ist), dann stoppen. Ein Cancel-All während eines Drains eskaliert ihn |
 
 ### Workflows
 
@@ -111,11 +111,11 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 | GET | `/api/v1/workflows/:id` | – | Workflow + `diagnosis` (letzte Planungsdiagnose), `filter`, `hooks` |
 | PATCH | `/api/v1/workflows/:id/runtime` | `{"enabled"?: bool\|null, "priority"?: number\|null, "maxConcurrent"?: int≥1\|null}` (`null` = Override entfernen) | `200` Workflow |
 | POST | `/api/v1/workflows/:id/start` | `{"item"?: "https://github.com/o/r/issues/7" \| "#7" \| "7" \| "repo_a:7", "parameters"?: {…}}` | `202 {"run": RunSummary}` |
-| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14; `source.sources` je Source, `capacity.perSource`, WI-20) |
+| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14; `hooks: {onResult: [...], technical: {crashed, start_error, timed_out, cancelled → Hook}}`, WI-17; seit 0.3.0 `secrets` wie beim Workflow, WI-18; `source.sources` je Source, `capacity.perSource`, WI-20) |
 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
 `overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?}}`,
-`execute {type, command, args, workingDirectory, timeout, secrets: [Namen]}`, `hasFilter`, `hasShellFilter`,
+`execute {type, command, args, workingDirectory, timeout, secrets: [Namen], secretDelivery: {Name: env|file}, keep: [Muster], keepMaxSizeBytes}` (seit 0.3.0 `secretDelivery`; nie Werte), `secrets` (seit 0.3.0: alle deklarierten Secrets von `execute` und `shell`-Actions als `[{where, name, identity, delivery, variable}]`, nie Werte), `hasFilter`, `hasShellFilter`,
 `conditions {workflow, item}` (Anzahl), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
 
 Mehrere Sources (WI-20): `trigger` enthält dann zusätzlich `sources: [<id>, …]` (`source` = erste Source, wie bisher);
@@ -137,6 +137,8 @@ Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven 
 | GET | `/api/v1/runs/:id` | RunDetail |
 | GET | `/api/v1/runs/:id/events?after=<sequence>&limit=1000` | `{"events":[RunEvent],"hasMore","nextAfter"}` |
 | GET | `/api/v1/runs/:id/logs?stream=stdout\|stderr&offset=<byte>&limit=<bytes>` bzw. `&tail=<bytes>` | LogPage |
+| GET | `/api/v1/runs/:id/kept` | KeptListing – gesicherte Dateien (`execute.keep`, WI-22) |
+| GET | `/api/v1/runs/:id/kept/<pfad>` | Download einer gesicherten Datei (`<pfad>` relativ zu `kept/`, Segmente URL-kodiert); `400 invalid_path`, `404 not_found` |
 | POST | `/api/v1/runs/:id/cancel` `{"reason"?}` | `202 {"runId","status":"cancelling","run"}`; `409` wenn beendet/nicht abbrechbar |
 | POST | `/api/v1/runs/:id/recovery/retry` `{"assumeGone"?: bool}` | `202` – Recovery eines `recovery_pending`-Runs erneut versuchen (`assumeGone: true` = Operator bestätigt, Prozess ist weg); `409 run_not_recovery_pending` |
 
@@ -147,21 +149,56 @@ Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven 
   "scheduledFor": null, "identity": "coder", "status": "completed", "active": false,
   "outcome": "success|failure|technical_error|cancelled|active", "finalStatus": "completed",
   "businessResult": "success", "finalReason": "exit code 0", "resultMessage": "PR opened", "statusMessage": "phase 2",
+  "resultOutcome": "approved", "completionHook": "on_result.approved",
   "exitCode": 0, "lifecycleStatus": "succeeded", "lifecycleFailed": false,
   "createdAt": "…", "startedAt": "…", "finishedAt": "…", "durationMs": 12345 }
 ```
 `outcome` trennt eindeutig fachliches `failure` (Ergebnisdatei) von technischem Fehler (`crashed|start_error|timed_out`)
-und `cancelled`; `lifecycleFailed` zeigt separat „Lifecycle failed“ (Spec §21).
+und `cancelled`; `lifecycleFailed` zeigt separat „Lifecycle failed“ (Spec §21). `resultOutcome` ist das benannte
+Ergebnis aus der Ergebnisdatei (`outcome`, ab 0.3.0; `null` ohne bzw. bei technischem Fehler) – eigener Name, weil
+`outcome` die UI-Klassifikation ist. `completionHook` ist der beim Übergang nach `finalizing` gewählte Abschluss-Hook
+(z. B. `on_success`, `on_result.approved`, `on_error`; `null`, wenn kein Hook läuft oder bei Runs vor 0.3.0).
 
 `RunDetail` = RunSummary + `lockKey, parameters, command {command, args}, workingDirectory, workspacePath, pid,
 result` (geparste Ergebnisdatei), `error` (technische Diagnose), `input` (`context.json`, Worker-Input; max. 1 MiB) /
 `inputError`, `resultFile` / `resultFileError` (Rohdatei), `actions` (Journal inkl. `attemptsDetail`), `events` (max. 500,
-`eventsTruncated`), `logs {stdout:{size, truncated}, stderr:{…}}`, `block` (aktiver Block des Scopes), `supervised`,
+`eventsTruncated`), `logs {stdout:{size, truncated}, stderr:{…}}`, `block` (aktiver Block des Scopes),
+`kept` (`{files, bytes, skippedCount, message, error}` aus dem Event `run.kept_files`, sonst `null`), `supervised`,
 `blockGeneration, countedTechnicalFailure, configVersion, configHash, finalizingAt, updatedAt`.
 
 `LogPage`: `{"runId","active","stream","offset","length","nextOffset","size","eof","exists","data"}` – Seiten max. 1 MiB
 (Default 64 KiB), geschnitten an UTF-8-Zeichengrenzen; `tail=N` liefert die letzten N Bytes. Folgeseite: `offset=nextOffset`.
 Für Live-Logs `run.output` per SSE nutzen und bei Reconnect ab `size` nachladen.
+
+`KeptListing` (Dateien unter `data-dir/runs/<run-id>/kept/`, sortiert, höchstens 10 000):
+```json
+{ "runId": "run-…", "files": [{ "path": ".agent/gate/unit.log", "size": 1234 }], "totalBytes": 1234, "truncated": false,
+  "report": { "message": "kept 1 file(s), 1234 bytes; 1 skipped (size_limit)", "patterns": [".agent/gate/*.log"],
+              "maxBytes": 104857600, "files": 1, "bytes": 1234, "unmatched": [], "notSearched": [],
+              "skipped": [{ "path": ".agent/gate/huge.log", "reason": "size_limit", "size": 209715200 }],
+              "skippedCount": 1, "walkLimitReached": false } }
+```
+`report` ist die Payload des Run-Events `run.kept_files`. `report: null` heißt: Für diesen Run wurde (noch) kein
+Sicherungsschritt ausgeführt – der Workflow hat kein `execute.keep`, der Run hatte keinen Workspace oder ist noch nicht
+bis zum Cleanup gekommen. Ein ausgeführter Schritt ohne Treffer liefert dagegen einen `report` mit `files: 0`.
+`bytes`/`size` sind die **geschriebenen** Bytes (nach dem Redigieren), `size` in `skipped` die Größe der Quelldatei.
+Gründe in `skipped[].reason`: `size_limit`, `symlink`, `directory` (Muster benennt ein Verzeichnis; Hinweis in
+`message`), `not_regular_file`, `outside_workspace`, `changed` (Datei nach der Suche ersetzt), `file_limit`, `error`.
+`unmatched` = Muster ohne Treffer, `notSearched` = Wildcard-Muster, die wegen der Grenze für Verzeichniseinträge nicht
+(vollständig) durchsucht wurden (`walkLimitReached: true`). `alreadyPresent: true` nach einer fortgesetzten
+Finalisierung, `error` bei einem grundsätzlichen Problem (z. B. Workspace fehlt; dann ist nichts gesichert).
+
+Secrets werden beim Kopieren redigiert – best effort, wie Logs (gleiche byteweise Ersetzung wie stdout/stderr; Marker
+`[REDACTED]`); die ausgelieferten Dateien enthalten also bereits den redigierten Inhalt.
+
+Download: Der Pfad wird segmentweise geprüft (keine leeren, `.`/`..`-Segmente, kein `\`, kein NUL), jede Komponente
+darf kein Symlink sein, der aufgelöste Pfad muss unter `kept/` liegen, und nur reguläre Dateien werden ausgeliefert –
+sonst `400 invalid_path` bzw. `404 not_found`. Antwort immer mit `Content-Disposition: attachment` (ASCII-Name plus
+`filename*=UTF-8''…` nach RFC 5987), `Content-Length`, `X-Content-Type-Options: nosniff` und
+`Content-Security-Policy: sandbox`. `Content-Type` nach Endung: `.log`/`.txt`/`.diff`/`.patch` → `text/plain`,
+`.json` → `application/json`, `.jsonl`/`.ndjson` → `application/x-ndjson`, `.md` → `text/markdown`, `.csv` →
+`text/csv`, `.xml` → `application/xml`, `.yaml`/`.yml` → `application/yaml` (Textarten mit `charset=utf-8`), dazu
+`.gz`, `.zip`, `.tar`, `.png`, `.jpg`, `.pdf`; alles andere, insbesondere HTML/SVG/JS, als `application/octet-stream`.
 
 ### Blocks / Failed Actions
 
@@ -229,7 +266,7 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 |---|---|---|
 | `stream.open` | `id` = aktuelle Basis (ohne Resume) | `{lastEventId, replayed}` |
 | `stream.reset` | `id` = neueste ID | `{reason:"too_many_missed_events"\|"unknown_last_event_id", lastEventId}` – Client lädt per REST neu (auch wenn die `Last-Event-ID` größer als jede bekannte ID ist, z. B. nach Austausch des data-dir) |
-| `run.event` | ja | RunEvent `{id, runId, sequence, timestamp, origin: worker\|orchestrator, type, payload}`; `type` u. a. `run.status` (`{from,to,target?,blockId?}`), Worker-`status`/`progress`/…, `diagnostic.*`, `lifecycle.action`, `lifecycle.chain`, `run.spawn`, `run.cancel_requested`, `recovery.*`, `workspace.cleanup` |
+| `run.event` | ja | RunEvent `{id, runId, sequence, timestamp, origin: worker\|orchestrator, type, payload}`; `type` u. a. `run.status` (`{from,to,target?,outcome?,hook?,blockId?}`; `outcome`/`hook` beim Übergang nach `finalizing`), `run.outcome_warning` (`{code: invalid_outcome|unmatched_outcome, message, outcome?, hook?}`), Worker-`status`/`progress`/…, `diagnostic.*`, `lifecycle.action`, `lifecycle.chain`, `run.spawn`, `run.cancel_requested`, `recovery.*`, `run.kept_files`, `workspace.cleanup` |
 | `run.output` | nein | `{runId, stream: stdout\|stderr, data, at}` (Live-Log, redigiert; per REST nachladen) |
 | `run.action` | nein | Action-Journal-Eintrag nach Änderung |
 | `block.created` / `block.cleared` | nein | Block |

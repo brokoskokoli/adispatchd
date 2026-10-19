@@ -11,7 +11,7 @@
  * so browsers cannot read API responses cross-origin and the custom header
  * forces a (failing) preflight for cross-origin writes.
  */
-import { existsSync } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
@@ -37,10 +37,11 @@ import { loadConfig, toPublicConfig, type ConfigManager, type ReloadResult } fro
 import type { LifecycleEngine } from '../lifecycle/index.js';
 import type { NotificationService } from '../notifications/index.js';
 import type { Repositories, RunRecord } from '../persistence/index.js';
-import type { RetentionService, RunController } from '../runs/index.js';
+import { listKeptFiles, RUN_EVENTS, type RetentionService, type RunController } from '../runs/index.js';
 import type { Scheduler } from '../scheduler/index.js';
 import type { ViewService } from '../views/index.js';
 import { ApiError, toErrorResponse } from './errors.js';
+import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile } from './kept.js';
 import { readLogPage } from './logs.js';
 import { runDetailFields, toBlockView, toRunSummary, toWorkflowView, type ActionView } from './serialize.js';
 import type { EventHub } from './sse.js';
@@ -516,6 +517,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
         .map((e) => String(e.payload.stream ?? (e.payload.details as { stream?: unknown } | undefined)?.stream ?? '')),
     );
     const block = repos.blocks.activeFor(run.workflowId, run.sourceItemKey);
+    const keptEvent = allEvents.findLast((e) => e.type === RUN_EVENTS.keptFiles);
     return redactValue(
       {
         ...toRunSummary(run),
@@ -532,6 +534,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
           stderr: { size: stderrSize, truncated: truncatedStreams.has('stderr') },
         },
         block: block ? toBlockView(block, { affectedRunIds: repos.blocks.affectedRunIds(block.id), sourceUrl: run.sourceUrl, workflowName: null }) : null,
+        kept: keptEvent ? keptSummary(keptEvent.payload) : null,
         supervised: deps.controller.activeRunIds().includes(id),
       },
       redact,
@@ -561,6 +564,45 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
       ...(q.tail !== undefined ? { tail: q.tail } : {}),
     });
     return { runId: id, active: (ACTIVE_STATUSES as readonly string[]).includes(run.status), ...page };
+  });
+
+  // Kept files (WI-22): listing and download of `runs/<id>/kept/`.
+  app.get('/api/v1/runs/:id/kept', async (req) => {
+    const { id } = parse(idParam, req.params, 'path');
+    requireRun(id);
+    const paths = runPaths(id);
+    const listing = paths ? await listKeptFiles(paths.keptDir) : { files: [], truncated: false };
+    const keptEvent = repos.events.listForRun(id).findLast((e) => e.type === RUN_EVENTS.keptFiles);
+    return redactValue(
+      {
+        runId: id,
+        files: listing.files,
+        totalBytes: listing.files.reduce((sum, f) => sum + f.size, 0),
+        truncated: listing.truncated,
+        report: keptEvent ? keptEvent.payload : null,
+      },
+      redact,
+    );
+  });
+  app.get('/api/v1/runs/:id/kept/*', async (req, reply) => {
+    const params = req.params as { id?: unknown; '*'?: unknown };
+    const { id } = parse(idParam, { id: params.id }, 'path');
+    requireRun(id);
+    const segments = keptPathSegments(typeof params['*'] === 'string' ? params['*'] : '');
+    const paths = runPaths(id);
+    if (!paths) throw new ApiError(404, 'not_found', 'Kept file not found');
+    const file = await openKeptFile(paths.keptDir, segments);
+    void reply
+      .header('content-type', keptContentType(file.name))
+      .header('content-disposition', attachmentDisposition(file.name))
+      .header('content-length', String(file.size))
+      .header('content-security-policy', "default-src 'none'; sandbox");
+    if (file.size === 0) {
+      await file.handle.close();
+      return reply.send('');
+    }
+    // Exactly the size seen at open time; the stream closes the handle.
+    return reply.send(createReadStream('', { fd: file.handle, start: 0, end: file.size - 1 }));
   });
 
   app.post('/api/v1/runs/:id/cancel', async (req, reply) => {
@@ -751,6 +793,18 @@ async function readConfigFiles(configDir: string, redact: Redactor): Promise<Arr
       }
     }),
   );
+}
+
+/** Short form of a `run.kept_files` event for the run detail. */
+function keptSummary(payload: Record<string, unknown>): { files: number; bytes: number; skippedCount: number; message: string | null; error: string | null } {
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  return {
+    files: num(payload.files),
+    bytes: num(payload.bytes),
+    skippedCount: num(payload.skippedCount),
+    message: typeof payload.message === 'string' ? payload.message : null,
+    error: typeof payload.error === 'string' ? payload.error : null,
+  };
 }
 
 /** Keys whose values are always masked in displayed YAML (besides {@link isSecretKey}). */

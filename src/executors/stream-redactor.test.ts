@@ -72,4 +72,13 @@ describe('StreamRedactor', () => {
       `${REDACTION_MARKER} ${REDACTION_MARKER}`,
     );
   });
+
+  it('redacts secrets registered later (renewed tokens, WI-18)', () => {
+    const r = new StreamRedactor(['first-token']);
+    expect(r.push(Buffer.from('a first-token b ')).toString()).toBe(`a ${REDACTION_MARKER} b `);
+    r.add('second-token');
+    r.add('second-token'); // duplicates are ignored
+    r.add('xy'); // too short
+    expect(run(r, ['c second-token d first-token xy'])).toBe(`c ${REDACTION_MARKER} d ${REDACTION_MARKER} xy`);
+  });
 });

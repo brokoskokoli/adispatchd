@@ -116,6 +116,8 @@ class ShellProcess implements RunningProcess {
   private readonly events: Channel<WorkerEvent>;
   private readonly diagnostics: Channel<ExecutorDiagnostic>;
   private readonly secretRedactor = new SecretRedactor();
+  private readonly streamRedactors: StreamRedactor[] = [];
+  private readonly unsubscribeSecrets: Unsubscribe | undefined;
 
   private child: ChildProcess | undefined;
   private _pid: number | undefined;
@@ -149,6 +151,12 @@ class ShellProcess implements RunningProcess {
     this.startedAt = deps.clock.now();
     this.done = new Promise((resolve) => (this.resolveDone = resolve));
     for (const value of Object.values(spec.secrets)) this.secretRedactor.add(value);
+    for (const value of spec.redactSecrets?.values() ?? []) this.secretRedactor.add(value);
+    // Renewed tokens (token files, WI-18) are registered before the worker can read them.
+    this.unsubscribeSecrets = spec.redactSecrets?.onAdd((value) => {
+      this.secretRedactor.add(value);
+      for (const redactor of this.streamRedactors) redactor.add(value);
+    });
   }
 
   get pid(): number | undefined {
@@ -288,7 +296,7 @@ class ShellProcess implements RunningProcess {
   }
 
   private async openCaptures(): Promise<StreamCapture[]> {
-    const redactorSecrets = Object.values(this.spec.secrets);
+    const redactorSecrets = [...Object.values(this.spec.secrets), ...(this.spec.redactSecrets?.values() ?? [])];
     const sinks = {
       output: (chunk: OutputChunk) => this.outputs.emit(chunk),
       event: (type: string, data: Record<string, unknown>, stream: 'stdout' | 'stderr') =>
@@ -307,13 +315,15 @@ class ShellProcess implements RunningProcess {
       } catch (err) {
         openError = err as Error;
       }
+      const redactor = new StreamRedactor(redactorSecrets);
+      this.streamRedactors.push(redactor);
       result.push(
         new StreamCapture({
           stream,
           filePath,
           openError,
           budget,
-          redactor: new StreamRedactor(redactorSecrets),
+          redactor,
           clock: this.deps.clock,
           sinks,
         }),
@@ -541,7 +551,8 @@ class ShellProcess implements RunningProcess {
       if (!parsed.ok) return { state: 'invalid', error: this.secretRedactor.redact(parsed.error) };
       // Spec §9.2: redact sensitive values before the result is persisted anywhere.
       const result = redactValue(parsed.result, this.secretRedactor.asRedactor) as WorkerResult;
-      return { state: 'valid', result };
+      const warnings = parsed.warnings.map((w) => this.secretRedactor.redact(w));
+      return { state: 'valid', result, ...(warnings.length > 0 ? { warnings } : {}) };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
       return { state: 'invalid', error: `result file could not be read: ${errorMessage(err)}` };
@@ -556,6 +567,7 @@ class ShellProcess implements RunningProcess {
   private complete(outcome: ExecutionOutcome): void {
     if (this.outcome) return;
     this.outcome = outcome;
+    this.unsubscribeSecrets?.();
     // Resolve after every notification emitted before has been delivered.
     this.dispatcher.enqueue(() => this.resolveDone(outcome));
   }

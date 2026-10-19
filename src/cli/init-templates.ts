@@ -179,10 +179,17 @@ execute:
     NODE_ENV: production
   secrets:
     GH_TOKEN: { identity: coder }   # short-lived installation token, only for this worker
+    # Long runs: { identity: coder, delivery: file } puts the token into a file ($GH_TOKEN_FILE)
+    # that is renewed before it expires; use it per call: GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh ...
   timeout:
     max_duration: 6h
     idle_timeout: 45m
   cancel_grace: 30s         # SIGTERM → SIGKILL of the worker's process group
+  # Files kept after the run (copied to data-dir/runs/<run-id>/kept/ before the workspace cleanup):
+  # keep:
+  #   - .agent/transcript.jsonl
+  #   - .agent/gate/*.log     # relative globs: *, ?, ** (no "..", no absolute paths, symlinks are never followed)
+  # keep_max_size: 100MB      # total per run (default 100MB)
 
 retry:
   max_technical_failures: 3 # consecutive crashes/timeouts/start errors → retry block (remove in UI)
