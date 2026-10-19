@@ -81,7 +81,7 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     const info = JSON.parse(pack.stdout.slice(pack.stdout.indexOf('['))) as Array<{ filename: string; files: Array<{ path: string; mode: number }> }>;
     const tarball = path.join(root, info[0]?.filename ?? '');
     const files = (info[0]?.files ?? []).map((f) => f.path);
-    for (const f of ['dist/cli/main.js', 'dist/app.js', 'dist/persistence/schema.js', 'dist/service/unit.js', 'dist/ui/public/index.html', 'dist/ui/public/app.css', 'examples/config/config.yaml', 'README.md', 'docs/operations.md', 'docs/worker-protocol.md', 'package.json']) {
+    for (const f of ['dist/cli/main.js', 'dist/app.js', 'dist/persistence/schema.js', 'dist/service/unit.js', 'dist/ui/public/index.html', 'dist/ui/public/app.css', 'examples/config/config.yaml', 'README.md', 'README.de.md', 'docs/operations.md', 'docs/worker-protocol.md', 'package.json']) {
       expect(files, f).toContain(f);
     }
     expect(files.filter((f) => /\.test\.|\/testing\/|^src\//.test(f))).toEqual([]);

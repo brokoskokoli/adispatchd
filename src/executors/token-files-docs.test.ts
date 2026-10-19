@@ -22,11 +22,18 @@ describe('token file documentation (WI-18)', () => {
   });
 
   it('states the isolation limit (same service user) wherever token files are described', () => {
-    for (const rel of ['docs/spec-v0.1.md', 'docs/worker-protocol.md', 'docs/configuration-reference.md', 'README.md']) {
+    for (const rel of ['docs/spec-v0.1.md', 'docs/worker-protocol.md', 'docs/configuration-reference.md', 'README.de.md']) {
       const text = read(rel).replace(/\s+/g, ' ');
       expect(text, rel).toMatch(/anderen Systembenutzern/);
       expect(text, rel).toContain('/proc/<pid>/environ');
       expect(text, rel).toMatch(/getrennten Benutzern oder (nutzt |in )?Containern? \(WI-19\)/);
     }
+  });
+
+  it('states the isolation limit in the English README too', () => {
+    const text = read('README.md').replace(/\s+/g, ' ');
+    expect(text).toMatch(/other system users/);
+    expect(text).toContain('/proc/<pid>/environ');
+    expect(text).toMatch(/separate users or in containers \(WI-19\)/);
   });
 });

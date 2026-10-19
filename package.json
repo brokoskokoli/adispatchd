@@ -8,7 +8,7 @@
     "type": "git",
     "url": "git+https://github.com/brokoskokoli/adispatchd.git"
   },
-  "homepage": "https://github.com/brokoskokoli/adispatchd#readme",
+  "homepage": "https://brokoskokoli.github.io/adispatchd/",
   "bugs": {
     "url": "https://github.com/brokoskokoli/adispatchd/issues"
   },
@@ -27,6 +27,7 @@
     "docs/cron-semantics.md",
     "docs/manual-tests/",
     "README.md",
+    "README.de.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
@@ -60,15 +61,28 @@
   "author": "brokoskokoli",
   "keywords": [
     "ai-agents",
+    "ai-agent",
     "agent-orchestration",
+    "orchestrator",
+    "llm",
+    "coding-agent",
     "dispatcher",
     "daemon",
+    "task-runner",
+    "github",
     "github-issues",
+    "github-projects",
     "github-app",
+    "automation",
     "workflow",
+    "workflow-automation",
     "scheduler",
     "cron",
+    "shell",
+    "docker",
+    "podman",
     "systemd",
+    "self-hosted",
     "cli",
     "yaml"
   ],
