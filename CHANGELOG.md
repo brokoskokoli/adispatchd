@@ -20,7 +20,10 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   gilt auch für das Action-Log.
 - Validierung: `delivery` ∈ {`env`, `file`} (mit „did you mean …“), `<NAME>_FILE` darf weder in `env` noch als
   anderer Secret-Name vorkommen, Identities müssen existieren (jetzt mit Vorschlag bei Tippfehlern).
-- API/UI: Workflow-Ansicht zeigt je Secret die Übergabeart (`execute.secretDelivery`).
+- API/UI und `workflow dry-run` (CLI/API/UI) zeigen alle deklarierten Secrets von `execute` und `shell`-Actions mit
+  Identity und Übergabeart (`secrets`, `execute.secretDelivery`) – nie Werte.
+- Hinweis zur Isolation: `0700`/`0600` schützt Token-Dateien vor anderen Systembenutzern, nicht vor anderen Runs desselben
+  Dienstes; für getrennte Berechtigungen getrennte Instanzen/Benutzer oder Container verwenden.
 
 ### Geändert
 

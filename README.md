@@ -164,6 +164,10 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
   nie in Kontext-/Ergebnisdateien, API-Antworten oder Logs persistiert, Redaction in Prozesslogs ist best-effort. Einzige
   Ausnahme ist die Token-Datei bei `delivery: file` (`data-dir/runs/<run>/secrets/`, `0600`, außerhalb des Workspaces,
   nach dem Run gelöscht). Ein Worker kann ihm übergebene Secrets dennoch ausgeben.
+- **Keine Isolation zwischen Runs desselben Dienstes:** `0700`/`0600` schützt nur vor anderen Systembenutzern. Alle
+  Worker laufen als derselbe Dienstbenutzer und können Token-Dateien (vorhersagbare Pfade) bzw. unter Linux die Umgebung
+  (`/proc/<pid>/environ`) paralleler Runs lesen. Hoch- und niedrig-privilegierte Workflows in getrennten Instanzen unter
+  getrennten Benutzern oder in Containern (WI-19) betreiben.
 - GitHub-Apps mit minimalen Rechten; fehlende Rechte bei Cross-Repo-Abhängigkeiten führen zu `unknown` (kein Start), nicht zu „0“.
 - Event-, Result- und Log-Inhalte werden in der UI nur als Text dargestellt.
 

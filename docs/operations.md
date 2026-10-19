@@ -23,7 +23,8 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
 - **Token-Dateien** (`delivery: file`, seit 0.3.0): `runs/<run-id>/secrets/<NAME>` bzw.
   `runs/<run-id>/actions/<action>/attempt-<n>/secrets/<NAME>`, Verzeichnis 0700, Datei 0600 (Dienstbenutzer). Sie
   existieren nur, solange der Worker bzw. die Action läuft; Reste nach einem Absturz löscht die Recovery beim nächsten
-  Start, die Retention bei jedem Lauf. Workspaces nicht unter `runs/` legen (sonst `start_error`).
+  Start, die Retention bei jedem Lauf. Das Token-Verzeichnis darf nicht im Workspace liegen; verglichen werden die aufgelösten Pfade (Symlinks werden verfolgt). Liegt es darin (z. B. Workspace unter `<data-dir>/runs/` oder ein Symlink dorthin), endet der Run mit `start_error` bzw. die Action scheitert.
+  Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
 
 ## Installation als systemd-Dienst (Linux)
 
@@ -195,7 +196,7 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 | config-dir | Versionsverwaltung (git) oder Dateikopie; enthält keine Secrets |
 | Env-Datei | sicher (verschlüsselt) aufbewahren – enthält Private Keys |
 | `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
-| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien) |
+| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien; nur diese, nicht jedes `secrets/`-Verzeichnis, z. B. in Workspaces) |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
 **`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
@@ -204,8 +205,13 @@ irgendeinen Deskriptor auf die Datei schließt – deshalb öffnet der Orchestra
 ein zweites Mal. Externe Werkzeuge, die die Datei als SQLite-DB öffnen (`sqlite3`, Backup-Agenten mit SQLite-Support),
 konkurrieren um die Sperre und scheitern bzw. blockieren; eine kopierte Lock-Datei ist wertlos. Beim Sichern ausschließen, z. B.:
 
+Die Token-Ausschlüsse sind am Quellverzeichnis verankert (führendes `/`), damit gleichnamige Verzeichnisse in
+Workspaces gesichert werden.
+
 ```bash
-rsync -a --exclude 'adispatchd.lock*' --exclude 'adispatchd.sqlite*' --exclude 'secrets/' /var/lib/adispatchd/ /backup/orch-data/
+rsync -a --exclude 'adispatchd.lock*' --exclude 'adispatchd.sqlite*' \
+  --exclude '/runs/*/secrets/' --exclude '/runs/*/actions/*/*/secrets/' \
+  /var/lib/adispatchd/ /backup/orch-data/
 sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch-data/adispatchd.sqlite'"
 ```
 

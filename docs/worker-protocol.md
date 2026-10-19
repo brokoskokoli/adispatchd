@@ -40,8 +40,8 @@ Datei bereitstellen und erneuern:
 - Pfad: `data-dir/runs/<run-id>/secrets/<NAME>` (Verzeichnis `0700`, Datei `0600`, Dienstbenutzer), **außerhalb**
   des Workspaces; der Pfad steht in `<NAME>_FILE`. Inhalt: nur das Token, ohne Zeilenumbruch.
 - Solange der Worker läuft, ersetzt der Daemon die Datei **atomar** (temporäre Datei + `rename` im selben
-  Verzeichnis) spätestens **10 Minuten vor Ablauf** des Tokens. Wer die Datei liest, bekommt immer ein vollständiges,
-  gültiges Token – nie eine halb geschriebene Datei. Identities ohne Ablauf (`github_token`) werden einmal geschrieben.
+  Verzeichnis) spätestens **10 Minuten vor Ablauf** des Tokens. Wer die Datei liest, bekommt immer ein vollständiges
+  Token – nie eine halb geschriebene Datei; gültig ist es, solange die Erneuerung klappt (s. u.). Identities ohne Ablauf (`github_token`) werden einmal geschrieben.
 - **Pro Aufruf lesen**, nicht einmal am Anfang in eine Variable kopieren:
 
   ```sh
@@ -54,6 +54,9 @@ Datei bereitstellen und erneuern:
   die Recovery Reste weg (Tokens werden dann nicht mehr erneuert), die Retention entfernt übrig gebliebene Verzeichnisse.
 - Jedes ausgegebene Token wird beim Redactor registriert, **bevor** es in der Datei steht (stdout/stderr, Live-Output,
   Events, Ergebnis, Dienst-Log).
+- Wird das Verzeichnis während des Runs ersetzt oder entfernt (anderes Inode, Symlink), schreibt der Daemon nicht
+  mehr hinein: Erneuerungen enden (Fehler im Dienst-Log, ohne Token), der Worker behält das alte Token.
+- **Isolation:** Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
 
 ### Kontextdatei `ADISPATCH_CONTEXT_FILE` (`data-dir/runs/<run-id>/context.json`, Modus 0600)
 
@@ -158,6 +161,8 @@ Worker und Shell-Actions sind **vertrauenswürdiger Konfigurationscode** mit den
 Sandbox. Ein Worker kann ihm übergebene Secrets (z. B. `GH_TOKEN` oder den Inhalt von `GH_TOKEN_FILE`) ausgeben; die Redaction in Logs ist best-effort
 (transformierte Secrets, z. B. base64, werden nicht erkannt). Nur benötigte Secrets deklarieren, App-Rechte minimal halten.
 Event-/Result-/Log-Inhalte werden in API/UI als untrusted Text behandelt.
+
+Secrets sind nicht zwischen Runs/Actions desselben Dienstes isoliert: Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
 
 ## Shell-Lifecycle-Actions und Prüfskripte
 

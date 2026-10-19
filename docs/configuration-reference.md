@@ -686,7 +686,11 @@ Schreiben, endet der Run mit `start_error` (`on_start_error`). Nach dem Prozesse
 Verzeichnis gelöscht, nach einem Neustart räumt die Recovery Reste weg, die Retention entfernt bei jedem Lauf
 übrig gebliebene Token-Verzeichnisse beendeter Runs. Jedes ausgegebene Token wird beim Redactor registriert, bevor
 es in der Datei steht (stdout/stderr-Logs, Live-Output, Events, Ergebnis, Dienst-Log). Liegt der Workspace so, dass
-das Token-Verzeichnis darin läge (Workspace im Data-Dir), endet der Run mit `start_error`.
+das Token-Verzeichnis darin läge (Vergleich der aufgelösten Pfade, Symlinks werden verfolgt; z. B. Workspace unter
+`<data-dir>/runs/`), endet der Run mit `start_error`. Wird das Verzeichnis während des Runs ersetzt (Symlink, anderes
+Inode), enden die Erneuerungen; der Worker behält das alte Token.
+
+**Isolation:** Die Rechte `0700`/`0600` schützen nur vor **anderen Systembenutzern**, nicht vor anderen Runs und Actions **desselben Dienstes**: Alle Worker laufen als derselbe Dienstbenutzer, die Pfade sind vorhersagbar – ein Worker kann die Token-Datei eines parallel laufenden Runs lesen (genauso wie unter Linux dessen Umgebung über `/proc/<pid>/environ` bei `delivery: env`). Wer hoch- und niedrig-privilegierte Workflows trennen muss, betreibt getrennte Instanzen unter getrennten Benutzern oder nutzt Container (WI-19).
 
 Mit der GitHub CLI liest man das Token pro Aufruf aus der Datei:
 
@@ -1319,7 +1323,9 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
 `project.*`-Felder (`projectFields`), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
-Textausgabe `filter:`). Reserviert nichts, startet keine Worker oder Actions
+Textausgabe `filter:`) sowie seit 0.3.0 alle deklarierten Secrets von `execute` und `shell`-Actions mit Ort,
+Identity, Übergabeart und Variable (`secrets`, Textausgabe `secret execute: GH_TOKEN ← identity coder, delivery file
+(GH_TOKEN_FILE)`; nie Werte, es wird kein Token geholt). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 

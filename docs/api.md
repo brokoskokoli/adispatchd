@@ -111,11 +111,11 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 | GET | `/api/v1/workflows/:id` | – | Workflow + `diagnosis` (letzte Planungsdiagnose), `filter`, `hooks` |
 | PATCH | `/api/v1/workflows/:id/runtime` | `{"enabled"?: bool\|null, "priority"?: number\|null, "maxConcurrent"?: int≥1\|null}` (`null` = Override entfernen) | `200` Workflow |
 | POST | `/api/v1/workflows/:id/start` | `{"item"?: "https://github.com/o/r/issues/7" \| "#7" \| "7", "parameters"?: {…}}` | `202 {"run": RunSummary}` |
-| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14) |
+| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14; seit 0.3.0 `secrets` wie beim Workflow) |
 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
 `overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?}}`,
-`execute {type, command, args, workingDirectory, timeout, secrets: [Namen], secretDelivery: {Name: env|file}}` (seit 0.3.0 `secretDelivery`; nie Werte), `hasFilter`, `hasShellFilter`,
+`execute {type, command, args, workingDirectory, timeout, secrets: [Namen], secretDelivery: {Name: env|file}}` (seit 0.3.0 `secretDelivery`; nie Werte), `secrets` (seit 0.3.0: alle deklarierten Secrets von `execute` und `shell`-Actions als `[{where, name, identity, delivery, variable}]`, nie Werte), `hasFilter`, `hasShellFilter`,
 `conditions {workflow, item}` (Anzahl), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
 
 Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven Lock (`409 lock_conflict`).
