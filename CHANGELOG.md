@@ -16,7 +16,10 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   `docs/api.md`); `read_requires_login: false` erlaubt Lesen ohne Anmeldung. Neue Endpunkte `POST /api/v1/auth/login`,
   `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`. Die UI zeigt Benutzer, Rolle und „Log out“ und deaktiviert
   Schaltflächen ohne passende Rolle. CLI-Steuerbefehle arbeiten über einen lokalen Steuer-Token
-  (`<data-dir>/control.token`, `0600`, nur über Loopback). Audit: schreibende Aktionen stehen mit Benutzer im Dienstlog,
+  (`<data-dir>/control.token`, `0600`, nur über Loopback und den Port der Instanz, Rolle `operator` nur für die Routen der
+  CLI-Befehle – Worker können ihn lesen). Optional `auth.trusted_header.proxy_secret_env` (Geheimnis des Proxys in
+  `X-Adispatch-Proxy-Secret`); ohne es und mit nur Loopback-Proxys (Tailscale Serve) ist die Identität lokal fälschbar
+  (Warnung beim Start). Audit: schreibende Aktionen stehen mit Benutzer im Dienstlog,
   Run-Aktionen zusätzlich als Run-Event `audit.user_action`. Einrichtung: `docs/operations.md`.
 
 - **Server-Ressourcen im Dashboard:** neuer Bereich „Server“ mit gestapeltem CPU-Diagramm über die Zeit (Daemon, jeder

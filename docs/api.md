@@ -71,6 +71,8 @@ diesem Abschnitt außer `GET /api/v1/auth/me`; alle Endpunkte verhalten sich wie
 | `trusted_header`: Header leer, mehrfach oder mit Leer-/Steuerzeichen bzw. Komma | `401 invalid_identity_header` |
 | `trusted_header`: Login nicht in `auth.trusted_header.users` | `403 login_not_allowed` |
 | Steuer-Token nicht von Loopback / falsch | `401 control_token_not_local` / `401 invalid_control_token` |
+| Steuer-Token auf einer Route, die die CLI nicht braucht | `403 control_token_not_allowed` |
+| `trusted_header` mit `proxy_secret_env`: `X-Adispatch-Proxy-Secret` fehlt/falsch (oder Variable fehlt) | `401 invalid_proxy_secret` |
 
 - **`auth.read_requires_login: false`:** `GET`/`HEAD` (inkl. SSE) gehen ohne Anmeldung mit der Rolle `viewer`; jede
   schreibende Anfrage braucht eine Anmeldung.
@@ -86,25 +88,41 @@ diesem Abschnitt außer `GET /api/v1/auth/me`; alle Endpunkte verhalten sich wie
 
 | Methode | Pfad | Body | Antwort |
 |---|---|---|---|
-| POST | `/api/v1/auth/login` | `{"name","password"}` (CSRF-Header wie jeder POST) | `200 {"user":{"name","role","via":"password"},"expiresAt"}` + `Set-Cookie: adispatch_session=…; Path=/; Max-Age=…; HttpOnly; SameSite=Strict[; Secure]`; `401 invalid_credentials` (gleiche Antwort für unbekannte Benutzer und falsche Passwörter); `429 too_many_attempts` mit `Retry-After`; `400 login_not_available` außerhalb von `mode: password` |
-| POST | `/api/v1/auth/logout` | – | `200 {"ok":true}`, beendet die Session (Cookie gelöscht, offene SSE-Verbindungen der Session geschlossen) |
+| POST | `/api/v1/auth/login` | `{"name","password"}` (CSRF-Header wie jeder POST) | `200 {"user":{"name","role","via":"password"},"expiresAt"}` + `Set-Cookie: adispatch_session=…; Path=/; Max-Age=…; HttpOnly; SameSite=Strict` bzw. über HTTPS `__Host-adispatch_session=…; …; Secure`; `401 invalid_credentials` (gleiche Antwort für unbekannte Benutzer und falsche Passwörter); `429 too_many_attempts` mit `Retry-After`; `400 login_not_available` außerhalb von `mode: password` |
+| POST | `/api/v1/auth/logout` | – | `200 {"ok":true}`, beendet die Session (beide Cookie-Namen gelöscht, offene SSE-Verbindungen der Session geschlossen) |
 | GET | `/api/v1/auth/me` | – | `{"mode","readRequiresLogin","user":{"name","role","via"}\|null,"role","expiresAt","error"}` – `role` = wirksame Rolle (`mode: none` → `admin`; anonym mit `read_requires_login: false` → `viewer`; sonst `null`), `error` = Grund, warum die Anfrage abgewiesen würde (z. B. `login_not_allowed`), `via` ∈ `password`, `trusted_header`, `control_token` |
 
 **Sessions** (`mode: password`): 32 zufällige Bytes (`randomBytes`), im Speicher (ein Neustart meldet alle ab), gültig für
 `auth.session_ttl` ab Anmeldung (kein Verlängern). Die Rolle wird bei jeder Anfrage aus der aktiven Konfiguration gelesen –
 nach einem Reload gilt die neue Rolle sofort, ein entfernter Benutzer ist sofort abgemeldet. `Secure` wird gesetzt, wenn die
-Anfrage per HTTPS kam: eigene TLS-Verbindung oder `X-Forwarded-Proto: https` von einer Gegenstelle in `auth.trusted_proxies`.
+Anfrage per HTTPS kam: eigene TLS-Verbindung oder `X-Forwarded-Proto: https` von einer Gegenstelle in `auth.trusted_proxies`;
+das Cookie heißt dann `__Host-adispatch_session` (kann von keinem anderen Host und keiner HTTP-Seite gesetzt werden).
+Doppelte Cookies: `__Host-` gewinnt; wird `adispatch_session` mehrfach mit verschiedenen Werten gesendet (Cookie-Tossing),
+gilt die Anfrage als nicht angemeldet.
 
 **Login-Schutz:** Passwortvergleich mit scrypt (`node:crypto`) und `timingSafeEqual`; ein unbekannter Benutzer kostet
 dieselbe scrypt-Berechnung (Dummy-Hash) – keine Unterscheidung „unbekannt“/„falsch“, weder in Antwort noch in Laufzeit.
-Nach jedem Fehlschlag 1 s Verzögerung. Grenzen je Fenster von 15 Minuten: 20 Fehlversuche je Client-IP, 5 je Benutzername
-(auch für nicht existierende Namen); höchstens 8 gleichzeitige Prüfungen. Client-IP ist die TCP-Gegenstelle bzw. – wenn
-diese in `auth.trusted_proxies` steht – der letzte Eintrag von `X-Forwarded-For`.
+Nach jedem Fehlschlag 1 s Verzögerung. Grenzen je Fenster von 15 Minuten: 5 Fehlversuche je (Benutzername, Client-IP),
+50 je Benutzername über alle IPs, 20 je Client-IP (IPv6 je /64) – auch für nicht existierende Namen. Ein Angreifer sperrt
+damit nur sich selbst: der richtige Benutzer meldet sich von einer IP ohne Fehlversuche weiter an (bis zur höheren
+Grenze je Name). Höchstens 8 gleichzeitige Prüfungen. Einträge, die gerade sperren, werden nie aus dem Speicher verdrängt.
+Client-IP ist die TCP-Gegenstelle bzw. – wenn diese in `auth.trusted_proxies` steht – der letzte Eintrag von
+`X-Forwarded-For`.
 
 **Steuer-Token** (CLI, alle Modi außer `none`): Der Daemon schreibt bei jedem Start einen neuen zufälligen Token (32 Bytes,
-base64url) atomar nach `<data-dir>/control.token` (Modus `0600`) und löscht ihn beim Beenden. Die CLI sendet ihn als
-`X-Adispatch-Control-Token`; er gilt als Rolle `admin` (`via: control_token`, Name `control-token`), **nur** wenn die
-TCP-Gegenstelle Loopback ist (`127.0.0.0/8`, `::1`). Die CLI sendet ihn nur an Loopback-URLs.
+base64url) nach dem Start des HTTP-Servers atomar nach `<data-dir>/control.token` (Modus `0600`, JSON
+`{"token","port","pid"}`) und löscht ihn beim Beenden. Die CLI sendet ihn als `X-Adispatch-Control-Token` – nur an
+Loopback-URLs **mit dem Port aus der Datei** (`via: control_token`, Name `control-token`); der Daemon akzeptiert ihn nur,
+wenn die TCP-Gegenstelle Loopback ist (`127.0.0.0/8`, `::1`). Der Token gilt nur als Rolle `operator` und **nur** auf den Routen, die die CLI-Steuerbefehle aufrufen (Spalte
+„Steuer-Token“ der Tabelle unten: Status, Pause/Resume, Drain/Cancel-All, Config-Reload, Dry-Run); auf allen anderen
+Routen → `403 control_token_not_allowed`. Grund: Worker und Shell-Actions laufen als derselbe Dienstbenutzer und **können
+die Datei lesen** – jedes Skript kann damit diese Operator-Aktionen auslösen (Skripte sind vertrauenswürdiger
+Konfigurationscode, Spec §20.2), aber nichts darüber hinaus.
+
+**`via`** des Aufrufers (`password`, `trusted_header`, `control_token`, `anonymous`) steht in `GET /api/v1/auth/me` und im
+Audit. Künftige sensible Routen (WI-27) verlangen eine interaktive Anmeldung (`password` oder `trusted_header`;
+`isInteractive()` in `src/api/auth.ts`) und – bei `trusted_header` – einen nicht lokal fälschbaren Proxy
+(`isIdentityForgeableLocally()` in `src/config/auth.ts`, siehe [operations.md](operations.md#anmeldung-web-ui-und-api-seit-040)).
 
 **Audit:** Jede schreibende Anfrage eines angemeldeten Benutzers steht im Daemon-Log (`api write` mit `actor`, `role`,
 `via`, `method`, `route`, `path`, `status`; nie Bodies oder Passwörter). Schreibende Aktionen an einem Run (manueller Start,
@@ -115,54 +133,55 @@ angemeldete Benutzer als `clearedBy` gespeichert (ein mitgesendetes `clearedBy` 
 
 ### Mindestrolle je Endpunkt
 
-`public` = ohne Anmeldung. `HEAD` gilt wie `GET`. Die Tabelle wird von `src/api/roles.test.ts` gegen die registrierten
+`public` = ohne Anmeldung. `HEAD` gilt wie `GET`. „Steuer-Token: ja“ = der CLI-Steuer-Token wird dort akzeptiert (als
+`operator`), sonst `403 control_token_not_allowed`. Die Tabelle wird von `src/api/roles.test.ts` gegen die registrierten
 Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich nicht registrieren.
 
-| Endpunkt | Mindestrolle |
-|---|---|
-| `GET /health` | public |
-| `GET /ready` | public |
-| `POST /api/v1/auth/login` | public |
-| `POST /api/v1/auth/logout` | public |
-| `GET /api/v1/auth/me` | public |
-| `GET /api/v1/status` | viewer |
-| `POST /api/v1/scheduler/pause` | operator |
-| `POST /api/v1/scheduler/resume` | operator |
-| `PATCH /api/v1/scheduler/runtime` | operator |
-| `POST /api/v1/shutdown/drain` | operator |
-| `POST /api/v1/shutdown/cancel-all` | operator |
-| `GET /api/v1/workflows` | viewer |
-| `GET /api/v1/workflows/:id` | viewer |
-| `PATCH /api/v1/workflows/:id/runtime` | operator |
-| `POST /api/v1/workflows/:id/start` | operator |
-| `POST /api/v1/workflows/:id/dry-run` | viewer |
-| `GET /api/v1/runs` | viewer |
-| `GET /api/v1/runs/:id` | viewer |
-| `GET /api/v1/runs/:id/events` | viewer |
-| `GET /api/v1/runs/:id/logs` | viewer |
-| `GET /api/v1/runs/:id/kept` | viewer |
-| `GET /api/v1/runs/:id/kept/*` | viewer |
-| `POST /api/v1/runs/:id/cancel` | operator |
-| `POST /api/v1/runs/:id/recovery/retry` | operator |
-| `GET /api/v1/blocks` | viewer |
-| `POST /api/v1/blocks/:id/clear` | operator |
-| `GET /api/v1/actions/failed` | viewer |
-| `POST /api/v1/actions/:id/retry` | operator |
-| `POST /api/v1/actions/:id/skip` | operator |
-| `GET /api/v1/views` | viewer |
-| `GET /api/v1/views/:id` | viewer |
-| `GET /api/v1/views/:id/items` | viewer |
-| `GET /api/v1/config` | viewer |
-| `GET /api/v1/config/files` | viewer |
-| `POST /api/v1/config/validate` | viewer |
-| `POST /api/v1/config/reload` | operator |
-| `GET /api/v1/dashboard/info` | viewer |
-| `POST /api/v1/dashboard/info/:id/refresh` | operator |
-| `GET /api/v1/notifications` | viewer |
-| `POST /api/v1/notifications/:id/retry` | operator |
-| `GET /api/v1/system/metrics` | viewer |
-| `GET /api/v1/events` | viewer |
-| `GET /*` | public |
+| Endpunkt | Mindestrolle | Steuer-Token |
+|---|---|---|
+| `GET /health` | public | – |
+| `GET /ready` | public | – |
+| `POST /api/v1/auth/login` | public | – |
+| `POST /api/v1/auth/logout` | public | – |
+| `GET /api/v1/auth/me` | public | – |
+| `GET /api/v1/status` | viewer | ja |
+| `POST /api/v1/scheduler/pause` | operator | ja |
+| `POST /api/v1/scheduler/resume` | operator | ja |
+| `PATCH /api/v1/scheduler/runtime` | operator | – |
+| `POST /api/v1/shutdown/drain` | operator | ja |
+| `POST /api/v1/shutdown/cancel-all` | operator | ja |
+| `GET /api/v1/workflows` | viewer | – |
+| `GET /api/v1/workflows/:id` | viewer | – |
+| `PATCH /api/v1/workflows/:id/runtime` | operator | – |
+| `POST /api/v1/workflows/:id/start` | operator | – |
+| `POST /api/v1/workflows/:id/dry-run` | viewer | ja |
+| `GET /api/v1/runs` | viewer | – |
+| `GET /api/v1/runs/:id` | viewer | – |
+| `GET /api/v1/runs/:id/events` | viewer | – |
+| `GET /api/v1/runs/:id/logs` | viewer | – |
+| `GET /api/v1/runs/:id/kept` | viewer | – |
+| `GET /api/v1/runs/:id/kept/*` | viewer | – |
+| `POST /api/v1/runs/:id/cancel` | operator | – |
+| `POST /api/v1/runs/:id/recovery/retry` | operator | – |
+| `GET /api/v1/blocks` | viewer | – |
+| `POST /api/v1/blocks/:id/clear` | operator | – |
+| `GET /api/v1/actions/failed` | viewer | – |
+| `POST /api/v1/actions/:id/retry` | operator | – |
+| `POST /api/v1/actions/:id/skip` | operator | – |
+| `GET /api/v1/views` | viewer | – |
+| `GET /api/v1/views/:id` | viewer | – |
+| `GET /api/v1/views/:id/items` | viewer | – |
+| `GET /api/v1/config` | viewer | – |
+| `GET /api/v1/config/files` | viewer | – |
+| `POST /api/v1/config/validate` | viewer | – |
+| `POST /api/v1/config/reload` | operator | ja |
+| `GET /api/v1/dashboard/info` | viewer | – |
+| `POST /api/v1/dashboard/info/:id/refresh` | operator | – |
+| `GET /api/v1/notifications` | viewer | – |
+| `POST /api/v1/notifications/:id/retry` | operator | – |
+| `GET /api/v1/system/metrics` | viewer | – |
+| `GET /api/v1/events` | viewer | – |
+| `GET /*` | public | – |
 
 `POST …/dry-run` und `POST /config/validate` ändern nichts und brauchen daher nur `viewer` (aber eine Anmeldung, auch mit
 `read_requires_login: false`). `admin` umfasst alles von `operator`; eigene `admin`-Endpunkte folgen mit WI-27.
@@ -176,8 +195,8 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | HTTP | Codes (Auswahl) |
 |---|---|
 | 400 | `invalid_request` (Schema-Validierung, `details.issues`), `invalid_json`, `manual_item_required`, `manual_item_not_supported`, `manual_item_invalid_ref`, `invalid_parameters` (`details.errors`), `lifecycle_not_skippable`, `validation_error` |
-| 401 | `authentication_required`, `invalid_credentials`, `untrusted_proxy`, `invalid_identity_header`, `control_token_not_local`, `invalid_control_token` (WI-26) |
-| 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed` (WI-26) |
+| 401 | `authentication_required`, `invalid_credentials`, `untrusted_proxy`, `invalid_proxy_secret`, `invalid_identity_header`, `control_token_not_local`, `invalid_control_token` (WI-26) |
+| 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed`, `control_token_not_allowed` (WI-26) |
 | 421 | `host_not_allowed` (Host-Allowlist) |
 | 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found` |
 | 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition` |

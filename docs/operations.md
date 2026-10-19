@@ -353,10 +353,16 @@ auth:
       - { login: alice@example.com, role: admin }
       - { login: bob@example.com, role: viewer }
 ```
-Nicht gelistete Logins erhalten `403`, Anfragen ohne Header (z. B. über Tailscale Funnel) `401`. **Wichtig:** Der Header
-wird jedem geglaubt, der sich von einer Adresse in `trusted_proxies` verbindet – adispatchd also nie an eine
-Nicht-Loopback-Adresse binden (sonst Warnung beim Start) und `trusted_proxies` so eng wie möglich halten. Lokale Benutzer
-des Hosts erreichen `127.0.0.1` ebenfalls; wer ihnen nicht traut, nutzt `password`.
+Nicht gelistete Logins erhalten `403`, Anfragen ohne Header (z. B. über Tailscale Funnel) `401`.
+
+> **Wichtig – lokal fälschbar:** Der Header wird jedem geglaubt, der sich von einer Adresse in `trusted_proxies` verbindet.
+> Mit Tailscale Serve ist das `127.0.0.1` – also kann **jeder Prozess auf diesem Host, auch jeder Worker und jede
+> Shell-Action**, `curl -H 'Tailscale-User-Login: alice@example.com' http://127.0.0.1:8787/…` senden und mit Alices Rolle
+> handeln. Tailscale Serve kann kein zusätzliches Geheimnis mitsenden; adispatchd warnt beim Start
+> („trusted_header without proxy_secret_env and only loopback proxies“). Diese Konfiguration nur verwenden, wenn alle
+> lokalen Prozesse vertrauenswürdig sind (Workers sind ohnehin vertrauenswürdiger Code, Spec §20.2) – sonst einen Proxy
+> mit `proxy_secret_env` (unten) oder `password` verwenden. adispatchd nie an eine Nicht-Loopback-Adresse binden (sonst
+> Warnung beim Start) und `trusted_proxies` so eng wie möglich halten.
 
 **oauth2-proxy / Authelia / Authentik** vor nginx: der Proxy setzt nach der Anmeldung einen Header mit dem Benutzer –
 oauth2-proxy mit `--set-xauthrequest` z. B. `X-Auth-Request-Email`/`X-Auth-Request-User`, im Upstream-Modus mit
@@ -382,8 +388,12 @@ auth:
   trusted_header:
     header: X-Forwarded-User
     trusted_proxies: [127.0.0.1]
+    proxy_secret_env: ADISPATCH_PROXY_SECRET   # nginx sendet es, lokale Prozesse kennen es nicht
     users: [{ login: alice@example.com, role: admin }]
 ```
+Das Geheimnis (z. B. `openssl rand -base64 32`) steht in der Env-Datei von adispatchd und in der nginx-Konfiguration
+(`proxy_set_header X-Adispatch-Proxy-Secret "<geheimnis>";`, Datei nur für root lesbar). Ohne `proxy_secret_env` gilt
+dieselbe Warnung wie bei Tailscale Serve.
 
 **Passwort-Modus mit HTTPS-Proxy** (ohne externen Identitätsdienst): Benutzer in `config.yaml`, Hashes in der Env-Datei
 des Dienstes. Das Passwort niemals ohne TLS über ein Netz senden – vor adispatchd einen TLS-Proxy (nginx/Caddy/Tailscale
@@ -416,14 +426,18 @@ location / {
 }
 ```
 Sessions liegen im Speicher: nach einem Neustart ist jeder abgemeldet. Login-Schutz: 1 s Verzögerung nach Fehlschlag,
-höchstens 20 Fehlversuche je Client-IP und 5 je Benutzername in 15 Minuten (`429`), keine Unterscheidung zwischen
-unbekanntem Benutzer und falschem Passwort. Mit `read_requires_login: false` dürfen alle, die die UI erreichen, lesen.
+höchstens 5 Fehlversuche je (Benutzername, Client-IP), 50 je Benutzername und 20 je Client-IP (IPv6 je /64) in 15 Minuten
+(`429`) – ein Angreifer sperrt den echten Benutzer an dessen eigener IP nicht aus; keine Unterscheidung zwischen
+unbekanntem Benutzer und falschem Passwort. Bei `password` an einer Nicht-Loopback-Adresse warnt `start` (Klartext-HTTP
+ohne TLS-Proxy). Über HTTPS heißt das Cookie `__Host-adispatch_session`. Mit `read_requires_login: false` dürfen alle, die die UI erreichen, lesen.
 
 **CLI und Steuer-Token:** Bei jedem Start schreibt der Daemon einen neuen zufälligen Token nach
-`<data-dir>/control.token` (`0600`, atomar ersetzt, beim Stop gelöscht). `adispatch status|pause|resume|drain|cancel-all|
-config reload|workflow dry-run` lesen ihn (`--data-dir`) und senden ihn nur an Loopback-URLs; der Daemon akzeptiert ihn
-nur von Loopback-Verbindungen und behandelt ihn als `admin`. Ohne lesbaren Token antworten die Befehle mit `401` und einem
-Hinweis. Grenze: Worker und Shell-Actions laufen als derselbe Dienstbenutzer und könnten die Datei lesen – das entspricht
+`<data-dir>/control.token` (`0600`, atomar ersetzt, mit Port und PID, beim Stop gelöscht). `adispatch status|pause|resume|
+drain|cancel-all|config reload|workflow dry-run` lesen ihn (`--data-dir`) und senden ihn nur an Loopback-URLs mit dem Port
+aus der Datei; der Daemon akzeptiert ihn nur von Loopback-Verbindungen, behandelt ihn als `operator` und nur auf genau
+diesen Routen (sonst `403 control_token_not_allowed`). Ohne lesbaren Token antworten die Befehle mit `401` und einem
+Hinweis. **Grenze:** Worker und Shell-Actions laufen als derselbe Dienstbenutzer und **können die Datei lesen** – jedes
+Skript kann also pausieren, fortsetzen, die Konfiguration neu laden, einen Drain oder Cancel-All auslösen. Das entspricht
 der bestehenden Vertrauensgrenze (Skripte sind vertrauenswürdiger Konfigurationscode, Spec §20.2); Container sehen das
 data-dir nicht (außer bei einem entsprechenden Mount).
 
@@ -435,6 +449,9 @@ zusätzlich als Event `audit.user_action` in den Run-Details, entfernte Blocks m
 |---|---|
 | `401 authentication_required` in der CLI | Token nicht lesbar: als Dienstbenutzer/root mit `--data-dir` aufrufen, Loopback-URL verwenden |
 | `401 invalid_control_token` | Token einer anderen/neu gestarteten Instanz → richtiges `--data-dir` |
+| `403 control_token_not_allowed` | Steuer-Token auf einer Route außerhalb der CLI-Befehle (z. B. Run starten) – dafür in der UI anmelden |
+| `401 invalid_proxy_secret` | Proxy sendet `X-Adispatch-Proxy-Secret` nicht/falsch oder `proxy_secret_env` fehlt in der Env-Datei |
+| Warnung „trusted_header without proxy_secret_env and only loopback proxies …“ | Identität lokal fälschbar (siehe Tailscale Serve oben) |
 | `401 untrusted_proxy` | Identitäts-Header kam nicht von `trusted_header.trusted_proxies` (Proxy auf anderem Host? Adresse eintragen) |
 | `403 login_not_allowed` | Login fehlt in `auth.trusted_header.users` (Schreibweise wie vom Proxy gesendet, ohne Groß-/Kleinschreibung) |
 | Warnung „user cannot log in – password hash variable missing or malformed“ | Env-Variable fehlt oder Hash unvollständig → `adispatch auth hash-password`, Env-Datei, Neustart |

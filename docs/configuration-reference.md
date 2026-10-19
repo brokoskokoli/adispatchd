@@ -268,6 +268,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `auth.users` | Liste | `[]` | | Benutzer für `mode: password`: `name`, `password_hash_env`, `role`. |
 | `auth.trusted_header.header` | String | `Tailscale-User-Login` | HTTP-Header-Name | Header mit dem Login für `mode: trusted_header` (z. B. `X-Forwarded-User` bei oauth2-proxy). |
 | `auth.trusted_header.trusted_proxies` | Liste IP/CIDR | `[127.0.0.1, ::1]` | | Nur von diesen TCP-Gegenstellen wird der Header geglaubt. |
+| `auth.trusted_header.proxy_secret_env` | Env-Name | – | | optional: Umgebungsvariable mit einem gemeinsamen Geheimnis, das der Proxy in `X-Adispatch-Proxy-Secret` mitsenden muss (Vergleich in konstanter Zeit; fehlt die Variable → jede Anfrage `401`). Nur so ist der Header vor anderen lokalen Prozessen geschützt (nginx/oauth2-proxy können ihn setzen, Tailscale Serve nicht). |
 | `auth.trusted_header.users` | Liste | `[]` | | Login → Rolle (`login`, `role`); nicht gelistete Logins → `403`. |
 | `auth.trusted_proxies` | Liste IP/CIDR | `[127.0.0.1, ::1]` | | `mode: password`: Proxys, deren `X-Forwarded-Proto` (Cookie-Flag `Secure`) und `X-Forwarded-For` (Login-Rate-Limit je IP) geglaubt werden. |
 | `auth.session_ttl` | Dauer | `12h` | 1 m – 30 d | Gültigkeit einer Session ab Anmeldung (`mode: password`). |
@@ -389,14 +390,18 @@ statischen UI-Hülle eine Anmeldung und eine **Mindestrolle** (Tabelle je Endpun
   `Tailscale-User-Login`, oauth2-proxy z. B. `X-Forwarded-User`, Authelia `Remote-User`). Der Header zählt **nur**, wenn
   die TCP-Gegenstelle (nicht `X-Forwarded-For`) in `trusted_header.trusted_proxies` liegt, sonst `401`; ohne Header `401`;
   Login nicht in `trusted_header.users` → `403`. Logins werden ohne Groß-/Kleinschreibung verglichen. adispatchd muss
-  dann an `127.0.0.1` gebunden und **nur** über den Proxy erreichbar sein (sonst kann jeder auf dem Host bzw. im Netz den
-  Header selbst setzen, wenn er von einer vertrauenswürdigen Adresse kommt; beim Start wird bei Nicht-Loopback-Bind gewarnt).
-  Reservierte Header (`Host`, `Cookie`, `Origin`, `X-Forwarded-For`, …) sind nicht erlaubt.
+  dann an `127.0.0.1` gebunden und **nur** über den Proxy erreichbar sein (beim Start wird bei Nicht-Loopback-Bind
+  gewarnt). **Lokal fälschbar:** Stehen nur Loopback-Adressen in `trusted_proxies` und ist kein `proxy_secret_env`
+  gesetzt (typisch Tailscale Serve), kann **jeder Prozess auf dem Host – auch jeder Worker** – den Header selbst setzen
+  und sich als beliebiger gelisteter Login ausgeben (Warnung beim Start). Mit `proxy_secret_env` muss der Proxy zusätzlich
+  `X-Adispatch-Proxy-Secret` senden. Reservierte Header (`Host`, `Cookie`, `Origin`, `X-Forwarded-For`,
+  `X-Adispatch-Proxy-Secret`, …) sind nicht erlaubt. `0.0.0.0/0` bzw. `::/0` in einer Proxy-Liste ergibt eine Warnung.
 - **CLI-Steuerbefehle** (`status`, `pause`, `drain`, `config reload`, …) funktionieren in allen Modi weiter: Der Daemon
   schreibt bei jedem Start einen zufälligen Steuer-Token nach `<data-dir>/control.token` (`0600`), die CLI liest ihn
-  (`--data-dir`, sonst `./data` und `/var/lib/adispatchd`) und erhält damit `admin` – nur über Loopback. Worker laufen
-  als derselbe Dienstbenutzer und könnten die Datei lesen; das entspricht der bestehenden Vertrauensgrenze (Skripte sind
-  vertrauenswürdiger Konfigurationscode, Spec §20.2).
+  (`--data-dir`, sonst `./data` und `/var/lib/adispatchd`; nur für den Port aus der Datei) und erhält damit `operator` –
+  nur über Loopback und **nur** für die Routen der CLI-Befehle. Worker laufen als derselbe Dienstbenutzer und **können die
+  Datei lesen**, also genau diese Aktionen auslösen (Status, Pause/Resume, Drain/Cancel-All, Reload, Dry-Run); das
+  entspricht der bestehenden Vertrauensgrenze (Skripte sind vertrauenswürdiger Konfigurationscode, Spec §20.2).
 - **Audit:** schreibende Aktionen protokollieren den Benutzer (Daemon-Log, Run-Event `audit.user_action`, `clearedBy` bei
   Blocks), siehe [api.md](api.md#anmeldung-und-rollen-seit-040-wi-26).
 
@@ -508,6 +513,7 @@ auth:
   trusted_header:                                    # mode: trusted_header
     header: Tailscale-User-Login
     trusted_proxies: [127.0.0.1, ::1]
+    proxy_secret_env: ADISPATCH_PROXY_SECRET         # optional; Default: kein Geheimnis
     users:
       - { login: alice@example.com, role: admin }
   trusted_proxies: [127.0.0.1, ::1]                  # mode: password: X-Forwarded-Proto/-For
@@ -3486,6 +3492,7 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Invalid environment variable name` | z. B. `private_key_env: my-key` |
 | `Invalid IP address or CIDR range …` (Pfad `auth.…trusted_proxies[n]`) | Hostname oder Tippfehler – IP (`127.0.0.1`, `::1`) oder CIDR (`100.64.0.0/10`) angeben |
 | `No users configured: nobody can log in …` (Warnung) | `auth.mode: password` ohne `auth.users` – Benutzer anlegen (CLI-Befehle gehen weiter) |
+| `"0.0.0.0/0" trusts every address …` (Warnung) | Proxy-Liste erlaubt jede Adresse – nur die tatsächlichen Proxy-Adressen eintragen |
 | `This header cannot carry the user` | `auth.trusted_header.header` ist ein reservierter Header (`Cookie`, `Host`, …) |
 | `Must be an absolute http(s) URL` (Pfad `ui.external_links[n].url`) | relative URL oder anderes Schema – volle URL angeben, wie der Browser das Tool erreicht |
 | `Query parameter "t" looks like an access token …` (Warnung) | Token in `ui.external_links[n].url` – für jeden sichtbar, der UI/API erreicht; besser Tool ohne Token nur lokal betreiben bzw. hinter dem authentifizierenden Proxy |
