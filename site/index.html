@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>adispatchd – Agent Dispatch Daemon</title>
+<meta name="description" content="Configuration-driven daemon that turns GitHub issues into supervised runs of shell scripts and AI agents: filters, priorities, cron, lifecycle hooks, containers and a live web UI.">
+<link rel="canonical" href="https://brokoskokoli.github.io/adispatchd/">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<meta name="theme-color" content="#2563eb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0b1120" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="adispatchd">
+<meta property="og:title" content="adispatchd – Agent Dispatch Daemon">
+<meta property="og:description" content="Turn GitHub issues into supervised runs of your shell scripts and AI agents – declaratively, observably, on your own machine.">
+<meta property="og:url" content="https://brokoskokoli.github.io/adispatchd/">
+<meta property="og:locale" content="en_US">
+<meta property="og:locale:alternate" content="de_DE">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="adispatchd – Agent Dispatch Daemon">
+<meta name="twitter:description" content="Turn GitHub issues into supervised runs of your shell scripts and AI agents – declaratively, observably, on your own machine.">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "adispatchd",
+  "alternateName": "Agent Dispatch Daemon",
+  "description": "Configuration-driven dispatcher and orchestrator for shell processes and AI agents, with GitHub issues as task source.",
+  "applicationCategory": "DeveloperApplication",
+  "operatingSystem": "Linux, macOS",
+  "softwareVersion": "0.3.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "url": "https://brokoskokoli.github.io/adispatchd/",
+  "codeRepository": "https://github.com/brokoskokoli/adispatchd",
+  "downloadUrl": "https://www.npmjs.com/package/adispatchd",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+<script>
+  // Pick the language before first paint (no flash of the wrong language).
+  (function () {
+    var l = null;
+    try { l = localStorage.getItem('adispatchd-lang'); } catch (e) { /* storage blocked */ }
+    if (l !== 'en' && l !== 'de') {
+      var n = ((navigator.languages && navigator.languages[0]) || navigator.language || 'en').toLowerCase();
+      l = n.indexOf('de') === 0 ? 'de' : 'en';
+    }
+    document.documentElement.setAttribute('data-lang', l);
+    document.documentElement.lang = l;
+    document.documentElement.className += ' js';
+  })();
+</script>
+<style>
+  :root {
+    --bg: #ffffff;
+    --bg-alt: #f5f7fb;
+    --card: #ffffff;
+    --text: #0f172a;
+    --muted: #475569;
+    --border: #e2e8f0;
+    --accent: #2563eb;
+    --accent-strong: #1d4ed8;
+    --on-accent: #ffffff;
+    --code-bg: #0f172a;
+    --code-text: #e2e8f0;
+    --code-comment: #94a3b8;
+    --code-key: #93c5fd;
+    --code-str: #fcd34d;
+    --shadow: 0 1px 2px rgba(15, 23, 42, .06), 0 4px 16px rgba(15, 23, 42, .06);
+    --radius: 12px;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b1120;
+      --bg-alt: #111a2e;
+      --card: #131d33;
+      --text: #e2e8f0;
+      --muted: #a3b1c6;
+      --border: #24324d;
+      --accent: #60a5fa;
+      --accent-strong: #93c5fd;
+      --on-accent: #0b1120;
+      --code-bg: #070c18;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 16px rgba(0, 0, 0, .25);
+    }
+  }
+  /* Language switch: English is the default and the no-JS fallback. */
+  :root:not([data-lang="de"]) [data-l="de"] { display: none !important; }
+  :root[data-lang="de"] [data-l="en"] { display: none !important; }
+  html:not(.js) .needs-js { display: none !important; }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.6 var(--font); }
+  a { color: var(--accent); text-underline-offset: 2px; }
+  a:hover { color: var(--accent-strong); }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  code, pre { font-family: var(--mono); font-size: .9em; }
+  :not(pre) > code { background: var(--bg-alt); border: 1px solid var(--border); border-radius: 5px; padding: .05em .35em; }
+  h1, h2, h3 { line-height: 1.25; margin: 0 0 .5em; }
+  h2 { font-size: clamp(1.5rem, 3vw, 2rem); letter-spacing: -.01em; }
+  h3 { font-size: 1.05rem; }
+  p { margin: 0 0 1em; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px; }
+  @media (min-width: 720px) { .wrap { padding: 0 24px; } }
+  .skip { position: absolute; left: -999px; top: 8px; background: var(--accent); color: var(--on-accent); padding: 8px 12px; border-radius: 6px; z-index: 10; }
+  .skip:focus { left: 8px; }
+
+  /* Header */
+  header.top { position: sticky; top: 0; z-index: 5; background: var(--bg); background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: saturate(1.4) blur(8px); border-bottom: 1px solid var(--border); }
+  .bar { display: flex; align-items: center; gap: 16px; min-height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); text-decoration: none; font-size: 1.05rem; }
+  .brand svg { width: 28px; height: 28px; flex: none; }
+  nav.main { display: none; gap: 20px; margin-left: 12px; }
+  nav.main a { color: var(--muted); text-decoration: none; font-size: .95rem; }
+  nav.main a:hover { color: var(--text); }
+  @media (min-width: 900px) { nav.main { display: flex; } }
+  .bar-end { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .lang { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .lang button { font: inherit; font-size: .85rem; font-weight: 600; background: transparent; color: var(--muted); border: 0; padding: 6px 10px; cursor: pointer; min-width: 40px; min-height: 32px; }
+  .lang button[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
+  .gh-link { display: inline-flex; color: var(--text); padding: 4px; }
+  .gh-link svg { width: 24px; height: 24px; }
+
+  /* Hero */
+  .hero { padding: 72px 0 56px; background: var(--bg); background: radial-gradient(1200px 400px at 50% -10%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 70%); text-align: center; }
+  .hero .logo { width: 72px; height: 72px; margin: 0 auto 20px; display: block; }
+  .hero h1 { font-size: clamp(2.2rem, 6vw, 3.5rem); letter-spacing: -.02em; margin-bottom: .2em; }
+  .hero .sub { color: var(--muted); font-size: 1rem; margin-bottom: 1.2em; }
+  .hero .tagline { font-size: clamp(1.1rem, 2.4vw, 1.35rem); max-width: 760px; margin: 0 auto 1.8em; }
+  .install { display: inline-flex; align-items: center; gap: 4px; max-width: 100%; background: var(--code-bg); color: var(--code-text); border-radius: 10px; padding: 6px 6px 6px 16px; box-shadow: var(--shadow); }
+  .install code { min-width: 0; background: none; border: 0; padding: 0; font-size: .95rem; white-space: nowrap; overflow-x: auto; color: inherit; }
+  .install code::before { content: "$ "; color: var(--code-comment); }
+  .copy { font: inherit; font-size: .8rem; font-weight: 600; background: rgba(255, 255, 255, .1); color: var(--code-text); border: 1px solid rgba(255, 255, 255, .18); border-radius: 7px; padding: 6px 10px; cursor: pointer; flex: none; min-height: 32px; }
+  .copy:hover { background: rgba(255, 255, 255, .18); }
+  .buttons { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 28px; }
+  .btn { display: inline-flex; align-items: center; gap: 8px; padding: 10px 18px; border-radius: 10px; font-weight: 600; text-decoration: none; border: 1px solid var(--border); background: var(--card); color: var(--text); min-height: 44px; }
+  .btn:hover { border-color: var(--accent); color: var(--text); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--on-accent); }
+  .badges { margin-top: 22px; color: var(--muted); font-size: .9rem; }
+
+  /* Sections */
+  section { padding: 64px 0; }
+  section.alt { background: var(--bg-alt); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  .lead { color: var(--muted); max-width: 760px; font-size: 1.05rem; }
+  .grid { display: grid; gap: 16px; grid-template-columns: 1fr; margin-top: 28px; }
+  @media (min-width: 640px) { .grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (min-width: 980px) { .grid { grid-template-columns: repeat(3, 1fr); } }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
+  .card h3 { display: flex; align-items: center; gap: 10px; }
+  .card h3 .ic { width: 30px; height: 30px; flex: none; display: inline-grid; place-items: center; border-radius: 8px; background: var(--bg-alt); background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+  .card h3 .ic svg { width: 18px; height: 18px; }
+  .card p { color: var(--muted); margin: 0; font-size: .95rem; }
+
+  /* Diagram */
+  figure.diagram { margin: 28px 0 0; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); overflow-x: auto; }
+  figure.diagram svg { display: block; width: 100%; min-width: 640px; height: auto; }
+  .d-box { fill: var(--bg-alt); stroke: var(--border); stroke-width: 1.5; }
+  .d-box.hl { fill: var(--card); fill: color-mix(in srgb, var(--accent) 14%, var(--card)); stroke: var(--accent); }
+  .d-title { fill: var(--text); font: 600 15px var(--font); }
+  .d-sub { fill: var(--muted); font: 12.5px var(--font); }
+  .d-line { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+  .d-line.dash { stroke-dasharray: 5 4; }
+  .d-line.accent { stroke: var(--accent); }
+  .d-label { fill: var(--muted); font: 12px var(--font); }
+  .d-arrow { fill: var(--muted); }
+  .d-arrow.accent { fill: var(--accent); }
+  ol.steps { margin: 24px 0 0; padding-left: 1.3em; display: grid; gap: 8px; max-width: 860px; }
+  ol.steps li::marker { color: var(--accent); font-weight: 700; }
+
+  /* Code */
+  .code { position: relative; margin-top: 24px; }
+  pre { margin: 0; background: var(--code-bg); color: var(--code-text); border-radius: var(--radius); padding: 18px 20px; overflow-x: auto; line-height: 1.55; box-shadow: var(--shadow); }
+  pre .c { color: var(--code-comment); }
+  pre .k { color: var(--code-key); }
+  pre .s { color: var(--code-str); }
+  .code .copy { position: absolute; top: 10px; right: 10px; }
+  .file { font: 600 .85rem var(--mono); color: var(--muted); margin: 20px 0 -14px; }
+  .two { display: grid; gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  @media (min-width: 1500px) { .two { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); align-items: start; } }
+
+  /* Quickstart */
+  ol.qs { list-style: none; counter-reset: qs; padding: 0; margin: 28px 0 0; display: grid; gap: 18px; }
+  ol.qs > li { counter-increment: qs; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 4px 14px; }
+  ol.qs > li::before { content: counter(qs); grid-row: span 2; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: var(--on-accent); font-weight: 700; }
+  ol.qs h3 { margin: 6px 0 4px; }
+  ol.qs pre { padding: 12px 16px; font-size: .95em; }
+  ol.qs p { color: var(--muted); margin: 0 0 8px; }
+
+  /* Docs */
+  .docs a.card { text-decoration: none; color: inherit; display: block; }
+  .docs a.card:hover { border-color: var(--accent); }
+  .docs a.card h3 { color: var(--accent); }
+  .note { display: inline-block; margin-top: 8px; font-size: .9rem; color: var(--muted); border: 1px dashed var(--border); border-radius: 8px; padding: 4px 10px; }
+  ul.sec { padding-left: 1.2em; max-width: 860px; }
+  ul.sec li { margin-bottom: 8px; }
+  ul.sec code { overflow-wrap: anywhere; }
+
+  footer { padding: 36px 0; border-top: 1px solid var(--border); color: var(--muted); font-size: .92rem; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: center; justify-content: space-between; }
+  footer nav { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main"><span data-l="en">Skip to content</span><span data-l="de" lang="de">Zum Inhalt springen</span></a>
+
+<header class="top">
+  <div class="wrap bar">
+    <a class="brand" href="#top" aria-label="adispatchd home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="6" fill="#2563eb"/><circle cx="10" cy="16" r="4" fill="#fff"/><circle cx="22" cy="9" r="3" fill="#fff"/><circle cx="22" cy="23" r="3" fill="#fff"/><path d="M13 14l6-4M13 18l6 4" stroke="#fff" stroke-width="2"/></svg>
+      adispatchd
+    </a>
+    <nav class="main" aria-label="Sections">
+      <a href="#features"><span data-l="en">Features</span><span data-l="de" lang="de">Funktionen</span></a>
+      <a href="#how"><span data-l="en">How it works</span><span data-l="de" lang="de">Ablauf</span></a>
+      <a href="#example"><span data-l="en">Example</span><span data-l="de" lang="de">Beispiel</span></a>
+      <a href="#quickstart">Quickstart</a>
+      <a href="#docs"><span data-l="en">Docs</span><span data-l="de" lang="de">Doku</span></a>
+    </nav>
+    <div class="bar-end">
+      <div class="lang needs-js" role="group" aria-label="Language / Sprache">
+        <button type="button" data-set-lang="en" aria-pressed="true" lang="en" title="English">EN</button>
+        <button type="button" data-set-lang="de" aria-pressed="false" lang="de" title="Deutsch">DE</button>
+      </div>
+      <a class="gh-link" href="https://github.com/brokoskokoli/adispatchd" aria-label="GitHub repository">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+      </a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+  <div class="hero" id="top">
+    <div class="wrap">
+      <svg class="logo" viewBox="0 0 32 32" role="img" aria-label="adispatchd logo"><rect width="32" height="32" rx="6" fill="#2563eb"/><circle cx="10" cy="16" r="4" fill="#fff"/><circle cx="22" cy="9" r="3" fill="#fff"/><circle cx="22" cy="23" r="3" fill="#fff"/><path d="M13 14l6-4M13 18l6 4" stroke="#fff" stroke-width="2"/></svg>
+      <h1>adispatchd</h1>
+      <p class="sub">Agent Dispatch Daemon · v0.3.0 · MIT</p>
+      <p class="tagline">
+        <span data-l="en">Turn GitHub issues into supervised runs of your shell scripts and AI agents – declaratively, observably, on your own machine.</span>
+        <span data-l="de" lang="de">Aus GitHub-Issues werden überwachte Runs deiner Shell-Skripte und KI-Agenten – deklarativ, nachvollziehbar, auf deinem eigenen Rechner.</span>
+      </p>
+      <div class="install">
+        <code id="install-cmd">npm install -g adispatchd</code>
+        <button type="button" class="copy needs-js" data-copy="install-cmd"><span data-l="en">Copy</span><span data-l="de" lang="de">Kopieren</span></button>
+      </div>
+      <div class="buttons">
+        <a class="btn primary" href="https://github.com/brokoskokoli/adispatchd">GitHub</a>
+        <a class="btn" href="https://www.npmjs.com/package/adispatchd">npm</a>
+        <a class="btn" href="#docs"><span data-l="en">Documentation</span><span data-l="de" lang="de">Dokumentation</span></a>
+      </div>
+      <p class="badges">
+        <span data-l="en">Node.js ≥ 22.13 · Linux &amp; macOS · SQLite built in (no native add-on)</span>
+        <span data-l="de" lang="de">Node.js ≥ 22.13 · Linux &amp; macOS · SQLite eingebaut (kein natives Addon)</span>
+      </p>
+    </div>
+  </div>
+
+  <section id="why">
+    <div class="wrap">
+      <h2><span data-l="en">Why adispatchd?</span><span data-l="de" lang="de">Warum adispatchd?</span></h2>
+      <p class="lead" data-l="en">Running coding or review agents against an issue tracker usually ends up as a pile of cron jobs and glue scripts: who picks which issue, what happens when an agent crashes, who resets the labels, where are the logs? adispatchd moves those decisions into a few YAML files – GitHub stays the source of truth, workers stay plain programs, and technical failures are kept apart from business results.</p>
+      <p class="lead" data-l="de" lang="de">Wer Coding- oder Review-Agenten auf einen Issue-Tracker loslässt, landet meist bei einem Haufen Cronjobs und Klebeskripten: Wer nimmt welches Issue, was passiert bei einem Absturz, wer setzt die Labels zurück, wo liegen die Logs? adispatchd verlegt diese Entscheidungen in wenige YAML-Dateien – GitHub bleibt Source of Truth, Worker bleiben normale Programme, und technische Fehler sind von fachlichen Ergebnissen getrennt.</p>
+    </div>
+  </section>
+
+  <section id="features" class="alt">
+    <div class="wrap">
+      <h2><span data-l="en">Features</span><span data-l="de" lang="de">Funktionen</span></h2>
+      <div class="grid">
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/></svg></span><span data-l="en">GitHub as task source</span><span data-l="de" lang="de">GitHub als Aufgabenquelle</span></h3>
+          <p data-l="en">Issues and pull requests, including GitHub Projects fields (status, priority, custom fields), native dependencies and the issue's work branch and PR.</p>
+          <p data-l="de" lang="de">Issues und Pull Requests inklusive GitHub-Projects-Feldern (Status, Priorität, eigene Felder), nativen Abhängigkeiten sowie Arbeits-Branch und PR des Issues.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4-2v-4z"/></svg></span><span data-l="en">Declarative filters</span><span data-l="de" lang="de">Deklarative Filter</span></h3>
+          <p data-l="en"><code>all</code>/<code>any</code>/<code>not</code> trees and named filters reused across workflows and views. Missing access yields <code>unknown</code> – never a wrong start.</p>
+          <p data-l="de" lang="de"><code>all</code>/<code>any</code>/<code>not</code>-Bäume und benannte Filter für Workflows und Views. Fehlender Zugriff ergibt <code>unknown</code> – nie einen falschen Start.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 18h4M4 12h10M4 6h16"/></svg></span><span data-l="en">Priorities &amp; limits</span><span data-l="de" lang="de">Prioritäten &amp; Limits</span></h3>
+          <p data-l="en">Workflow priority first, then item priority rules. Global, per-workflow and per-source concurrency limits, a lock per item and retry blocks.</p>
+          <p data-l="de" lang="de">Erst Workflow-Priorität, dann Item-Prioritätsregeln. Globale, workflow- und sourcebezogene Limits, ein Lock je Item und Retry-Blocks.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><span data-l="en">Source, cron &amp; manual triggers</span><span data-l="de" lang="de">Source-, Cron- &amp; manuelle Trigger</span></h3>
+          <p data-l="en">Poll GitHub, run on a cron schedule with time zone, or start manually from the UI/API with typed parameters. One workflow can serve several repositories.</p>
+          <p data-l="de" lang="de">GitHub abfragen, per Cron mit Zeitzone laufen oder manuell aus UI/API mit typisierten Parametern starten. Ein Workflow kann mehrere Repositories bedienen.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3v12M18 9v12M6 15a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM18 3a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg></span><span data-l="en">Lifecycle hooks</span><span data-l="de" lang="de">Lifecycle-Hooks</span></h3>
+          <p data-l="en"><code>on_start</code>, <code>on_success</code>, <code>on_failure</code>, crash/timeout/cancel hooks, <code>on_result.&lt;outcome&gt;</code> for named results and a catch-all <code>on_error</code>.</p>
+          <p data-l="de" lang="de"><code>on_start</code>, <code>on_success</code>, <code>on_failure</code>, Hooks für Absturz/Timeout/Abbruch, <code>on_result.&lt;outcome&gt;</code> für benannte Ergebnisse und der Sammel-Hook <code>on_error</code>.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M20 12l-8 8-9-9V3h8z"/><circle cx="7.5" cy="7.5" r="1.5"/></svg></span><span data-l="en">Labels, project fields, comments</span><span data-l="de" lang="de">Labels, Projektfelder, Kommentare</span></h3>
+          <p data-l="en">Move items across your board as runs start and end. Idempotent (read before write), journaled and retried; items are added to the project if needed.</p>
+          <p data-l="de" lang="de">Items wandern beim Start und Ende eines Runs über das Board. Idempotent (erst lesen, dann schreiben), mit Journal und Retries; Items werden bei Bedarf dem Projekt hinzugefügt.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 17l6-5-6-5M12 19h8"/></svg></span><span data-l="en">Shell or container workers</span><span data-l="de" lang="de">Shell- oder Container-Worker</span></h3>
+          <p data-l="en">Commands run without a shell in their own process group – or in a throw-away Docker/Podman container with fixed mounts, resource limits and <code>--cap-drop ALL</code>.</p>
+          <p data-l="de" lang="de">Kommandos laufen ohne Shell in eigener Prozessgruppe – oder in einem Wegwerf-Container (Docker/Podman) mit festen Mounts, Ressourcenlimits und <code>--cap-drop ALL</code>.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3"/></svg></span><span data-l="en">Token files for long runs</span><span data-l="de" lang="de">Token-Dateien für lange Runs</span></h3>
+          <p data-l="en">Short-lived GitHub App tokens as an environment variable or a file (<code>&lt;NAME&gt;_FILE</code>) that the daemon renews atomically and deletes after the run.</p>
+          <p data-l="de" lang="de">Kurzlebige GitHub-App-Tokens als Umgebungsvariable oder als Datei (<code>&lt;NAME&gt;_FILE</code>), die der Daemon atomar erneuert und nach dem Run löscht.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/></svg></span><span data-l="en">Keep files</span><span data-l="de" lang="de">Dateien sichern</span></h3>
+          <p data-l="en"><code>execute.keep</code> saves transcripts and logs (glob patterns) before the workspace is cleaned up – size-limited, never following symlinks, downloadable in the UI.</p>
+          <p data-l="de" lang="de"><code>execute.keep</code> sichert Mitschnitte und Logs (Glob-Muster) vor dem Workspace-Cleanup – mit Größenlimit, ohne Symlinks zu folgen, Download in der UI.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M7 14l3-3 3 2 4-5"/></svg></span><span data-l="en">Live web UI &amp; API</span><span data-l="de" lang="de">Live-Weboberfläche &amp; API</span></h3>
+          <p data-l="en">Workflows, runs with live output, events, kept files and read-only views across repositories, streamed via Server-Sent Events – plus a JSON HTTP API.</p>
+          <p data-l="de" lang="de">Workflows, Runs mit Live-Output, Events, gesicherte Dateien und read-only Views über mehrere Repositories, live per Server-Sent Events – dazu eine JSON-HTTP-API.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></span><span data-l="en">Dry-run &amp; validation</span><span data-l="de" lang="de">Dry-Run &amp; Validierung</span></h3>
+          <p data-l="en"><code>config validate</code> reports errors with file and line; <code>workflow dry-run</code> explains for every item why it would or would not start – without starting anything.</p>
+          <p data-l="de" lang="de"><code>config validate</code> meldet Fehler mit Datei und Zeile; <code>workflow dry-run</code> erklärt je Item, warum es starten würde oder nicht – ohne etwas zu starten.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg></span><span data-l="en">Built for operations</span><span data-l="de" lang="de">Für den Betrieb gebaut</span></h3>
+          <p data-l="en">systemd service installer, drain and cancel-all, crash recovery, atomic config reload and automatic migrations with backup.</p>
+          <p data-l="de" lang="de">systemd-Installer, Drain und Cancel-All, Crash-Recovery, atomarer Config-Reload und automatische Migrationen mit Backup.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <h2><span data-l="en">How it works</span><span data-l="de" lang="de">So funktioniert es</span></h2>
+      <figure class="diagram">
+        <svg viewBox="0 0 960 270" role="img" aria-labelledby="diagram-title diagram-desc">
+          <title id="diagram-title">adispatchd flow</title>
+          <desc id="diagram-desc">GitHub issues are polled, filtered and prioritised; conditions and limits gate the start; cron and manual triggers enter at the same point; the worker runs as a shell process or container; lifecycle hooks write labels, project fields and comments back to GitHub; logs and events stream to the web UI.</desc>
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-arrow" d="M0 0L10 5L0 10z"/></marker>
+            <marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="d-arrow accent" d="M0 0L10 5L0 10z"/></marker>
+          </defs>
+          <!-- top row -->
+          <rect class="d-box" x="400" y="12" width="150" height="46" rx="10"/>
+          <text class="d-title" x="475" y="41" text-anchor="middle" data-l="en">cron / manual</text>
+          <text class="d-title" x="475" y="41" text-anchor="middle" data-l="de">Cron / manuell</text>
+          <rect class="d-box" x="590" y="12" width="150" height="46" rx="10"/>
+          <text class="d-title" x="665" y="33" text-anchor="middle" data-l="en">web UI / API</text>
+          <text class="d-title" x="665" y="33" text-anchor="middle" data-l="de">Weboberfläche / API</text>
+          <text class="d-sub" x="665" y="50" text-anchor="middle" data-l="en">live via SSE</text>
+          <text class="d-sub" x="665" y="50" text-anchor="middle" data-l="de">live per SSE</text>
+          <path class="d-line" d="M475 58V90" marker-end="url(#ar)"/>
+          <path class="d-line dash" d="M665 92V60" marker-end="url(#ar)"/>
+          <!-- main row -->
+          <rect class="d-box hl" x="20" y="92" width="150" height="76" rx="10"/>
+          <text class="d-title" x="95" y="124" text-anchor="middle">GitHub</text>
+          <text class="d-sub" x="95" y="144" text-anchor="middle">issues · PRs · Projects</text>
+          <rect class="d-box" x="210" y="92" width="150" height="76" rx="10"/>
+          <text class="d-title" x="285" y="124" text-anchor="middle" data-l="en">filters &amp;</text>
+          <text class="d-title" x="285" y="144" text-anchor="middle" data-l="en">priorities</text>
+          <text class="d-title" x="285" y="124" text-anchor="middle" data-l="de">Filter &amp;</text>
+          <text class="d-title" x="285" y="144" text-anchor="middle" data-l="de">Prioritäten</text>
+          <rect class="d-box" x="400" y="92" width="150" height="76" rx="10"/>
+          <text class="d-title" x="475" y="124" text-anchor="middle" data-l="en">conditions</text>
+          <text class="d-title" x="475" y="144" text-anchor="middle" data-l="en">&amp; limits</text>
+          <text class="d-title" x="475" y="124" text-anchor="middle" data-l="de">Bedingungen</text>
+          <text class="d-title" x="475" y="144" text-anchor="middle" data-l="de">&amp; Limits</text>
+          <rect class="d-box hl" x="590" y="92" width="150" height="76" rx="10"/>
+          <text class="d-title" x="665" y="124" text-anchor="middle">worker</text>
+          <text class="d-sub" x="665" y="144" text-anchor="middle" data-l="en">shell or container</text>
+          <text class="d-sub" x="665" y="144" text-anchor="middle" data-l="de">Shell oder Container</text>
+          <rect class="d-box" x="780" y="92" width="160" height="76" rx="10"/>
+          <text class="d-title" x="860" y="122" text-anchor="middle" data-l="en">lifecycle hooks</text>
+          <text class="d-title" x="860" y="122" text-anchor="middle" data-l="de">Lifecycle-Hooks</text>
+          <text class="d-sub" x="860" y="141" text-anchor="middle">on_success · on_result</text>
+          <text class="d-sub" x="860" y="157" text-anchor="middle">on_error · …</text>
+          <path class="d-line" d="M170 130H206" marker-end="url(#ar)"/>
+          <path class="d-line" d="M360 130H396" marker-end="url(#ar)"/>
+          <path class="d-line" d="M550 130H586" marker-end="url(#ar)"/>
+          <path class="d-line" d="M740 130H776" marker-end="url(#ar)"/>
+          <text class="d-label" x="760" y="188" text-anchor="middle" data-l="en">exit code + result.json</text>
+          <text class="d-label" x="760" y="188" text-anchor="middle" data-l="de">Exit-Code + result.json</text>
+          <!-- feedback loop -->
+          <path class="d-line accent" d="M860 168V236H95V172" marker-end="url(#ara)"/>
+          <text class="d-label" x="478" y="256" text-anchor="middle" data-l="en">labels · project fields · comments</text>
+          <text class="d-label" x="478" y="256" text-anchor="middle" data-l="de">Labels · Projektfelder · Kommentare</text>
+        </svg>
+      </figure>
+      <ol class="steps" data-l="en">
+        <li>On every planning step the daemon polls each source, evaluates the workflow filter and sorts candidates by priority.</li>
+        <li>Start conditions – shell checks, limits, locks and retry blocks – decide whether a run may start.</li>
+        <li>The worker gets a workspace, a JSON context file and, if declared, a token. Its exit code and optional result file decide which hook runs.</li>
+        <li>Hooks update labels, project fields and comments on the item – so the next workflow (for example a reviewer) can pick it up.</li>
+      </ol>
+      <ol class="steps" data-l="de" lang="de">
+        <li>In jedem Planungsschritt fragt der Daemon die Sources ab, wertet den Workflow-Filter aus und sortiert die Kandidaten nach Priorität.</li>
+        <li>Startbedingungen – Shell-Prüfungen, Limits, Locks und Retry-Blocks – entscheiden, ob ein Run starten darf.</li>
+        <li>Der Worker bekommt einen Workspace, eine JSON-Kontextdatei und – falls deklariert – ein Token. Exit-Code und optionale Ergebnisdatei bestimmen den Hook.</li>
+        <li>Hooks ändern Labels, Projektfelder und Kommentare am Item – der nächste Workflow (z. B. ein Reviewer) übernimmt.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="example" class="alt">
+    <div class="wrap two">
+      <div>
+        <h2><span data-l="en">One YAML file per workflow</span><span data-l="de" lang="de">Eine YAML-Datei pro Workflow</span></h2>
+        <p class="lead" data-l="en">This coder takes issues labelled <code>ready-for-coding</code> whose project status is <code>Todo</code> or <code>Ready</code>, moves them across the board while it works and puts them back in the queue on any technical error.</p>
+        <p class="lead" data-l="de" lang="de">Dieser Coder nimmt Issues mit Label <code>ready-for-coding</code>, deren Projektstatus <code>Todo</code> oder <code>Ready</code> ist, schiebt sie während der Arbeit über das Board und stellt sie bei jedem technischen Fehler zurück in die Warteschlange.</p>
+        <h3><span data-l="en">The worker contract</span><span data-l="de" lang="de">Der Worker-Vertrag</span></h3>
+        <ul class="sec" data-l="en">
+          <li><strong>Input:</strong> a minimal environment plus declared secrets and <code>ADISPATCH_RUN_ID</code>, <code>ADISPATCH_WORKSPACE</code>, <code>ADISPATCH_CONTEXT_FILE</code>, <code>ADISPATCH_RESULT_FILE</code>, …</li>
+          <li><strong>Exit code</strong> = technical status: <code>0</code> is ok, anything else is <code>crashed</code>.</li>
+          <li><strong>Result file</strong> for the business result: <code>{"schema_version":1,"result":"failure","message":"…"}</code>, optionally with an <code>"outcome"</code> for <code>on_result</code>.</li>
+          <li><strong>Events:</strong> <code>@@ADISPATCH_EVENT {"type":"status","message":"…"}</code> lines show up live in the UI.</li>
+        </ul>
+        <ul class="sec" data-l="de" lang="de">
+          <li><strong>Input:</strong> Minimalumgebung plus deklarierte Secrets und <code>ADISPATCH_RUN_ID</code>, <code>ADISPATCH_WORKSPACE</code>, <code>ADISPATCH_CONTEXT_FILE</code>, <code>ADISPATCH_RESULT_FILE</code>, …</li>
+          <li><strong>Exit-Code</strong> = technischer Status: <code>0</code> ist ok, alles andere <code>crashed</code>.</li>
+          <li><strong>Ergebnisdatei</strong> für das fachliche Ergebnis: <code>{"schema_version":1,"result":"failure","message":"…"}</code>, optional mit <code>"outcome"</code> für <code>on_result</code>.</li>
+          <li><strong>Events:</strong> Zeilen <code>@@ADISPATCH_EVENT {"type":"status","message":"…"}</code> erscheinen live in der UI.</li>
+        </ul>
+      </div>
+      <div>
+        <p class="file">workflows/coder.yaml</p>
+        <div class="code">
+<pre id="example-yaml" tabindex="0" aria-label="Example workflow YAML"><code>id: coder
+priority: 50                         # workflow priority comes before item priority
+max_concurrent: 2
+identity: coder                      # GitHub App used for labels, fields and comments
+trigger: { type: source, source: app }   # or { type: schedule, cron: '0 3 * * *' } / { type: manual }
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-coding }
+    - { field: project.Status, operator: in, value: [Todo, Ready] }
+    - { field: dependencies.blocked_by_open, operator: equals, value: 0 }
+item_priority:
+  rules:
+    - when: { field: project.Priority, operator: in, value: [P0, P1] }
+      value: 100
+conditions:
+  workflow: [ { type: shell, command: scripts/check-credits.sh, cache: 60s } ]
+execute:
+  type: shell
+  command: scripts/coder.sh          # relative to the config dir; no shell, args as a list
+  args: ['{item.url}']
+  secrets:
+    GH_TOKEN: { identity: coder, delivery: file }   # renewed token file in $GH_TOKEN_FILE
+  timeout: { max_duration: 6h, idle_timeout: 45m }
+  keep: ['.agent/transcript.jsonl']  # saved to runs/&lt;run-id&gt;/kept/ before cleanup
+retry: { max_technical_failures: 3 }
+on_start:
+  - type: source.update
+    labels: { add: [coding], remove: [ready-for-coding] }
+    project: { Status: In Progress }
+on_success:
+  - type: source.update
+    labels: { add: [ready-for-review], remove: [coding] }
+    project: { Status: Review }
+  - type: source.comment
+    message: 'Done (run {run.id}): {result.message}'
+on_failure:
+  - type: source.update
+    labels: { add: [needs-maintainer], remove: [coding] }
+on_result:                           # named outcome from the result file
+  needs_split:
+    - type: source.comment
+      message: 'Too big, please split: {result.message}'
+    - type: source.update
+      labels: { add: [needs-maintainer], remove: [coding] }
+on_error:                            # crashed, start_error, timed_out, cancelled
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [coding] }
+    project: { Status: Ready }</code></pre>
+          <button type="button" class="copy needs-js" data-copy="example-yaml"><span data-l="en">Copy</span><span data-l="de" lang="de">Kopieren</span></button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="quickstart">
+    <div class="wrap">
+      <h2>Quickstart</h2>
+      <p class="lead" data-l="en">Linux or macOS with Node.js ≥ 22.13 (24 LTS recommended). No GitHub account needed for the first run.</p>
+      <p class="lead" data-l="de" lang="de">Linux oder macOS mit Node.js ≥ 22.13 (empfohlen 24 LTS). Für den ersten Run ist kein GitHub-Konto nötig.</p>
+      <ol class="qs">
+        <li>
+          <h3><span data-l="en">Install</span><span data-l="de" lang="de">Installieren</span></h3>
+          <div>
+            <pre><code>npm install -g adispatchd        <span class="c"># or try it: npx adispatchd --help</span></code></pre>
+          </div>
+        </li>
+        <li>
+          <h3><span data-l="en">Create a sample configuration</span><span data-l="de" lang="de">Beispielkonfiguration anlegen</span></h3>
+          <div>
+            <p data-l="en">Never overwrites existing files and validates the result.</p>
+            <p data-l="de" lang="de">Überschreibt nie bestehende Dateien und validiert das Ergebnis.</p>
+            <pre><code>adispatch init --config-dir ./config --data-dir ./data</code></pre>
+          </div>
+        </li>
+        <li>
+          <h3><span data-l="en">Start the daemon</span><span data-l="de" lang="de">Daemon starten</span></h3>
+          <div>
+            <p data-l="en">Runs in the foreground; Ctrl-C drains active runs.</p>
+            <p data-l="de" lang="de">Läuft im Vordergrund; Ctrl-C lässt aktive Runs geordnet auslaufen (Drain).</p>
+            <pre><code>adispatch start --config-dir ./config --data-dir ./data</code></pre>
+          </div>
+        </li>
+        <li>
+          <h3><span data-l="en">Open the web UI</span><span data-l="de" lang="de">Weboberfläche öffnen</span></h3>
+          <div>
+            <p data-l="en">Go to <code>http://127.0.0.1:8787/</code> and start the <strong>hello</strong> workflow under <em>Workflows</em> – or via the API:</p>
+            <p data-l="de" lang="de"><code>http://127.0.0.1:8787/</code> öffnen und unter <em>Workflows</em> den Workflow <strong>hello</strong> starten – oder per API:</p>
+            <pre><code>curl -X POST -H 'X-Adispatch-Request: 1' -H 'Content-Type: application/json' \
+     -d '{"parameters":{"name":"Ada"}}' http://127.0.0.1:8787/api/v1/workflows/hello/start</code></pre>
+          </div>
+        </li>
+        <li>
+          <h3><span data-l="en">Connect GitHub</span><span data-l="de" lang="de">GitHub anbinden</span></h3>
+          <div>
+            <p data-l="en">Create a GitHub App per role, put its IDs into <code>identities.yaml</code> and the repository into <code>sources.yaml</code>, export the private key, set <code>enabled: true</code> in <code>workflows/coder.yaml</code> and run <code>adispatch config reload --config-dir ./config</code>.</p>
+            <p data-l="de" lang="de">GitHub App je Rolle anlegen, IDs in <code>identities.yaml</code> und das Repository in <code>sources.yaml</code> eintragen, Private Key exportieren, in <code>workflows/coder.yaml</code> <code>enabled: true</code> setzen und <code>adispatch config reload --config-dir ./config</code> ausführen.</p>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="security" class="alt">
+    <div class="wrap">
+      <h2><span data-l="en">Security in brief</span><span data-l="de" lang="de">Sicherheit in Kürze</span></h2>
+      <ul class="sec" data-l="en">
+        <li><strong>No authentication in V1.</strong> The API binds to <code>127.0.0.1</code> by default; for remote access use an authenticating reverse proxy, VPN or Tailscale and set <code>server.allowed_hosts</code>.</li>
+        <li><strong>Scripts and YAML are trusted code</strong> running with the service's permissions – there is no sandbox.</li>
+        <li><strong>No isolation between runs of the same service user.</strong> Separate high- and low-privilege workflows into separate instances, users or containers.</li>
+        <li>Workers only receive explicitly declared secrets; private keys come from environment variables, never from YAML.</li>
+      </ul>
+      <ul class="sec" data-l="de" lang="de">
+        <li><strong>Keine Anmeldung in V1.</strong> Die API bindet standardmäßig an <code>127.0.0.1</code>; Fernzugriff nur über einen authentifizierenden Reverse Proxy, VPN oder Tailscale mit <code>server.allowed_hosts</code>.</li>
+        <li><strong>Skripte und YAML sind vertrauenswürdiger Code</strong> mit den Rechten des Dienstes – keine Sandbox.</li>
+        <li><strong>Keine Isolation zwischen Runs desselben Dienstbenutzers.</strong> Hoch- und niedrig-privilegierte Workflows in getrennten Instanzen, Benutzern oder Containern betreiben.</li>
+        <li>Worker erhalten nur ausdrücklich deklarierte Secrets; Private Keys kommen aus Umgebungsvariablen, nie aus YAML.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="docs" class="docs">
+    <div class="wrap">
+      <h2><span data-l="en">Documentation</span><span data-l="de" lang="de">Dokumentation</span></h2>
+      <p class="note" data-l="en">The detailed documentation is in German. The README is available in <a href="https://github.com/brokoskokoli/adispatchd#readme">English</a> and <a href="https://github.com/brokoskokoli/adispatchd/blob/main/README.de.md">German</a>.</p>
+      <p class="note" data-l="de" lang="de">Die ausführliche Dokumentation ist auf Deutsch. Das README gibt es auf <a href="https://github.com/brokoskokoli/adispatchd#readme">Englisch</a> und <a href="https://github.com/brokoskokoli/adispatchd/blob/main/README.de.md">Deutsch</a>.</p>
+      <div class="grid">
+        <a class="card" href="https://github.com/brokoskokoli/adispatchd/blob/main/docs/configuration-reference.md">
+          <h3><span data-l="en">Configuration reference</span><span data-l="de" lang="de">Konfigurationsreferenz</span></h3>
+          <p data-l="en">Every file, field, default, filter and placeholder – examples tested against the real loader.</p>
+          <p data-l="de" lang="de">Alle Dateien, Felder, Defaults, Filter und Platzhalter – Beispiele gegen den echten Loader getestet.</p>
+        </a>
+        <a class="card" href="https://github.com/brokoskokoli/adispatchd/blob/main/docs/worker-protocol.md">
+          <h3><span data-l="en">Worker protocol</span><span data-l="de" lang="de">Worker-Protokoll</span></h3>
+          <p data-l="en">Environment, context and result files, events, token files, containers.</p>
+          <p data-l="de" lang="de">Umgebung, Kontext- und Ergebnisdatei, Events, Token-Dateien, Container.</p>
+        </a>
+        <a class="card" href="https://github.com/brokoskokoli/adispatchd/blob/main/docs/operations.md">
+          <h3><span data-l="en">Operations</span><span data-l="de" lang="de">Betrieb</span></h3>
+          <p data-l="en">systemd, updates, backups, recovery, reverse proxy, container permissions.</p>
+          <p data-l="de" lang="de">systemd, Updates, Backups, Recovery, Reverse Proxy, Container-Rechte.</p>
+        </a>
+        <a class="card" href="https://github.com/brokoskokoli/adispatchd/blob/main/docs/api.md">
+          <h3>HTTP API / SSE</h3>
+          <p data-l="en">Endpoints, error format and live events.</p>
+          <p data-l="de" lang="de">Endpunkte, Fehlerform und Live-Events.</p>
+        </a>
+        <a class="card" href="https://github.com/brokoskokoli/adispatchd/blob/main/docs/cron-semantics.md">
+          <h3><span data-l="en">Cron semantics</span><span data-l="de" lang="de">Cron-Semantik</span></h3>
+          <p data-l="en">Schedules, time zones, missed slots and daylight saving time.</p>
+          <p data-l="de" lang="de">Zeitpläne, Zeitzonen, verpasste Slots und Sommerzeit.</p>
+        </a>
+        <a class="card" href="https://github.com/brokoskokoli/adispatchd/blob/main/CHANGELOG.md">
+          <h3>Changelog</h3>
+          <p data-l="en">Release notes for every version; project status in <code>docs/status.md</code>.</p>
+          <p data-l="de" lang="de">Release-Notizen jeder Version; Projektstand in <code>docs/status.md</code>.</p>
+        </a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>© 2026 brokoskokoli · <span data-l="en">Released under the</span><span data-l="de" lang="de">Veröffentlicht unter der</span> <a href="https://github.com/brokoskokoli/adispatchd/blob/main/LICENSE"><span data-l="en">MIT License</span><span data-l="de" lang="de">MIT-Lizenz</span></a></p>
+    <nav aria-label="Footer">
+      <a href="https://github.com/brokoskokoli/adispatchd">GitHub</a>
+      <a href="https://www.npmjs.com/package/adispatchd">npm</a>
+      <a href="https://github.com/brokoskokoli/adispatchd/issues">Issues</a>
+      <a href="https://github.com/brokoskokoli/adispatchd/blob/main/CHANGELOG.md">Changelog</a>
+      <a href="https://github.com/brokoskokoli/adispatchd/blob/main/docs/status.md">Status</a>
+    </nav>
+  </div>
+  <p class="sr" role="status" aria-live="polite" id="live"></p>
+</footer>
+
+<script>
+  (function () {
+    var root = document.documentElement;
+    var text = {
+      en: {
+        title: 'adispatchd – Agent Dispatch Daemon',
+        desc: 'Configuration-driven daemon that turns GitHub issues into supervised runs of shell scripts and AI agents: filters, priorities, cron, lifecycle hooks, containers and a live web UI.',
+        copied: 'Copied to clipboard', copyFailed: 'Copy failed'
+      },
+      de: {
+        title: 'adispatchd – Agent Dispatch Daemon',
+        desc: 'Konfigurationsgetriebener Daemon, der GitHub-Issues in überwachte Runs von Shell-Skripten und KI-Agenten verwandelt: Filter, Prioritäten, Cron, Lifecycle-Hooks, Container und eine Live-Weboberfläche.',
+        copied: 'In die Zwischenablage kopiert', copyFailed: 'Kopieren fehlgeschlagen'
+      }
+    };
+    var live = document.getElementById('live');
+    var meta = document.querySelector('meta[name="description"]');
+    var buttons = document.querySelectorAll('[data-set-lang]');
+
+    function current() { return root.getAttribute('data-lang') === 'de' ? 'de' : 'en'; }
+    function apply(lang) {
+      root.setAttribute('data-lang', lang);
+      root.lang = lang;
+      document.title = text[lang].title;
+      if (meta) meta.setAttribute('content', text[lang].desc);
+      for (var i = 0; i < buttons.length; i++) {
+        buttons[i].setAttribute('aria-pressed', String(buttons[i].getAttribute('data-set-lang') === lang));
+      }
+    }
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].addEventListener('click', function () {
+        var lang = this.getAttribute('data-set-lang');
+        apply(lang);
+        try { localStorage.setItem('adispatchd-lang', lang); } catch (e) { /* storage blocked */ }
+      });
+    }
+    apply(current());
+
+    // Copy buttons.
+    function announce(msg) { live.textContent = ''; setTimeout(function () { live.textContent = msg; }, 30); }
+    function fallbackCopy(value) {
+      var ta = document.createElement('textarea');
+      ta.value = value; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      var ok = false;
+      try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      return ok;
+    }
+    var copyButtons = document.querySelectorAll('[data-copy]');
+    for (var j = 0; j < copyButtons.length; j++) {
+      copyButtons[j].addEventListener('click', function () {
+        var el = document.getElementById(this.getAttribute('data-copy'));
+        var value = el ? el.textContent : '';
+        var lang = current();
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(value).then(function () { announce(text[lang].copied); }, function () {
+            announce(fallbackCopy(value) ? text[lang].copied : text[lang].copyFailed);
+          });
+        } else {
+          announce(fallbackCopy(value) ? text[lang].copied : text[lang].copyFailed);
+        }
+      });
+    }
+
+    // Minimal YAML highlighting: comments, keys, quoted strings.
+    var code = document.querySelector('#example-yaml code');
+    if (code) {
+      var esc = function (s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+      code.innerHTML = code.textContent.split('\n').map(function (line) {
+        var comment = '';
+        var idx = line.search(/(^|\s)#\s/);
+        if (idx >= 0) { comment = line.slice(idx); line = line.slice(0, idx); }
+        var out = esc(line)
+          .replace(/'[^']*'/g, function (m) { return '<span class="s">' + m + '</span>'; })
+          .replace(/^(\s*(?:-\s+)?)([A-Za-z_][\w.]*)(:)/, '$1<span class="k">$2</span>$3');
+        return out + (comment ? '<span class="c">' + esc(comment) + '</span>' : '');
+      }).join('\n');
+    }
+  })();
+</script>
+</body>
+</html>
