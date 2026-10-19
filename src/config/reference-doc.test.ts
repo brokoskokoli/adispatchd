@@ -243,7 +243,8 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain(`| \`monitoring.top_processes\` | Integer | \`${DEFAULTS.monitoringTopProcesses}\` |`);
     expect(markdown).toContain(`| \`monitoring.min_cpu_percent\` | Zahl | \`${DEFAULTS.monitoringMinCpuPercent}\` |`);
     expect(markdown).toContain(`höchstens \`${MAX_DEFAULT_MONITORING_INTERVAL_MS / 1000}s\` | ≥ ${MIN_MONITORING_INTERVAL_MS / 1000} s |`);
-    expect(markdown).toContain('ps -A -o pid=,ppid=,pgid=,time=,rss=,comm=');
+    expect(markdown).toContain('ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=');
+    expect(markdown).toContain('PR_SET_NAME');
     expect(markdown).toContain('**nur Befehlsnamen, nie Argumente**');
   });
 

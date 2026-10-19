@@ -99,14 +99,14 @@ Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 2
 Paket `adispatchd` auf npm, Befehl `adispatch`. Für Dienste immer eine **feste Version** global installieren (kein `npx`):
 
 ```bash
-npm install -g adispatchd@0.3.1                 # aus der npm-Registry
+npm install -g adispatchd@0.4.0                 # aus der npm-Registry
 npx adispatchd --help                           # nur zum Ausprobieren, ohne Installation
 
 # alternativ aus dem Repository-Checkout:
 git clone https://github.com/brokoskokoli/adispatchd.git && cd adispatchd
 npm install
-npm pack                                        # baut (prepack) und erzeugt adispatchd-0.3.1.tgz
-npm install -g ./adispatchd-0.3.1.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
+npm pack                                        # baut (prepack) und erzeugt adispatchd-0.4.0.tgz
+npm install -g ./adispatchd-0.4.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
 # lokal ohne globale Installation: npm run build && node dist/cli/main.js <kommando> …
 ```
 
@@ -336,7 +336,7 @@ Kurzfassung – Details in [docs/operations.md](docs/operations.md):
 
 ## Projektstand und Roadmap
 
-Version 0.3.1. Alle geplanten Work-Items sind umgesetzt und durch eine automatisierte Testsuite abgedeckt (CI auf
+Version 0.4.0. Alle geplanten Work-Items sind umgesetzt und durch eine automatisierte Testsuite abgedeckt (CI auf
 Node 22 und 24). Die manuelle Prüfung gegen echte GitHub-Repositories und systemd unter Linux steht noch aus – was vor
 dem Produktivbetrieb offen ist, steht in [docs/status.md](docs/status.md), Release-Notizen in [CHANGELOG.md](CHANGELOG.md).
 

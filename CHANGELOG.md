@@ -3,7 +3,7 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
-## [0.3.1] – unveröffentlicht
+## [0.4.0] – unveröffentlicht
 
 ### Hinzugefügt
 
@@ -14,8 +14,10 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   `workspace.base_dir`), aktuellen Werten (CPU, Load, RAM, Platte) als Zahlen und Tabelle, Tooltip je Zeitpunkt,
   Zeitraum-Auswahl und Live-Aktualisierung per SSE. Eigenes SVG-Rendering ohne Bibliotheken, Hell/Dunkel.
 - **Messung:** CPU aus den `os.cpus()`-Zeiten, RAM über `MemAvailable` (Linux) bzw. `vm_stat` (macOS), Platte über
-  `statfs`, Prozesse über eine `ps`-Ausführung je Intervall (`execFile`, Timeout, Ausgabe begrenzt); CPU je Prozess aus
-  dem Delta der CPU-Zeit (PID-Wiederverwendung erkannt). Zuordnung zu Runs über Prozessgruppe/Prozessbaum, bei
+  `statfs`, Prozesse über eine `ps`-Ausführung je Intervall (`execFile`, Timeout, Ausgabe begrenzt; Namen aus `ucomm`,
+  nicht dem umschreibbaren `argv[0]`); CPU je Prozess als Rate der CPU-Zeit, Prozesse über PID, Name und Startzeit
+  (`etime`) erkannt, unter Linux über mindestens 60 s gemittelt. API mit serverseitigem Downsampling (`range`,
+  `points`, Default höchstens 600 Punkte). Zuordnung zu Runs über Prozessgruppe/Prozessbaum, bei
   Container-Runs zusätzlich `<engine> stats`. **Nur Befehlsnamen, nie Argumente.** Messungen laufen nie parallel;
   Fehler (z. B. fehlendes `ps`) werden gedrosselt geloggt und lassen den Teilwert leer. Werte nur im Speicher
   (Ringpuffer, gehen beim Neustart verloren).
@@ -269,7 +271,7 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
-[0.3.1]: https://github.com/brokoskokoli/adispatchd/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/brokoskokoli/adispatchd/releases/tag/v0.1.0

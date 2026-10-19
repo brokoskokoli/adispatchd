@@ -117,7 +117,7 @@ GitHub App per role (permissions: Issues read/write, Pull requests write, Metada
 (`export GITHUB_CODER_PRIVATE_KEY="$(cat key.pem)"`), set `enabled: true` in `workflows/coder.yaml` and run
 `adispatch config reload --config-dir ./config`.
 
-For services, always install a **fixed version** globally (`npm install -g adispatchd@0.3.1`), not `npx`.
+For services, always install a **fixed version** globally (`npm install -g adispatchd@0.4.0`), not `npx`.
 
 ## Example workflow
 
@@ -260,7 +260,7 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
 ## Status and roadmap
 
-Version 0.3.1. All planned work items are implemented and covered by an automated test suite (CI on Node 22 and 24).
+Version 0.4.0. All planned work items are implemented and covered by an automated test suite (CI on Node 22 and 24).
 Manual verification against real GitHub repositories and systemd on Linux is still pending – see
 [docs/status.md](docs/status.md) for what is open before production use, and [CHANGELOG.md](CHANGELOG.md) for
 release notes.

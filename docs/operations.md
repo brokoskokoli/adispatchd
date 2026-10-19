@@ -70,8 +70,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.3.1
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.3.1.tgz
+sudo npm install -g adispatchd@0.4.0
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.4.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -320,7 +320,7 @@ server {
 
 Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen in `allowed_hosts` eintragen.
 
-## Externe Tools in der UI, z. B. claude-inspect (seit 0.3.1)
+## Externe Tools in der UI, z. B. claude-inspect (seit 0.4.0)
 
 `ui.external_links` in `config.yaml` nimmt lokale Werkzeuge in die Navigation auf – als Link in neuem Tab oder
 eingebettet (`embed: true`, Details und Validierung: [configuration-reference.md](configuration-reference.md) §3.1).
@@ -388,7 +388,7 @@ Beispiel [claude-inspect](https://github.com/brokoskokoli/claude_inspect) (Dashb
 - Aufbewahrung über `retention` in `config.yaml` (Default: erfolgreiche Runs 30 d, fehlgeschlagene 90 d, Block-Runs nie,
   100 MB Log pro Run, Prüfung alle 24 h). Aktive Runs, offene Blocks und unvollständige Aktionsketten werden nie gelöscht.
 
-### Server-Ressourcen im Dashboard (`monitoring`, seit 0.3.1)
+### Server-Ressourcen im Dashboard (`monitoring`, seit 0.4.0)
 
 - Der Daemon misst CPU, Load, RAM, freien Plattenplatz (data-dir und – falls anderes Dateisystem – `workspace.base_dir`)
   und die Prozessliste (`ps`, einmal je `monitoring.interval`, ohne Shell, Timeout 10 s). Die Werte liegen nur im
@@ -399,13 +399,22 @@ Beispiel [claude-inspect](https://github.com/brokoskokoli/claude_inspect) (Dashb
   `monitoring.enabled: false` (keine Messung, kein `ps`).
 - **Zuordnung:** eigene PID → Daemon; Prozessgruppe bzw. Prozessbaum eines Workers → dessen Run; andere Kindprozesse des
   Daemons (Shell-Actions, Conditions) → „adispatchd (hooks/checks)“. Container-Runs: der Engine-CLI-Prozess plus – wenn
-  möglich – `<engine> stats --no-stream`; unter Linux sichtbare Container-Prozesse werden nicht doppelt gezählt. Docker
-  Desktop/Podman-Maschine auf macOS: die Container laufen in einer VM, gezählt wird nur `stats`.
+  möglich – `<engine> stats --no-stream` (misst selbst nur ein kurzes Fenster von 1–2 s, nicht das ganze Intervall); unter
+  Linux sichtbare Container-Prozesse werden nicht doppelt gezählt. Docker Desktop/Podman-Maschine auf macOS: die Container
+  laufen in einer VM; der per `stats` gezählte Verbrauch wird vom VM-Prozess (`com.apple.Virtualization…`, `qemu-system*`,
+  `vfkit`, `krunkit`) abgezogen.
 - **macOS-RAM:** „verfügbar“ = free + inactive + speculative Seiten aus `vm_stat` (vergleichbar mit Linux `MemAvailable`;
   komprimierter Speicher zählt als belegt). Linux: `MemAvailable` aus `/proc/meminfo`. Fehlt beides: `os.freemem()`.
-- **Genauigkeit:** CPU je Prozess = Delta der kumulierten CPU-Zeit aus `ps` zwischen zwei Messungen (Linux-`ps` liefert
-  ganze Sekunden: bei 30 s Intervall ±3 % je Prozess). Prozesse, die zwischen zwei Messungen starten und enden, fehlen
-  in der Aufteilung; die Differenz zur Gesamtauslastung erscheint als „System / unattributed“.
+- **Genauigkeit:** CPU je Prozess = Rate der kumulierten CPU-Zeit aus `ps`; Prozesse werden über PID, Name und Startzeit
+  (`etime`) wiedererkannt. Linux-`ps` liefert ganze Sekunden, deshalb wird dort über mindestens 60 s gemittelt (kurze
+  Spitzen erscheinen geglättet). Prozesse, die zwischen zwei Messungen starten und enden, fehlen in der Aufteilung; die
+  Differenz zur Gesamtauslastung erscheint als „System / unattributed“.
+- **Prozessnamen:** `ps -o ucomm` (Abrechnungsname des Kernels, nicht das umschreibbare `argv[0]`/`process.title`),
+  zusätzlich an der ersten Leerstelle abgeschnitten. Restrisiko Linux: `prctl(PR_SET_NAME)` erlaubt einem Prozess, seinen
+  Namen (max. 15 Zeichen) selbst zu setzen.
+- **Speicher/Payload:** höchstens 5 000 Messpunkte (`retention` ≤ 5 000 Intervalle) mit je höchstens
+  `top_processes` (≤ 20) fremden Gruppen, typisch wenige MB. Die API liefert höchstens `points` (Default 600) Punkte –
+  bei längeren Zeiträumen Mittelwerte je Zeitfenster.
 - Fehler (z. B. `ps` fehlt im Container-Image) werden höchstens alle 10 min geloggt; der Teilwert bleibt leer.
 
 ## Fehlerbilder
