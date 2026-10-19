@@ -27,6 +27,7 @@ Zerlegung der Spec v0.1 in umsetzbare Pakete. **Status: alle Work-Items umgesetz
 | [21](WI-21-linked-branches.md) | Verknüpfte Branches und PRs als Item-Felder | §6 | 16 | 11 (0.3.0) |
 | [22](WI-22-keep-files.md) | Dateien vor dem Workspace-Cleanup sichern (`execute.keep`) | §8, §15, §21 | 15 | 10 (0.3.0) |
 | [23](WI-23-resource-monitor.md) | Server-Ressourcen im Dashboard (CPU, RAM, Platte, Prozesse) | §16, §21 | 22 | 12 (0.3.1) |
+| [24](WI-24-conditions-and-info.md) | Conditions in der Workflow-Ansicht, Info-Kacheln im Dashboard (`dashboard.yaml`) | §5, §16 | 22 | 12 (0.3.1) |
 
 Ablauf je Work-Item: Coder-Agent (eigener Branch/Worktree) → Reviewer-Agent (prüft gegen Acceptance Criteria + Spec) → ggf. Fix-Runde → Merge nach `main`.
 
