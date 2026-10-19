@@ -730,7 +730,7 @@ async function readConfigFiles(configDir: string, redact: Redactor): Promise<Arr
   const { readdir } = await import('node:fs/promises');
   const files: string[] = [];
   for (const top of ['config.yaml', 'sources.yaml', 'identities.yaml']) if (existsSync(path.join(configDir, top))) files.push(top);
-  for (const sub of ['workflows', 'views']) {
+  for (const sub of ['workflows', 'views', 'filters']) {
     try {
       const names = (await readdir(path.join(configDir, sub))).filter((n) => /\.ya?ml$/.test(n)).sort();
       for (const n of names) files.push(`${sub}/${n}`);

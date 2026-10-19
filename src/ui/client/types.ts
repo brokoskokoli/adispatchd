@@ -231,7 +231,7 @@ export interface DryRunResult {
   capacity: { global: { active: number; max: number }; workflow: { active: number; max: number } };
   gate: { canStartAutomatically: boolean; reason: string | null } | null;
   conditions: CheckDiagnosis[];
-  source: { sourceId: string; polled: number; pushdown: unknown; error: string | null } | null;
+  source: { sourceId: string; polled: number; filter?: unknown; pushdown: unknown; error: string | null } | null;
   candidates: Candidate[];
   cron: { cron: string; timezone: string; nextSlots: string[]; nextSlotForecast: string; forecastReason: string | null; recentFirings: CronFiring[]; blockId: number | null } | null;
   notes: string[];

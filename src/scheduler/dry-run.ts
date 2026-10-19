@@ -90,6 +90,7 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
     result.source = {
       sourceId: trigger.source,
       polled: prepared.diagnosis.polled,
+      filter: workflow.filter,
       pushdown: prepared.diagnosis.pushdown,
       error: prepared.diagnosis.error,
     };

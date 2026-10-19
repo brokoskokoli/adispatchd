@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createTempConfigDir, type TempConfigDir } from '../config/testing/fixtures.js';
@@ -123,6 +123,23 @@ describe('cli workflow dry-run (local)', () => {
     ]); // #3 is excluded by the label pushdown
     expect(result.source).toMatchObject({ polled: 2, pushdown: { field: 'labels', operator: 'contains', value: 'ready-for-coding' } });
     expect(result.notes.some((n) => n.includes('no --data-dir'))).toBe(true);
+  });
+
+  it('shows the expanded filter of a workflow using a named filter (WI-15)', async () => {
+    const { tmp, deps } = await setup();
+    const workflow = readFileSync(path.join(tmp.dir, 'workflows/coder.yaml'), 'utf8');
+    await tmp.write({
+      'filters/ready.yaml': 'id: ready\nfilter: { field: labels, operator: contains, value: ready-for-coding }\n',
+      'workflows/coder.yaml': workflow.replace(/^filter: .*$/m, 'filter: { all: [ { use: ready } ] }'),
+    });
+    const io = await run(['workflow', 'dry-run', 'coder', '--config-dir', tmp.dir], deps);
+    expect(io.err).toBe('');
+    expect(io.code).toBe(0);
+    const predicate = '{"field":"labels","operator":"contains","value":"ready-for-coding"}';
+    expect(io.out).toContain(`  filter: {"all":[${predicate}]}\n`);
+    expect(io.out).toContain(`2 item(s) polled, pushdown ${predicate}`);
+    expect(io.out).toContain('labels contains "ready-for-coding": true');
+    expect(io.out).not.toContain('"use"');
   });
 
   it('fails for unknown workflows, missing config dir and source errors', async () => {

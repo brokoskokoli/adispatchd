@@ -61,6 +61,8 @@ export function formatDryRun(r: DryRunResult): string {
   if (r.gate) lines.push(`  automatic starts: ${r.gate.canStartAutomatically ? 'possible' : `not possible (${r.gate.reason ?? 'unknown'})`}`);
   for (const c of r.conditions) lines.push(`  ${checkLine(c)}`);
   if (r.source) {
+    // `filter` is missing in results of older instances (before 0.2.0).
+    if (r.source.filter !== undefined) lines.push(`  filter: ${r.source.filter ? JSON.stringify(r.source.filter) : '(none)'}`);
     lines.push(`  source ${r.source.sourceId}: ${r.source.polled} item(s) polled${r.source.pushdown ? `, pushdown ${JSON.stringify(r.source.pushdown)}` : ''}`);
     if (r.source.error) lines.push(`  SOURCE ERROR: ${r.source.error}`);
     lines.push('', `Candidates (${r.summary.candidates}): ${r.summary.wouldStart} would start, ${r.summary.pendingChecks} pending checks, ${r.summary.notStartable} not startable`);

@@ -214,8 +214,11 @@ export interface DryRunResult {
   gate: GateInfo | null;
   /** Workflow conditions – never executed in a dry-run (`not_evaluated`). */
   conditions: CheckDiagnosis[];
-  /** Source workflows only. */
-  source: { sourceId: string; polled: number; pushdown: FilterNode | null; error: string | null } | null;
+  /**
+   * Source workflows only. `filter` is the declarative filter as evaluated: references to named
+   * filters (WI-15) are already expanded.
+   */
+  source: { sourceId: string; polled: number; filter: FilterNode | null; pushdown: FilterNode | null; error: string | null } | null;
   /** Source workflows only; planning order, cheap-filter rejections last. */
   candidates: CandidateDiagnosis[];
   /** Schedule workflows only. */

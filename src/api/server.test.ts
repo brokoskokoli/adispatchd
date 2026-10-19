@@ -1,4 +1,4 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { REPO_A, startAppEnv, type AppEnv } from './testing/helpers.js';
@@ -380,6 +380,12 @@ describe('configuration and notifications', () => {
     expect(config.content).toContain('[REDACTED]');
     expect(config.content).not.toContain('LITERAL-SECRET-URL');
     expect(files.json.files.map((f: { file: string }) => f.file)).toContain('workflows/coder.yaml');
+    // Named filters (WI-15): listed in the config (expanded) and shown as files.
+    expect(cfg.json.config.filters).toEqual({});
+    mkdirSync(path.join(env.configDir, 'filters'), { recursive: true });
+    writeFileSync(path.join(env.configDir, 'filters', 'spare.yaml'), 'id: spare\nfilter: { field: number, operator: equals, value: 1 }\n');
+    expect((await env.request('GET', '/api/v1/config/files')).json.files.map((f: { file: string }) => f.file)).toContain('filters/spare.yaml');
+    rmSync(path.join(env.configDir, 'filters'), { recursive: true });
     expect((await env.request('POST', '/api/v1/config/validate')).json.ok).toBe(true);
 
     // A secret added on disk without reload is not known to any redactor – the structural redaction still masks it.
