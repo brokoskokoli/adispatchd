@@ -15,14 +15,16 @@ let child: ChildProcess | undefined;
 const extra: ChildProcess[] = [];
 
 afterAll(() => {
+  // Only the process groups of the children this test spawned itself (detached → group ID = their PID).
   for (const c of extra) {
+    if (typeof c.pid !== 'number' || c.pid <= 1) continue;
     try {
-      process.kill(-c.pid!, 'SIGKILL');
+      process.kill(-c.pid, 'SIGKILL');
     } catch {
       // already gone
     }
   }
-  if (child?.pid) {
+  if (typeof child?.pid === 'number' && child.pid > 1) {
     try {
       process.kill(-child.pid, 'SIGKILL');
     } catch {
