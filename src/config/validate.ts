@@ -31,6 +31,7 @@ import {
   workflowFieldContext,
   type FieldIssue,
 } from './field-catalog.js';
+import { validateExternalLinks } from './external-links.js';
 import type { RawFilterNode } from './filter-schema.js';
 import { formatIssuePath, type IssueCollector, type IssuePath } from './issues.js';
 import {
@@ -135,6 +136,7 @@ export function validateSemantics(input: SemanticInput, issues: IssueCollector):
 }
 
 function validateGlobal(global: GlobalConfig, issues: IssueCollector): void {
+  validateExternalLinks(global.ui.externalLinks, CONFIG_FILE, issues);
   const ids = new Set<string>();
   global.notifications.channels.forEach((channel, i) => {
     const at: IssuePath = ['notifications', 'channels', i];

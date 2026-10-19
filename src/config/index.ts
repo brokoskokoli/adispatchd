@@ -50,3 +50,4 @@ export {
   type ParameterValidationResult,
 } from './parameters.js';
 export { toPublicConfig } from './public.js';
+export { activeExternalLinks, externalLinkFrameOrigins, isTokenLikeParam, type ExternalLinkInfo } from './external-links.js';

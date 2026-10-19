@@ -36,13 +36,14 @@ import {
   type TechnicalStatus,
 } from '../core/index.js';
 import { readFileNoFollow } from '../executors/index.js';
-import { loadConfig, toPublicConfig, type ConfigManager, type ReloadResult } from '../config/index.js';
+import { activeExternalLinks, externalLinkFrameOrigins, loadConfig, toPublicConfig, type ConfigManager, type ReloadResult } from '../config/index.js';
 import type { LifecycleEngine } from '../lifecycle/index.js';
 import type { NotificationService } from '../notifications/index.js';
 import type { Repositories, RunRecord } from '../persistence/index.js';
 import { listKeptFiles, RUN_EVENTS, type RetentionService, type RunController } from '../runs/index.js';
 import type { Scheduler } from '../scheduler/index.js';
 import type { ViewService } from '../views/index.js';
+import { uiContentSecurityPolicy } from './csp.js';
 import { ApiError, toErrorResponse } from './errors.js';
 import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile } from './kept.js';
 import { readLogPage } from './logs.js';
@@ -316,7 +317,12 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'no-referrer');
     reply.header('x-frame-options', 'DENY');
-    if (req.url.startsWith('/api/') || req.url === '/health' || req.url === '/ready') reply.header('cache-control', 'no-store');
+    const pathname = req.url.split('?')[0] ?? '';
+    if (pathname.startsWith('/api/') || pathname === '/health' || pathname === '/ready') reply.header('cache-control', 'no-store');
+    else if (!reply.hasHeader('content-security-policy')) {
+      // Web UI: frame-src follows the active configuration (updated by every reload).
+      reply.header('content-security-policy', uiContentSecurityPolicy(externalLinkFrameOrigins(deps.config.current.global)));
+    }
     return payload;
   });
   app.setErrorHandler((err, req, reply) => {
@@ -713,7 +719,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
   // --- Configuration --------------------------------------------------------
   app.get('/api/v1/config', async () => {
     const cfg = toPublicConfig(deps.config.current);
-    return { config: cfg, overrides: deps.config.getOverrides() };
+    return { config: cfg, overrides: deps.config.getOverrides(), externalLinks: activeExternalLinks(deps.config.current.global) };
   });
   app.get('/api/v1/config/files', async () => ({ files: await readConfigFiles(deps.config.current.configDir, redact) }));
   app.post('/api/v1/config/validate', async (req) => {
