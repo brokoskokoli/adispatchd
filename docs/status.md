@@ -1,8 +1,8 @@
 # Projektstand
 
-Stand: 19. Oktober 2026 · `main` + Branches `wi-14-project-fields` und `wi-15-named-filters` (Version 0.2.0)
+Stand: 19. Oktober 2026 · `main`, Version 0.2.0
 
-Alle Work-Items WI-01 bis WI-13 (siehe `docs/work-items/`) sind umgesetzt. WI-14 (Filter auf GitHub-Projects-Felder, `state_reason`/`milestone`/`issue_type`, Identity-Art `github_token`, Version 0.2.0, `CHANGELOG.md`) ist auf `wi-14-project-fields` umgesetzt und wartet auf Review/Merge. WI-15 (benannte, wiederverwendbare Filter in `filters/*.yaml`, `filter: <id>` / `{ use: <id> }`) baut darauf auf und ist auf `wi-15-named-filters` umgesetzt und reviewt, die Findings (u. a. Größengrenze 10 000 Knoten für expandierte Filter) sind behoben; Merge nach WI-14. Jedes wurde von einem Reviewer-Agent gegen seine Acceptance Criteria und die Spec geprüft, die Findings wurden behoben, dann wurde es gemergt. Details zu jedem Work-Item stehen in `docs/handoff/WI-NN.md`.
+Alle Work-Items WI-01 bis WI-15 (siehe `docs/work-items/`) sind umgesetzt. WI-14 brachte Filter auf GitHub-Projects-Felder (`project.<Feld>`), die Felder `state_reason`/`milestone`/`issue_type`, die Identity-Art `github_token` und `CHANGELOG.md`; WI-15 brachte benannte, wiederverwendbare Filter in `filters/*.yaml` (`filter: <id>` / `{ use: <id> }`, Größengrenze 10 000 Knoten). Jedes Work-Item wurde von einem Reviewer-Agent gegen seine Acceptance Criteria und die Spec geprüft, die Findings wurden behoben, dann wurde es gemergt. Details zu jedem Work-Item stehen in `docs/handoff/WI-NN.md`.
 
 - **Gate (0.2.0):** `npm run check` grün auf macOS und Linux (Container `node:24`): 813 Tests (1 übersprungen); `npm run test:pack` grün auf beiden.
 - **Paket-Test:** `npm run test:pack` grün (pack → install → init → start → Run → drain → Update).
