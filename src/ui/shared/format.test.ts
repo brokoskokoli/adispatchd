@@ -11,8 +11,18 @@ import {
   prettyJson,
   runBadges,
   safeHttpUrl,
+  triggerSummary,
   truncate,
 } from './format.js';
+
+describe('triggerSummary', () => {
+  it('lists all sources of a multi-source workflow (WI-20)', () => {
+    expect(triggerSummary({ type: 'source', source: 'repo_a' })).toBe('source: repo_a');
+    expect(triggerSummary({ type: 'source', source: 'repo_a', sources: ['repo_a', 'repo_b'] })).toBe('sources: repo_a, repo_b');
+    expect(triggerSummary({ type: 'schedule', cron: '0 3 * * *' })).toBe('schedule: 0 3 * * * (UTC)');
+    expect(triggerSummary({ type: 'manual' })).toBe('manual');
+  });
+});
 
 describe('formatting', () => {
   it('formatDuration', () => {

@@ -110,13 +110,22 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 | GET | `/api/v1/workflows` | – | `{"workflows":[Workflow], "overrides":{"global":{},"workflows":{}}}` |
 | GET | `/api/v1/workflows/:id` | – | Workflow + `diagnosis` (letzte Planungsdiagnose), `filter`, `hooks` |
 | PATCH | `/api/v1/workflows/:id/runtime` | `{"enabled"?: bool\|null, "priority"?: number\|null, "maxConcurrent"?: int≥1\|null}` (`null` = Override entfernen) | `200` Workflow |
-| POST | `/api/v1/workflows/:id/start` | `{"item"?: "https://github.com/o/r/issues/7" \| "#7" \| "7", "parameters"?: {…}}` | `202 {"run": RunSummary}` |
-| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14) |
+| POST | `/api/v1/workflows/:id/start` | `{"item"?: "https://github.com/o/r/issues/7" \| "#7" \| "7" \| "repo_a:7", "parameters"?: {…}}` | `202 {"run": RunSummary}` |
+| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14; `source.sources` je Source, `capacity.perSource`, WI-20) |
 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
 `overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?}}`,
 `execute {type, command, args, workingDirectory, timeout, secrets: [Namen]}`, `hasFilter`, `hasShellFilter`,
 `conditions {workflow, item}` (Anzahl), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
+
+Mehrere Sources (WI-20): `trigger` enthält dann zusätzlich `sources: [<id>, …]` (`source` = erste Source, wie bisher);
+`maxConcurrentPerSource` (`null` = nicht konfiguriert); `lastPlanning.sources: [{sourceId, status, error, polled}]` (auch
+bei einer Source, ein Eintrag; `lastPlanning.status` ist `source_error`, sobald eine Source ausfiel, `error` fasst die
+Meldungen zusammen). Die Planungsdiagnose (`diagnosis`) und das DryRunResult (`source`) behalten `sourceId` (erste
+Source), `polled` (Summe), `pushdown` und `error` und haben zusätzlich `sources: [{sourceId, status, error, polled,
+pushdown}]`; neuer Kandidaten-Status `source_limit` (`max_concurrent_per_source` erreicht). Manueller Start: `item` darf
+`<source>:<nr>` sein; bei mehreren Sources wird die Source aus URL bzw. Präfix abgeleitet, sonst `400
+manual_item_invalid_ref` mit Hinweis.
 
 Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven Lock (`409 lock_conflict`).
 

@@ -155,6 +155,8 @@ export function toWorkflowView(
     enabled: wf.enabled,
     priority: wf.priority,
     maxConcurrent: wf.maxConcurrent,
+    /** `max_concurrent_per_source` (WI-20), `null` = not configured. */
+    maxConcurrentPerSource: c.maxConcurrentPerSource ?? null,
     configured: { enabled: c.enabled, priority: c.priority, maxConcurrent: c.maxConcurrent },
     overrides: wf.overrides,
     trigger: c.trigger,
@@ -183,6 +185,8 @@ export function toWorkflowView(
           polled: extra.diagnosis.polled,
           candidates: extra.diagnosis.candidates.length,
           started: extra.diagnosis.candidates.filter((x) => x.decision === 'started').length,
+          // Per source (WI-20).
+          sources: extra.diagnosis.sources.map((x) => ({ sourceId: x.sourceId, status: x.status, error: x.error, polled: x.polled })),
         }
       : null,
   };

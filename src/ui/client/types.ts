@@ -150,6 +150,8 @@ export interface Status {
 export interface Trigger {
   type: string;
   source?: string;
+  /** Multi-source workflows (WI-20): all sources in configured order. */
+  sources?: string[];
   cron?: string;
   timezone?: string;
 }
@@ -161,6 +163,8 @@ export interface Workflow {
   enabled: boolean;
   priority: number;
   maxConcurrent: number;
+  /** WI-20; absent from older instances. */
+  maxConcurrentPerSource?: number | null;
   configured: { enabled: boolean; priority: number; maxConcurrent: number };
   overrides: { enabled?: boolean; priority?: number; maxConcurrent?: number };
   trigger: Trigger;
@@ -174,10 +178,28 @@ export interface Workflow {
   conditions: { workflow: number; item: number };
   maxTechnicalFailures: number;
   cron: { nextSlot: string | null; lastFiring: { scheduledFor: string; decision: string; runId: string | null; reason: string | null } | null } | null;
-  lastPlanning: { at: string; status: string; error: string | null; polled: number; candidates: number; started: number } | null;
+  lastPlanning: {
+    at: string;
+    status: string;
+    error: string | null;
+    polled: number;
+    candidates: number;
+    started: number;
+    /** Per source (WI-20); absent from older instances. */
+    sources?: SourcePoll[];
+  } | null;
   diagnosis?: unknown;
   filter?: unknown;
   hooks?: Record<string, unknown[]>;
+}
+
+/** Poll result of one source (WI-20). */
+export interface SourcePoll {
+  sourceId: string;
+  status: string;
+  error: string | null;
+  polled: number;
+  pushdown?: unknown;
 }
 
 export interface CheckDiagnosis {
@@ -198,6 +220,8 @@ export type FilterTrace =
   | { kind: 'invalid'; value: unknown; reason: string };
 
 export interface Candidate {
+  /** Absent from very old instances only. */
+  sourceId?: string;
   itemKey: string;
   url: string;
   title: string | null;
@@ -228,10 +252,15 @@ export interface DryRunResult {
   generatedAt: string;
   enabled: boolean;
   workflowPriority: number;
-  capacity: { global: { active: number; max: number }; workflow: { active: number; max: number } };
+  capacity: {
+    global: { active: number; max: number };
+    workflow: { active: number; max: number };
+    /** `max_concurrent_per_source` (WI-20). */
+    perSource?: { max: number; active: Record<string, number> };
+  };
   gate: { canStartAutomatically: boolean; reason: string | null } | null;
   conditions: CheckDiagnosis[];
-  source: { sourceId: string; polled: number; filter?: unknown; pushdown: unknown; error: string | null } | null;
+  source: { sourceId: string; polled: number; filter?: unknown; pushdown: unknown; error: string | null; sources?: SourcePoll[] } | null;
   candidates: Candidate[];
   cron: { cron: string; timezone: string; nextSlots: string[]; nextSlotForecast: string; forecastReason: string | null; recentFirings: CronFiring[]; blockId: number | null } | null;
   notes: string[];

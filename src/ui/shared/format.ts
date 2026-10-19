@@ -6,6 +6,13 @@
 /** Visual tone of a badge / message. */
 export type Tone = 'ok' | 'warn' | 'error' | 'info' | 'muted';
 
+/** Workflow trigger as shown in lists: `source: a`, `sources: a, b` (WI-20), `schedule: … (tz)`, `manual`. */
+export function triggerSummary(t: { type: string; source?: string; sources?: readonly string[]; cron?: string; timezone?: string }): string {
+  if (t.type === 'source') return t.sources ? `sources: ${t.sources.join(', ')}` : `source: ${t.source ?? '?'}`;
+  if (t.type === 'schedule') return `schedule: ${t.cron ?? '?'} (${t.timezone ?? 'UTC'})`;
+  return t.type;
+}
+
 /** Duration as `850 ms`, `12s`, `3m 05s`, `2h 04m`, `3d 02h`; `—` for null/invalid. */
 export function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms) || ms < 0) return '—';
