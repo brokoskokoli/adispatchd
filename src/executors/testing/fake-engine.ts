@@ -121,6 +121,8 @@ async function main() {
       else env[e.slice(0, j)] = translate(e.slice(j + 1));
     }
     if (command.length === 0) { process.stderr.write('no command\n'); return 125; }
+    // Register the container before its command can print anything (a real engine creates it before starting it).
+    fs.writeFileSync(file(opts.name), JSON.stringify({ name: opts.name, labels: opts.labels, pid: null, rm: opts.rm }));
     const child = spawn(command[0], command.slice(1).map(translate), { cwd: toHost(opts.workdir || '/'), env, stdio: 'inherit' });
     fs.writeFileSync(file(opts.name), JSON.stringify({ name: opts.name, labels: opts.labels, pid: child.pid, rm: opts.rm }));
     const code = await new Promise((resolve) => {
