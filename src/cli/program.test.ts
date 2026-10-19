@@ -32,6 +32,7 @@ describe('cli program', () => {
       'config validate',
       'config reload',
       'workflow dry-run',
+      'auth hash-password',
       'service install',
       'service status',
       'service uninstall',

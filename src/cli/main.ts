@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Executable entry point of the `adispatch` binary. */
+import { createHashPasswordHandler } from './auth.js';
 import { createConfigValidateHandler } from './config-validate.js';
 import { createConfigReloadHandler, createSchedulerHandler, createShutdownHandler, createStatusHandler } from './control.js';
 import { createInitHandler } from './init.js';
@@ -23,6 +24,7 @@ await createProgram(
     serviceInstall: createServiceInstallHandler(processIo),
     serviceStatus: createServiceStatusHandler(processIo),
     serviceUninstall: createServiceUninstallHandler(processIo),
+    authHashPassword: createHashPasswordHandler(processIo),
   },
   processIo,
 ).parseAsync(process.argv);

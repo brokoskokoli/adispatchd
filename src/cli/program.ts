@@ -99,6 +99,7 @@ export interface CliHandlers {
   serviceInstall?: Handler<ServiceCliOptions>;
   serviceStatus?: Handler<ServiceCliOptions>;
   serviceUninstall?: Handler<ServiceCliOptions>;
+  authHashPassword?: Handler<GlobalOptions>;
 }
 
 /** Streams/side effects used by the CLI (injectable for tests). */
@@ -142,6 +143,7 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
         '  config validate               validate the configuration offline',
         '  config reload                 reload the configuration of the running instance',
         '  workflow dry-run <workflow>   show candidate selection without starting anything',
+        '  auth hash-password            print the scrypt hash of a password (auth.mode: password)',
         '  service install               install the systemd service (Linux)',
         '  service status                show the systemd service status',
         '  service uninstall             remove the systemd service',
@@ -224,6 +226,12 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
       }
       io.setExitCode(await handlers.workflowDryRun(workflowId, cmd.optsWithGlobals<DryRunCliOptions>()));
     });
+
+  const auth = program.command('auth').description('authentication helpers (auth in config.yaml)');
+  auth
+    .command('hash-password')
+    .description('read a password (terminal without echo, or the first line of stdin) and print its scrypt hash')
+    .action(run('auth hash-password', handlers.authHashPassword));
 
   const service = program.command('service').description('systemd service management (Linux)');
   const serviceCommand = (name: string, description: string, handler: Handler<ServiceCliOptions> | undefined): Command =>

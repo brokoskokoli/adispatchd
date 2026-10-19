@@ -125,7 +125,9 @@ export function createStartHandler(io: Pick<CliIo, 'stdout' | 'stderr'>, deps: S
     if (graceWarning) io.stderr(`warning: ${graceWarning}\n`);
     if (!uiDir) io.stderr('Note: web UI assets not found (run `npm run build`); serving the API only.\n');
     const host = new URL(url).hostname;
-    if (!isLoopback(host)) {
+    const authMode = app.config.current.global.auth.mode;
+    if (authMode !== 'none') io.stdout(`authentication: ${authMode} (CLI control token: ${path.join(dataDir, 'control.token')})\n`);
+    if (!isLoopback(host) && authMode === 'none') {
       io.stderr(
         `WARNING: the HTTP API is bound to ${host} without authentication. Only expose it behind an authenticating reverse proxy or VPN ` +
           '(add its host name to server.allowed_hosts; see docs/operations.md).\n',

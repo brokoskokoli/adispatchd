@@ -7,7 +7,7 @@
  */
 import { errorMessage, parseDuration, type FetchLike } from '../core/index.js';
 import { formatConfigIssue, type ConfigIssue } from '../config/index.js';
-import { ApiClient, ApiResponseError, ApiUnreachableError, EXIT_UNREACHABLE, resolveBaseUrl } from './http-client.js';
+import { ApiClient, ApiResponseError, ApiUnreachableError, authHint, EXIT_UNREACHABLE, resolveBaseUrl, resolveControlToken } from './http-client.js';
 import type { CliIo, ControlCliOptions, ShutdownCliOptions } from './program.js';
 
 /** Exit code when `--wait` timed out. */
@@ -28,20 +28,23 @@ async function client(opts: ControlCliOptions, io: Io, deps: ControlDeps): Promi
   try {
     const { url, note } = await resolveBaseUrl(opts);
     if (note) io.stderr(`note: ${note}\n`);
-    return new ApiClient(url, deps.fetch ? { fetch: deps.fetch } : {});
+    const token = resolveControlToken(url, opts);
+    return new ApiClient(url, { ...(deps.fetch ? { fetch: deps.fetch } : {}), controlToken: token?.token ?? null });
   } catch (err) {
     io.stderr(`${errorMessage(err)}\n`);
     return 2;
   }
 }
 
-function reportError(name: string, err: unknown, io: Io): number {
+function reportError(name: string, err: unknown, io: Io, opts: { dataDir?: string } = {}): number {
   if (err instanceof ApiUnreachableError) {
     io.stderr(`${name}: ${err.message}\n`);
     return EXIT_UNREACHABLE;
   }
   if (err instanceof ApiResponseError) {
     io.stderr(`${name}: ${err.message} (HTTP ${err.status}, ${err.code})\n`);
+    const hint = authHint(err, opts);
+    if (hint) io.stderr(`hint: ${hint}\n`);
     return 1;
   }
   io.stderr(`${name}: ${errorMessage(err)}\n`);
@@ -84,7 +87,7 @@ export function createStatusHandler(io: Io, deps: ControlDeps = {}) {
       io.stdout(opts.json ? `${JSON.stringify(body, null, 2)}\n` : formatStatus(body));
       return 0;
     } catch (err) {
-      return reportError('status', err, io);
+      return reportError('status', err, io, opts);
     }
   };
 }
@@ -103,7 +106,7 @@ export function createSchedulerHandler(action: 'pause' | 'resume', io: Io, deps:
       );
       return 0;
     } catch (err) {
-      return reportError(action, err, io);
+      return reportError(action, err, io, opts);
     }
   };
 }
@@ -155,7 +158,7 @@ export function createShutdownHandler(mode: 'drain' | 'cancel-all', io: Io, deps
         for (const id of active) io.stdout(`  ${id}\n`);
       }
     } catch (err) {
-      return reportError(mode, err, io);
+      return reportError(mode, err, io, opts);
     }
     return opts.wait ? waitForStop(api, opts, io, deps) : 0;
   };
@@ -194,7 +197,7 @@ export function createConfigReloadHandler(io: Io, deps: ControlDeps = {}) {
         io.stderr(`config reload rejected – the active configuration was kept:\n${issueList(details.errors)}`);
         return 1;
       }
-      return reportError('config reload', err, io);
+      return reportError('config reload', err, io, opts);
     }
   };
 }

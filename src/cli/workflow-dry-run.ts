@@ -22,7 +22,7 @@ import { ConfigLoadError, ConfigManager, formatConfigIssue } from '../config/ind
 import { MIGRATIONS, createRepositories, schemaVersion } from '../persistence/index.js';
 import { dryRunWorkflow, emptyState, formatDryRun, repositoryState, type DryRunResult, type SchedulingState } from '../scheduler/index.js';
 import { SourceRegistry } from '../app.js';
-import { ApiClient, ApiResponseError, ApiUnreachableError, EXIT_UNREACHABLE, resolveBaseUrl } from './http-client.js';
+import { ApiClient, ApiResponseError, ApiUnreachableError, authHint, EXIT_UNREACHABLE, resolveBaseUrl, resolveControlToken } from './http-client.js';
 import type { CliIo, DryRunCliOptions } from './program.js';
 
 /** Injectable dependencies (tests: Fake-GitHub `fetch`, key env). */
@@ -133,7 +133,7 @@ async function dryRunRemote(
     io.stderr(`workflow dry-run: ${errorMessage(err)}\n`);
     return { done: true, code: 2 };
   }
-  const api = new ApiClient(url, deps.apiFetch ? { fetch: deps.apiFetch } : {});
+  const api = new ApiClient(url, { ...(deps.apiFetch ? { fetch: deps.apiFetch } : {}), controlToken: resolveControlToken(url, opts)?.token ?? null });
   try {
     const { body } = await api.post<DryRunResult>(`/api/v1/workflows/${encodeURIComponent(workflowId)}/dry-run`);
     io.stdout(opts.json ? `${JSON.stringify(body, null, 2)}\n` : formatDryRun(body));
@@ -151,6 +151,8 @@ async function dryRunRemote(
       return { done: true, code: 1 };
     }
     io.stderr(`workflow dry-run: ${errorMessage(err)}${err instanceof ApiResponseError ? ` (HTTP ${err.status}, ${err.code})` : ''}\n`);
+    const hint = err instanceof ApiResponseError ? authHint(err, opts) : null;
+    if (hint) io.stderr(`hint: ${hint}\n`);
     return { done: true, code: 1 };
   }
 }

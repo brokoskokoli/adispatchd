@@ -15,6 +15,7 @@ export type {
 } from './program.js';
 export { processIo } from './program.js';
 export { createConfigValidateHandler, EXIT_CONFIG_INVALID, EXIT_CONFIG_VALID } from './config-validate.js';
+export { createHashPasswordHandler, MIN_PASSWORD_LENGTH, type HashPasswordDeps, type PasswordInput } from './auth.js';
 export { createWorkflowDryRunHandler, type WorkflowDryRunDeps } from './workflow-dry-run.js';
 export { createStartHandler, parseStartFlags, type StartDeps } from './start.js';
 export { createInitHandler, initDirectories, type InitResult } from './init.js';
@@ -35,6 +36,9 @@ export {
   DEFAULT_API_URL,
   EXIT_UNREACHABLE,
   resolveBaseUrl,
+  resolveControlToken,
+  isLoopbackUrl,
+  SERVICE_DATA_DIR,
   urlForBind,
 } from './http-client.js';
 export {

@@ -9,11 +9,15 @@
  *   server's allowlist.
  * - Mutating requests carry the CSRF header `X-Adispatch-Request: 1` and a
  *   JSON body (never form data); no `Origin` is sent.
+ * - Authentication (WI-26): the local control token from
+ *   `<data-dir>/control.token` is sent as `X-Adispatch-Control-Token` – only
+ *   to loopback URLs (the daemon accepts it only from loopback anyway).
  */
 import { accessSync, constants } from 'node:fs';
 import path from 'node:path';
 import { errorMessage, type FetchLike } from '../core/index.js';
 import { loadConfig } from '../config/index.js';
+import { CONTROL_TOKEN_HEADER, controlTokenPath, readControlToken } from '../api/index.js';
 
 /** Default base URL (Spec §5.1 defaults). */
 export const DEFAULT_API_URL = 'http://127.0.0.1:8787';
@@ -106,6 +110,51 @@ export async function resolveBaseUrl(opts: { url?: string; configDir?: string; d
   return { url: DEFAULT_API_URL };
 }
 
+/** Default data dir of a systemd installation (docs/operations.md), tried when no `--data-dir` is given. */
+export const SERVICE_DATA_DIR = '/var/lib/adispatchd';
+
+/** True if `baseUrl` points at this host (loopback name or address). */
+export function isLoopbackUrl(baseUrl: string): boolean {
+  try {
+    const h = new URL(baseUrl).hostname.replace(/^\[|\]$/g, '').toLowerCase();
+    return h === 'localhost' || h === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Control token for a loopback URL (WI-26): `<--data-dir>/control.token`, without
+ * `--data-dir` `./data` and then {@link SERVICE_DATA_DIR}. `null` for remote URLs
+ * or if no readable token exists (the instance may run with `auth.mode: none`).
+ */
+export function resolveControlToken(baseUrl: string, opts: { dataDir?: string }): { token: string; file: string } | null {
+  if (!isLoopbackUrl(baseUrl)) return null;
+  const dirs = opts.dataDir ? [path.resolve(opts.dataDir)] : [path.resolve('data'), SERVICE_DATA_DIR];
+  for (const dir of dirs) {
+    const file = controlTokenPath(dir);
+    const token = readControlToken(file);
+    if (token) return { token, file };
+  }
+  return null;
+}
+
+/** Hint for 401/403 answers of an instance with authentication (WI-26). */
+export function authHint(err: ApiResponseError, opts: { dataDir?: string }): string | null {
+  if (err.status !== 401 && err.status !== 403) return null;
+  if (err.code === 'invalid_control_token') {
+    return 'the control token is outdated (the instance was restarted?) or belongs to another instance – check --data-dir';
+  }
+  if (err.status === 401) {
+    const where = opts.dataDir ? controlTokenPath(path.resolve(opts.dataDir)) : `<data-dir>/${path.basename(controlTokenPath('.'))}`;
+    return (
+      `the instance requires authentication (auth.mode): run the command on the same host as the service user or root ` +
+      `with --data-dir <data-dir> so it can read ${where}, and use a loopback --url`
+    );
+  }
+  return null;
+}
+
 /** JSON response of the API. */
 export interface ApiResponse<T = any> {
   status: number;
@@ -118,11 +167,15 @@ export class ApiClient {
 
   constructor(
     readonly baseUrl: string,
-    options: { fetch?: FetchLike; timeoutMs?: number } = {},
+    options: { fetch?: FetchLike; timeoutMs?: number; controlToken?: string | null } = {},
   ) {
     this.fetchFn = options.fetch ?? ((input, init) => fetch(input, init));
     this.timeoutMs = options.timeoutMs ?? 30_000;
+    // Never send the token anywhere but to this host.
+    this.controlToken = options.controlToken && isLoopbackUrl(baseUrl) ? options.controlToken : null;
   }
+
+  private readonly controlToken: string | null;
 
   private readonly timeoutMs: number;
 
@@ -174,6 +227,7 @@ export class ApiClient {
     const headers: Record<string, string> = { accept: 'application/json' };
     const mutating = method !== 'GET' && method !== 'HEAD';
     if (mutating) headers[CSRF_HEADER_NAME] = '1';
+    if (this.controlToken) headers[CONTROL_TOKEN_HEADER] = this.controlToken;
     if (body !== undefined) headers['content-type'] = 'application/json';
     const signal = AbortSignal.timeout(this.timeoutMs);
     try {
