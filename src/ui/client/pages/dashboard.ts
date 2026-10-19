@@ -6,6 +6,7 @@ import { formatDuration, formatRelative } from '../../shared/format.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
 import type { RunSummary, Status } from '../types.js';
 import { act, badge, button, confirmDialog, errorBox, isEditing, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, externalLink } from '../ui.js';
+import { createInfoSection } from './dashboard-info.js';
 
 export function schedulerStateBadge(s: Status['scheduler']): HTMLElement {
   const tone = s.state === 'running' ? 'ok' : s.state === 'paused' ? 'warn' : s.state === 'recovering' ? 'info' : 'error';
@@ -49,6 +50,9 @@ export const dashboardPage = (ctx: PageContext): Page => {
   ctx.setTitle('Dashboard');
   const el = h('div', { class: 'page' }, h('h1', null, 'Dashboard'));
   const body = h('div', { class: 'grid' }, loading());
+  // WI-24: info tiles (own module, own live handling).
+  const info = createInfoSection();
+  el.appendChild(info.el);
   el.appendChild(body);
 
   const load = async (): Promise<void> => {
@@ -238,12 +242,17 @@ export const dashboardPage = (ctx: PageContext): Page => {
   };
 
   void load();
+  void info.load();
   return {
     el,
     onLive: (msg) => {
+      info.onLive(msg);
       if (isStateChange(msg)) refresher.trigger();
     },
-    onResync: () => void refresher.now(),
+    onResync: () => {
+      void info.load();
+      void refresher.now();
+    },
     dispose: () => refresher.dispose(),
   };
 };

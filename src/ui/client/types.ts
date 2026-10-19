@@ -237,7 +237,8 @@ export interface Workflow {
   secrets?: SecretInfo[];
   hasFilter: boolean;
   hasShellFilter: boolean;
-  conditions: { workflow: number; item: number };
+  /** Shell checks with display name and last status (WI-24). */
+  conditions: WorkflowConditions;
   maxTechnicalFailures: number;
   cron: { nextSlot: string | null; lastFiring: { scheduledFor: string; decision: string; runId: string | null; reason: string | null } | null } | null;
   lastPlanning: {
@@ -264,10 +265,58 @@ export interface SourcePoll {
   pushdown?: unknown;
 }
 
+/** Last evaluation of a workflow condition (WI-24). */
+export interface LastConditionCheck {
+  status: 'ok' | 'not_now' | 'error' | 'skipped';
+  checkedAt: string;
+  ranAt: string | null;
+  durationMs: number | null;
+  cached: boolean;
+  exitCode: number | null;
+  error: string | null;
+  stderr: string | null;
+}
+
+/** Item-check counts of the last planning step (WI-24). */
+export interface CheckCountsView {
+  at: string;
+  items: number;
+  ok: number;
+  notNow: number;
+  error: number;
+  notEvaluated: number;
+}
+
+/** `conditions` of a workflow view (WI-24). */
+export interface WorkflowConditions {
+  workflow: Array<{ index: number; name: string | null; label: string; command: string; args: string[]; timeoutMs: number; cacheMs: number | null; last: LastConditionCheck | null }>;
+  item: Array<{ index: number; name: string | null; label: string; command: string; args: string[]; timeoutMs: number; last: CheckCountsView | null }>;
+  shellFilter: { name: string | null; label: string; command: string; timeoutMs: number; last: CheckCountsView | null } | null;
+}
+
+/** Dashboard info tile (WI-24, `GET /api/v1/dashboard/info`). */
+export interface InfoTile {
+  id: string;
+  title: string;
+  type: 'text' | 'number' | 'percent';
+  value: string | number | null;
+  unit: string | null;
+  status: 'ok' | 'warn' | 'critical' | 'error' | 'pending';
+  updatedAt: string | null;
+  expiresAt: string | null;
+  error?: string;
+  stale: boolean;
+  refreshing: boolean;
+  lastAttemptAt: string | null;
+  durationMs: number | null;
+}
+
 export interface CheckDiagnosis {
   kind: string;
   index: number;
   command: string;
+  /** Configured display name (WI-24). */
+  name?: string;
   value: unknown;
   cached: boolean;
   exitCode: number | null;
