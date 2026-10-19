@@ -297,13 +297,14 @@ export function containerExecution(
   execute: ContainerExecuteConfig,
   input: { runId: string; workflowId: string; dataDir: string; workspace: string; workspaceTarget: string; hostValues: TemplateValues },
 ): ContainerExecution {
-  const mounts = execute.mounts.map((m) => {
+  const mounts: ContainerExecution['mounts'][number][] = execute.mounts.map((m) => {
     if (!m.source.includes('{')) return { source: m.source, target: m.target, mode: m.mode };
     const source = path.resolve(renderTemplate(m.source, input.hostValues, { mode: 'text', scope: { workspace: true } }));
     if (!isWithin(input.workspace, source)) {
       throw new RunControllerError('run_invalid_mount', `mount source must stay inside the workspace: ${m.source}`);
     }
-    return { source, target: m.target, mode: m.mode };
+    // Symlinks below the workspace are checked by the executor right before the start (lstat per segment).
+    return { source, target: m.target, mode: m.mode, ...(source !== path.resolve(input.workspace) ? { withinWorkspace: true } : {}) };
   });
   if (!execute.mounts.some((m) => WORKSPACE_ITSELF.test(m.source))) {
     mounts.unshift({ source: input.workspace, target: CONTAINER_PATHS.workspace, mode: 'rw' });
@@ -319,6 +320,7 @@ export function containerExecution(
     },
     mounts,
     workspaceTarget: input.workspaceTarget,
+    dataDir: path.resolve(input.dataDir),
     workdir: execute.workdir ?? input.workspaceTarget,
     resources: { ...execute.resources },
     user: execute.user ?? defaultContainerUser(),

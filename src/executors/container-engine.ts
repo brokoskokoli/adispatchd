@@ -130,7 +130,12 @@ export class ContainerEngineClient {
    * the label `adispatch.instance=<instance>`. @throws ContainerEngineError
    */
   async list(engine: ContainerEngine, instance: string): Promise<string[]> {
-    const result = await this.run(engine, ['ps', '-a', '--filter', `label=${CONTAINER_LABELS.instance}=${instance}`, '--format', '{{.Names}}']);
+    return this.listByLabel(engine, `${CONTAINER_LABELS.instance}=${instance}`);
+  }
+
+  /** Names of all containers carrying `label` (`key=value`). @throws ContainerEngineError */
+  async listByLabel(engine: ContainerEngine, label: string): Promise<string[]> {
+    const result = await this.run(engine, ['ps', '-a', '--filter', `label=${label}`, '--format', '{{.Names}}']);
     if (result.code !== 0) {
       throw new ContainerEngineError(`${this.binary(engine)} ps failed (exit ${result.code}): ${firstLine(result.stderr)}`);
     }
@@ -148,6 +153,35 @@ export class ContainerEngineClient {
       return { ok: false, error: `${this.binary(engine)} --version exited with ${result.code}: ${firstLine(result.stderr)}` };
     } catch (err) {
       return { ok: false, error: errorMessage(err) };
+    }
+  }
+
+  /** `rm -f`, never throwing (logged). */
+  async removeQuietly(engine: ContainerEngine, name: string): Promise<void> {
+    try {
+      await this.remove(engine, name);
+    } catch (err) {
+      this.logger.warn('container could not be removed', { engine, container: name, error: errorMessage(err) });
+    }
+  }
+
+  /**
+   * Remove every container of a run (label `adispatch.run=<runId>`) now and
+   * once more after `recheckMs` – a container the engine creates late (after
+   * the CLI was killed) is caught by the second look. Never throws.
+   */
+  async sweepRun(engine: ContainerEngine, runId: string, recheckMs: number, wait: (ms: number) => Promise<void>): Promise<void> {
+    for (const pass of [0, 1]) {
+      if (pass === 1) await wait(recheckMs);
+      try {
+        for (const name of await this.listByLabel(engine, `${CONTAINER_LABELS.run}=${runId}`)) {
+          this.logger.warn('removing left-over container of the run', { engine, container: name, runId });
+          await this.removeQuietly(engine, name);
+        }
+      } catch (err) {
+        this.logger.warn('containers of the run could not be listed', { engine, runId, error: errorMessage(err) });
+        return;
+      }
     }
   }
 

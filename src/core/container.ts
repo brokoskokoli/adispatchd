@@ -103,11 +103,47 @@ export const CONTAINER_RESERVED_ENV_NAMES: readonly string[] = [
   ...CONTAINER_ENGINE_ENV_KEYS,
 ];
 
+/**
+ * Variables that steer the engine CLI (Go runtime, dynamic linker, proxies,
+ * TLS, registry auth, engine config) – WI-19 review. Never passed through the
+ * engine process environment: `env` entries go on the command line
+ * (`-e NAME=value`), `secrets` with these names are refused.
+ */
+export const CONTAINER_ENGINE_STEERING_NAMES: readonly string[] = [
+  'GODEBUG',
+  'GOGC',
+  'GOMAXPROCS',
+  'GOMEMLIMIT',
+  'GOTRACEBACK',
+  'GORACE',
+  'GOEXPERIMENT',
+  'NO_PROXY',
+  'no_proxy',
+  'REGISTRY_AUTH_FILE',
+];
+
+/** Prefixes/suffixes of {@link CONTAINER_ENGINE_STEERING_NAMES}-like variables. */
+const STEERING_PATTERN = /^(LD_|DYLD_|SSL_CERT_|DOCKER_|CONTAINERS?_|XDG_)|_PROXY$/i;
+
+/**
+ * True if `name` belongs to the environment of the engine CLI process (minimal
+ * variables, engine variables, anything that would steer the CLI). Such
+ * names are never taken from the engine environment via `-e NAME`.
+ */
+export function isContainerEngineEnvName(name: string): boolean {
+  return CONTAINER_RESERVED_ENV_NAMES.includes(name) || CONTAINER_ENGINE_STEERING_NAMES.includes(name) || STEERING_PATTERN.test(name);
+}
+
 /** One bind mount of a container run (sources are absolute host paths). */
 export interface ContainerMount {
   source: string;
   target: string;
   mode: ContainerMountMode;
+  /**
+   * Source given as `{workspace.path}/<sub>`: every segment below the
+   * workspace is checked for symlinks right before the start (WI-19 review).
+   */
+  withinWorkspace?: boolean;
 }
 
 /** Resource limits (`--memory`, `--cpus`, `--pids-limit`); `null` = engine default. */
@@ -133,6 +169,8 @@ export interface ContainerExecution {
   mounts: readonly ContainerMount[];
   /** Target of the workspace mount (`ADISPATCH_WORKSPACE` inside the container). */
   workspaceTarget: string;
+  /** The daemon's data dir: no user mount may contain it or lie inside it (except inside the workspace). */
+  dataDir: string;
   /** Working directory inside the container (`-w`). */
   workdir: string;
   resources: ContainerResources;

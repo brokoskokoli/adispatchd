@@ -10,13 +10,14 @@
  * Secrets never appear on the engine command line: the container gets
  * `-e NAME` and the value is set in the engine process environment.
  */
-import { stat } from 'node:fs/promises';
+import { lstat, realpath, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ContainerExecuteConfig } from '../config/index.js';
 import {
   CONTAINER_LABELS,
   CONTAINER_PATHS,
-  CONTAINER_RESERVED_ENV_NAMES,
+  isContainerEngineEnvName,
+  isWithin,
   OrchestratorError,
   containerInstanceId,
   containerName,
@@ -37,6 +38,12 @@ export interface ContainerExecutorOptions extends ShellExecutorOptions {
   engines?: ContainerEngineClient;
   /** Max wait for the engine process to end after `<engine> stop` before it is signalled. Default 10 s. */
   stopSettleMs?: number;
+  /** After an abnormal end: delay before the second look for a late-created container of the run. Default 2 s. */
+  recheckMs?: number;
+}
+
+function delay(timers: SupervisorDeps['timers'], ms: number): Promise<void> {
+  return new Promise((resolve) => timers.setTimeout(resolve, ms));
 }
 
 /** Engine command line of a container run plus the values passed via the engine environment. */
@@ -90,7 +97,7 @@ export function buildContainerInvocation(spec: ExecutionSpec, engineBinary?: str
   for (const [name, value] of Object.entries(spec.env)) {
     if (name in tokenEnv) continue;
     // Names of the engine's own environment cannot be passed via its environment: on the command line (never secrets).
-    if (CONTAINER_RESERVED_ENV_NAMES.includes(name)) args.push('-e', `${name}=${value}`);
+    if (isContainerEngineEnvName(name)) args.push('-e', `${name}=${value}`);
     else passByName(name, value);
   }
   for (const [name, hostPath] of Object.entries(tokenEnv)) args.push('-e', `${name}=${containerTokenFilePath(hostPath)}`);
@@ -126,15 +133,56 @@ async function checkContainerSpec(spec: ExecutionSpec): Promise<void> {
     }
   }
   for (const name of Object.keys(spec.secrets)) {
-    if (CONTAINER_RESERVED_ENV_NAMES.includes(name) || name.startsWith('ADISPATCH_')) {
+    if (isContainerEngineEnvName(name) || name.startsWith('ADISPATCH_')) {
       throw new OrchestratorError('invalid_spec', `secret "${name}" cannot be passed to a container`);
     }
   }
+  const workspace = await realpath(spec.workingDirectory);
+  const dataDir = await realpath(c.dataDir).catch(() => path.resolve(c.dataDir));
   for (const m of c.mounts) {
     // The engine would fail with a less helpful message (or create a directory).
     await stat(m.source).catch((err: unknown) => {
       throw new OrchestratorError('ENOENT', `mount source does not exist: ${m.source}`, { cause: err });
     });
+    if (m.withinWorkspace) await assertNoSymlinkBelow(spec.workingDirectory, m.source);
+    const real = await realpath(m.source);
+    if (m.withinWorkspace && !isWithin(workspace, real)) {
+      throw new OrchestratorError('invalid_mount', `mount source resolves outside the workspace: ${m.source}`);
+    }
+    // The data dir holds the database, every run's logs, context, results and token files.
+    if (isWithin(real, dataDir)) {
+      throw new OrchestratorError('invalid_mount', `mount source contains the data directory: ${m.source}`);
+    }
+    const isWorkspace = real === workspace;
+    if (isWithin(dataDir, real) && !isWithin(workspace, real)) {
+      throw new OrchestratorError('invalid_mount', `mount source lies inside the data directory: ${m.source}`);
+    }
+    if (isWorkspace && isWithin(dataDir, real)) {
+      // A workspace below the data dir (default `<data-dir>/workspaces`) is fine, but never one of the daemon's own trees.
+      for (const own of ['runs', 'logs', 'backups']) {
+        if (isWithin(path.join(dataDir, own), real)) {
+          throw new OrchestratorError('invalid_mount', `workspace lies inside the daemon's ${own}/ directory: ${m.source}`);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Refuse a `{workspace.path}/<sub>` mount if any path segment below the
+ * workspace is a symlink (it could point anywhere on the host).
+ */
+async function assertNoSymlinkBelow(workspace: string, source: string): Promise<void> {
+  const rel = path.relative(path.resolve(workspace), path.resolve(source));
+  if (rel === '') return;
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    throw new OrchestratorError('invalid_mount', `mount source must stay inside the workspace: ${source}`);
+  }
+  let current = path.resolve(workspace);
+  for (const segment of rel.split(path.sep)) {
+    current = path.join(current, segment);
+    const st = await lstat(current);
+    if (st.isSymbolicLink()) throw new OrchestratorError('invalid_mount', `mount source contains a symbolic link: ${current}`);
   }
 }
 
@@ -144,11 +192,13 @@ export class ContainerExecutor implements Executor {
   private readonly deps: SupervisorDeps;
   private readonly engines: ContainerEngineClient;
   private readonly stopSettleMs: number;
+  private readonly recheckMs: number;
 
   constructor(options: ContainerExecutorOptions = {}) {
     this.deps = supervisorDeps(options);
     this.engines = options.engines ?? new ContainerEngineClient({ baseEnv: this.deps.baseEnv, logger: this.deps.logger });
     this.stopSettleMs = options.stopSettleMs ?? 10_000;
+    this.recheckMs = options.recheckMs ?? 2_000;
   }
 
   describe(spec: ExecutionSpec): { command: string; args: string[] } {
@@ -158,6 +208,7 @@ export class ContainerExecutor implements Executor {
 
   start(spec: ExecutionSpec): Promise<RunningProcess> {
     const engines = this.engines;
+    const recheckMs = this.recheckMs;
     const log = this.deps.logger.child({ component: 'container-executor', runId: spec.runId });
     let containerName: string | undefined;
     let engineName: ContainerExecution['engine'] | undefined;
@@ -182,8 +233,13 @@ export class ContainerExecutor implements Executor {
         }
       },
       afterExit: async (abnormal) => {
-        // `--rm` removes a container that ended normally; after a stop/kill make sure nothing is left.
-        if (abnormal && containerName && engineName) await engines.stopAndRemove(engineName, containerName, 0);
+        if (!containerName || !engineName) return;
+        // `--rm` removes a container that ended normally; make sure in any case (not found is fine).
+        if (abnormal) await engines.stopAndRemove(engineName, containerName, 0);
+        else await engines.removeQuietly(engineName, containerName);
+        // After a stop/kill the engine may still create the container (e.g. the CLI was killed during the pull):
+        // re-check by run label once more after a short delay and remove what appeared.
+        if (abnormal) await engines.sweepRun(engineName, spec.runId, recheckMs, (ms) => delay(this.deps.timers, ms));
       },
     };
     return startSupervised(spec, this.deps, strategy);
@@ -247,6 +303,7 @@ export function describeContainerExecute(
       },
       mounts,
       workspaceTarget,
+      dataDir,
       workdir: execute.workdir ?? workspaceTarget,
       resources: { ...execute.resources },
       user: execute.user ?? defaultContainerUser(),

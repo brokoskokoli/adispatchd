@@ -3,7 +3,7 @@
  * only in the engine environment, result file via the output mount, cancel
  * and timeout stop the container, engine errors.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -86,6 +86,7 @@ async function makeSpec(script: string, overrides: Partial<ExecutionSpec> = {}, 
         { source: agents, target: '/home/worker/agents', mode: 'ro' },
       ],
       workspaceTarget: '/work',
+      dataDir,
       workdir: '/work',
       resources: { memory: '8g', cpus: 3, pids: 4096 },
       user: '1000:1000',
@@ -141,6 +142,17 @@ describe('buildContainerInvocation', () => {
     expect(args.slice(-4)).toEqual(['localhost/worker:current', '/bin/sh', '-c', 'true']);
   });
 
+  it('never passes variables that steer the engine CLI through its environment (proxies, LD_*, GO*, DOCKER_*)', async () => {
+    const spec = await makeSpec('true', {
+      env: { HTTPS_PROXY: 'http://proxy:3128', no_proxy: 'localhost', LD_PRELOAD: '/x.so', GODEBUG: 'x=1', DOCKER_CONFIG: '/c', XDG_CACHE_HOME: '/c', OK: 'y' },
+    });
+    const { args, passEnv } = buildContainerInvocation(spec);
+    expect(passEnv).toEqual({ OK: 'y' });
+    for (const kv of ['HTTPS_PROXY=http://proxy:3128', 'no_proxy=localhost', 'LD_PRELOAD=/x.so', 'GODEBUG=x=1', 'DOCKER_CONFIG=/c', 'XDG_CACHE_HOME=/c']) {
+      expect(args).toContain(kv);
+    }
+  });
+
   it('adds --userns keep-id for podman and leaves out optional flags', async () => {
     const spec = await makeSpec('true', {}, {
       engine: 'podman',
@@ -193,8 +205,8 @@ describe.runIf(supported)('ContainerExecutor (fake engine)', () => {
     // Nothing of the daemon environment except the minimal variables reaches the engine process.
     expect(Object.keys(run!.env).filter((k) => !['PATH', 'HOME', 'LANG', 'TZ', 'USER', 'LOGNAME', 'TMPDIR', 'API_TOKEN', 'MODE'].includes(k) && !k.startsWith('XDG_') && !k.startsWith('DOCKER_') && !k.startsWith('__CF_'))).toEqual([]);
     expect(await engine.containers()).toEqual([]);
-    // Normal end: no stop/rm needed (--rm).
-    expect(calls.map((c) => c.argv[0])).toEqual(['run']);
+    // Normal end: no stop; rm -f anyway (not found is fine, --rm already removed it).
+    expect(calls.map((c) => c.argv.slice(0, 2).join(' '))).toEqual(['run --rm', 'rm -f']);
   });
 
   it('describe() returns the spawned command line', async () => {
@@ -274,5 +286,69 @@ describe.runIf(supported)('ContainerExecutor (fake engine)', () => {
     await proc.cancel();
     const outcome = await proc.wait();
     expect(classifyOutcome(outcome).status).toBe('cancelled');
+  });
+
+  it('exit codes 126/127 (command not executable / not found) are crashed', async () => {
+    const notExecutable = path.join(root, 'not-executable.sh');
+    await writeFile(notExecutable, '#!/bin/sh\n');
+    await chmod(notExecutable, 0o644);
+    for (const [command, code] of [[notExecutable, 126], [path.join(root, 'missing-binary'), 127]] as const) {
+      const spec = await makeSpec('true', { args: [command] });
+      const outcome = await (await executor().start(spec)).wait();
+      expect(outcome.exitCode).toBe(code);
+      expect(classifyOutcome(outcome)).toMatchObject({ status: 'crashed', reason: `exit code ${code}` });
+    }
+  });
+
+  it('refuses a {workspace.path}/<sub> mount through a symlink (ln -s / ws/cache)', async () => {
+    const spec = await makeSpec('true');
+    await mkdir(spec.workingDirectory, { recursive: true });
+    await symlink('/', path.join(spec.workingDirectory, 'cache'));
+    const container = spec.container!;
+    const withLink = {
+      ...spec,
+      container: { ...container, mounts: [...container.mounts, { source: path.join(spec.workingDirectory, 'cache'), target: '/cache', mode: 'rw' as const, withinWorkspace: true }] },
+    };
+    const outcome = await (await executor().start(withLink)).wait();
+    expect(classifyOutcome(outcome).status).toBe('start_error');
+    expect(outcome.spawnError?.message).toContain('mount source contains a symbolic link');
+    expect(await engine.calls()).toEqual([]);
+  });
+
+  it('refuses mounts that contain or lie inside the data dir (incl. the workspace)', async () => {
+    const spec = await makeSpec('true');
+    const dataDir = spec.container!.dataDir;
+    await mkdir(path.join(dataDir, 'runs'), { recursive: true });
+    const cases: Array<[string, string]> = [
+      [dataDir, 'contains the data directory'],
+      [root, 'contains the data directory'],
+      [path.join(dataDir, 'runs'), 'lies inside the data directory'],
+    ];
+    for (const [source, message] of cases) {
+      const s = await makeSpec('true', {}, { mounts: [{ source, target: '/x', mode: 'ro' }] });
+      const outcome = await (await executor().start(s)).wait();
+      expect(outcome.spawnError?.message, source).toContain(message);
+    }
+    // A workspace inside the daemon's runs/ tree.
+    const inRuns = path.join(dataDir, 'runs', 'some-run', 'ws');
+    const s = await makeSpec('true', { workingDirectory: inRuns }, { mounts: [{ source: inRuns, target: '/work', mode: 'rw' }] });
+    const outcome = await (await executor().start(s)).wait();
+    expect(outcome.spawnError?.message).toContain("workspace lies inside the daemon's runs/ directory");
+    // The default layout (workspace below <data-dir>/workspaces) stays allowed.
+    const inWorkspaces = path.join(dataDir, 'workspaces', 'wf', 'r1');
+    const ok = await makeSpec('true', { workingDirectory: inWorkspaces }, { mounts: [{ source: inWorkspaces, target: '/work', mode: 'rw' }] });
+    expect(classifyOutcome(await (await executor().start(ok)).wait()).status).toBe('completed');
+  });
+
+  it('cancel during the pull: a container the engine creates late is removed by the re-check', async () => {
+    const spec = await makeSpec('true', { cancelGraceMs: 200 }, { image: 'fake/slow-pull' });
+    const proc = await new ContainerExecutor({ engines: engine.client(), stdioDrainMs: 300, stopSettleMs: 100, recheckMs: 800 }).start(spec);
+    while (!(await engine.calls()).some((c) => c.argv[0] === 'run')) await new Promise((r) => setTimeout(r, 20));
+    await proc.cancel();
+    expect(classifyOutcome(await proc.wait()).status).toBe('cancelled');
+    expect(await engine.containers()).toEqual([]);
+    const calls = (await engine.calls()).map((c) => c.argv[0]);
+    expect(calls.filter((c) => c === 'ps').length).toBe(2);
+    expect(calls).toContain('rm');
   });
 });

@@ -9,7 +9,7 @@ import path from 'node:path';
 import { Cron } from 'croner';
 import {
   CONTAINER_PATHS,
-  CONTAINER_RESERVED_ENV_NAMES,
+  isContainerEngineEnvName,
   extractPlaceholders,
   isSecretKey,
   keepPatternError,
@@ -519,11 +519,11 @@ function validateContainer(exec: ContainerExecuteConfig, issues: IssueCollector,
     if (error) issues.error(file, ['execute', 'workdir'], error);
   }
   for (const name of Object.keys(exec.secrets)) {
-    if (CONTAINER_RESERVED_ENV_NAMES.includes(name)) {
+    if (isContainerEngineEnvName(name)) {
       issues.error(
         file,
         ['execute', 'secrets', name],
-        `"${name}" belongs to the environment of the container engine process and cannot be a secret of a container run`,
+        `"${name}" belongs to the environment of the container engine process (or would steer the engine CLI) and cannot be a secret of a container run`,
       );
     }
   }

@@ -97,6 +97,14 @@ async function main() {
     const command = argv.slice(i + 1);
     if (read(opts.name)) { process.stderr.write('Conflict. The container name "' + opts.name + '" is already in use\n'); return 125; }
     if (image === 'fake/missing') { process.stderr.write('Unable to find image ' + image + '\n'); return 125; }
+    if (image === 'fake/slow-pull') {
+      // The "daemon" creates the container late, independent of this CLI process (cancel-during-pull race).
+      const json = JSON.stringify({ name: opts.name, labels: opts.labels, pid: '__PID__', rm: false }).replace('"__PID__"', '__PID__');
+      const creator = spawn('sh', ['-c', 'sleep 0.3; printf "%s" "$1" | sed "s/__PID__/$$/" > "$2"; exec sleep 60', 'sh', json, file(opts.name)], { detached: true, stdio: 'ignore' });
+      creator.unref();
+      fs.appendFileSync(path.join(STATE, 'late-pids'), creator.pid + '\n');
+      for (;;) await sleep(1000);
+    }
     const mounts = [...opts.mounts].sort((a, b) => b.target.length - a.target.length);
     const toHost = (p) => {
       for (const m of mounts) {
@@ -116,7 +124,7 @@ async function main() {
     const child = spawn(command[0], command.slice(1).map(translate), { cwd: toHost(opts.workdir || '/'), env, stdio: 'inherit' });
     fs.writeFileSync(file(opts.name), JSON.stringify({ name: opts.name, labels: opts.labels, pid: child.pid, rm: opts.rm }));
     const code = await new Promise((resolve) => {
-      child.on('error', (err) => { process.stderr.write(String(err) + '\n'); resolve(127); });
+      child.on('error', (err) => { process.stderr.write(String(err) + '\n'); resolve(err.code === 'EACCES' ? 126 : 127); });
       child.on('exit', (c, sig) => resolve(sig ? 128 + ({ SIGTERM: 15, SIGKILL: 9, SIGINT: 2 }[sig] || 1) : c));
     });
     if (opts.rm) fs.rmSync(file(opts.name), { force: true });
@@ -200,6 +208,14 @@ export async function createFakeEngine(): Promise<FakeEngine> {
     async cleanup() {
       for (const child of orphans) {
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }
+      const late = await readFile(path.join(stateDir, 'late-pids'), 'utf8').catch(() => '');
+      for (const pid of late.split('\n').filter((l) => l !== '')) {
+        try {
+          process.kill(Number(pid), 'SIGKILL');
+        } catch {
+          /* gone */
+        }
       }
       await rm(root, { recursive: true, force: true });
     },

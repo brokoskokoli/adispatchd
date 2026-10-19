@@ -193,13 +193,28 @@ describe('container executor configuration (WI-19)', () => {
           '  secrets:',
           '    HOME: { identity: coder }',
           '    DOCKER_HOST: { identity: coder }',
+          '    HTTPS_PROXY: { identity: coder }',
+          '    LD_PRELOAD: { identity: coder }',
+          '    GODEBUG: { identity: coder }',
+          '    GOOGLE_TOKEN: { identity: coder }',
         ].join('\n'),
       ),
     );
+    const msg = (n: string) =>
+      `workflows/w.yaml: execute.secrets.${n}: "${n}" belongs to the environment of the container engine process (or would steer the engine CLI) and cannot be a secret of a container run`;
     expect(errs).toEqual([
       expect.stringContaining('workflows/w.yaml: execute.command[0]: Unknown placeholder "{item.nmber}"'),
-      'workflows/w.yaml: execute.secrets.HOME: "HOME" belongs to the environment of the container engine process and cannot be a secret of a container run',
-      'workflows/w.yaml: execute.secrets.DOCKER_HOST: "DOCKER_HOST" belongs to the environment of the container engine process and cannot be a secret of a container run',
+      msg('HOME'),
+      msg('DOCKER_HOST'),
+      msg('HTTPS_PROXY'),
+      msg('LD_PRELOAD'),
+      msg('GODEBUG'),
+    ]);
+  });
+
+  it('rejects sharing another container\'s network (container:<x>)', async () => {
+    expect(await errors(workflow("  image: busybox\n  network: 'container:other'"))).toEqual([
+      expect.stringContaining('workflows/w.yaml: execute.network: Invalid network'),
     ]);
   });
 

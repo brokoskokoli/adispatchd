@@ -77,6 +77,7 @@ describe.runIf(enabled)('ContainerExecutor with real docker (ADISPATCH_CONTAINER
           { source: extra, target: '/extra', mode: 'ro' },
         ],
         workspaceTarget: '/work',
+        dataDir,
         workdir: '/work',
         resources: { memory: '128m', cpus: 1, pids: 64 },
         user: defaultContainerUser(),

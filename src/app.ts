@@ -401,6 +401,8 @@ export async function createApp(options: AppOptions): Promise<App> {
     credentials: sources,
   });
   const containers = options.controller?.containers ?? new ContainerEngineClient({ logger });
+  /** Engines whose binary was checked (startup, reloads). */
+  const checkedEngines = new Set<ContainerEngine>();
   const controller = new RunController({
     clock,
     timers,
@@ -474,6 +476,12 @@ export async function createApp(options: AppOptions): Promise<App> {
     const res = await config.reload();
     if (res.ok) {
       sources.rebuild(res.config);
+      // A reload may add a container workflow on an engine not checked yet (warning only).
+      const newEngines = containerEngines(res.config).filter((e) => !checkedEngines.has(e));
+      if (newEngines.length > 0) {
+        for (const e of newEngines) checkedEngines.add(e);
+        void checkContainerEngines(containers, newEngines, log);
+      }
       views.invalidate();
       notifications.refreshSecrets();
       events.publish('config.reloaded', {
@@ -629,7 +637,9 @@ export async function createApp(options: AppOptions): Promise<App> {
     notifications.start();
     void (async () => {
       try {
-        await checkContainerEngines(containers, containerEngines(config.current), log);
+        const engines = containerEngines(config.current);
+        for (const e of engines) checkedEngines.add(e);
+        await checkContainerEngines(containers, engines, log);
         const report = await controller.recover();
         log.info('recovery finished', {
           finalized: report.finalized.length,
