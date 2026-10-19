@@ -36,7 +36,7 @@ describe('config validate', () => {
   it('exits 0 for examples/config', async () => {
     const io = await run(['config', 'validate', '--config-dir', EXAMPLE_CONFIG_DIR]);
     expect(io.code).toBe(0);
-    expect(io.out).toMatch(/is valid: 4 workflow\(s\), 1 view\(s\), 2 source\(s\), 3 identities/);
+    expect(io.out).toMatch(/is valid: 4 workflow\(s\), 1 view\(s\), 1 named filter\(s\), 2 source\(s\), 3 identities/);
     expect(io.err).toBe('');
   });
 
@@ -49,6 +49,18 @@ describe('config validate', () => {
     const io = await run(['config', 'validate', '--config-dir', t.dir]);
     expect(io.code).toBe(1);
     expect(io.err).toMatch(/invalid, 1 error\(s\):\n {2}workflows\/wf\.yaml:2: trigger\.cron: Invalid cron expression "nope"/);
+  });
+
+  it('exits 0 with a warning for an unused named filter (WI-15)', async () => {
+    const t = await createTempConfigDir({
+      ...BASE_FILES,
+      'filters/spare.yaml': 'id: spare\nfilter: { field: labels, operator: contains, value: x }\n',
+    });
+    temps.push(t);
+    const io = await run(['config', 'validate', '--config-dir', t.dir]);
+    expect(io.code).toBe(0);
+    expect(io.err).toMatch(/1 warning\(s\):\n {2}filters\/spare\.yaml:1: warning: id: Named filter "spare" is not used by any workflow or view/);
+    expect(io.out).toMatch(/1 named filter\(s\)/);
   });
 
   it('exits 1 without --config-dir', async () => {

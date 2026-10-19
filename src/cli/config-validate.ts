@@ -36,6 +36,7 @@ export function createConfigValidateHandler(io: Pick<CliIo, 'stdout' | 'stderr'>
     io.stdout(
       `Configuration in ${configDir} is valid: ` +
         `${Object.keys(c.workflows).length} workflow(s), ${Object.keys(c.views).length} view(s), ` +
+        `${Object.keys(c.filters).length} named filter(s), ` +
         `${Object.keys(c.sources).length} source(s), ${Object.keys(c.identities).length} identities. ` +
         `Hash ${c.hash.slice(0, 12)}\n`,
     );

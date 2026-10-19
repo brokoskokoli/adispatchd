@@ -68,6 +68,11 @@ describe('cli init', () => {
     if (!loaded.ok) return;
     expect(loaded.warnings).toEqual([]);
     expect(Object.keys(loaded.config.workflows).sort()).toEqual(['coder', 'hello', 'nightly-maintenance']);
+    // The named filter is used by the coder workflow and the view (WI-15).
+    const needsMaintainer = { field: 'labels', operator: 'contains', value: 'needs-maintainer' };
+    expect(loaded.config.filters['needs-maintainer']?.filter).toEqual({ all: [needsMaintainer] });
+    expect(loaded.config.views['needs-maintainer']?.filter).toEqual({ all: [needsMaintainer] });
+    expect(loaded.config.workflows.coder?.filter).toMatchObject({ all: expect.arrayContaining([{ not: { all: [needsMaintainer] } }]) });
     // Only the self-contained manual workflow is enabled; GitHub/cron examples are disabled.
     expect(Object.values(loaded.config.workflows).filter((w) => w.enabled).map((w) => w.id)).toEqual(['hello']);
     expect(loaded.config.workflows.hello?.execute.command).toBe(path.join(configDir, 'scripts/hello.sh'));

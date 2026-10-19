@@ -2,9 +2,7 @@
 id: needs-maintainer
 title: Needs Maintainer
 sources: [project_a, project_b]
-filter:
-  all:
-    - { field: labels, operator: contains, value: needs-maintainer }
+filter: needs-maintainer   # named filter, see filters/needs-maintainer.yaml
 fields:
   - { field: repository, label: Repository }
   - { field: number, label: Issue }

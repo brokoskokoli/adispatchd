@@ -69,6 +69,11 @@ describe('loadConfig – spec examples', () => {
     expect(result.warnings).toEqual([]);
     expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'nightly-maintenance', 'reviewer-project-b']);
     expect(Object.keys(config.views)).toEqual(['needs-maintainer']);
+    // The named filter is shared by the view and the coder workflow (WI-15).
+    const needsMaintainer = { field: 'labels', operator: 'contains', value: 'needs-maintainer' };
+    expect(config.filters['needs-maintainer']?.filter).toEqual(needsMaintainer);
+    expect(config.views['needs-maintainer']?.filter).toEqual(needsMaintainer);
+    expect(config.workflows['coder-project-a']?.filter).toMatchObject({ all: expect.arrayContaining([{ not: needsMaintainer }]) });
   });
 
   it('validates the literal YAML examples of spec §5.1–§5.5 and §17', async () => {

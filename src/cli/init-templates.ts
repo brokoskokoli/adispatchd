@@ -2,7 +2,8 @@
  * Files created by `init` (Spec §4): a commented, valid example configuration
  * that starts without any GitHub credentials. Only the manual `hello`
  * workflow is enabled; the GitHub coder workflow and the nightly schedule are
- * disabled examples to copy from. Kept as code (not as package files) so the
+ * disabled examples to copy from. The named filter `needs-maintainer` is
+ * shared by the coder workflow and the view. Kept as code (not as package files) so the
  * installed package needs no asset lookup.
  */
 
@@ -150,6 +151,8 @@ filter:                     # declarative filter (all/any/not; equals, contains,
     - { field: dependencies.blocked_by_open, operator: equals, value: 0 }
     # With a project in sources.yaml: "A or B" via "in", e.g.
     # - { field: project.Status, operator: in, value: [Todo, Ready] }
+    # Named filter (filters/needs-maintainer.yaml), shared with the view: skip items waiting for the maintainer.
+    - not: { use: needs-maintainer }
 
 item_priority:
   rules:
@@ -228,9 +231,7 @@ const VIEW_YAML = `# views/needs-maintainer.yaml – read-only table over one or
 id: needs-maintainer
 title: Needs Maintainer
 sources: [project_a]
-filter:
-  all:
-    - { field: labels, operator: contains, value: needs-maintainer }
+filter: needs-maintainer    # named filter, see filters/needs-maintainer.yaml
 fields:
   - { field: repository, label: Repository }
   - { field: number, label: Issue }
@@ -239,6 +240,16 @@ fields:
   - { field: run.last_result.message, label: Result }
   - { field: updated_at, label: Updated }
 sort: { field: updated_at, direction: desc }
+`;
+
+const FILTER_YAML = `# filters/needs-maintainer.yaml – named, reusable filter (one file per filter).
+# Use it as "filter: needs-maintainer" or as "{ use: needs-maintainer }" anywhere inside a filter
+# (workflow filter, item_priority rules, views, other named filters), so all of them see the same items.
+id: needs-maintainer
+description: Items waiting for a maintainer decision
+filter:
+  all:
+    - { field: labels, operator: contains, value: needs-maintainer }
 `;
 
 const HELLO_SH = `#!/bin/sh
@@ -302,6 +313,7 @@ export function initTemplates(options: { port?: number } = {}): TemplateFile[] {
     { path: 'workflows/coder.yaml', content: CODER_YAML, mode: 0o640 },
     { path: 'workflows/nightly-maintenance.yaml', content: NIGHTLY_YAML, mode: 0o640 },
     { path: 'views/needs-maintainer.yaml', content: VIEW_YAML, mode: 0o640 },
+    { path: 'filters/needs-maintainer.yaml', content: FILTER_YAML, mode: 0o640 },
     { path: 'scripts/hello.sh', content: HELLO_SH, mode: 0o750 },
     { path: 'scripts/notify.sh', content: NOTIFY_SH, mode: 0o750 },
     { path: 'scripts/coder.sh', content: CODER_SH, mode: 0o750 },

@@ -1,9 +1,9 @@
 /**
  * `init --config-dir <dir> [--data-dir <dir>] [--port <port>]` (Spec §4):
- * creates the config-dir with a commented example configuration and example
- * scripts, and the data-dir layout. Never overwrites or modifies existing
- * files (each file is created with `O_EXCL`); existing files are reported as
- * kept. Afterwards the resulting configuration is validated.
+ * creates the config-dir with a commented example configuration (incl. a named
+ * filter in `filters/`) and example scripts, and the data-dir layout. Never
+ * overwrites or modifies existing files (each file is created with `O_EXCL`);
+ * existing files are reported as kept. Afterwards the resulting configuration is validated.
  *
  * Exit codes: 0 = done (configuration valid), 1 = resulting configuration
  * invalid (e.g. because of pre-existing files) or I/O error, 2 = usage error.
@@ -48,7 +48,7 @@ export async function initDirectories(options: { configDir: string; dataDir: str
   const dataDir = path.resolve(options.dataDir);
   const created: string[] = [];
   const kept: string[] = [];
-  for (const sub of ['', 'workflows', 'views', 'scripts']) {
+  for (const sub of ['', 'workflows', 'views', 'filters', 'scripts']) {
     await mkdir(path.join(configDir, sub), { recursive: true, mode: 0o750 });
   }
   for (const file of initTemplates({ ...(options.port !== undefined ? { port: options.port } : {}) })) {

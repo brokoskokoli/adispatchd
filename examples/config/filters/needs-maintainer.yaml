@@ -1,0 +1,10 @@
+# filters/needs-maintainer.yaml – named, reusable filter (WI-15).
+# Used as "filter: needs-maintainer" (views/needs-maintainer.yaml) and as
+# "{ use: needs-maintainer }" inside other filters (workflows/coder-project-a.yaml),
+# so the view and the coder agree on which items wait for the maintainer.
+id: needs-maintainer
+description: Items waiting for a maintainer decision
+filter:
+  field: labels
+  operator: contains
+  value: needs-maintainer
