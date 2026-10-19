@@ -59,13 +59,14 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Dateien sichern:** `execute.keep` kopiert Mitschnitte und Logs (Glob-Muster) vor dem Workspace-Cleanup nach
   `runs/<run-id>/kept/` – mit Größenlimit, ohne Symlinks zu folgen; Download in UI und API, gelöscht mit dem Run.
 - **Weboberfläche mit Live-Updates** (SSE): Workflows, Runs mit Live-Output, Events und gesicherten Dateien, Views
-  über mehrere Repositories; dazu eine JSON-HTTP-API.
-- **Server-Ressourcen im Dashboard:** CPU über die Zeit, gestapelt nach Daemon, jedem Run (Klick → Run), Hooks/Checks
-  und den größten fremden Prozessen, dazu RAM, Load und freier Plattenplatz; Messwerte nur im Speicher (`monitoring` in
-  `config.yaml`), gezeigt werden nur Befehlsnamen, nie Argumente.
   über mehrere Repositories; dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools in der Toolbar
   (z. B. das Dashboard [claude-inspect](https://github.com/brokoskokoli/claude_inspect)), im neuen Tab oder eingebettet
   (`ui.external_links`).
+- **Server-Ressourcen:** oben im Dashboard eine kompakte Leiste (CPU mit Verlauf der letzten 15 Minuten, RAM, die am
+  stärksten belegte Platte, Load und die größten Prozessgruppen, eigene Runs zuerst); der Reiter **Resources** zeigt die
+  CPU über die Zeit, gestapelt nach Daemon, jedem Run (Klick → Run), Hooks/Checks und den größten fremden Prozessen,
+  dazu Diagramme für RAM und Platte und eine Wertetabelle. Messwerte nur im Speicher (`monitoring` in `config.yaml`),
+  gezeigt werden nur Befehlsnamen, nie Argumente.
 - **Anmeldung optional:** `auth.mode: password` (eingebaute Benutzer, scrypt-Hashes, Session-Cookie) oder
   `trusted_header` (Identität von Tailscale Serve, oauth2-proxy, …), Rollen `viewer` / `operator` / `admin` je
   Endpunkt, Audit jeder schreibenden Aktion; die CLI arbeitet über einen lokalen Steuer-Token weiter.
@@ -314,7 +315,7 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
   (Tailscale Serve, oauth2-proxy, Passwort-Modus hinter HTTPS-Proxy, `adispatch auth hash-password`) und
   [Betrieb → Fernzugriff](docs/operations.md#fernzugriff-reverse-proxy-spec-15-201).
 - Mutierende Requests brauchen den Header `X-Adispatch-Request: 1`; es gibt keine CORS-Freigaben.
-- Das Dashboard zeigt die Befehlsnamen aller Prozesse des Servers (nie deren Argumente) – ein Grund mehr, die UI nur
+- Dashboard und Reiter „Resources“ zeigen die Befehlsnamen aller Prozesse des Servers (nie deren Argumente) – ein Grund mehr, die UI nur
   hinter Authentifizierung freizugeben (oder `monitoring.enabled: false` zu setzen).
 - **Skripte und YAML sind vertrauenswürdiger Code** mit den Rechten des Dienstes – keine Sandbox. Schreibrecht auf das
   config-dir ist gleichbedeutend mit Codeausführung; `service install` legt es `root`-eigen an und lässt den Dienst unter einem

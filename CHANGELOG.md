@@ -3,6 +3,17 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.5.0] – unveröffentlicht
+
+### Geändert
+
+- **Dashboard: kompakte Ressourcenleiste statt großer Server-Sektion.** Oben im Dashboard (vor den Info-Kacheln und den
+  Scheduler-Karten) zeigt eine schmale Leiste CPU gesamt mit Verlauf der letzten 15 Minuten, RAM belegt/gesamt, die am
+  stärksten belegte Platte, Load und eine Zeile mit den größten Prozessgruppen (eigene Runs zuerst); live per SSE
+  `system.metrics`, ein Klick öffnet den neuen Reiter **Resources** (`#/resources`) mit den bisherigen Diagrammen
+  (CPU gestapelt, RAM, Platte), Legende, Zeitraumwahl und Wertetabelle. Bei `monitoring.enabled: false` zeigt die Leiste
+  einen kurzen Hinweis. Sichtbar ab Rolle `viewer`.
+
 ## [0.4.0] – 2026-10-19
 
 ### Hinzugefügt
