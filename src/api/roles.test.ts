@@ -4,22 +4,29 @@
  * enforce it (401 without login, 403 below the minimum role). A new route
  * without an entry fails at registration.
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CSRF_HEADER } from './server.js';
-import { ROUTE_ROLES, roleAllows } from './roles.js';
+import { acceptsControlToken, ROUTE_ROLES, roleAllows, routeAccess } from './roles.js';
 import { authEnvSetup, AUTH_PASSWORDS, FAST_AUTH, PASSWORD_AUTH_CONFIG } from './testing/auth.js';
 import { createAppEnv, startAppEnv, type AppEnv } from './testing/helpers.js';
 
 const DOC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../docs/api.md');
 
 let env: AppEnv;
+let uiDir = '';
 const cookies: Record<string, string> = {};
 
 beforeAll(async () => {
-  env = await startAppEnv({ configExtra: PASSWORD_AUTH_CONFIG, app: FAST_AUTH }, authEnvSetup);
+  // With the static UI, so its catch-all route `/*` is part of the enforcement checks (review minor 3).
+  uiDir = mkdtempSync(path.join(os.tmpdir(), 'orch-roles-ui-'));
+  mkdirSync(path.join(uiDir, 'js', 'client'), { recursive: true });
+  writeFileSync(path.join(uiDir, 'index.html'), '<!doctype html><title>x</title>');
+  writeFileSync(path.join(uiDir, 'js', 'client', 'app.js'), '');
+  env = await startAppEnv({ configExtra: PASSWORD_AUTH_CONFIG, app: { ...FAST_AUTH, uiDir } }, authEnvSetup);
   for (const [name, password] of Object.entries(AUTH_PASSWORDS)) {
     const res = await env.request('POST', '/api/v1/auth/login', { name, password });
     expect(res.status, name).toBe(200);
@@ -29,6 +36,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await env?.cleanup();
+  if (uiDir) rmSync(uiDir, { recursive: true, force: true });
 });
 
 /** Concrete URL for a route pattern. */
@@ -39,9 +47,9 @@ function sample(url: string): string {
     .replace(/\*$/, 'file.txt');
 }
 
-const entries = Object.entries(ROUTE_ROLES).map(([key, role]) => {
+const entries = Object.keys(ROUTE_ROLES).map((key) => {
   const [method, url] = key.split(' ') as [string, string];
-  return { key, method, url, role };
+  return { key, method, url, role: routeAccess(method, url)!, controlToken: acceptsControlToken(method, url) };
 });
 
 describe('route roles table', () => {
@@ -75,7 +83,7 @@ describe('route roles table', () => {
 
   it('is documented in docs/api.md (one row per route with its role)', () => {
     const doc = readFileSync(DOC, 'utf8');
-    for (const { key, role } of entries) expect(doc, key).toContain(`| \`${key}\` | ${role} |`);
+    for (const { key, role, controlToken } of entries) expect(doc, key).toContain(`| \`${key}\` | ${role} | ${controlToken ? 'ja' : '–'} |`);
     const rows = [...doc.matchAll(/^\| `((?:GET|POST|PATCH|PUT|DELETE) [^`]+)` \| (public|viewer|operator|admin) \|/gm)].map((m) => m[1]);
     expect(rows.sort()).toEqual(Object.keys(ROUTE_ROLES).sort());
   });
@@ -133,6 +141,21 @@ describe('enforcement per endpoint (password mode)', () => {
       expect((await inject('POST', '/api/v1/scheduler/pause', { cookie: cookies[name]! })).statusCode, name).toBe(200);
       expect((await inject('POST', '/api/v1/scheduler/resume', { cookie: cookies[name]! })).statusCode, name).toBe(200);
     }
+  });
+
+  it('the control token works only on the routes the CLI uses (operator at most)', async () => {
+    const token = { 'x-adispatch-control-token': env.app.auth.controlToken };
+    for (const { key, method, url, role, controlToken } of entries) {
+      if (role === 'public' || url === '/api/v1/events') continue;
+      if (method === 'POST' && url.startsWith('/api/v1/shutdown/')) continue; // would stop the app; covered by src/cli/auth.test.ts
+      const res = await inject(method, sample(url), token);
+      if (controlToken) expect([401, 403], key).not.toContain(res.statusCode);
+      else {
+        expect(res.statusCode, key).toBe(403);
+        expect(res.json().error.code, key).toBe('control_token_not_allowed');
+      }
+    }
+    expect((await inject('GET', '/api/v1/nope', token)).statusCode).toBe(403);
   });
 
   it('unknown API routes need a login (no route probing), unknown UI paths do not', async () => {

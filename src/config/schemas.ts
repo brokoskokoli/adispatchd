@@ -191,7 +191,7 @@ const ipOrCidr = z.string().refine((value) => {
 }, 'Invalid IP address or CIDR range (e.g. 127.0.0.1, ::1, 100.64.0.0/10)');
 
 /** HTTP headers that cannot carry the user of `auth.mode: trusted_header`. */
-const RESERVED_AUTH_HEADERS = new Set(['host', 'cookie', 'origin', 'content-type', 'content-length', 'x-adispatch-request', 'x-adispatch-control-token', 'x-forwarded-for', 'x-forwarded-proto']);
+const RESERVED_AUTH_HEADERS = new Set(['host', 'cookie', 'origin', 'content-type', 'content-length', 'x-adispatch-request', 'x-adispatch-control-token', 'x-adispatch-proxy-secret', 'x-forwarded-for', 'x-forwarded-proto']);
 
 const authRole = z.enum(AUTH_ROLES);
 
@@ -215,6 +215,8 @@ const authSchema = z.strictObject({
         .refine((h) => !RESERVED_AUTH_HEADERS.has(h.toLowerCase()), 'This header cannot carry the user')
         .default(DEFAULTS.authHeader),
       trusted_proxies: z.array(ipOrCidr).default([...DEFAULTS.authTrustedProxies]),
+      /** Env var with a shared secret the proxy sends as `X-Adispatch-Proxy-Secret` (review M2). */
+      proxy_secret_env: envName.optional(),
       users: z
         .array(z.strictObject({ login: z.string().trim().min(1, 'Must not be empty').max(320).refine((v) => !/[\s,\x00-\x1f]/.test(v), 'Must not contain whitespace or commas'), role: authRole }))
         .default([]),

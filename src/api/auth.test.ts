@@ -5,9 +5,15 @@ import path from 'node:path';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { MemoryLogger, type Clock } from '../core/index.js';
 import type { AuthConfig } from '../config/index.js';
+import { isIdentityForgeableLocally } from '../config/index.js';
 import {
   AuthService,
   CONTROL_TOKEN_HEADER,
+  FailureLimiter,
+  PROXY_SECRET_HEADER,
+  ipRateKey,
+  isInteractive,
+  sessionIdOf,
   LOGIN_LIMITS,
   controlTokenPath,
   ipMatcher,
@@ -34,6 +40,7 @@ const baseConfig = (over: Partial<AuthConfig> = {}): AuthConfig => ({
   trustedHeader: {
     header: 'tailscale-user-login',
     trustedProxies: ['127.0.0.1', '::1'],
+    proxySecretEnv: null,
     users: [{ login: 'alice@example.com', role: 'operator' }],
   },
   trustedProxies: ['127.0.0.1', '::1'],
@@ -106,10 +113,11 @@ describe('AuthService – password login', () => {
     expect(me).toMatchObject({ ok: true, principal: { name: 'alice', role: 'admin' } });
   });
 
-  it('sets Secure when X-Forwarded-Proto: https comes from a trusted proxy (TCP peer), not from anyone else', async () => {
+  it('sets Secure with the __Host- prefix when X-Forwarded-Proto: https comes from a trusted proxy (TCP peer), not from anyone else', async () => {
     const { auth } = service({ trustedProxies: ['10.0.0.0/8'] });
     const viaProxy = await auth.login('alice', 'correct horse', local({ 'x-forwarded-proto': 'https' }, '10.1.2.3'));
-    expect(viaProxy.ok && viaProxy.cookie).toMatch(/; Secure$/);
+    expect(viaProxy.ok && viaProxy.cookie).toMatch(/^__Host-adispatch_session=[A-Za-z0-9_-]{43}; Path=\/; Max-Age=3600; HttpOnly; SameSite=Strict; Secure$/);
+    if (viaProxy.ok) expect(auth.resolve(local(cookieOf(viaProxy.cookie)))).toMatchObject({ principal: { name: 'alice' } });
     const spoofed = await auth.login('alice', 'correct horse', local({ 'x-forwarded-proto': 'https', 'x-forwarded-for': '10.1.2.3' }, '192.168.1.9'));
     expect(spoofed.ok && spoofed.cookie).not.toMatch(/Secure/);
     expect(auth.isHttps({ headers: {}, remoteAddress: '192.168.1.9', encrypted: true })).toBe(true);
@@ -146,19 +154,50 @@ describe('AuthService – password login', () => {
     expect(text).toContain('(unknown)');
   });
 
-  it('rate-limits per user name (also with the correct password) and resets after the window', async () => {
+  it('blocks a (user, IP) pair after a few failures while the user still logs in from another IP (no lockout DoS)', async () => {
     const { auth, clock } = service();
-    for (let i = 0; i < LOGIN_LIMITS.perUser; i++) {
-      expect(await auth.login('alice', `bad${i}`, local({}, `10.0.0.${i}`))).toMatchObject({ status: 401 });
+    for (let i = 0; i < LOGIN_LIMITS.perUserIp; i++) {
+      expect(await auth.login('alice', `bad${i}`, local({}, '203.0.113.66'))).toMatchObject({ status: 401 });
     }
-    const limited = await auth.login('alice', 'correct horse', local({}, '10.0.0.99'));
+    const limited = await auth.login('alice', 'correct horse', local({}, '203.0.113.66'));
     expect(limited).toMatchObject({ ok: false, status: 429, code: 'too_many_attempts' });
     expect(!limited.ok && limited.retryAfterMs).toBeGreaterThan(0);
-    // Unknown names are limited the same way (no enumeration through the limiter).
-    for (let i = 0; i < LOGIN_LIMITS.perUser; i++) await auth.login('ghost', 'x', local({}, `10.0.1.${i}`));
-    expect(await auth.login('ghost', 'x', local({}, '10.0.1.99'))).toMatchObject({ status: 429 });
+    // The attacker's IP can still try other users; the real user from her IP is not affected.
+    expect((await auth.login('victor', 'viewer pass', local({}, '203.0.113.66'))).ok).toBe(true);
+    expect((await auth.login('alice', 'correct horse', local({}, '198.51.100.1'))).ok).toBe(true);
     clock.t += LOGIN_LIMITS.windowMs + 1;
-    expect((await auth.login('alice', 'correct horse', local())).ok).toBe(true);
+    expect((await auth.login('alice', 'correct horse', local({}, '203.0.113.66'))).ok).toBe(true);
+  });
+
+  it('has a higher per-user limit across IPs; unknown names are limited the same way', async () => {
+    const { auth } = service();
+    for (let i = 0; i < LOGIN_LIMITS.perUser; i++) await auth.login('alice', 'bad', local({}, `10.${Math.floor(i / 250)}.${i % 250}.1`));
+    expect(await auth.login('alice', 'correct horse', local({}, '192.0.2.200'))).toMatchObject({ status: 429 });
+    for (let i = 0; i < LOGIN_LIMITS.perUser; i++) await auth.login('ghost', 'x', local({}, `10.9.${i}.1`));
+    expect(await auth.login('ghost', 'x', local({}, '192.0.2.201'))).toMatchObject({ status: 429 });
+  });
+
+  it('counts IPv6 clients per /64', async () => {
+    const { auth } = service();
+    for (let i = 0; i < LOGIN_LIMITS.perIp; i++) await auth.login(`user${i}`, 'x', local({}, `2001:db8:1:2::${(i + 1).toString(16)}`));
+    expect(await auth.login('alice', 'correct horse', local({}, '2001:db8:1:2:ffff::7'))).toMatchObject({ status: 429 });
+    expect((await auth.login('alice', 'correct horse', local({}, '2001:db8:1:3::1'))).ok).toBe(true);
+    expect(ipRateKey('2001:0db8:0001:0002:0000:0000:0000:0001')).toBe('2001:db8:1:2::/64');
+    expect(ipRateKey('::ffff:192.0.2.1')).toBe('192.0.2.1');
+    expect(ipRateKey('garbage')).toBe('unknown');
+  });
+
+  it('rate-limit stores never evict entries that currently block (non-blocking oldest first)', () => {
+    const limiter = new FailureLimiter(2, 60_000, 3);
+    limiter.fail('attacker', 0);
+    limiter.fail('attacker', 0);
+    expect(limiter.blockedFor('attacker', 1)).toBeGreaterThan(0);
+    for (let i = 0; i < 20; i++) limiter.fail(`noise${i}`, 1);
+    expect(limiter.blockedFor('attacker', 2)).toBeGreaterThan(0);
+    expect(limiter.size).toBeLessThanOrEqual(3);
+    // After the window everything expires.
+    limiter.prune(60_001);
+    expect(limiter.size).toBe(0);
   });
 
   it('rate-limits per client IP across user names; behind a trusted proxy the last X-Forwarded-For hop counts', async () => {
@@ -187,9 +226,12 @@ describe('AuthService – password login', () => {
     const closed = vi.fn();
     const v2 = auth.resolve(local(cookieOf(v.cookie)));
     if (!v2.ok || !v2.principal?.sessionKey) throw new Error('no session');
-    auth.registerStream(v2.principal.sessionKey, closed);
+    auth.registerStream(v2.principal, closed);
     const clear = auth.logout(local(cookieOf(v.cookie)));
-    expect(clear).toMatch(/^adispatch_session=; Path=\/; Max-Age=0; HttpOnly; SameSite=Strict$/);
+    expect(clear).toEqual([
+      'adispatch_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict',
+      '__Host-adispatch_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict; Secure',
+    ]);
     expect(closed).toHaveBeenCalledTimes(1);
     expect(auth.resolve(local(cookieOf(v.cookie)))).toEqual({ ok: true, principal: null });
 
@@ -209,12 +251,26 @@ describe('AuthService – password login', () => {
     expect(auth.resolve(local({ cookie: `adispatch_session=${'A'.repeat(43)}` }))).toEqual({ ok: true, principal: null });
   });
 
+  it('handles duplicate cookies deterministically: __Host- wins, conflicting plain values count as logged out', async () => {
+    const { auth } = service();
+    const v = await auth.login('victor', 'viewer pass', local());
+    const a = await auth.login('alice', 'correct horse', local());
+    if (!v.ok || !a.ok) throw new Error('login failed');
+    const vid = v.cookie.split(';')[0]!.split('=')[1]!;
+    const aid = a.cookie.split(';')[0]!.split('=')[1]!;
+    // Tossed plain cookie next to the real one: not logged in (never the attacker's session).
+    expect(auth.resolve(local({ cookie: `adispatch_session=${aid}; adispatch_session=${vid}` }))).toEqual({ ok: true, principal: null });
+    expect(auth.resolve(local({ cookie: `adispatch_session=${vid}; adispatch_session=${vid}` }))).toMatchObject({ principal: { name: 'victor' } });
+    expect(auth.resolve(local({ cookie: `adispatch_session=${aid}; __Host-adispatch_session=${vid}` }))).toMatchObject({ principal: { name: 'victor' } });
+    expect(sessionIdOf(undefined)).toBeUndefined();
+  });
+
   it('sweeps expired sessions and closes their streams', async () => {
     const { auth, clock } = service();
     const a = await auth.login('alice', 'correct horse', local());
     if (!a.ok) throw new Error('login failed');
     const closed = vi.fn();
-    auth.registerStream(a.principal.sessionKey!, closed);
+    auth.registerStream(a.principal, closed);
     clock.t += 2 * 60 * 60_000;
     auth.sweep();
     expect(closed).toHaveBeenCalledTimes(1);
@@ -243,6 +299,56 @@ describe('AuthService – trusted header', () => {
     expect(auth.resolve(local(h('a@example.com, alice@example.com')))).toMatchObject({ ok: false, status: 401 });
     expect(auth.resolve(local(h('')))).toMatchObject({ ok: false, status: 401 });
   });
+  it('requires the shared proxy secret when proxy_secret_env is set (constant-time, fail closed)', () => {
+    const header = { ...h('alice@example.com') };
+    const withSecret = (env: Record<string, string>) =>
+      new AuthService({
+        config: () => baseConfig({ mode: 'trusted_header', trustedHeader: { ...baseConfig().trustedHeader, proxySecretEnv: 'PROXY_SECRET' } }),
+        env,
+      });
+    const auth = withSecret({ PROXY_SECRET: 's3cret-from-nginx' });
+    expect(auth.resolve(local(header))).toMatchObject({ ok: false, status: 401, code: 'invalid_proxy_secret' });
+    expect(auth.resolve(local({ ...header, [PROXY_SECRET_HEADER]: 'wrong' }))).toMatchObject({ ok: false, status: 401, code: 'invalid_proxy_secret' });
+    expect(auth.resolve(local({ ...header, [PROXY_SECRET_HEADER]: 's3cret-from-nginx' }))).toMatchObject({ ok: true, principal: { name: 'alice@example.com' } });
+    const missing = withSecret({});
+    expect(missing.proxySecretMissing()).toBe(true);
+    expect(missing.resolve(local({ ...header, [PROXY_SECRET_HEADER]: '' }))).toMatchObject({ ok: false, code: 'invalid_proxy_secret' });
+  });
+
+  it('reports locally forgeable identities (no proxy secret, only loopback proxies)', () => {
+    const cfg = (over: Partial<AuthConfig['trustedHeader']>, mode: AuthConfig['mode'] = 'trusted_header') =>
+      baseConfig({ mode, trustedHeader: { ...baseConfig().trustedHeader, ...over } });
+    expect(isIdentityForgeableLocally(cfg({}))).toBe(true);
+    expect(isIdentityForgeableLocally(cfg({ trustedProxies: ['127.0.0.0/8', '::1', '::ffff:127.0.0.1'] }))).toBe(true);
+    expect(isIdentityForgeableLocally(cfg({ proxySecretEnv: 'PROXY_SECRET' }))).toBe(false);
+    expect(isIdentityForgeableLocally(cfg({ trustedProxies: ['127.0.0.1', '10.0.0.5'] }))).toBe(false);
+    expect(isIdentityForgeableLocally(cfg({ trustedProxies: ['127.0.0.0/7'] }))).toBe(false);
+    expect(isIdentityForgeableLocally(cfg({}, 'password'))).toBe(false);
+  });
+
+  it('a reload closes SSE streams of logins that were removed', () => {
+    const { auth, setConfig } = service({ mode: 'trusted_header' });
+    const r = auth.resolve(local(h('alice@example.com')));
+    if (!r.ok || !r.principal) throw new Error('no principal');
+    const closed = vi.fn();
+    auth.registerStream(r.principal, closed);
+    auth.sweep();
+    expect(closed).not.toHaveBeenCalled();
+    setConfig({ mode: 'trusted_header', trustedHeader: { ...baseConfig().trustedHeader, users: [{ login: 'bob@example.com', role: 'viewer' }] } });
+    auth.sweep();
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(auth.streamCount).toBe(0);
+    // Anonymous readers lose their stream when reading starts to require a login.
+    const anon = vi.fn();
+    setConfig({ readRequiresLogin: false });
+    auth.registerStream({ name: 'anonymous', role: 'viewer', via: 'anonymous' }, anon);
+    auth.sweep();
+    expect(anon).not.toHaveBeenCalled();
+    setConfig({ readRequiresLogin: true });
+    auth.sweep();
+    expect(anon).toHaveBeenCalledTimes(1);
+  });
+
   it('supports CIDR ranges and IPv6', () => {
     const m = ipMatcher(['100.64.0.0/10', 'fd7a:115c:a1e0::/48', '::1']);
     expect(m('100.100.1.1')).toBe(true);
@@ -256,10 +362,14 @@ describe('AuthService – trusted header', () => {
 });
 
 describe('AuthService – control token', () => {
-  it('grants admin only from loopback and only with the exact token', () => {
+  it('grants operator (not admin) only from loopback and only with the exact token; never interactive', () => {
     const { auth } = service();
     const ok = auth.resolve(local({ [CONTROL_TOKEN_HEADER]: auth.controlToken }));
-    expect(ok).toEqual({ ok: true, principal: { name: 'control-token', role: 'admin', via: 'control_token' } });
+    expect(ok).toEqual({ ok: true, principal: { name: 'control-token', role: 'operator', via: 'control_token' } });
+    expect(isInteractive(ok.ok ? ok.principal : null)).toBe(false);
+    expect(isInteractive({ name: 'a', role: 'admin', via: 'password' })).toBe(true);
+    expect(isInteractive({ name: 'a', role: 'admin', via: 'trusted_header' })).toBe(true);
+    expect(isInteractive({ name: 'anonymous', role: 'viewer', via: 'anonymous' })).toBe(false);
     expect(auth.resolve(local({ [CONTROL_TOKEN_HEADER]: auth.controlToken }, '::1'))).toMatchObject({ ok: true });
     expect(auth.resolve(local({ [CONTROL_TOKEN_HEADER]: auth.controlToken }, '192.168.1.20'))).toMatchObject({ ok: false, status: 401, code: 'control_token_not_local' });
     expect(auth.resolve(local({ [CONTROL_TOKEN_HEADER]: `${auth.controlToken}x` }))).toMatchObject({ ok: false, status: 401, code: 'invalid_control_token' });
@@ -277,20 +387,21 @@ describe('AuthService – control token', () => {
 
   const dir = mkdtempSync(path.join(os.tmpdir(), 'orch-token-'));
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
-  it('is written atomically with mode 0600, replaced on restart and removed only by its owner', () => {
+  it('is written atomically with mode 0600 (token, port, pid), replaced on restart and removed only by its owner', () => {
     const t1 = service().auth.controlToken;
-    const file = writeControlToken(dir, t1);
+    const file = writeControlToken(dir, { token: t1, port: 8790, pid: 4242 });
     expect(file).toBe(controlTokenPath(dir));
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(readControlToken(file)).toBe(t1);
+    expect(readControlToken(file)).toEqual({ token: t1, port: 8790, pid: 4242 });
     // A pre-existing world-readable file is replaced by a fresh 0600 file.
     writeFileSync(file, 'old\n', { mode: 0o644 });
+    expect(readControlToken(file)).toBeNull();
     const t2 = service().auth.controlToken;
-    writeControlToken(dir, t2);
+    writeControlToken(dir, { token: t2, port: 8791, pid: 4243 });
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    expect(readFileSync(file, 'utf8')).toBe(`${t2}\n`);
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ token: t2, port: 8791, pid: 4243 });
     removeControlToken(dir, t1); // not ours any more
-    expect(readControlToken(file)).toBe(t2);
+    expect(readControlToken(file)?.token).toBe(t2);
     removeControlToken(dir, t2);
     expect(readControlToken(file)).toBeNull();
     expect(readControlToken(path.join(dir, 'missing'))).toBeNull();

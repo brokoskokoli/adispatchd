@@ -6,14 +6,21 @@
  *
  * `public` = no login needed (health checks, login itself, the static UI
  * shell, which contains no data). HEAD requests use the entry of the GET route.
+ *
+ * `controlToken: true` marks the routes the CLI control commands call: only
+ * there is the local control token accepted (it grants `operator`; worker
+ * processes of the same service user can read it – review M1).
  */
 import { AUTH_ROLES, type AuthRole } from '../config/index.js';
 
 /** Required access of a route. */
 export type RouteAccess = AuthRole | 'public';
 
+/** Entry of {@link ROUTE_ROLES}: a minimum role, or a role plus flags. */
+export type RouteRule = RouteAccess | { role: RouteAccess; controlToken?: boolean };
+
 /** `"<METHOD> <route url>"` → minimum role. */
-export const ROUTE_ROLES: Readonly<Record<string, RouteAccess>> = {
+export const ROUTE_ROLES: Readonly<Record<string, RouteRule>> = {
   'GET /health': 'public',
   'GET /ready': 'public',
   // Authentication (WI-26)
@@ -21,18 +28,18 @@ export const ROUTE_ROLES: Readonly<Record<string, RouteAccess>> = {
   'POST /api/v1/auth/logout': 'public',
   'GET /api/v1/auth/me': 'public',
   // Status / scheduler / shutdown
-  'GET /api/v1/status': 'viewer',
-  'POST /api/v1/scheduler/pause': 'operator',
-  'POST /api/v1/scheduler/resume': 'operator',
+  'GET /api/v1/status': { role: 'viewer', controlToken: true },
+  'POST /api/v1/scheduler/pause': { role: 'operator', controlToken: true },
+  'POST /api/v1/scheduler/resume': { role: 'operator', controlToken: true },
   'PATCH /api/v1/scheduler/runtime': 'operator',
-  'POST /api/v1/shutdown/drain': 'operator',
-  'POST /api/v1/shutdown/cancel-all': 'operator',
+  'POST /api/v1/shutdown/drain': { role: 'operator', controlToken: true },
+  'POST /api/v1/shutdown/cancel-all': { role: 'operator', controlToken: true },
   // Workflows
   'GET /api/v1/workflows': 'viewer',
   'GET /api/v1/workflows/:id': 'viewer',
   'PATCH /api/v1/workflows/:id/runtime': 'operator',
   'POST /api/v1/workflows/:id/start': 'operator',
-  'POST /api/v1/workflows/:id/dry-run': 'viewer',
+  'POST /api/v1/workflows/:id/dry-run': { role: 'viewer', controlToken: true },
   // Runs
   'GET /api/v1/runs': 'viewer',
   'GET /api/v1/runs/:id': 'viewer',
@@ -56,7 +63,7 @@ export const ROUTE_ROLES: Readonly<Record<string, RouteAccess>> = {
   'GET /api/v1/config': 'viewer',
   'GET /api/v1/config/files': 'viewer',
   'POST /api/v1/config/validate': 'viewer',
-  'POST /api/v1/config/reload': 'operator',
+  'POST /api/v1/config/reload': { role: 'operator', controlToken: true },
   // Dashboard info tiles (WI-24)
   'GET /api/v1/dashboard/info': 'viewer',
   'POST /api/v1/dashboard/info/:id/refresh': 'operator',
@@ -78,7 +85,14 @@ export function routeKey(method: string, url: string): string {
 
 /** Minimum role of a route, `undefined` if not in the table. */
 export function routeAccess(method: string, url: string): RouteAccess | undefined {
-  return ROUTE_ROLES[routeKey(method, url)];
+  const rule = ROUTE_ROLES[routeKey(method, url)];
+  return rule === undefined ? undefined : typeof rule === 'string' ? rule : rule.role;
+}
+
+/** True if the local control token is accepted on this route (CLI control commands). */
+export function acceptsControlToken(method: string, url: string): boolean {
+  const rule = ROUTE_ROLES[routeKey(method, url)];
+  return typeof rule === 'object' && rule.controlToken === true;
 }
 
 /** True if `role` satisfies `required` (viewer < operator < admin). */

@@ -182,6 +182,13 @@ function validateAuth(global: GlobalConfig, issues: IssueCollector): void {
   if (auth.mode === 'trusted_header' && auth.trustedHeader.trustedProxies.length === 0) {
     issues.warning(CONFIG_FILE, ['auth', 'trusted_header', 'trusted_proxies'], 'No trusted proxies: every request is rejected with 401');
   }
+  const anyAddress = (list: readonly string[], at: IssuePath): void => {
+    list.forEach((entry, i) => {
+      if (/\/0$/.test(entry)) issues.warning(CONFIG_FILE, [...at, i], `"${entry}" trusts every address: anyone who can connect can claim an identity or HTTPS`);
+    });
+  };
+  anyAddress(auth.trustedHeader.trustedProxies, ['auth', 'trusted_header', 'trusted_proxies']);
+  anyAddress(auth.trustedProxies, ['auth', 'trusted_proxies']);
 }
 
 function isHttpUrl(value: string): boolean {

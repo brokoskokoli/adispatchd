@@ -21,7 +21,7 @@ describe('auth (WI-26)', () => {
     expect(config.global.auth).toEqual({
       mode: 'none',
       users: [],
-      trustedHeader: { header: 'tailscale-user-login', trustedProxies: ['127.0.0.1', '::1'], users: [] },
+      trustedHeader: { header: 'tailscale-user-login', trustedProxies: ['127.0.0.1', '::1'], proxySecretEnv: null, users: [] },
       trustedProxies: ['127.0.0.1', '::1'],
       sessionTtlMs: 12 * 60 * 60_000,
       readRequiresLogin: true,
@@ -36,6 +36,7 @@ describe('auth (WI-26)', () => {
   trusted_header:
     header: X-Forwarded-User
     trusted_proxies: [127.0.0.1, "100.64.0.0/10", "fd7a:115c:a1e0::/48"]
+    proxy_secret_env: NGINX_PROXY_SECRET
     users:
       - { login: Alice@Example.com, role: operator }
   trusted_proxies: [10.0.0.1]
@@ -48,6 +49,7 @@ describe('auth (WI-26)', () => {
       trustedHeader: {
         header: 'x-forwarded-user',
         trustedProxies: ['127.0.0.1', '100.64.0.0/10', 'fd7a:115c:a1e0::/48'],
+        proxySecretEnv: 'NGINX_PROXY_SECRET',
         users: [{ login: 'alice@example.com', role: 'operator' }],
       },
       trustedProxies: ['10.0.0.1'],
@@ -101,6 +103,11 @@ describe('auth (WI-26)', () => {
       'auth.users[1].name: Duplicate user "Alice"',
       'auth.trusted_header.users[1].login: Duplicate login "a@example.com"',
     ]);
+  });
+
+  it('warns when a proxy list trusts every address', async () => {
+    const res = await load('auth: { mode: trusted_header, trusted_header: { trusted_proxies: ["0.0.0.0/0"], users: [{ login: a@example.com, role: viewer }] }, trusted_proxies: ["::/0"] }\n');
+    expect(res.warnings.map((w) => w.path)).toEqual(expect.arrayContaining(['auth.trusted_header.trusted_proxies[0]', 'auth.trusted_proxies[0]']));
   });
 
   it('warns when a mode has nobody who could log in', async () => {
