@@ -2,6 +2,7 @@
 import { api, seg } from '../api.js';
 import { h, replaceChildren } from '../dom.js';
 import { cellText, nextSort, objectText, sortRows, type SortDirection } from '../../shared/sort.js';
+import { itemPanelLink } from './item.js';
 import type { Page, PageContext } from '../page.js';
 import type { ViewDef, ViewItems } from '../types.js';
 import { button, errorBox, externalLink, loading, routeLink, runLink, table, time } from '../ui.js';
@@ -88,7 +89,10 @@ export const viewPage = (ctx: PageContext, id: string): Page => {
       d.truncated ? h('div', { class: 'alert alert-warn' }, 'Result truncated.') : null,
       table(
         [...headers, ''],
-        rows.map((r) => [...r.cells.map((c, i) => cellNode(c, d.columns[i]?.field ?? '')), r.lastRunId ? runLink(r.lastRunId, 'last run') : '']),
+        rows.map((r) => [
+          ...r.cells.map((c, i) => cellNode(c, d.columns[i]?.field ?? '')),
+          h('span', null, r.lastRunId ? runLink(r.lastRunId, 'last run') : '', r.lastRunId ? ' ' : '', itemPanelLink(r.sourceId, r.itemId, 'act…')),
+        ]),
         { empty: 'No items match this view.' },
       ),
     );

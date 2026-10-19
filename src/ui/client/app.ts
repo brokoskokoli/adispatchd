@@ -22,6 +22,7 @@ import { failedActionsPage } from './pages/actions.js';
 import { viewPage, viewsListPage } from './pages/views.js';
 import { configPage } from './pages/config.js';
 import { toolPage } from './pages/tools.js';
+import { itemPage, uiActionsPage } from './pages/item.js';
 import { externalLinks, reloadExternalLinks } from './external-links.js';
 import { externalNavItem, TOOLS_ROUTE } from '../shared/external-links.js';
 
@@ -205,6 +206,10 @@ function pageFor(route: Route, ctx: PageContext): Page {
       return b ? viewPage(ctx, b) : viewsListPage(ctx);
     case 'config':
       return configPage(ctx);
+    case 'items':
+      return itemPage(ctx, b ?? '', route.segments[2] ?? '');
+    case 'ui-actions':
+      return uiActionsPage(ctx);
     case TOOLS_ROUTE:
       return toolPage(ctx, b ?? '');
     default:
@@ -277,6 +282,12 @@ window.addEventListener(UNAUTHORIZED_EVENT, () => {
 
 function startApp(): void {
   appStarted = true;
+  // UI actions (WI-27): admins only; with auth.mode none the page explains how to enable them.
+  const me = currentAuth();
+  if (me.mode === 'none' || me.user?.role === 'admin') {
+    const config = nav.querySelector('a[data-nav="config"]')?.parentElement ?? null;
+    $('ul.menu', nav).insertBefore(navItem('ui-actions', '#/ui-actions', 'UI Actions'), config);
+  }
   nav.hidden = false;
   window.addEventListener('hashchange', render);
   live = createLive();
