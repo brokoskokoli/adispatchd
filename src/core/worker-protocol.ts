@@ -88,6 +88,18 @@ export type WorkerResult = z.infer<typeof workerResultSchema>;
 export type WorkerArtifact = z.infer<typeof workerArtifactSchema>;
 
 /**
+ * Position part of a `JSON.parse` error (`at position 12 (line 1 column 13)`),
+ * never the message itself: V8 quotes the offending content, which may be a
+ * secret or a host file the worker pointed to.
+ */
+export function jsonErrorPosition(err: unknown): string {
+  const message = err instanceof Error ? err.message : '';
+  const m = /at position (\d+)(?: \(line (\d+) column (\d+)\))?/.exec(message);
+  if (!m) return '';
+  return m[2] !== undefined ? ` (at position ${m[1]}, line ${m[2]} column ${m[3]})` : ` (at position ${m[1]})`;
+}
+
+/**
  * Parse and validate result-file content. Returns a discriminated result
  * instead of throwing; any problem means a technical protocol error (Spec §8.2 rule 4).
  */
@@ -101,7 +113,7 @@ export function parseWorkerResult(
   try {
     json = JSON.parse(content);
   } catch (err) {
-    return { ok: false, error: `result file is not valid JSON: ${(err as Error).message}` };
+    return { ok: false, error: `result file is not valid JSON${jsonErrorPosition(err)}` };
   }
   const warnings: string[] = [];
   json = dropInvalidOutcome(json, warnings);

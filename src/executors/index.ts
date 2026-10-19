@@ -43,6 +43,7 @@ export {
 export { buildMinimalEnv, buildOrchEnv, contextSource, type OrchSourceInfo, buildWorkerEnv, FALLBACK_PATH, MINIMAL_ENV_KEYS } from './env.js';
 export { EventLineParser, parseEventLine, type EventLineHandlers, type EventLineResult } from './event-parser.js';
 export { ensureWorkspaceWithin } from './workspace.js';
+export { readFileNoFollow, type SafeReadResult } from './safe-read.js';
 export { MIN_STREAM_SECRET_LENGTH, REDACTION_MARKER, StreamRedactor } from './stream-redactor.js';
 export {
   TOKEN_DIR_NAME,

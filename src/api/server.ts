@@ -24,6 +24,7 @@ import {
   errorMessage,
   isSecretKey,
   isValidRunId,
+  jsonErrorPosition,
   noopLogger,
   REDACTED,
   redactValue,
@@ -31,8 +32,10 @@ import {
   type Clock,
   type Logger,
   type Redactor,
+  type RunPaths,
   type TechnicalStatus,
 } from '../core/index.js';
+import { readFileNoFollow } from '../executors/index.js';
 import { loadConfig, toPublicConfig, type ConfigManager, type ReloadResult } from '../config/index.js';
 import type { LifecycleEngine } from '../lifecycle/index.js';
 import type { NotificationService } from '../notifications/index.js';
@@ -170,16 +173,27 @@ async function earlyError(p: Promise<unknown>): Promise<unknown> {
 }
 
 /** Read a JSON file (bounded); returns `{value}` or `{error}`; `null` if missing. */
-async function readJsonFile(file: string): Promise<{ value: unknown } | { error: string } | null> {
+/**
+ * Read a JSON file a worker may control (context, result) without following
+ * symlinks or opening FIFOs (WI-19 review); parse errors report the position only.
+ */
+async function readJsonFile(file: string, dir: string): Promise<{ value: unknown } | { error: string } | null> {
+  const read = await readFileNoFollow(file, { dir, maxBytes: MAX_JSON_FILE_BYTES, what: 'file' });
+  if (read.state === 'missing') return null;
+  if (read.state === 'invalid') return { error: read.error };
   try {
-    const st = await stat(file);
-    if (!st.isFile()) return { error: 'not a regular file' };
-    if (st.size > MAX_JSON_FILE_BYTES) return { error: `file too large (${st.size} bytes)` };
-    return { value: JSON.parse(await readFile(file, 'utf8')) as unknown };
+    return { value: JSON.parse(read.text) as unknown };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    return { error: errorMessage(err) };
+    return { error: `not valid JSON${jsonErrorPosition(err)}` };
   }
+}
+
+/** Result file of a run: container runs (WI-19) write into `runs/<id>/out/`. */
+function resultFileOf(run: RunRecord, paths: RunPaths): { file: string; dir: string } {
+  const execute = (run.configSnapshot as { workflow?: { execute?: { type?: unknown } } } | null)?.workflow?.execute;
+  return execute?.type === 'container'
+    ? { file: path.join(paths.outDir, 'result.json'), dir: paths.outDir }
+    : { file: paths.resultFile, dir: paths.runDir };
 }
 
 async function fileSize(file: string): Promise<number | null> {
@@ -506,7 +520,12 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const run = requireRun(id);
     const paths = runPaths(id);
     const [input, resultFile, stdoutSize, stderrSize] = paths
-      ? await Promise.all([readJsonFile(paths.contextFile), readJsonFile(paths.resultFile), fileSize(paths.stdoutLog), fileSize(paths.stderrLog)])
+      ? await Promise.all([
+          readJsonFile(paths.contextFile, paths.runDir),
+          readJsonFile(resultFileOf(run, paths).file, resultFileOf(run, paths).dir),
+          fileSize(paths.stdoutLog),
+          fileSize(paths.stderrLog),
+        ])
       : [null, null, null, null];
     const actions: ActionView[] = repos.actions.listForRun(id).map((a) => ({ ...a, attemptsDetail: repos.actions.listAttempts(a.id) }));
     const allEvents = repos.events.listForRun(id);

@@ -4,7 +4,7 @@
  * events, enforces timeouts and supervises cancel/termination.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import {
@@ -44,6 +44,7 @@ import {
   type KillFn,
   type ProcessInspector,
 } from './process-identity.js';
+import { readFileNoFollow } from './safe-read.js';
 import { StreamRedactor } from './stream-redactor.js';
 import { ensureWorkspaceWithin } from './workspace.js';
 
@@ -595,23 +596,15 @@ class ShellProcess implements RunningProcess {
   }
 
   private async inspectResultFile(): Promise<ResultFileStatus> {
-    const file = this.spec.files.resultFile;
-    try {
-      const st = await stat(file);
-      if (!st.isFile()) return { state: 'invalid', error: 'result file is not a regular file' };
-      if (st.size > MAX_RESULT_FILE_BYTES) {
-        return { state: 'invalid', error: `result file exceeds ${MAX_RESULT_FILE_BYTES} bytes` };
-      }
-      const parsed = parseWorkerResult(await readFile(file, 'utf8'));
-      if (!parsed.ok) return { state: 'invalid', error: this.secretRedactor.redact(parsed.error) };
-      // Spec §9.2: redact sensitive values before the result is persisted anywhere.
-      const result = redactValue(parsed.result, this.secretRedactor.asRedactor) as WorkerResult;
-      const warnings = parsed.warnings.map((w) => this.secretRedactor.redact(w));
-      return { state: 'valid', result, ...(warnings.length > 0 ? { warnings } : {}) };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
-      return { state: 'invalid', error: `result file could not be read: ${errorMessage(err)}` };
-    }
+    // The worker controls this file: never follow symlinks, never read FIFOs (WI-19 review).
+    const read = await readFileNoFollow(this.spec.files.resultFile, { maxBytes: MAX_RESULT_FILE_BYTES });
+    if (read.state !== 'ok') return read.state === 'missing' ? read : { state: 'invalid', error: this.secretRedactor.redact(read.error) };
+    const parsed = parseWorkerResult(read.text);
+    if (!parsed.ok) return { state: 'invalid', error: this.secretRedactor.redact(parsed.error) };
+    // Spec §9.2: redact sensitive values before the result is persisted anywhere.
+    const result = redactValue(parsed.result, this.secretRedactor.asRedactor) as WorkerResult;
+    const warnings = parsed.warnings.map((w) => this.secretRedactor.redact(w));
+    return { state: 'valid', result, ...(warnings.length > 0 ? { warnings } : {}) };
   }
 
   private emitDiagnostic(diagnostic: ExecutorDiagnostic): void {
