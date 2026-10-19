@@ -29,6 +29,8 @@ Zerlegung der Spec v0.1 in umsetzbare Pakete. **Status: alle Work-Items umgesetz
 | [23](WI-23-resource-monitor.md) | Server-Ressourcen im Dashboard (CPU, RAM, Platte, Prozesse) | §16, §21 | 22 | 12 (0.3.1) |
 | [24](WI-24-conditions-and-info.md) | Conditions in der Workflow-Ansicht, Info-Kacheln im Dashboard (`dashboard.yaml`) | §5, §16 | 22 | 12 (0.3.1) |
 | [25](WI-25-external-links.md) | Externe Tools in der Toolbar (z. B. claude-inspect), optional eingebettet | §16 | 22 | 12 (0.3.1) |
+| [26](WI-26-authentication.md) | Anmeldung für UI und API (Passwort oder vertrauenswürdiger Proxy-Header, Rollen, Audit) | §15, §16, §20 | 25 | 13 |
+| [27](WI-27-act-as-identity.md) | In der UI als App-Identität handeln (Kommentar, Labels, Projektfelder) | §10, §16, §20 | 26 | 14 |
 
 Ablauf je Work-Item: Coder-Agent (eigener Branch/Worktree) → Reviewer-Agent (prüft gegen Acceptance Criteria + Spec) → ggf. Fix-Runde → Merge nach `main`.
 
