@@ -291,17 +291,27 @@ aus erreichbar sein (lokal oder über einen Reverse Proxy). Betrieb von claude-i
 |---|---|---|---|---|
 | `id` | Konfigurations-ID | ja | | eindeutig innerhalb der Liste; Teil der Route `#/tools/<id>` |
 | `label` | String | ja | | Text des Eintrags, 1–40 Zeichen (nur als Text dargestellt, nie als HTML) |
-| `url` | String | ja | | absolute `http(s)`-URL, wie der Browser das Tool erreicht. Keine Zugangsdaten (`user:pass@` → Fehler). Query-Parameter sind erlaubt; ein Parameter, der wie ein Token aussieht (`t`, `token`, `access_token`, `key`, `secret`, `password`, …), ergibt eine **Warnung** – der Wert wäre in `GET /api/v1/config` und in der UI sichtbar. |
-| `enabled` | Boolean | nein | `true` | `false` blendet den Eintrag aus (auch in API und CSP) |
+| `url` | String | ja | | absolute `http(s)`-URL, wie der Browser das Tool erreicht. Keine Zugangsdaten (`user:pass@` → Fehler). Query-Parameter sind erlaubt; ein Parameter, der wie ein Token aussieht (`t`, `token`, `access_token`, `key`, `secret`, `password`, …), ergibt eine **Warnung** – solange der Eintrag aktiv ist, sieht jeder, der UI/API erreicht, die vollständige URL (siehe unten). |
+| `enabled` | Boolean | nein | `true` | `false` entfernt den Eintrag aus der Toolbar, aus `externalLinks` und `config.global.ui` von `GET /api/v1/config` und aus der CSP. Die URL bleibt nur in `config.yaml` (in `GET /api/v1/config/files` ist sie wie jeder `url`-Wert redigiert). |
 | `embed` | Boolean | nein | `false` | `false` = Link in neuem Tab (`noopener noreferrer`, Symbol „↗“); `true` = Seite `#/tools/<id>` mit dem Tool in einem `iframe` (Sandbox `allow-scripts allow-same-origin allow-forms allow-popups allow-downloads`, kein Referrer) und „Open in new tab“ |
 
 Für jeden aktivierten Eintrag mit `embed: true` erlaubt die Content-Security-Policy der UI dessen Origin
 (`schema://host[:port]`) in `frame-src`; sonst bleibt die Policy unverändert. Ob das Tool sich einbetten lässt, entscheidet
 das Tool selbst (`X-Frame-Options`/`frame-ancestors`); verbietet es das, nicht läuft oder die Anfrage ablehnt (z. B.
-Host-Prüfung), bleibt die Seite leer – der Link „Open in new tab“ und ein Hinweis bleiben sichtbar. IPv6-Literale
-(`http://[::1]:…`) lassen sich in der CSP nicht ausdrücken (Warnung bei `embed: true`; einen Hostnamen wie `localhost`
-verwenden). Die UI liegt meist auf einer anderen Origin als das Tool; Cookies des Tools (z. B. ein Zugangstoken-Cookie)
-gelten im Frame nur, wenn der Browser sie dort zulässt.
+Host-Prüfung), bleibt die Seite leer – der Link „Open in new tab“ und ein Hinweis bleiben sichtbar. Bei `embed: true`
+muss sich der Host in der CSP ausdrücken lassen – nur Buchstaben, Ziffern, `.` und `-` (Hostname oder IPv4); IPv6-Literale
+(`http://[::1]:…`) und Hosts mit `_`, `*`, `;`, `,` … sind ein **Fehler** (`embed: false` geht).
+
+**Sichtbarkeit:** Die URL jedes **aktiven** Eintrags – inklusive eines Tokens darin – sieht jeder, der die UI oder die API
+erreicht (Toolbar, Feld `externalLinks` von `GET /api/v1/config`). Das ist dieselbe Vertrauensgrenze wie für adispatchd
+selbst: die UI nur lokal oder hinter einem authentifizierenden Reverse Proxy betreiben. Die Konfigurationsansicht
+(`config.global.ui.externalLinks`) zeigt nur aktive Einträge und redigiert deren Query-String und Fragment.
+
+**Gleicher Hostname und gleiches Schema:** UI und Tool sollten mit demselben Hostnamen und Schema geöffnet werden, z. B.
+beide über `127.0.0.1` (`http://127.0.0.1:8787/` und `http://127.0.0.1:47717/`) – nicht einmal `localhost` und einmal
+`127.0.0.1`. Sonst ist der Frame für den Browser „cross-site“, und Cookies mit `SameSite=Strict`/`Lax` (z. B. das
+Zugangs-Cookie eines per Token geschützten Tools) werden im Frame nicht gesendet. Auf einem Server: UI und Tool unter
+derselben registrierbaren Domain (z. B. `orchestrator.example.com` und `inspect.example.com`) und beide per HTTPS.
 
 ```yaml
 # example: external-links
@@ -3159,7 +3169,8 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Invalid host name (expected "name" or "name:port")` | Schema/Pfad in `allowed_hosts` (`https://…`) |
 | `Invalid environment variable name` | z. B. `private_key_env: my-key` |
 | `Must be an absolute http(s) URL` (Pfad `ui.external_links[n].url`) | relative URL oder anderes Schema – volle URL angeben, wie der Browser das Tool erreicht |
-| `Query parameter "t" looks like an access token …` (Warnung) | Token in `ui.external_links[n].url`; besser Tool ohne Token nur lokal betreiben bzw. hinter dem authentifizierenden Proxy |
+| `Query parameter "t" looks like an access token …` (Warnung) | Token in `ui.external_links[n].url` – für jeden sichtbar, der UI/API erreicht; besser Tool ohne Token nur lokal betreiben bzw. hinter dem authentifizierenden Proxy |
+| `The host cannot be allowed in the Content-Security-Policy (frame-src) …` (Pfad `ui.external_links[n].embed`) | IPv6-Literal oder Host mit `_`, `*`, `;` … bei `embed: true` – Hostname/IPv4 verwenden oder `embed: false` |
 | `Expected a size such as 100MB` | Größe als Zahl statt String (`max_log_size_per_run: 100`) |
 | `Invalid size "100" (expected e.g. 512KB, 100MB, 1GB)` | String ohne oder mit unbekannter Einheit (`'100'`, `'100MiBs'`) |
 | `Must be greater than 0` (Pfad `execute.keep_max_size`) | `keep_max_size: 0MB` |

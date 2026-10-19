@@ -12,7 +12,9 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   Weboberfläche: `embed: false` (Default) öffnet sie in einem neuen Tab, `embed: true` zeigt sie auf einer eigenen Seite
   `#/tools/<id>` in einem `iframe` (Sandbox, kein Referrer) mit „Open in new tab“ und Hinweis, falls nichts erscheint.
   Schlüssel `id`, `label` (1–40 Zeichen), `url` (absolut, `http`/`https`, ohne Zugangsdaten), `enabled`, `embed`;
-  Token-ähnliche Query-Parameter (`t`, `token`, …) ergeben eine Warnung. Kein Proxy – der Browser spricht das Tool
+  die URLs aktiver Einträge sieht jeder, der UI/API erreicht – Token-ähnliche Query-Parameter (`t`, `token`, …) ergeben
+  deshalb eine Warnung; `embed: true` verlangt einen in der CSP ausdrückbaren Host (Hostname/IPv4). Deaktivierte Einträge
+  erscheinen nirgends in API/UI. Kein Proxy – der Browser spricht das Tool
   direkt an. `GET /api/v1/config` liefert die aktiven Einträge als `externalLinks`. Betrieb neben adispatchd (lokal
   und auf dem Server hinter dem Reverse Proxy): `docs/operations.md`.
 
