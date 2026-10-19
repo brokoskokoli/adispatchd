@@ -27,7 +27,8 @@ item_priority:
 
 conditions:
   workflow:
-    - type: shell
+    - name: Credits available
+      type: shell
       command: /etc/adispatchd/scripts/check-credits.sh
       timeout: 15s
       cache: 60s

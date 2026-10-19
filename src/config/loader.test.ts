@@ -74,6 +74,9 @@ describe('loadConfig – spec examples', () => {
     expect(config.filters['needs-maintainer']?.filter).toEqual(needsMaintainer);
     expect(config.views['needs-maintainer']?.filter).toEqual(needsMaintainer);
     expect(config.workflows['coder-project-a']?.filter).toMatchObject({ all: expect.arrayContaining([{ not: needsMaintainer }]) });
+    // WI-24: named condition and an info tile.
+    expect(config.workflows['coder-project-a']?.conditions.workflow[0]?.name).toBe('Credits available');
+    expect(config.dashboard?.info.map((t) => t.id)).toEqual(['data-disk']);
   });
 
   it('validates the literal YAML examples of spec §5.1–§5.5 and §17', async () => {
