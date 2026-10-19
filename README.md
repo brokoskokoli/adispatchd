@@ -58,7 +58,8 @@ who picks which issue, what happens when an agent crashes, how do labels get res
 - **Keep files** – `execute.keep` copies transcripts and logs (glob patterns) to `runs/<run-id>/kept/` before the
   workspace is cleaned up; download them in the UI or via the API.
 - **Web UI with live updates** – workflows, runs, live output, events, kept files and views (read-only tables across
-  repositories), streamed via Server-Sent Events; plus a JSON HTTP API. Optional toolbar links to other local tools
+  repositories; sorted by your own value order such as pipeline stages, several sort keys, sections with headings),
+  streamed via Server-Sent Events; plus a JSON HTTP API. Optional toolbar links to other local tools
   (e.g. the [claude-inspect](https://github.com/brokoskokoli/claude_inspect) dashboard), opened in a new tab or embedded
   (`ui.external_links`).
 - **Server resources** – a compact strip at the top of the dashboard (CPU with a 15-minute sparkline, memory, the

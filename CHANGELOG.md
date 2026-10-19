@@ -5,6 +5,21 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [0.5.0] – unveröffentlicht
 
+### Hinzugefügt
+
+- **Views: eigene Wertereihenfolge, mehrere Sortierschlüssel, Abschnitte.** `sort` darf eine Liste von 1–5
+  Schlüsseln sein (ein einzelnes Objekt bleibt gültig); je Schlüssel sortiert `order: [open, coding, review, …]` nach
+  der Position des Werts (nur `string`-Felder, z. B. `project.Status`): nicht gelistete Werte danach, leere zuletzt,
+  `direction: desc` kehrt die Liste um. Werte, die ein `single_select`-Projektfeld nicht kennt, erscheinen als Warnung
+  im View-Ergebnis. `group_by_first: true` zeigt eine Gruppenzeile je Wert. Mit `sections` zeigt eine View mehrere
+  Tabellen mit Überschrift und Zeilenzahl (eigener `filter` oder `rest: true`, optional eigene `sort`/`fields`;
+  `exclusive`, `hide_empty_sections`); die Sources werden dabei nur einmal gelesen. UI: „Default order“ stellt nach
+  einem Spaltenklick die konfigurierte Sortierung wieder her, Sprungmarken ab vier Abschnitten. Beispiel:
+  `examples/config/views/pipeline.yaml`; Referenz §3.5.1, §3.5.2.
+- **API:** `GET /api/v1/views` und `/views/:id` liefern `sort` jetzt **immer als Liste** (`[{field, direction, order}]`,
+  vorher ein Objekt oder `null`) sowie `sections`, `exclusive`, `hideEmptySections`, `groupByFirst`; View-Ergebnisse
+  haben `warnings` und bei Abschnitten `sections: [{ title, rows, counts, sort, fields, … }]` (dann `rows: []`).
+
 ### Geändert
 
 - **Dashboard: kompakte Ressourcenleiste statt großer Server-Sektion.** Oben im Dashboard (vor den Info-Kacheln und den

@@ -59,7 +59,8 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Dateien sichern:** `execute.keep` kopiert Mitschnitte und Logs (Glob-Muster) vor dem Workspace-Cleanup nach
   `runs/<run-id>/kept/` – mit Größenlimit, ohne Symlinks zu folgen; Download in UI und API, gelöscht mit dem Run.
 - **Weboberfläche mit Live-Updates** (SSE): Workflows, Runs mit Live-Output, Events und gesicherten Dateien, Views
-  über mehrere Repositories; dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools in der Toolbar
+  über mehrere Repositories (Sortierung nach eigener Wertereihenfolge wie Pipeline-Stufen, mehrere
+  Sortierschlüssel, Abschnitte mit Überschriften); dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools in der Toolbar
   (z. B. das Dashboard [claude-inspect](https://github.com/brokoskokoli/claude_inspect)), im neuen Tab oder eingebettet
   (`ui.external_links`).
 - **Server-Ressourcen:** oben im Dashboard eine kompakte Leiste (CPU mit Verlauf der letzten 15 Minuten, RAM, die am

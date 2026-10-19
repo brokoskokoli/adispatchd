@@ -1348,12 +1348,100 @@ sort: { field: updated_at, direction: desc }
 | `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen; `project.*` nur, wenn **alle** Sources der View es mit gleicher Art deklarieren (§4.7.1) | Feldname (§4.7, §4.8); `object[]`-Felder (`closing_prs`) erscheinen als Liste, z. B. `#12 open, #9 merged`, jeder Eintrag als Link auf seine `url` |
 | `fields[].label` | String | nein | Feldname | | Spaltenüberschrift |
 | `fields[].link` | String (Feldname, geprüft wie `field`) | nein | `link` der Felddefinition (`number`, `title` → `url`; `work_pr` → `work_pr_url`, also der PR) | | Feld, dessen Wert (nur absolute `http(s)`-URL) als Link dient |
-| `sort.field` | String | ja (wenn `sort`) | | geprüft wie `fields[].field`; kein `object[]`-Feld (`Views cannot be sorted by "closing_prs" (type object[])`) | Sortierfeld |
-| `sort.direction` | Enum | nein | `asc` | `asc`, `desc` | leere Werte immer zuletzt; Gleichstand nach Item-Schlüssel (natürlich) |
+| `sort` | Sortierschlüssel oder Liste von 1–5 Sortierschlüsseln (seit 0.5.0) | nein | Item-Schlüssel | | erster Schlüssel entscheidet, bei Gleichstand der nächste, zuletzt der Item-Schlüssel (natürlich) |
+| `sort[].field` | String | ja (je Schlüssel) | | geprüft wie `fields[].field`; kein `object[]`-Feld (`Views cannot be sorted by "closing_prs" (type object[])`) | Sortierfeld |
+| `sort[].direction` | Enum | nein | `asc` | `asc`, `desc` | leere Werte immer zuletzt; mit `order` kehrt `desc` die Liste um |
+| `sort[].order` | Liste String (seit 0.5.0) | nein | | 1–100 Werte, eindeutig; nur Felder vom Typ `string` (§3.5.1) | eigene Wertereihenfolge |
+| `group_by_first` | Boolean (seit 0.5.0) | nein | `false` | erster Sortierschlüssel (der View oder eines Abschnitts) braucht `order` | Gruppenzeile je Wert des ersten Schlüssels |
+| `sections` | Liste (seit 0.5.0) | nein | | 1–20 Abschnitte (§3.5.2) | Teil-Tabellen mit Überschrift |
+| `exclusive` | Boolean | nein | `true` | nur mit `sections` (sonst Warnung) | ein Item nur im ersten passenden Abschnitt |
+| `hide_empty_sections` | Boolean | nein | `false` | nur mit `sections` (sonst Warnung) | leere Abschnitte ausblenden statt „No entries.“ |
 
 Laden: beim Öffnen/Refresh aus allen Sources (parallel; eine fehlerhafte Source erscheint als Fehlerzeile, die
-anderen liefern trotzdem), Cache 30 s, max. 2 000 Zeilen. Nicht auflösbare Felder (z. B. fehlende API-Rechte) bleiben erkennbar leer; unbekannte Feldnamen sind bereits
-ein Konfigurationsfehler (§4.3).
+anderen liefern trotzdem), Cache 30 s, max. 2 000 Zeilen (mit Abschnitten je Abschnitt). Nicht auflösbare Felder (z. B. fehlende API-Rechte) bleiben erkennbar leer; unbekannte Feldnamen sind bereits
+ein Konfigurationsfehler (§4.3). Im Browser lässt sich jede Tabelle per Spaltenklick umsortieren (nur lokal);
+„Default order“ stellt die konfigurierte Sortierung wieder her.
+
+#### 3.5.1 Sortierung nach eigener Wertereihenfolge (seit 0.5.0)
+
+Für Felder mit festen Werten (`project.*` der Arten `single_select`, `text`, `iteration`, aber auch `state`,
+`issue_type`, `run.last_status`, …) ist alphabetisch selten die gewünschte Reihenfolge. Mit `order` wird nach der
+Position des Werts in der Liste sortiert:
+
+- gelistete Werte in Listenreihenfolge (`direction: desc` kehrt sie um), danach **nicht gelistete** Werte
+  untereinander in natürlicher Reihenfolge (wie ohne `order`, Großbuchstaben vor Kleinbuchstaben), ganz zuletzt
+  **leere/unbekannte** Werte – in beiden Richtungen;
+- Vergleich mit Groß-/Kleinschreibung (`Review` ≠ `review`);
+- nur Felder vom Typ `string`; Listenfelder wie `labels` (`string[]`), Zahlen und Daten sind ein Fehler;
+- Werte, die ein `single_select`-Projektfeld laut Projekt-Metadaten nicht als Option kennt, ergeben beim Laden
+  der View eine **Warnung** im Ergebnis (`warnings`, in der UI als Hinweis), keinen Fehler. `config validate`
+  kennt die Metadaten nicht und prüft das nicht.
+
+`sort` als einzelnes Objekt bleibt gültig (ein Schlüssel). Die API liefert `sort` immer als Liste.
+
+#### 3.5.2 Abschnitte (seit 0.5.0)
+
+Mit `sections` zeigt eine View mehrere Tabellen untereinander, jede mit Überschrift und Zeilenzahl. Die Sources
+werden **einmal** gelesen (View-`filter` wie bisher, inkl. Pushdown); jeder Abschnitt filtert die Items der View
+lokal (Abschnittsfilter und View-Filter sind per `all` verknüpft).
+
+| Schlüssel | Typ | Pflicht | Default | Regeln | Bedeutung |
+|---|---|---|---|---|---|
+| `sections[].title` | String | ja | | 1–80 Zeichen, eindeutig in der View | Überschrift |
+| `sections[].filter` | Filter-AST oder ID eines benannten Filters | genau eins von `filter` / `rest: true` | | §4 inkl. `run.last_*`; `state` nur lokal (s. u.) | Items des Abschnitts |
+| `sections[].rest` | Boolean | | `false` | höchstens ein Abschnitt | alle Items der View, die in keinem anderen Abschnitt stehen |
+| `sections[].sort` | wie `sort` | nein | `sort` der View | wie `sort` | eigene Sortierung |
+| `sections[].fields` | wie `fields` | nein | `fields` der View | wie `fields` | eigene Spalten |
+
+- **`exclusive: true`** (Default): die Reihenfolge der Abschnitte entscheidet, ein Item steht nur im ersten
+  passenden. **`exclusive: false`**: ein Item steht in jedem passenden Abschnitt; `rest` enthält dann die Items, die
+  in keinem anderen stehen.
+- Ergibt ein Abschnittsfilter `unknown`, steht das Item nicht in diesem Abschnitt (gezählt je Abschnitt in
+  `counts.filterUnknown`); die Auswertung geht mit den folgenden Abschnitten weiter, landet es nirgends, kommt es
+  in den `rest`-Abschnitt.
+- **`state` in Abschnittsfiltern** wirkt nur lokal (kein Pushdown, keine eigene Abfrage): welche Items gelesen
+  werden, bestimmt allein der View-`filter` (ohne `state`-Prädikat nur offene, §4.5). Ein Abschnitt, der nach
+  Werten fragt, die die View nie liest (z. B. `state equals closed` bei einer View ohne `state`-Selektor), ist ein
+  Fehler; Lösung: `state in [open, closed]` im View-`filter`. Anders als im View-`filter` darf `state` im Abschnitt
+  auch unter `any`/`not` stehen.
+- Ohne `sections` verhält sich die View genau wie vor 0.5.0.
+
+```yaml
+# example: view-pipeline
+# extends: projects
+# file: views/pipeline.yaml
+id: pipeline
+title: Pipeline
+sources: [project_a, project_b]
+fields:
+  - { field: repository, label: Repository }
+  - { field: number, label: Nr. }
+  - { field: title, label: Titel, link: url }
+  - { field: project.Status, label: Status }
+  - { field: created_at, label: Erstellt }
+sort:
+  - field: project.Status
+    order: [Todo, Ready, In Progress, Review, Done]
+  - field: created_at
+    direction: asc
+group_by_first: true                 # Gruppenzeile je Status
+exclusive: true                      # Default: nur im ersten passenden Abschnitt
+sections:
+  - title: Braucht Maintainer
+    filter: { field: labels, operator: contains, value: needs-maintainer }
+  - title: Review
+    filter: { field: project.Status, operator: equals, value: Review }
+    sort: { field: updated_at, direction: desc }      # überschreibt die Sortierung der View
+  - title: In Arbeit
+    filter: { field: project.Status, operator: in, value: [Ready, In Progress] }
+    fields:                                            # überschreibt die Spalten
+      - { field: number, label: Nr. }
+      - { field: title, label: Titel, link: url }
+      - { field: run.last_status, label: Letzter Run }
+  - title: Übrige
+    rest: true
+hide_empty_sections: false
+```
 
 ### 3.6 filters/*.yaml
 
@@ -1653,6 +1741,7 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 | Ergebnis unknown | kein Start (Diagnose `filter_unknown`) | Zeile ausgeblendet, gezählt in `filterUnknown` |
 | Felder | Adapterfelder | Adapterfelder + `run.last_*` |
 | Shell | zusätzlich `shell_filter`, Conditions | nie |
+| Abschnitte | – | `sections[].filter` lokal auf den Items der View, `state` ohne Pushdown (§3.5.2) |
 | Zeitpunkt | jeder Planungsschritt; vor `on_start` erneut der billige Teil auf dem frisch gelesenen Item: `false` bricht den Run ohne Hooks ab, ebenso `unknown` durch ein billiges Feld, das die Source nicht ermitteln konnte (z. B. `project.*` ohne Zugriff); `unknown` nur durch teure Felder lässt ihn laufen | Öffnen/Refresh (Cache 30 s) |
 
 ### 4.7 Feldkatalog des GitHub-Adapters
@@ -3039,6 +3128,45 @@ shell_filter: { command: scripts/filter.sh }
 fields: [ { field: title } ]
 ```
 
+**View-Sortierung und Abschnitte** (seit 0.5.0, §3.5.1, §3.5.2) – `order` nur für `string`-Felder, Werte
+eindeutig; Abschnitte mit eindeutigem Titel und genau `filter` oder `rest: true`; `state` im Abschnitt nicht über
+die View-Abfrage hinaus.
+
+```yaml
+# example: err-view-sections
+# extends: projects
+# invalid
+# expect: views/board.yaml: sort[0].order[2]: Duplicate value "Todo" in "order"
+# expect: views/board.yaml: sort[1].order: "order" is only allowed for string fields (e.g. project.* single_select/text/iteration, state, run.last_status); "labels" has type string[]
+# expect: views/board.yaml: sections[1].title: Duplicate section title "Offen" (also used by section 1)
+# expect: views/board.yaml: sections[2]: A section needs a "filter" or "rest: true"
+# expect: views/board.yaml: sections[3].filter.field: "state" in a section only filters the items the view lists (only open issues/PRs); this section asks for "closed", which the view never reads – select them in the view filter (top level, e.g. state in [open, closed])
+# file: views/board.yaml
+id: board
+sources: [project_a, project_b]
+fields: [ { field: title }, { field: project.Status } ]
+sort:
+  - { field: project.Status, order: [Todo, Ready, Todo] }
+  - { field: labels, order: [bug] }
+sections:
+  - title: Offen
+    filter: { field: project.Status, operator: equals, value: Todo }
+  - title: Offen
+    rest: true
+  - title: Ohne Filter
+  - title: Erledigt
+    filter: { field: state, operator: equals, value: closed }
+```
+
+Lösung: `order` nur für Felder vom Typ `string` (für Labels einen Abschnitt je Label), doppelte Werte entfernen;
+Titel eindeutig; jedem Abschnitt einen `filter` geben oder ihn als einzigen `rest: true` markieren;
+geschlossene Items im View-`filter` auswählen (`state in [open, closed]`). Weitere Meldungen: `A view can sort by
+at most 5 keys`, `A sort list needs at least one key`, `"order" must list at least one value`, `"order" may list at
+most 100 values`, `A view can have at most 20 sections`, `A section title may have at most 80 characters`,
+`A section has either "filter" or "rest: true", not both`, `Only one section can be "rest: true"`,
+`"group_by_first" needs a first sort key with "order"`. Als Warnung:
+`"exclusive" has no effect without "sections"` (ebenso `hide_empty_sections`).
+
 **Ungültige ID und YAML-Typen**
 
 ```yaml
@@ -3610,3 +3738,7 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
    bleibt die alte Konfiguration aktiv). Alternativ zuerst ein manueller Start über die UI.
 10. **Beobachten:** erster Run in der UI (Status, Logs, Lifecycle-Journal), ggf. `max_concurrent` per Override
     anpassen und danach in YAML übernehmen (Overrides gehen beim Neustart verloren).
+11. **Übersicht:** für den Überblick über die Items des Workflows eine View anlegen (§3.5): Pipeline-Stufen mit
+    `sort[].order` in der richtigen Reihenfolge (Werte genau wie im Projekt; unbekannte Optionen meldet die View als
+    Warnung), bei Bedarf `group_by_first` und `sections` (z. B. „Braucht Maintainer“, „Review“, `rest: true` für
+    den Rest); geschlossene Items in einem Abschnitt nur, wenn der View-`filter` sie mit `state` auswählt.

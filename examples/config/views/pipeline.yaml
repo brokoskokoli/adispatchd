@@ -1,0 +1,27 @@
+# views/pipeline.yaml (WI-28): pipeline stages in their own order, split into sections.
+# project_b declares the project field Status (single_select) in sources.yaml.
+id: pipeline
+title: Pipeline
+sources: [project_b]
+fields:
+  - { field: number, label: Issue }
+  - { field: title, label: Titel, link: url }
+  - { field: project.Status, label: Status }
+  - { field: run.last_status, label: Letzter Run }
+  - { field: created_at, label: Erstellt }
+sort:
+  - field: project.Status          # stages in this order, other values after them, empty last
+    order: [Todo, Ready, In Progress, Ready for Review, In Review, Done]
+  - field: created_at              # within a stage: oldest first
+    direction: asc
+group_by_first: true               # one heading row per status
+sections:                          # exclusive (default): an item only shows up in the first matching section
+  - title: Braucht Maintainer
+    filter: needs-maintainer       # named filter, see filters/needs-maintainer.yaml
+  - title: Review
+    filter: { field: project.Status, operator: in, value: [Ready for Review, In Review] }
+    sort: { field: updated_at, direction: desc }
+  - title: In Arbeit
+    filter: { field: project.Status, operator: in, value: [Ready, In Progress] }
+  - title: Übrige
+    rest: true

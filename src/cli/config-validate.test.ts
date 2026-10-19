@@ -36,7 +36,7 @@ describe('config validate', () => {
   it('exits 0 for examples/config', async () => {
     const io = await run(['config', 'validate', '--config-dir', EXAMPLE_CONFIG_DIR]);
     expect(io.code).toBe(0);
-    expect(io.out).toMatch(/is valid: 4 workflow\(s\), 1 view\(s\), 1 named filter\(s\), 2 source\(s\), 3 identities/);
+    expect(io.out).toMatch(/is valid: 4 workflow\(s\), 2 view\(s\), 1 named filter\(s\), 2 source\(s\), 3 identities/);
     expect(io.err).toBe('');
   });
 

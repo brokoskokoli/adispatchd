@@ -68,7 +68,8 @@ describe('loadConfig – spec examples', () => {
     const config = expectOk(result);
     expect(result.warnings).toEqual([]);
     expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'nightly-maintenance', 'reviewer-project-b']);
-    expect(Object.keys(config.views)).toEqual(['needs-maintainer']);
+    expect(Object.keys(config.views)).toEqual(['needs-maintainer', 'pipeline']);
+    expect(config.views.pipeline?.sections?.map((s) => s.title)).toEqual(['Braucht Maintainer', 'Review', 'In Arbeit', 'Übrige']);
     // The named filter is shared by the view and the coder workflow (WI-15).
     const needsMaintainer = { field: 'labels', operator: 'contains', value: 'needs-maintainer' };
     expect(config.filters['needs-maintainer']?.filter).toEqual(needsMaintainer);

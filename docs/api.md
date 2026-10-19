@@ -398,8 +398,8 @@ clearedAt, clearedBy, active, affectedRunIds, sourceUrl`.
 
 | Methode | Pfad | Antwort |
 |---|---|---|
-| GET | `/api/v1/views` | `{"views":[{id, title, file, sources, columns, sort, filter}]}` |
-| GET | `/api/v1/views/:id` | View-Definition |
+| GET | `/api/v1/views` | `{"views":[{id, title, file, sources, columns, sort, filter, groupByFirst, sections, exclusive, hideEmptySections}]}` |
+| GET | `/api/v1/views/:id` | View-Definition; `sort` ist seit 0.5.0 **immer eine Liste** `[{field, direction, order}]` (`order`: Liste oder `null`; `[]` = unsortiert), `sections` = `null` oder `[{title, rest, filter, fields, sort}]` (`fields` = Spalten wie `columns`, `sort` = wirksame Sortierung) |
 | GET | `/api/v1/views/:id/items?refresh=true` | ViewItems (Cache 30 s, `refresh` umgeht ihn) |
 
 ```json
@@ -414,6 +414,22 @@ clearedAt, clearedBy, active, affectedRunIds, sourceUrl`.
 Spalten vom Typ `object[]` (z. B. `closing_prs`, WI-21) liefern `value` als Liste flacher Objekte
 (`[{ "number": 12, "state": "open", "head_ref": "feature/12", "is_draft": false, "url": "…" }]`); `work_pr` hat
 als `link` die PR-URL (`work_pr_url`).
+Seit 0.5.0 (WI-28):
+- `warnings` (immer vorhanden, Liste von Texten): z. B. `order`-Werte eines `single_select`-Projektfelds, die das
+  Projekt einer Source nicht als Option kennt.
+- `group_by_first`: View ohne Abschnitte → zusätzlich `"groupBy": {"field","label"}`, jede Zeile hat `group`
+  (Wert des ersten Sortierschlüssels als Text, `null` = leer/unbekannt); ohne Gruppierung fehlen beide Schlüssel.
+- Views **mit Abschnitten**: `rows` ist `[]`, `columns` = Default-Spalten der View, `filterUnknown` zählt nur den
+  View-Filter, `truncated` = irgendein Abschnitt gekürzt; dazu `hideEmptySections` und
+  ```json
+  "sections": [ { "title": "Review", "rest": false, "fields": [ …wie columns… ],
+                  "sort": [ { "field": "updated_at", "direction": "desc", "order": null } ],
+                  "rows": [ …wie rows… ], "counts": { "rows": 2, "filterUnknown": 0, "truncated": false },
+                  "groupBy": null } ]
+  ```
+  Reihenfolge wie konfiguriert, leere Abschnitte sind enthalten (`hideEmptySections` wertet die UI aus);
+  max. 2 000 Zeilen je Abschnitt. Ohne Abschnitte ist das Format unverändert.
+
 Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_result`, `run.last_result.message`,
 `run.last_status_message`, `run.last_started_at`, `run.last_finished_at` (letzter Run des Items nach Erstellzeit, workflowübergreifend).
 
