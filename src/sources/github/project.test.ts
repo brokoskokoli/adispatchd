@@ -256,6 +256,12 @@ describe('listCandidates with project fields', () => {
     const it1 = (await adapter.getItem('1')) as SourceItem;
     expect(it1.unknownFields?.['project.Status']).toMatch(/reading GitHub project example\/3 failed: invalid: nodes broke/);
     expect(it1.fields).toHaveProperty('title');
+    // Same failure again: warned only once; recovery is logged once.
+    github.failNext({ path: '/graphql' }, { status: 200, body: { data: { nodes: null }, errors: [{ message: 'nodes broke' }] } });
+    await adapter.getItem('1');
+    expect(logger.records.filter((r) => r.msg === 'Could not read project field values')).toHaveLength(1);
+    expect((await adapter.getItem('1'))?.fields['project.Status']).toBe('Ready');
+    expect(logger.records.filter((r) => r.msg === 'Project field values readable again')).toHaveLength(1);
 
     // A node that cannot be resolved (e.g. repository invisible to the project identity).
     github.failNext(

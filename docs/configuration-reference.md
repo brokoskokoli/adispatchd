@@ -940,7 +940,7 @@ das Item gar nicht im Projekt ist (und höchstens 20 Projekt-Mitgliedschaften ha
 |---|---|---|
 | Projekt nicht gefunden, kein Zugriff (z. B. fehlende App-Berechtigung, User-Projekt mit App-Token), GraphQL-/HTTP-Fehler, Rate-Limit bei den Metadaten | alle `project.*` der Source | Warnung nur bei Änderung des Grundes |
 | deklariertes Feld fehlt im Projekt oder hat einen anderen `dataType` als die Art verlangt | genau dieses Feld | Warnung nur bei Änderung des Grundes |
-| Werte-Abfrage scheitert (HTTP, GraphQL ohne verwertbare Daten, Rate-Limit) | alle `project.*` der betroffenen Items | Warnung |
+| Werte-Abfrage scheitert (HTTP, GraphQL ohne verwertbare Daten, Rate-Limit); folgende Blöcke werden dann nicht mehr abgefragt | alle `project.*` der betroffenen Items | Warnung nur bei Änderung des Grundes |
 | Item für die Projekt-Identity nicht lesbar | alle `project.*` dieses Items | – |
 | Item gehört zu mehr als 20 Projekten und das konfigurierte ist nicht unter den gelesenen | alle `project.*` dieses Items | – |
 

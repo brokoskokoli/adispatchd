@@ -134,6 +134,8 @@ export class GitHubProjectReader {
   private cached: { at: number; metadata: ProjectMetadata } | undefined;
   /** Last logged reason per declared field ('' = project level), to warn only on changes. */
   private readonly lastReasons = new Map<string, string | undefined>();
+  /** Last logged failure of the values query (warn only on changes). */
+  private lastValuesFailure: string | undefined;
   private readonly label: string;
 
   constructor(
@@ -188,12 +190,12 @@ export class GitHubProjectReader {
         } catch (err) {
           if (signal?.aborted) throw err;
           failure = `reading GitHub project ${this.label} failed: ${describeError(err)}`;
-          this.deps.logger.warn('Could not read project field values', { project: this.label, reason: failure });
         }
       }
       // After a failed chunk (e.g. rate limit) the remaining chunks are not attempted.
       for (const { item } of chunk) for (const f of metadata.fields) setUnknown(item, f.name, failure);
     }
+    if (pending.length > 0) this.noteValues(failure);
   }
 
   private async metadata(fresh: boolean, signal: AbortSignal | undefined): Promise<ProjectMetadata> {
@@ -308,6 +310,15 @@ export class GitHubProjectReader {
 
   private markAll(item: ProjectTarget, reason: string): void {
     for (const name of this.fieldNames()) setUnknown(item, name, reason);
+  }
+
+  /** Log a failing values query once per distinct reason, and its recovery. */
+  private noteValues(failure: string | undefined): void {
+    const previous = this.lastValuesFailure;
+    if (previous === failure) return;
+    this.lastValuesFailure = failure;
+    if (failure !== undefined) this.deps.logger.warn('Could not read project field values', { project: this.label, reason: failure });
+    else this.deps.logger.info('Project field values readable again', { project: this.label });
   }
 
   /** Log a warning when the reason of a field changes (not on every poll). */
