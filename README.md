@@ -1,5 +1,10 @@
 # Agent Dispatch Daemon (`adispatchd`)
 
+[![CI](https://github.com/brokoskokoli/adispatchd/actions/workflows/ci.yml/badge.svg)](https://github.com/brokoskokoli/adispatchd/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/adispatchd)](https://www.npmjs.com/package/adispatchd)
+[![Node](https://img.shields.io/node/v/adispatchd)](https://nodejs.org/)
+[![License: MIT](https://img.shields.io/github/license/brokoskokoli/adispatchd)](LICENSE)
+
 Konfigurationsgetriebener Orchestrator für Shell-Prozesse und KI-Agenten. Er findet Aufgaben in externen Quellen
 (V1: GitHub Issues/PRs), wählt sie über Filter und Prioritäten aus, prüft Startbedingungen, führt unabhängige
 Shell-Workflows in eigenen Workspaces aus, überwacht und protokolliert jeden Run, führt Lifecycle-Aktionen aus

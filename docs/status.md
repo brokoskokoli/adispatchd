@@ -34,7 +34,7 @@ Alle Work-Items WI-01 bis WI-22 (siehe `docs/work-items/`) sind umgesetzt. 0.2.0
 **P2 – vor Release**
 5. Versionen pinnen und die Sicherheitslage prüfen (Node 24 LTS, TypeScript 7, Vitest 5, zod 4, fastify).
 6. Die Version an einer einzigen Stelle führen; sie steht heute in `package.json` und in `APP_VERSION`.
-7. `test:pack` in die CI bzw. den Release-Ablauf aufnehmen.
+7. ~~`test:pack` in die CI aufnehmen~~ – erledigt: GitHub Actions (`.github/workflows/ci.yml`, Node 22 und 24: `npm run check` + `npm run test:pack`).
 8. Einen echten Coder-/Reviewer-Workflow durchspielen (§23).
 
 **P3 – Härtung und Betrieb**
