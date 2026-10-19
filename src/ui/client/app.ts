@@ -25,6 +25,9 @@ import { toolPage } from './pages/tools.js';
 import { itemPage, uiActionsPage } from './pages/item.js';
 import { externalLinks, reloadExternalLinks } from './external-links.js';
 import { externalNavItem, TOOLS_ROUTE } from '../shared/external-links.js';
+import { isNavActive, NAV_ENTRIES } from '../shared/nav.js';
+import { RESOURCES_ROUTE } from '../shared/resource-strip.js';
+import { resourcesPage } from './pages/server.js';
 
 /** Views listed directly in the menu up to this count (more → only "All Views"). */
 const MAX_DIRECT_VIEWS = 8;
@@ -114,13 +117,11 @@ replaceChildren(
   h(
     'ul',
     { class: 'menu' },
-    navItem('', '#/', 'Dashboard'),
-    navItem('runs', '#/runs', 'Runs'),
-    navItem('workflows', '#/workflows', 'Workflows'),
-    navItem('blocked', '#/blocked', 'Blocked', counters.blocks),
-    navItem('actions', '#/actions', 'Failed Actions', counters.actions),
-    h('li', { class: 'has-sub' }, h('details', { class: 'views-menu' }, h('summary', { 'data-nav': 'views' }, 'Views'), viewsMenu)),
-    navItem('config', '#/config', 'Configuration'),
+    NAV_ENTRIES.map((e) =>
+      e.submenu
+        ? h('li', { class: 'has-sub' }, h('details', { class: 'views-menu' }, h('summary', { 'data-nav': e.key }, e.label), viewsMenu))
+        : navItem(e.key, e.href, e.label, e.counter ? counters[e.counter] : undefined),
+    ),
   ),
 );
 
@@ -157,11 +158,9 @@ const navRefresher = createRefresher(loadNav, 2000);
 
 const markActiveNav = (): void => {
   const r = parseHash(location.hash);
-  const top = r.segments[0] ?? '';
-  const full = r.segments.slice(0, 2).join('/');
   nav.querySelectorAll('[data-nav]').forEach((a) => {
     const key = a.getAttribute('data-nav') ?? '';
-    const active = key === full || (key === top && !(top === 'views' && r.segments.length > 1 && a.tagName === 'A'));
+    const active = isNavActive(key, r, a.tagName === 'A');
     a.classList.toggle('active', active);
     if (a.tagName === 'A') {
       if (active) a.setAttribute('aria-current', 'page');
@@ -204,6 +203,8 @@ function pageFor(route: Route, ctx: PageContext): Page {
       return failedActionsPage(ctx);
     case 'views':
       return b ? viewPage(ctx, b) : viewsListPage(ctx);
+    case RESOURCES_ROUTE:
+      return resourcesPage(ctx);
     case 'config':
       return configPage(ctx);
     case 'items':
