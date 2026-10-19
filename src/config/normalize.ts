@@ -29,7 +29,7 @@ import type {
   RawView,
   RawWorkflow,
 } from './schemas.js';
-import { DEFAULTS } from './schemas.js';
+import { DEFAULTS, MAX_DEFAULT_MONITORING_INTERVAL_MS, MIN_MONITORING_INTERVAL_MS } from './schemas.js';
 
 /**
  * Expands references to named filters in a filter tree used at `at` of the
@@ -89,6 +89,15 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
       })),
     },
     container: { engine: raw.container.engine },
+    monitoring: {
+      enabled: raw.monitoring.enabled,
+      intervalMs:
+        raw.monitoring.interval ??
+        Math.max(MIN_MONITORING_INTERVAL_MS, Math.min(raw.scheduler.polling_interval, MAX_DEFAULT_MONITORING_INTERVAL_MS)),
+      retentionMs: raw.monitoring.retention,
+      topProcesses: raw.monitoring.top_processes,
+      minCpuPercent: raw.monitoring.min_cpu_percent,
+    },
   };
 }
 

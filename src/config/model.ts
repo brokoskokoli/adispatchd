@@ -110,6 +110,19 @@ export interface ContainerDefaultsConfig {
   engine: ContainerEngine;
 }
 
+/** Server resource monitor (`monitoring:` in config.yaml, WI-23). */
+export interface MonitoringConfig {
+  enabled: boolean;
+  /** Sampling interval (≥ 5 s; default `scheduler.polling_interval`, at most 60 s). */
+  intervalMs: number;
+  /** How long samples are kept in memory (≥ 10 intervals). */
+  retentionMs: number;
+  /** Foreign processes shown by name (0 = none). */
+  topProcesses: number;
+  /** Foreign processes below this CPU share (100 = one core) are summed up as "Others". */
+  minCpuPercent: number;
+}
+
 /** Content of `config.yaml`. */
 export interface GlobalConfig {
   server: ServerConfig;
@@ -123,6 +136,11 @@ export interface GlobalConfig {
    * versions lack it: readers must treat `undefined` as `{ engine: 'docker' }`.
    */
   container: ContainerDefaultsConfig;
+  /**
+   * Resource monitor (WI-23). Snapshots of older versions lack it; it is only
+   * read from the live configuration.
+   */
+  monitoring: MonitoringConfig;
 }
 
 // ---------------------------------------------------------------------------
