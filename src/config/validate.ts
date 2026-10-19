@@ -15,13 +15,14 @@ import {
   type TemplateMode,
   type TemplateScope,
 } from '../core/index.js';
-import { checkFieldName, checkFilterFields, sourceFieldContext, viewFieldContext, type FieldIssue } from './field-catalog.js';
+import { checkFieldName, checkFilterFields, sourceFieldContext, suggestField, viewFieldContext, type FieldIssue } from './field-catalog.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssueCollector, IssuePath } from './issues.js';
 import type {
   GlobalConfig,
   IdentityConfig,
   LifecycleActionConfig,
+  SecretRef,
   SourceConfig,
   ViewConfig,
   WorkflowConfig,
@@ -157,7 +158,40 @@ function checkIdentity(
   file: string,
   at: IssuePath,
 ): void {
-  if (id && !input.identities[id]) issues.error(file, at, `Unknown identity "${id}"`);
+  if (id && !input.identities[id]) {
+    const suggestion = suggestField(id, Object.keys(input.identities));
+    issues.error(file, at, `Unknown identity "${id}"${suggestion ? ` (did you mean "${suggestion}"?)` : ''}`);
+  }
+}
+
+/**
+ * `secrets` of `execute` and `shell` actions (WI-18): reserved prefix,
+ * existing identities, no clash with `env`; with `delivery: file` the
+ * generated `<NAME>_FILE` must clash neither with `env` nor with another secret.
+ */
+function checkSecrets(
+  secrets: Readonly<Record<string, SecretRef>>,
+  env: Readonly<Record<string, string>>,
+  input: SemanticInput,
+  issues: IssueCollector,
+  file: string,
+  at: IssuePath,
+): void {
+  checkEnvNames(Object.keys(secrets), issues, file, at);
+  for (const [name, ref] of Object.entries(secrets)) {
+    checkIdentity(ref.identity, input, issues, file, [...at, name, 'identity']);
+    if (name in env) {
+      issues.error(file, [...at, name], `"${name}" is defined both in "env" and "secrets"`);
+    }
+    if (ref.delivery !== 'file') continue;
+    const fileVar = `${name}_FILE`;
+    if (fileVar in env) {
+      issues.error(file, [...at, name, 'delivery'], `"delivery: file" sets "${fileVar}", which is also defined in "env"`);
+    }
+    if (fileVar in secrets) {
+      issues.error(file, [...at, name, 'delivery'], `"delivery: file" sets "${fileVar}", which is also a secret name`);
+    }
+  }
 }
 
 function checkTemplate(
@@ -301,14 +335,8 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
     checkTemplate(value, 'text', runScope, issues, file, ['execute', 'env', name]);
   }
   checkEnvNames(Object.keys(exec.env), issues, file, ['execute', 'env']);
-  checkEnvNames(Object.keys(exec.secrets), issues, file, ['execute', 'secrets']);
   checkLiteralSecrets(exec.env, issues, file, ['execute', 'env']);
-  for (const [name, ref] of Object.entries(exec.secrets)) {
-    checkIdentity(ref.identity, input, issues, file, ['execute', 'secrets', name, 'identity']);
-    if (name in exec.env) {
-      issues.error(file, ['execute', 'secrets', name], `"${name}" is defined both in "env" and "secrets"`);
-    }
-  }
+  checkSecrets(exec.secrets, exec.env, input, issues, file, ['execute', 'secrets']);
   const { maxDurationMs, idleTimeoutMs } = exec.timeout;
   if (maxDurationMs !== null && idleTimeoutMs !== null && idleTimeoutMs > maxDurationMs) {
     issues.warning(file, ['execute', 'timeout', 'idle_timeout'], '"idle_timeout" is longer than "max_duration"');
@@ -381,6 +409,7 @@ function validateAction(
       }
       checkEnvNames(Object.keys(action.env), issues, file, [...at, 'env']);
       checkLiteralSecrets(action.env, issues, file, [...at, 'env']);
+      checkSecrets(action.secrets, action.env, input, issues, file, [...at, 'secrets']);
       break;
   }
 }

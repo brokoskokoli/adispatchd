@@ -40,7 +40,10 @@ export function workflowIdentityRefs(workflow: WorkflowConfig, source: SourceCon
   if (source?.project) refs.add(source.project.identity);
   for (const ref of Object.values(workflow.execute.secrets)) refs.add(ref.identity);
   for (const actions of Object.values(workflow.hooks)) {
-    for (const action of actions) if (action.type === 'source.comment' && action.identity) refs.add(action.identity);
+    for (const action of actions) {
+      if (action.type === 'source.comment' && action.identity) refs.add(action.identity);
+      if (action.type === 'shell') for (const ref of Object.values(action.secrets)) refs.add(ref.identity);
+    }
   }
   return [...refs].sort();
 }

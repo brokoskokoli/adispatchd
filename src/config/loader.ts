@@ -12,6 +12,7 @@ import path from 'node:path';
 import { isMap, isSeq, LineCounter, parseDocument, type Document } from 'yaml';
 import type { z } from 'zod';
 import { CONFIG_ID_PATTERN, systemClock, toAbsolutePath, type Clock } from '../core/index.js';
+import { suggestField } from './field-catalog.js';
 import { formatIssuePath, IssueCollector, sortIssues, type IssuePath } from './issues.js';
 import type { ConfigIssue, GlobalConfig, LoadedConfig, ViewConfig, WorkflowConfig } from './model.js';
 import { NamedFilters, type NamedFilterEntry } from './named-filters.js';
@@ -303,10 +304,30 @@ function parseWith<S extends z.ZodType>(
     let message = issue.message;
     if (issue.code === 'unrecognized_keys') {
       message = `Unknown key(s): ${issue.keys.map((k) => `"${k}"`).join(', ')}`;
+    } else if (issue.code === 'invalid_value') {
+      message += enumSuggestion(valueAt(data, at), issue.values);
     }
     issues.error(file, at, message);
   }
   return undefined;
+}
+
+/** Value at `at` inside parsed YAML data (`undefined` if absent). */
+function valueAt(data: unknown, at: readonly (string | number)[]): unknown {
+  let node = data;
+  for (const segment of at) {
+    if (node === null || typeof node !== 'object') return undefined;
+    node = (node as Record<string | number, unknown>)[segment];
+  }
+  return node;
+}
+
+/** ` (did you mean "x"?)` for a mistyped enum string, else `''`. */
+function enumSuggestion(value: unknown, options: readonly unknown[]): string {
+  if (typeof value !== 'string') return '';
+  const names = options.filter((o): o is string => typeof o === 'string');
+  const suggestion = suggestField(value, names);
+  return suggestion ? ` (did you mean "${suggestion}"?)` : '';
 }
 
 /** Find the 1-based line of the deepest existing node along `issuePath`. */

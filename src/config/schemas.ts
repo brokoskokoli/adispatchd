@@ -108,6 +108,14 @@ const envMap = z
 
 const stringList = z.array(z.string()).default([]);
 
+/** How a secret reaches the process (WI-18): `env` = value in the variable, `file` = path in `<NAME>_FILE`. */
+export const SECRET_DELIVERIES = ['env', 'file'] as const;
+
+/** `secrets` of `execute` and `shell` actions: env name → identity whose token is handed over. */
+const secretsMap = z
+  .record(envName, z.strictObject({ identity: configId, delivery: z.enum(SECRET_DELIVERIES).default('env') }))
+  .default({});
+
 const notificationEvent = z.enum(NOTIFICATION_EVENT_TYPES);
 
 // ---------------------------------------------------------------------------
@@ -311,7 +319,7 @@ const executeSchema = z.discriminatedUnion('type', [
     working_directory: nonEmpty.default(DEFAULT_WORKING_DIRECTORY),
     create_directory: z.boolean().default(true),
     env: envMap,
-    secrets: z.record(envName, z.strictObject({ identity: configId })).default({}),
+    secrets: secretsMap,
     timeout: z
       .strictObject({
         max_duration: positiveDuration.optional(),
@@ -352,6 +360,7 @@ const actionSchema = z.discriminatedUnion('type', [
     args: stringList,
     timeout: positiveDuration.default(parseDuration(DEFAULTS.shellActionTimeout)),
     env: envMap,
+    secrets: secretsMap,
   }),
 ]);
 

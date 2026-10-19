@@ -13,6 +13,8 @@ import type {
   LifecycleActionConfig,
   ParameterDefinition,
   RetryPolicy,
+  SecretDelivery,
+  SecretRef,
   SourceConfig,
   ViewConfig,
   WorkflowConfig,
@@ -176,8 +178,14 @@ function normalizeAction(
         args: [...raw.args],
         timeoutMs: raw.timeout,
         env: { ...raw.env },
+        secrets: normalizeSecrets(raw.secrets),
       };
   }
+}
+
+/** Normalize `secrets` of `execute` / `shell` actions (WI-18: `delivery` defaults to `env`). */
+function normalizeSecrets(raw: Readonly<Record<string, { identity: string; delivery: SecretDelivery }>>): Record<string, SecretRef> {
+  return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, { identity: v.identity, delivery: v.delivery }]));
 }
 
 /** Normalize one workflow file. */
@@ -243,7 +251,7 @@ export function normalizeWorkflow(
       workingDirectory: exec.working_directory,
       createDirectory: exec.create_directory,
       env: { ...exec.env },
-      secrets: Object.fromEntries(Object.entries(exec.secrets).map(([k, v]) => [k, { identity: v.identity }])),
+      secrets: normalizeSecrets(exec.secrets),
       timeout: {
         maxDurationMs: exec.timeout.max_duration ?? null,
         idleTimeoutMs: exec.timeout.idle_timeout ?? null,

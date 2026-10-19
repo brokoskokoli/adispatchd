@@ -250,9 +250,21 @@ export type ParameterDefinition = StringParameter | NumberParameter | BooleanPar
 /** Value of a parameter after validation. */
 export type ParameterValue = string | number | boolean;
 
-/** Reference to an identity whose short-lived token is exposed as env variable. */
+/** How a secret reaches the process (WI-18). */
+export type SecretDelivery = 'env' | 'file';
+
+/**
+ * Reference to an identity whose short-lived token is handed to a process:
+ * `env` = token in the variable itself; `file` = token in a private file
+ * (renewed before expiry), its path in `<NAME>_FILE`.
+ */
 export interface SecretRef {
   identity: string;
+  /**
+   * Default `env`. Snapshots written before WI-18 lack the field: readers
+   * must treat `undefined` as `env`.
+   */
+  delivery: SecretDelivery;
 }
 
 /** Main worker execution (Spec §5.4, §8.3, §9). */
@@ -267,7 +279,7 @@ export interface ShellExecuteConfig {
   createDirectory: boolean;
   /** Env variable → value template (text mode). */
   env: Readonly<Record<string, string>>;
-  /** Env variable → identity whose token is injected (only in memory). */
+  /** Env variable → identity whose token is injected (in memory or as token file, WI-18). */
   secrets: Readonly<Record<string, SecretRef>>;
   timeout: {
     maxDurationMs: number | null;
@@ -317,6 +329,11 @@ export interface ShellActionConfig extends ActionBase {
   /** Default 5m. */
   timeoutMs: number;
   env: Readonly<Record<string, string>>;
+  /**
+   * Secrets like `execute.secrets` (WI-18). Journal entries written before
+   * WI-18 lack the field: readers must treat `undefined` as `{}`.
+   */
+  secrets: Readonly<Record<string, SecretRef>>;
 }
 
 /** A lifecycle action. */
