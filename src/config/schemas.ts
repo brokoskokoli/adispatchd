@@ -48,6 +48,7 @@ export const DEFAULTS = {
   checkTimeout: '30s',
   shellActionTimeout: '5m',
   cancelGrace: '30s',
+  keepMaxSize: '100MB',
   scheduleTimezone: 'UTC',
 } as const;
 
@@ -95,6 +96,8 @@ const sizeSchema = z.string('Expected a size such as 100MB').transform((value, c
     return z.NEVER;
   }
 });
+
+const positiveSize = sizeSchema.refine((bytes) => bytes > 0, 'Must be greater than 0');
 
 const positiveInt = z.number().int('Must be an integer').positive('Must be greater than 0');
 const nonNegativeInt = z.number().int('Must be an integer').min(0, 'Must not be negative');
@@ -319,6 +322,9 @@ const executeSchema = z.discriminatedUnion('type', [
       })
       .default({}),
     cancel_grace: durationSchema.default(parseDuration(DEFAULTS.cancelGrace)),
+    // Patterns are checked in validate.ts (path + message per entry).
+    keep: z.array(z.string('Expected a pattern such as .agent/*.log')).default([]),
+    keep_max_size: positiveSize.optional(),
   }),
 ]);
 

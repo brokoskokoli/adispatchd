@@ -18,6 +18,7 @@
  */
 import {
   HOOK_NAMES,
+  dataPaths,
   errorMessage,
   hookForOutcome,
   isOrchestratorError,
@@ -63,6 +64,7 @@ import {
 import { RunControllerError } from './errors.js';
 import { PersistedEventPublisher, RunEventBus, type ControllerStatus } from './event-bus.js';
 import { buildExecutionSpec } from './execution.js';
+import { keepWorkspaceFiles } from './keep.js';
 import { removeWorkspace, shouldCleanupWorkspace } from './workspace.js';
 
 /** Orchestrator-side event types persisted by the controller (besides `run.status`). */
@@ -84,6 +86,8 @@ export const RUN_EVENTS = {
   recovered: 'recovery.recovered',
   /** Workspace cleanup result. */
   workspaceCleanup: 'workspace.cleanup',
+  /** Files kept from the workspace (`execute.keep`, WI-22): a {@link KeepReport}. */
+  keptFiles: 'run.kept_files',
 } as const;
 
 /** Optional per-start settings. */
@@ -1087,7 +1091,10 @@ export class RunController {
         }
       }
     }
-    if (snapshot) await this.cleanupWorkspace(runId, snapshot, target.status, target.businessResult);
+    if (snapshot) {
+      await this.keepFiles(runId, snapshot);
+      await this.cleanupWorkspace(runId, snapshot, target.status, target.businessResult);
+    }
     const finished = this.repos.runs.finish(runId);
     this.publisher.flush();
     return finished;
@@ -1100,6 +1107,37 @@ export class RunController {
       this.repos.runs.finish(runId);
     });
     this.publisher.flush();
+  }
+
+  /**
+   * Copy `execute.keep` files to `runs/<id>/kept/` (WI-22) – for every terminal
+   * status, before the cleanup. Runs once per run: a resumed finalization
+   * (recovery) skips it when the event already exists.
+   */
+  private async keepFiles(runId: string, snapshot: WorkflowSnapshot): Promise<void> {
+    // Snapshots of runs started before WI-22 have no `keep`.
+    const keep = (snapshot.workflow.execute.keep as readonly string[] | undefined) ?? [];
+    if (keep.length === 0) return;
+    const run = this.repos.runs.require(runId);
+    if (!run.workspacePath) return;
+    if (this.repos.events.listForRun(runId).some((e) => e.type === RUN_EVENTS.keptFiles)) return;
+    let keptDir: string;
+    try {
+      keptDir = dataPaths(this.options.dataDir).run(runId).keptDir;
+    } catch (err) {
+      this.logger.warn('kept files: invalid run directory', { runId, error: err });
+      return;
+    }
+    const report = await keepWorkspaceFiles({
+      workspace: run.workspacePath,
+      keptDir,
+      patterns: keep,
+      maxBytes: snapshot.workflow.execute.keepMaxSizeBytes,
+    });
+    if (report.skippedCount > 0 || report.error) {
+      this.logger.warn('kept files incomplete', { runId, skipped: report.skippedCount, error: report.error });
+    }
+    this.appendEvent(runId, RUN_EVENTS.keptFiles, { ...report });
   }
 
   private async cleanupWorkspace(runId: string, snapshot: WorkflowSnapshot, status: TerminalStatus, result: BusinessResult): Promise<void> {

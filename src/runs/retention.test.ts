@@ -75,6 +75,23 @@ describe('RetentionService', () => {
     expect(svc.lastReport).toBe(later);
   });
 
+  it('deletes kept files (runs/<id>/kept, WI-22) together with the run', async () => {
+    const old = completeRun(p, withFiles('coder', 'a:1').id, SUCCESS);
+    const recentReserved = withFiles('coder', 'a:2');
+    for (const id of [old.id, recentReserved.id]) {
+      const keptDir = dataPaths(dir).run(id).keptDir;
+      mkdirSync(path.join(keptDir, '.agent'), { recursive: true });
+      writeFileSync(path.join(keptDir, '.agent', 'transcript.jsonl'), '{}');
+    }
+    clock.advance(31 * DAY);
+    const recent = completeRun(p, recentReserved.id, SUCCESS);
+    const svc = new RetentionService({ repositories: p, dataDir: dir, settings: () => settings, clock, timers: clock });
+    const report = await svc.runOnce();
+    expect(report.deletedRunIds).toEqual([old.id]);
+    expect(existsSync(dataPaths(dir).run(old.id).keptDir)).toBe(false);
+    expect(existsSync(path.join(dataPaths(dir).run(recent.id).keptDir, '.agent', 'transcript.jsonl'))).toBe(true);
+  });
+
   it('applies blocked_runs to runs of a cleared block and removes old orphan directories', async () => {
     settings = { ...settings, blockedRunsMs: 10 * DAY };
     const crash = completeRun(p, withFiles('coder', 'a:1').id, CRASH, { maxTechnicalFailures: 1 });

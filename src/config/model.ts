@@ -275,6 +275,14 @@ export interface ShellExecuteConfig {
   };
   /** Grace period between SIGTERM and SIGKILL on cancel/timeout (default 30s). */
   cancelGraceMs: number;
+  /**
+   * Workspace files copied to `runs/<run-id>/kept/` after the completion hook
+   * and before the workspace cleanup (WI-22): relative glob patterns
+   * (`*`, `?`, `**`). Empty = nothing is kept.
+   */
+  keep: readonly string[];
+  /** Max. total size of kept files per run in bytes (`keep_max_size`, default 100MB). */
+  keepMaxSizeBytes: number;
 }
 
 /** Execution configuration (V1: shell only). */
