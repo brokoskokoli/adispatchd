@@ -127,7 +127,7 @@ Konfigurationsänderungen wirken **nur** durch einen manuellen Reload (`adispatc
 | `workspace.*`, `lifecycle.action_retry` | für neu reservierte Runs (Snapshot) |
 | `retention.*` | ab dem nächsten Retention-Durchlauf; `cleanup_interval` bestimmt den Timer nach jedem Durchlauf |
 | `notifications.*` | sofort für neue Benachrichtigungen; offene Zustellungen an entfernte Kanäle scheitern endgültig |
-| `sources.yaml`, `identities.yaml` | Adapter/Credentials werden neu aufgebaut, wenn sich etwas geändert hat; entfernte bleiben für laufende Runs verfügbar |
+| `sources.yaml`, `identities.yaml` | Adapter/Credentials werden neu aufgebaut, wenn sich etwas geändert hat; entfernte bleiben für laufende Runs verfügbar; `ui_actions` gilt sofort (nächster Request) |
 | Workflows | sofort für Planung/Cron; geänderte Cron-Ausdrücke planen ab „jetzt“; Cache der Workflow-Conditions wird geleert; der angezeigte letzte Condition-Status geänderter/entfernter Workflows wird verworfen |
 | `dashboard.yaml` | sofort: neue und geänderte Kacheln werden gleich abgerufen, unveränderte behalten Wert und Ablaufzeit, entfernte verschwinden (ein laufendes Skript wird beendet) |
 | Views | sofort; View-Cache wird verworfen |
@@ -661,6 +661,7 @@ identities:
 | `<id>.installation_id` | Integer | ja (`github_app`) | > 0 | Installation der App im Ziel-Owner |
 | `<id>.private_key_env` | Env-Name | ja (`github_app`) | `^[A-Za-z_][A-Za-z0-9_]*$` | Name der Umgebungsvariable mit dem privaten Schlüssel |
 | `<id>.token_env` | Env-Name | ja (`github_token`) | `^[A-Za-z_][A-Za-z0-9_]*$` | Name der Umgebungsvariable mit dem Token |
+| `<id>.ui_actions` | Boolean | nein (Default `false`) | braucht `auth.mode` ≠ `none` | seit 0.4.0: Benutzer mit Rolle `admin` dürfen in der Web-UI **als diese Identity** kommentieren, Labels setzen/entfernen und Projektfelder ändern (siehe unten) |
 
 **Secrets über die Umgebung:** Der Schlüssel steht nie in YAML. Die Variable muss in der Umgebung des
 Orchestrator-Prozesses gesetzt sein (unter systemd: `EnvironmentFile`, Default `/etc/default/adispatchd`,
@@ -685,6 +686,54 @@ kann überall verwendet werden, wo Identities erlaubt sind (Source, `project.ide
 Schreib-Actions). **Kommentar-Marker** (`source.comment`-Idempotenz, §3.4.11) erkennt der Adapter bei
 `github_token` am **Autor-Login**: beim ersten Gebrauch fragt er `GET /user` ab und cacht den Login; ein Kommentar
 mit Marker zählt nur, wenn `user.login` gleich diesem Login ist (bei Apps: `performed_via_github_app.id`).
+
+**`ui_actions`** (seit 0.4.0): Freischaltung einer Identity für das **Item-Panel** der Web-UI (Menü „UI Actions“, Link
+„Act as identity…“ im Run-Detail und in Views). Ein angemeldeter `admin` kann dort auf ein Issue/PR als diese Identity
+antworten, Labels setzen/entfernen und die in `project.fields` der Source deklarierten Projektfelder ändern – ohne als
+eigene Person aufzutreten. Default aus. Voraussetzungen und Grenzen:
+
+- `auth.mode` muss `password` oder `trusted_header` sein. Mit `mode: none` sind UI-Aktionen deaktiviert (Hinweis in der
+  UI, Warnung bei `config validate`).
+- Mit `trusted_header`, in dem ein Loopback-Proxy steht (z. B. Tailscale Serve) und kein `proxy_secret_env` gesetzt ist,
+  könnte jeder lokale Prozess – auch ein Worker – den Login-Header fälschen: dann ist `ui_actions: true` ein **Fehler**.
+  Abhilfe: `auth.mode: password` (funktioniert auch über Tailscale) oder `proxy_secret_env`.
+- Nur echte Benutzer: Der CLI-Steuer-Token wird für UI-Aktionen nie akzeptiert.
+- Geschrieben wird genau mit dieser Identity (auch Projektfelder, unabhängig von `project.identity` der Source). App-Rechte:
+  Issues und Pull Requests **Read and write**, für Projektfelder Organization → Projects **Read and write**.
+- Jede Aktion steht im Audit (`GET /api/v1/ui-actions`, UI-Seite „UI Actions“), Details: [api.md](api.md#ui-aktionen-als-identity-seit-040-wi-27).
+
+```yaml
+# example: ui-actions
+# extends: auth-password
+# file: identities.yaml
+identities:
+  maintainer:
+    type: github_app
+    app_id: 100001
+    installation_id: 200001
+    private_key_env: GITHUB_MAINTAINER_PRIVATE_KEY
+    ui_actions: true                   # Kommentare/Labels/Projektfelder aus der Web-UI
+  coder:
+    type: github_app
+    app_id: 100002
+    installation_id: 200002
+    private_key_env: GITHUB_CODER_PRIVATE_KEY
+```
+
+```yaml
+# example: ui-actions-forgeable
+# extends: auth-tailscale
+# file: identities.yaml
+# invalid
+# expect: identities.yaml: identities.maintainer.ui_actions: UI actions are not allowed with auth.mode trusted_header behind a local (loopback) proxy
+identities:
+  maintainer:
+    type: github_app
+    app_id: 100001
+    installation_id: 200001
+    private_key_env: GITHUB_MAINTAINER_PRIVATE_KEY
+    ui_actions: true                   # Tailscale Serve auf 127.0.0.1 ohne proxy_secret_env → Fehler
+```
 
 ### 3.4 workflows/*.yaml
 
@@ -3503,6 +3552,7 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Pattern must be relative to the workspace (no absolute path)` | `keep: [/var/log/app.log]` – Pfade relativ zum Workspace angeben |
 | `Pattern must not end with "**" (use "dir/**/*" or "**/*.log")` | `keep: [logs/**]` → `logs/**/*` |
 | `config.yaml not found, using defaults` (Warnung) | `config.yaml` fehlt |
+| `UI actions need a login (auth.mode password or trusted_header); with auth.mode none they are disabled` (Warnung) | `ui_actions: true` bei `auth.mode: none` (§3.3) |
 
 Laufzeitfehler, die `config validate` **nicht** findet: fehlende Umgebungsvariablen (Keys, Tokens, Webhooks),
 nicht existierende/nicht ausführbare Skripte (außer Info-Kacheln, §3.7), fehlende App-Rechte (→ Felder unknown bzw. Actions scheitern),

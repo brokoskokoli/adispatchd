@@ -457,6 +457,41 @@ zusätzlich als Event `audit.user_action` in den Run-Details, entfernte Blocks m
 | Warnung „user cannot log in – password hash variable missing or malformed“ | Env-Variable fehlt oder Hash unvollständig → `adispatch auth hash-password`, Env-Datei, Neustart |
 | Login-Seite erscheint nach jedem Neustart | erwartet: Sessions liegen im Speicher |
 
+## UI-Aktionen als Identity (seit 0.4.0)
+
+Administratoren können in der Web-UI (Menü **UI Actions**, Link „Act as identity…“ im Run-Detail und in Views) auf ein
+Issue/PR **als eine konfigurierte Identity** antworten, Labels setzen/entfernen und Projektfelder ändern – etwa als
+`maintainer`-App statt mit dem eigenen GitHub-Konto. Einrichtung:
+
+1. Anmeldung einschalten: `auth.mode: password` oder `trusted_header` (siehe oben). Mit `mode: none` bleiben UI-Aktionen
+   aus. Bei `trusted_header` hinter einem lokalen Proxy ohne `proxy_secret_env` (z. B. Tailscale Serve) lehnt
+   `config validate` `ui_actions: true` ab – ein Worker könnte sonst den Login-Header fälschen und als App posten. Über
+   Tailscale funktioniert `auth.mode: password` genauso.
+2. Benutzer mit Rolle `admin` anlegen.
+3. In `identities.yaml` die Identity mit `ui_actions: true` freischalten, `adispatch config reload`.
+4. App-Rechte prüfen: **Issues** und **Pull requests** „Read and write“ (Kommentare, Labels), für Projektfelder
+   **Organization → Projects** „Read and write“. Fehlende Rechte meldet die UI als `github_forbidden`.
+
+Sicherheit: Der CLI-Steuer-Token öffnet diese Routen nie (nur echte Anmeldungen). Vor jedem Senden zeigt die UI einen
+Bestätigungsdialog („Send as maintainer (GitHub App)?“). Kommentartexte werden vor dem Senden redigiert (bekannte Secrets,
+GitHub-Token-Formate, Private Keys) und **nicht automatisch wiederholt**; bei `github_outcome_unknown` erst auf GitHub
+nachsehen, ob der Kommentar schon da ist. Der Link „Open on GitHub“ öffnet das Item in einem neuen Tab – dort liest und
+schreibt man als man selbst.
+
+**Audit:** Tabelle `ui_actions` in der Datenbank (Schema v4): Zeit, Benutzer, Identity, Item, Art, Ergebnis/Fehler, bei
+Kommentaren die URL (nie der Text). Anzeige auf der Seite „UI Actions“ und im Item-Panel, API `GET /api/v1/ui-actions`,
+zusätzlich Log-Zeilen `"msg":"ui action"`. Aufbewahrung wie Runs (`retention.completed_runs` für erfolgreiche,
+`retention.failed_runs` für fehlgeschlagene Einträge).
+
+| Meldung | Ursache / Lösung |
+|---|---|
+| `403 ui_actions_disabled` | `auth.mode: none` → Anmeldung einschalten |
+| `403 identity_not_allowed` | Identity ohne `ui_actions: true` (Reload vergessen?) |
+| `403 control_token_not_allowed` / `user_login_required` | Aufruf mit dem Steuer-Token – nur angemeldete Benutzer |
+| `502 github_forbidden` | App-Rechte fehlen oder die Unterhaltung ist gesperrt (locked) |
+| `429 github_rate_limited` | Rate-Limit der Identity; später erneut senden (`Retry-After`) |
+| `502 github_outcome_unknown` | Antwort ging verloren – auf GitHub prüfen, bevor erneut gesendet wird |
+
 ## Externe Tools in der UI, z. B. claude-inspect (seit 0.4.0)
 
 `ui.external_links` in `config.yaml` nimmt lokale Werkzeuge in die Navigation auf – als Link in neuem Tab oder

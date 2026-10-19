@@ -6,6 +6,7 @@ identities:
     app_id: 100001
     installation_id: 200001
     private_key_env: GITHUB_MAINTAINER_PRIVATE_KEY
+    # ui_actions: true   # admins may comment/label/set project fields as this app in the web UI (needs auth.mode ≠ none)
   coder:
     type: github_app
     app_id: 100002

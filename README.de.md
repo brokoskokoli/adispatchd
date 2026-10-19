@@ -69,6 +69,9 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Anmeldung optional:** `auth.mode: password` (eingebaute Benutzer, scrypt-Hashes, Session-Cookie) oder
   `trusted_header` (Identität von Tailscale Serve, oauth2-proxy, …), Rollen `viewer` / `operator` / `admin` je
   Endpunkt, Audit jeder schreibenden Aktion; die CLI arbeitet über einen lokalen Steuer-Token weiter.
+- **Aus der UI als GitHub App handeln:** Admins kommentieren ein Issue/PR, setzen/entfernen Labels und ändern
+  Projektfelder als konfigurierte Identity (`ui_actions: true` in `identities.yaml`), mit Bestätigungsdialog und
+  dauerhaftem Audit-Log; nur mit Anmeldung, nie über den CLI-Steuer-Token.
 - **Dry-Run:** `adispatch workflow dry-run <id>` zeigt, welche Items starten würden und warum die anderen nicht – ohne
   etwas zu starten.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per

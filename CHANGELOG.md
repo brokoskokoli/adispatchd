@@ -22,6 +22,17 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   (Warnung beim Start). Audit: schreibende Aktionen stehen mit Benutzer im Dienstlog,
   Run-Aktionen zusätzlich als Run-Event `audit.user_action`. Einrichtung: `docs/operations.md`.
 
+- **In der UI als Identity handeln:** Administratoren können auf ein Issue/PR als eine konfigurierte Identity (z. B. die
+  `maintainer`-App) antworten, Labels setzen/entfernen und Projektfelder ändern – neues Item-Panel (aus Run-Detail,
+  View-Zeilen und der Seite „UI Actions“ mit Suche nach URL/`owner/repo#nr`) mit Bestätigungsdialog vor jedem Senden.
+  Freischaltung je Identity mit `ui_actions: true` in `identities.yaml` (Default aus); nur mit Anmeldung (`auth.mode` ≠
+  `none`, sonst Warnung bei `config validate`), nur für echte Benutzer (nie mit dem Steuer-Token); bei lokal
+  fälschbarem `trusted_header` ist `ui_actions: true` ein Konfigurationsfehler. Kommentare werden vor dem Senden
+  redigiert und nie automatisch wiederholt; Labels/Projektfelder idempotent über den `source.update`-Pfad. Neue
+  Endpunkte `GET /api/v1/items/resolve`, `GET /api/v1/items/:source/:item`, `POST …/comment`, `…/labels`, `…/project`,
+  `GET /api/v1/ui-actions` (Rolle `admin`). Jede Aktion wird dauerhaft protokolliert (neue Tabelle `ui_actions`,
+  Datenbank-Schema v4, Migration automatisch beim Start; Kommentar-URL, nie der Text; Aufbewahrung wie Runs).
+
 - **Server-Ressourcen im Dashboard:** neuer Bereich „Server“ mit gestapeltem CPU-Diagramm über die Zeit (Daemon, jeder
   aktive Run mit stabiler Farbe je Workflow und Link zum Run, Hooks/Checks des Daemons, die größten fremden Prozesse
   nach Namen, „Others“ und der nicht zuordenbare Rest bis zur Gesamtauslastung; Skala 0–100 % der Gesamtkapazität),
