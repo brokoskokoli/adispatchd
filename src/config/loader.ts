@@ -100,7 +100,9 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
   const identitiesFile = await readTop(IDENTITIES_FILE, false);
   const workflowFiles = await readDir(dir, WORKFLOWS_DIR, issues, files);
   const viewFiles = await readDir(dir, VIEWS_DIR, issues, files);
-  const filterFiles = await readDir(dir, FILTERS_DIR, issues, files);
+  // Unreadable filter files still count by name, so places of use report "invalid" rather than "unknown".
+  const unusableFilterFiles: string[] = [];
+  const filterFiles = await readDir(dir, FILTERS_DIR, issues, files, (file) => unusableFilterFiles.push(file));
 
   const rawGlobal = parseWith(globalConfigSchema, configFile, CONFIG_FILE, issues);
   const rawSources = parseWith(sourcesFileSchema, sourcesFile, SOURCES_FILE, issues);
@@ -124,9 +126,10 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
       filterEntries.push({ id: raw.id, file: parsed.file, description: raw.description ?? null, filter: raw.filter });
     } else {
       const id = (parsed.data as { id?: unknown } | null)?.id;
-      if (typeof id === 'string' && CONFIG_ID_PATTERN.test(id)) brokenFilters.set(id, parsed.file);
+      brokenFilters.set(typeof id === 'string' && CONFIG_ID_PATTERN.test(id) ? id : fileStem(parsed.file), parsed.file);
     }
   }
+  for (const file of unusableFilterFiles) brokenFilters.set(fileStem(file), file);
   const namedFilters = new NamedFilters(filterEntries, brokenFilters, issues);
 
   // Usage of named filters is only complete if every workflow and view could be parsed.
@@ -255,6 +258,7 @@ async function readDir(
   sub: string,
   issues: IssueCollector,
   files: Map<string, ParsedFile>,
+  onUnusable?: (file: string) => void,
 ): Promise<ParsedFile[]> {
   let names: string[];
   try {
@@ -271,9 +275,14 @@ async function readDir(
     if (parsed) {
       files.set(file, parsed);
       out.push(parsed);
-    }
+    } else onUnusable?.(file);
   }
   return out;
+}
+
+/** File name without directory and extension (`filters/x.yaml` → `x`). */
+function fileStem(file: string): string {
+  return path.basename(file, path.extname(file));
 }
 
 function parseWith<S extends z.ZodType>(

@@ -79,7 +79,9 @@ export function validateFilterNode(node: unknown, path: (string | number)[] = []
 
 function visit(node: unknown, path: (string | number)[], issues: FilterIssue[]): void {
   if (!isPlainObject(node)) {
-    issues.push({ path, message: 'Filter node must be a mapping (all / any / not / use / {field, operator, value})' });
+    // The short form `filter: <id>` only exists at the root; inside the tree a reference needs `use`.
+    const hint = typeof node === 'string' && CONFIG_ID_PATTERN.test(node) ? `; to reference a named filter write { use: ${node} }` : '';
+    issues.push({ path, message: `Filter node must be a mapping (all / any / not / use / {field, operator, value})${hint}` });
     return;
   }
   const keys = Object.keys(node);

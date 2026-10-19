@@ -7,7 +7,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { MemoryLogger } from '../core/index.js';
 import { splitForPushdown } from '../filters/index.js';
 import { GITHUB_FIELD_DEFINITIONS } from '../sources/index.js';
-import { ConfigManager, formatConfigIssue, loadConfig, MAX_FILTER_USE_DEPTH, type ConfigIssue, type LoadConfigResult } from './index.js';
+import {
+  ConfigManager,
+  formatConfigIssue,
+  loadConfig,
+  MAX_EXPANDED_FILTER_NODES,
+  MAX_FILTER_USE_DEPTH,
+  type ConfigIssue,
+  type LoadConfigResult,
+} from './index.js';
 import { BASE_FILES, createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
 
 const text = (i: ConfigIssue): string => `${i.file}: ${i.path}: ${i.message}`;
@@ -172,6 +180,53 @@ describe('named filters (WI-15)', () => {
     ]);
     // 16 levels from the workflow (w → f15 → … → f0) are allowed.
     expect(found.some((e) => e.startsWith('workflows/'))).toBe(false);
+  });
+
+  it(`stops expanding past ${MAX_EXPANDED_FILTER_NODES} nodes per root (fan-out, review M1)`, async () => {
+    // f<i> references f<i-1> ten times: f<i> expands to ~10^i nodes; f8 would be ~10^8.
+    const files: Record<string, string> = { 'filters/f0.yaml': named('f0', '{ field: number, operator: equals, value: 1 }') };
+    for (let i = 1; i <= 8; i++) {
+      files[`filters/f${i}.yaml`] = named(`f${i}`, `any: [ ${Array.from({ length: 10 }, () => `{ use: f${i - 1} }`).join(', ')} ]`);
+    }
+    const started = Date.now();
+    const found = await errors({
+      ...files,
+      'workflows/w.yaml': workflow('filter: f8\nitem_priority: { rules: [ { when: { all: [ { use: f3 }, { use: f3 }, { use: f2 } ] }, value: 1 } ] }\n'),
+      'workflows/w2.yaml': workflow(`filter:\n  all: [ ${Array.from({ length: 10 }, () => '{ use: f3 }').join(', ')} ]\n`, 'w2'),
+    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(found).toEqual([
+      'filters/f4.yaml: filter.any[9]: Expanded filter would exceed 10000 nodes ("f3" alone has 1111; named filters are copied at every place of use)',
+      'filters/f5.yaml: filter.any[0]: Named filter "f4" is invalid (see filters/f4.yaml)',
+      'filters/f6.yaml: filter.any[0]: Named filter "f5" is invalid (see filters/f5.yaml)',
+      'filters/f7.yaml: filter.any[0]: Named filter "f6" is invalid (see filters/f6.yaml)',
+      'filters/f8.yaml: filter.any[0]: Named filter "f7" is invalid (see filters/f7.yaml)',
+      'workflows/w.yaml: filter: Named filter "f8" is invalid (see filters/f8.yaml)',
+      // 1111 + 1111 + 111 + 1 nodes: below the cap.
+      'workflows/w2.yaml: filter.all[9]: Expanded filter would exceed 10000 nodes ("f3" alone has 1111; named filters are copied at every place of use)',
+    ]);
+    // Reported once per root, also for later references beyond the cap.
+    expect(found.filter((e) => e.startsWith('workflows/w2.yaml'))).toHaveLength(1);
+  });
+
+  it('reports "invalid" for filter files that cannot be parsed or lack an ID (review N1)', async () => {
+    const found = await errors({
+      'filters/syntax.yaml': 'id: syntax\nfilter: { all: [\n',
+      'filters/no-id.yaml': 'filter: { field: number, operator: equals, value: 1 }\n',
+      'workflows/w.yaml': workflow('filter: { all: [ { use: syntax }, { use: no-id } ] }\n'),
+    });
+    expect(found).toContain('filters/no-id.yaml: id: Invalid input: expected string, received undefined');
+    expect(found.some((e) => e.startsWith('filters/syntax.yaml: : YAML syntax error'))).toBe(true);
+    expect(found.filter((e) => e.startsWith('workflows/'))).toEqual([
+      'workflows/w.yaml: filter.all[0]: Named filter "syntax" is invalid (see filters/syntax.yaml)',
+      'workflows/w.yaml: filter.all[1]: Named filter "no-id" is invalid (see filters/no-id.yaml)',
+    ]);
+  });
+
+  it('hints at { use: … } for a bare filter ID inside the tree (review N5)', async () => {
+    expect(await errors({ 'filters/ready.yaml': READY, 'workflows/w.yaml': workflow('filter: { not: ready }\n') })).toEqual([
+      'workflows/w.yaml: filter.not: Filter node must be a mapping (all / any / not / use / {field, operator, value}); to reference a named filter write { use: ready }',
+    ]);
   });
 
   it('rejects malformed use nodes and named filter files', async () => {

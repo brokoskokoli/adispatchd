@@ -26,6 +26,14 @@ import type { NamedFilterConfig } from './model.js';
 /** Maximum number of nested references (`use` → `use` → …) starting at any filter. */
 export const MAX_FILTER_USE_DEPTH = 16;
 
+/**
+ * Maximum number of nodes of one expanded filter tree (per root: a workflow
+ * `filter`, each `item_priority` rule, a view `filter`, each named filter on
+ * its own). References are copied at every place of use, so without a cap a
+ * small fan-out over a few levels would grow exponentially.
+ */
+export const MAX_EXPANDED_FILTER_NODES = 10_000;
+
 /** A parsed named filter file. */
 export interface NamedFilterEntry {
   id: string;
@@ -51,6 +59,17 @@ interface Resolved {
   chain: string[];
   /** IDs of all named filters referenced directly or indirectly. */
   refs: ReadonlySet<string>;
+  /** Number of nodes of the expanded tree. */
+  size: number;
+}
+
+/** Node budget of one root expansion (see {@link MAX_EXPANDED_FILTER_NODES}). */
+interface Budget {
+  nodes: number;
+  /** Set once the cap was hit: reported once, later references are skipped without copying. */
+  exceeded: boolean;
+  /** Invalid named filters already reported in this root (one error per filter, not per reference). */
+  reportedInvalid: Set<string>;
 }
 
 /** Placeholder for a reference that cannot be expanded (the configuration is invalid anyway). */
@@ -106,7 +125,7 @@ export class NamedFilters {
    * placeholder at the failed reference.
    */
   expandAt(node: RawFilterNode, file: string, at: IssuePath): FilterNode {
-    const result = this.expand(node, file, at, []);
+    const result = this.expand(node, file, at, [], { nodes: 0, exceeded: false, reportedInvalid: new Set() });
     for (const id of result.refs) this.used.add(id);
     return result.filter;
   }
@@ -166,14 +185,22 @@ export class NamedFilters {
     const done = this.resolved.get(id);
     if (done) return done;
     const entry = this.byId.get(id) as NamedFilterEntry;
-    const result = this.expand(entry.filter, entry.file, ['filter'], [...stack, id]);
-    const resolved: Resolved = { ok: result.ok, filter: result.ok ? result.filter : PLACEHOLDER, chain: result.chain, refs: result.refs };
+    const budget: Budget = { nodes: 0, exceeded: false, reportedInvalid: new Set() };
+    const result = this.expand(entry.filter, entry.file, ['filter'], [...stack, id], budget);
+    const resolved: Resolved = {
+      ok: result.ok,
+      filter: result.ok ? result.filter : PLACEHOLDER,
+      chain: result.chain,
+      refs: result.refs,
+      size: result.ok ? budget.nodes : 1,
+    };
     this.resolved.set(id, resolved);
     return resolved;
   }
 
-  private expand(node: RawFilterNode, file: string, at: IssuePath, stack: readonly string[]): ExpandResult {
-    if (isFilterUse(node)) return this.expandUse(node.use, file, at, stack);
+  private expand(node: RawFilterNode, file: string, at: IssuePath, stack: readonly string[], budget: Budget): ExpandResult {
+    if (isFilterUse(node)) return this.expandUse(node.use, file, at, stack, budget);
+    budget.nodes++;
     const combine = (children: ExpandResult[], build: (nodes: FilterNode[]) => FilterNode): ExpandResult => {
       let chain: string[] = [];
       const refs = new Set<string>();
@@ -184,13 +211,13 @@ export class NamedFilters {
       return { ok: children.every((c) => c.ok), filter: build(children.map((c) => c.filter)), chain, refs };
     };
     if ('all' in node) {
-      return combine(node.all.map((c, i) => this.expand(c, file, [...at, 'all', i], stack)), (all) => ({ all }));
+      return combine(node.all.map((c, i) => this.expand(c, file, [...at, 'all', i], stack, budget)), (all) => ({ all }));
     }
     if ('any' in node) {
-      return combine(node.any.map((c, i) => this.expand(c, file, [...at, 'any', i], stack)), (any) => ({ any }));
+      return combine(node.any.map((c, i) => this.expand(c, file, [...at, 'any', i], stack, budget)), (any) => ({ any }));
     }
     if ('not' in node) {
-      return combine([this.expand(node.not, file, [...at, 'not'], stack)], ([not]) => ({ not: not as FilterNode }));
+      return combine([this.expand(node.not, file, [...at, 'not'], stack, budget)], ([not]) => ({ not: not as FilterNode }));
     }
     const value = node.value;
     return {
@@ -201,7 +228,7 @@ export class NamedFilters {
     };
   }
 
-  private expandUse(id: string, file: string, at: IssuePath, stack: readonly string[]): ExpandResult {
+  private expandUse(id: string, file: string, at: IssuePath, stack: readonly string[], budget: Budget): ExpandResult {
     const fail = (message: string): ExpandResult => {
       this.issues.error(file, at, message);
       return { ok: false, filter: PLACEHOLDER, chain: [id], refs: new Set(this.byId.has(id) ? [id] : []) };
@@ -211,7 +238,11 @@ export class NamedFilters {
     }
     if (!this.byId.has(id)) {
       const brokenFile = this.broken.get(id);
-      if (brokenFile) return fail(`Named filter "${id}" is invalid (see ${brokenFile})`);
+      if (brokenFile) {
+        if (budget.reportedInvalid.has(id)) return { ok: false, filter: PLACEHOLDER, chain: [id], refs: new Set() };
+        budget.reportedInvalid.add(id);
+        return fail(`Named filter "${id}" is invalid (see ${brokenFile})`);
+      }
       const suggestion = suggestField(id, [...this.byId.keys(), ...this.broken.keys()]);
       return fail(`Unknown named filter "${id}"${suggestion ? ` (did you mean "${suggestion}"?)` : ''}`);
     }
@@ -219,7 +250,8 @@ export class NamedFilters {
     const entry = this.byId.get(id) as NamedFilterEntry;
     const refs = new Set([id, ...target.refs]);
     if (!target.ok) {
-      this.issues.error(file, at, `Named filter "${id}" is invalid (see ${entry.file})`);
+      if (!budget.reportedInvalid.has(id)) this.issues.error(file, at, `Named filter "${id}" is invalid (see ${entry.file})`);
+      budget.reportedInvalid.add(id);
       return { ok: false, filter: PLACEHOLDER, chain: [id, ...target.chain], refs };
     }
     const chain = [id, ...target.chain];
@@ -227,6 +259,20 @@ export class NamedFilters {
       this.issues.error(file, at, `Named filters are nested more than ${MAX_FILTER_USE_DEPTH} levels deep: ${chain.join(' → ')}`);
       return { ok: false, filter: PLACEHOLDER, chain, refs };
     }
+    // Checked before copying, so an oversized expansion stops early instead of being built.
+    if (budget.exceeded || budget.nodes + target.size > MAX_EXPANDED_FILTER_NODES) {
+      if (!budget.exceeded) {
+        this.issues.error(
+          file,
+          at,
+          `Expanded filter would exceed ${MAX_EXPANDED_FILTER_NODES} nodes ("${id}" alone has ${target.size}; ` +
+            'named filters are copied at every place of use)',
+        );
+      }
+      budget.exceeded = true;
+      return { ok: false, filter: PLACEHOLDER, chain, refs };
+    }
+    budget.nodes += target.size;
     // Fresh copy per place of use: the loaded configuration is frozen and hashed per workflow.
     return { ok: true, filter: structuredClone(target.filter), chain, refs };
   }
