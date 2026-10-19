@@ -30,6 +30,7 @@ import {
   splitForPushdown,
   type FieldSource,
   type FilterEvaluation,
+  type FilterTrace,
   type PrioritizedCandidate,
 } from '../filters/index.js';
 import { notEvaluatedCheck, notEvaluatedConditions, type ChecksOutcome, type SchedulerChecks } from './checks.js';
@@ -318,7 +319,10 @@ export async function checkEligibility(candidate: PreparedCandidate, ctx: Eligib
 /**
  * Re-check for the item re-read by the run controller right before `on_start`
  * (Spec §7 races): the cheap part of the filter on the fresh item. `false`
- * cancels the run without hooks; `unknown` (expensive fields) does not.
+ * cancels the run without hooks. `unknown` caused only by expensive fields
+ * (not evaluated here) does not; `unknown` caused by a cheap field the
+ * source could not determine on the fresh item (`item.unknownFields`, e.g.
+ * `project.*` without project access) cancels as well (fail closed).
  */
 export function verifyItemFor(workflow: WorkflowConfig, adapter: SourceAdapter): ((item: SourceItem) => Promise<boolean>) | undefined {
   const filter = workflow.filter;
@@ -327,6 +331,23 @@ export function verifyItemFor(workflow: WorkflowConfig, adapter: SourceAdapter):
   return async (item) => {
     const fields = createItemFieldSource(item, { definitions });
     const result = await evaluateFilter(filter, cheapOnly(fields));
-    return result.value !== false;
+    if (result.value === false) return false;
+    if (result.value === 'unknown' && item.unknownFields && hasUnknownSourceField(result.trace, item.unknownFields)) return false;
+    return true;
   };
+}
+
+/** True if an `unknown` predicate in `trace` is about a field the source reported as undeterminable. */
+function hasUnknownSourceField(trace: FilterTrace, unknownFields: Readonly<Record<string, string>>): boolean {
+  switch (trace.kind) {
+    case 'all':
+    case 'any':
+      return trace.value === 'unknown' && trace.children.some((c) => hasUnknownSourceField(c, unknownFields));
+    case 'not':
+      return trace.value === 'unknown' && hasUnknownSourceField(trace.child, unknownFields);
+    case 'predicate':
+      return trace.value === 'unknown' && Object.hasOwn(unknownFields, trace.field);
+    case 'invalid':
+      return false;
+  }
 }

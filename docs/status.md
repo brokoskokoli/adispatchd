@@ -4,7 +4,7 @@ Stand: 19. Oktober 2026 · `main` + Branches `wi-14-project-fields` und `wi-15-n
 
 Alle Work-Items WI-01 bis WI-13 (siehe `docs/work-items/`) sind umgesetzt. WI-14 (Filter auf GitHub-Projects-Felder, `state_reason`/`milestone`/`issue_type`, Identity-Art `github_token`, Version 0.2.0, `CHANGELOG.md`) ist auf `wi-14-project-fields` umgesetzt und wartet auf Review/Merge. WI-15 (benannte, wiederverwendbare Filter in `filters/*.yaml`, `filter: <id>` / `{ use: <id> }`) baut darauf auf und ist auf `wi-15-named-filters` umgesetzt; es wartet ebenfalls auf Review/Merge (nach WI-14). Jedes wurde von einem Reviewer-Agent gegen seine Acceptance Criteria und die Spec geprüft, die Findings wurden behoben, dann wurde es gemergt. Details zu jedem Work-Item stehen in `docs/handoff/WI-NN.md`.
 
-- **Gate:** `npm run check` grün auf macOS und Linux (Container `node:24`): 744 Tests; mit WI-14 auf macOS 784 Tests, mit WI-15 802 Tests (je 1 übersprungen).
+- **Gate:** `npm run check` grün auf macOS und Linux (Container `node:24`): 744 Tests; mit WI-14 und WI-15 auf macOS 810 Tests (1 übersprungen).
 - **Paket-Test:** `npm run test:pack` grün (pack → install → init → start → Run → drain → Update).
 - **Dateiformate:** verbindliche Referenz in `docs/configuration-reference.md`; ein Test validiert alle Beispiele darin gegen den echten Loader.
 - **Abschlussprüfung:** Smoke-Test der installierten App erfolgreich (init, start, manueller Run, API, SSE, Dry-Run, drain mit Exit 0). Die Abdeckung der Szenarien aus §22.2 ist unten zusammengefasst.

@@ -58,13 +58,15 @@ der Webhooks. Beispiel:
 ```bash
 # /etc/default/adispatchd (0640, root:adispatchd)
 GITHUB_MAINTAINER_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----"
-GITHUB_PROJECT_TOKEN=github_pat_…        # identities.yaml: project_reader: { type: github_token, token_env: GITHUB_PROJECT_TOKEN }
+GITHUB_PROJECT_TOKEN=ghp_…               # identities.yaml: project_reader: { type: github_token, token_env: GITHUB_PROJECT_TOKEN }
 ```
 
 Tokens werden beim Start gelesen und in allen Logs redigiert; eine fehlende/leere Variable steht als Fehler im Journal
 („GitHub token identity not usable“), Zugriffe mit dieser Identity scheitern dann. Änderungen an der Env-Datei wirken erst
 nach `systemctl restart adispatchd`. Für Projektfelder org-eigener Projekte braucht die lesende GitHub App zusätzlich
-die Berechtigung **Organization → Projects: Read** (nach dem Ändern der App-Rechte die Installation bestätigen).
+die Berechtigung **Organization → Projects: Read** (nach dem Ändern der App-Rechte die Installation bestätigen). Für
+user-eigene Projekte empfohlen: klassischer PAT des Owners mit `read:project`, bei privaten Repos zusätzlich `repo`
+(der Token liest auch die Issues/PRs); fine-grained Tokens sind dafür nicht verifiziert.
 
 Optionen von `service install`: `--user`/`--group` (Default `adispatchd`), `--create-user`, `--name` (Unit-Name),
 `--node`/`--entry` (absolute Pfade, Default: das laufende Node und diese Installation), `--env-file <pfad|none>`,

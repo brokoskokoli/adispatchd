@@ -16,7 +16,7 @@ identities:
     app_id: 9000003
     installation_id: 9100003
     private_key_env: ADISPATCH_TEST_REVIEWER_KEY
-  # T25c (User-Projekt): einkommentieren; Token des Users (read:project), NUR als Env-Variable.
+  # T25c (User-Projekt): einkommentieren; klassischer Token des Users (read:project + repo bei privaten Repos), NUR als Env-Variable.
   # project_reader:
   #   type: github_token
   #   token_env: ADISPATCH_TEST_PROJECT_TOKEN

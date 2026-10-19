@@ -98,8 +98,10 @@ identities:
     app_id: 100002
     installation_id: 200002
     private_key_env: GITHUB_CODER_PRIVATE_KEY
-  # A token identity (e.g. fine-grained personal access token with "Projects: read"), needed to read
-  # user-owned GitHub Projects. token_env names the environment variable holding the token.
+  # A token identity, needed to read user-owned GitHub Projects: recommended is a classic personal access
+  # token of the project owner with read:project (plus repo for private repositories) – it must also be able
+  # to read the repository's issues/PRs. Fine-grained tokens are unverified for user-owned projects.
+  # token_env names the environment variable holding the token.
   # project_reader:
   #   type: github_token
   #   token_env: GITHUB_PROJECT_TOKEN

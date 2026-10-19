@@ -653,12 +653,17 @@ export class FakeGitHub {
         errors.push({ type: 'NOT_FOUND', path: ['nodes', index], message: `Could not resolve to a node with the global id of '${id}'` });
         return null;
       }
-      const memberships = this.projects.filter((p) => p.items.has(id) && this.projectReadable(p, auth));
+      // Memberships in projects the token cannot read come back as null + FORBIDDEN error (conservative model).
+      const memberships = this.projects.filter((p) => p.items.has(id));
       return {
         __typename: issue.isPullRequest ? 'PullRequest' : 'Issue',
         projectItems: {
           totalCount: memberships.length,
-          nodes: memberships.slice(0, first).map((p) => {
+          nodes: memberships.slice(0, first).map((p, k) => {
+            if (!this.projectReadable(p, auth)) {
+              errors.push({ type: 'FORBIDDEN', path: ['nodes', index, 'projectItems', 'nodes', k], message: 'Resource not accessible by integration' });
+              return null;
+            }
             const values = p.items.get(id) ?? {};
             const entry: Record<string, unknown> = { project: { id: p.id } };
             for (const { alias, name } of aliases) {

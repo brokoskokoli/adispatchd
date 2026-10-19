@@ -362,16 +362,31 @@ Requests des Repositories über `GET /repos/{owner}/{repo}/issues`, standardmä�
 `link`). Feldtyp je Art: `single_select` (Name der Option), `text` und `iteration` (Titel der Iteration) → `string`;
 `number` → `number`; `date` → `date`. Der Abgleich mit dem Projekt vergleicht den Feldnamen **ohne** Beachtung der
 Groß-/Kleinschreibung (`status` findet `Status`); die **Werte** werden wie alle Strings außer `labels` mit
-Groß-/Kleinschreibung verglichen. Gelesen wird per GraphQL im selben Planungsschritt wie die Issue-Liste (zwei
-Abfragen: Projekt-Metadaten einmal pro Listing, Werte in Blöcken zu 50 Items) – die Felder sind daher **nicht
-teuer** und haben **keinen Pushdown**. Unbekannt-Regeln: §4.7.1.
+Groß-/Kleinschreibung verglichen. Gelesen wird per GraphQL im selben Planungsschritt wie die Issue-Liste – die
+Felder sind daher **nicht teuer** und haben **keinen Pushdown**. Unbekannt-Regeln: §4.7.1.
 
-**Rechte.** Org-eigene Projekte lassen sich mit der GitHub App lesen, wenn sie die Berechtigung
-**Organization → Projects: Read** hat (in der App-Konfiguration hinzufügen und in der Installation bestätigen).
-**User-eigene** Projekte sind für GitHub-App-Installationstoken nicht zugänglich: dafür eine Identity vom Typ
-`github_token` (§3.3) mit einem Token des Users anlegen (fine-grained Personal Access Token mit
-**Projects: Read** bzw. klassischer Token mit `read:project`) und als `project.identity` eintragen. Die Source selbst
-kann weiter per App lesen.
+**Anfragevolumen je Listing** mit *n* Items: höchstens **eine** Metadaten-Abfrage plus **⌈n/50⌉** Werte-Abfragen.
+Die Metadaten (Projekt-ID, Felder) teilen sich alle Listings derselben Source **30 s** lang (mehrere Workflows auf
+einer Source → eine Metadaten-Abfrage pro Poll; Workflows mit gleichem Pushdown teilen sich ohnehin das Listing eines
+Planungsschritts); das frische Lesen eines Items vor `on_start` nutzt sie bis zu 5 Minuten. Die Werte werden pro
+Listing neu gelesen. **Rate-Limits** halten den Planungsschritt nicht auf: Projekt-Abfragen warten höchstens 5 s auf
+einen Retry; nach einem Rate-Limit sind alle `project.*` der Source bis zum Reset (`Retry-After` bzw.
+`x-ratelimit-reset`, sonst 60 s) sofort `unknown` mit Grund „GitHub GraphQL rate limit until <Zeit>“, ohne GitHub
+zu fragen.
+
+**Rechte.** Die Projekt-Identity liest über `nodes(ids:)` die Issues/PRs selbst; sie braucht deshalb **Lesezugriff
+auf das Projekt und auf die Issues/PRs des Repositories**. Fehlt der Zugriff aufs Repository, sind die Werte der
+Items `unknown`.
+- **Org-eigene** Projekte: die GitHub App der Source mit der Berechtigung **Organization → Projects: Read** (in der
+  App-Konfiguration hinzufügen und in der Installation bestätigen); Issues-Lesezugriff hat sie als Source-Identity
+  ohnehin.
+- **User-eigene** Projekte sind für GitHub-App-Installationstoken nicht zugänglich: dafür eine Identity vom Typ
+  `github_token` (§3.3) anlegen und als `project.identity` eintragen. **Empfohlen:** klassischer Personal Access
+  Token des Projekt-Owners mit **`read:project`**, bei privaten Repositories zusätzlich **`repo`** (für öffentliche
+  genügt `read:project`). Ein fine-grained Token (Repository-Rechte *Issues: Read* und *Pull requests: Read*,
+  Account-Recht *Projects: Read*) ist für user-eigene Projekte **nicht verifiziert** (Live-Test T25c in
+  [manual-tests/github.md](manual-tests/github.md)).
+- Die Source selbst kann weiter per App lesen.
 
 ### 3.3 identities.yaml
 
@@ -390,7 +405,7 @@ identities:
     installation_id: 200002
     private_key_env: GITHUB_CODER_PRIVATE_KEY
   project_reader:
-    type: github_token                 # z. B. fine-grained Personal Access Token
+    type: github_token                 # z. B. klassischer PAT mit read:project (+ repo bei privaten Repos)
     token_env: GITHUB_PROJECT_TOKEN    # Name der Env-Variable, nie der Token selbst
 ```
 
@@ -957,7 +972,7 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 | Ergebnis unknown | kein Start (Diagnose `filter_unknown`) | Zeile ausgeblendet, gezählt in `filterUnknown` |
 | Felder | Adapterfelder | Adapterfelder + `run.last_*` |
 | Shell | zusätzlich `shell_filter`, Conditions | nie |
-| Zeitpunkt | jeder Planungsschritt; vor `on_start` erneut der billige Teil auf dem frisch gelesenen Item | Öffnen/Refresh (Cache 30 s) |
+| Zeitpunkt | jeder Planungsschritt; vor `on_start` erneut der billige Teil auf dem frisch gelesenen Item: `false` bricht den Run ohne Hooks ab, ebenso `unknown` durch ein billiges Feld, das die Source nicht ermitteln konnte (z. B. `project.*` ohne Zugriff); `unknown` nur durch teure Felder lässt ihn laufen | Öffnen/Refresh (Cache 30 s) |
 
 ### 4.7 Feldkatalog des GitHub-Adapters
 
@@ -1010,7 +1025,9 @@ das Item gar nicht im Projekt ist (und höchstens 20 Projekt-Mitgliedschaften ha
 
 | Situation | betroffene Felder | Log |
 |---|---|---|
-| Projekt nicht gefunden, kein Zugriff (z. B. fehlende App-Berechtigung, User-Projekt mit App-Token), GraphQL-/HTTP-Fehler, Rate-Limit bei den Metadaten | alle `project.*` der Source | Warnung nur bei Änderung des Grundes |
+| Projekt nicht gefunden, kein Zugriff (z. B. fehlende App-Berechtigung, User-Projekt mit App-Token), GraphQL-/HTTP-Fehler bei den Metadaten | alle `project.*` der Source | Warnung nur bei Änderung des Grundes |
+| Rate-Limit (Metadaten oder Werte) | alle `project.*` der Source bis zum Reset, ohne GitHub-Aufruf | Warnung je Rate-Limit |
+| GraphQL-Fehler **unterhalb** eines Items (`errors[].path` beginnt mit `["nodes", i]`, z. B. an einem Feldwert) oder eine nicht lesbare (`null`) Projekt-Mitgliedschaft ohne Treffer | alle `project.*` dieses Items | – |
 | deklariertes Feld fehlt im Projekt oder hat einen anderen `dataType` als die Art verlangt | genau dieses Feld | Warnung nur bei Änderung des Grundes |
 | Werte-Abfrage scheitert (HTTP, GraphQL ohne verwertbare Daten, Rate-Limit); folgende Blöcke werden dann nicht mehr abgefragt | alle `project.*` der betroffenen Items | Warnung nur bei Änderung des Grundes |
 | Item für die Projekt-Identity nicht lesbar | alle `project.*` dieses Items | – |
@@ -1019,6 +1036,8 @@ das Item gar nicht im Projekt ist (und höchstens 20 Projekt-Mitgliedschaften ha
 Das Listing selbst scheitert wegen des Projekts **nie**; die übrigen Felder bleiben bekannt. Archivierte
 Projekt-Items zählen als „nicht im Projekt“. Vor `on_start` liest der Run-Controller das Item frisch (inkl.
 Projektwerten; Projekt-Metadaten dürfen dafür bis zu 5 Minuten alt sein) und prüft den billigen Filterteil erneut.
+Ist er dabei `unknown`, weil ein `project.*`-Feld nicht ermittelt werden konnte, wird der Run **abgebrochen** (wie
+bei `false`, fail closed).
 
 ### 4.8 Run-Felder für Views
 
@@ -1625,8 +1644,9 @@ fields:
 sort: { field: project.Priority }
 ```
 
-Umgebung: `GITHUB_PROJECT_TOKEN=github_pat_…` (fine-grained Token von `alice` mit **Projects: Read**, bzw.
-klassisch `read:project`) in der Env-Datei, danach Neustart. `project.Sprint` gibt es nur in Workflows auf
+Umgebung: `GITHUB_PROJECT_TOKEN=ghp_…` (klassischer Token von `alice` mit `read:project`, bei privatem
+`project-b` zusätzlich `repo`; fine-grained Tokens für User-Projekte sind unverifiziert, §3.2) in der Env-Datei,
+danach Neustart. `project.Sprint` gibt es nur in Workflows auf
 `project_a`; in der View wäre es ein Fehler, weil `project_b` es nicht deklariert. Ohne Projektzugriff ist der
 Filter `unknown` (kein Start) und der Dry-Run nennt den Grund.
 
