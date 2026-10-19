@@ -216,7 +216,7 @@ Kurzfassung – Details in [docs/operations.md](docs/operations.md):
   Migrationen laufen automatisch mit Backup in `data-dir/backups/`; config-dir und data-dir bleiben erhalten.
 - **Backups:** config-dir (git), Env-Datei, `adispatchd.sqlite` per `sqlite3 … ".backup …"`, `logs/`, `runs/`.
   `adispatchd.lock*` nie kopieren oder öffnen. data-dir nur auf lokalem Dateisystem (kein NFS).
-- **Recovery:** nach Absturz/Neustart werden verwaiste Runs `crashed` + `on_crash`, nicht sicher identifizierbare Prozesse
+- **Recovery:** nach Absturz/Neustart werden verwaiste Runs `crashed` + `on_crash` (bzw. `on_error`), Container der Instanz werden gestoppt, nicht sicher identifizierbare Prozesse
   `recovery_pending` (UI „Retry Recovery“); der Scheduler startet erst danach.
 
 ## Entwicklung
