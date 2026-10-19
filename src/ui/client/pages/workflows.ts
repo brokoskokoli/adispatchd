@@ -7,7 +7,7 @@ import { ApiError, api, qs, seg } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { buildRuntimeBody, buildStartBody } from '../../shared/params.js';
-import { checkValueLabel, decisionTone, formatDuration } from '../../shared/format.js';
+import { checkValueLabel, decisionTone, formatBytes, formatDuration } from '../../shared/format.js';
 import { buildHash } from '../../shared/route.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
 import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, Workflow } from '../types.js';
@@ -345,6 +345,7 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
             ['Command', h('code', { class: 'wrap' }, [wf.execute.command, ...wf.execute.args.map(String)].join(' '))],
             ['Timeout', timeoutText(wf.execute.timeout)],
             ['Secrets', wf.execute.secrets.length ? wf.execute.secrets.join(', ') : text(null)],
+            ['Kept files', wf.execute.keep?.length ? h('span', null, h('code', { class: 'wrap' }, wf.execute.keep.join(', ')), h('small', { class: 'muted' }, ` (max ${formatBytes(wf.execute.keepMaxSizeBytes ?? null)} per run)`)) : text(null)],
             ['Filter', `${wf.hasFilter ? 'declarative' : 'none'}${wf.hasShellFilter ? ' + shell filter' : ''}; conditions: ${wf.conditions.workflow} workflow, ${wf.conditions.item} item`],
             ['Max technical failures', String(wf.maxTechnicalFailures)],
             ['File', h('code', null, wf.file)],

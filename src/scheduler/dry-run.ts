@@ -56,6 +56,10 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
   if (gate === null) notes.push('controller state unknown (no running instance): pause/drain/readiness not considered');
   else if (!gate.canStartAutomatically) notes.push(`automatic starts are currently not possible: ${gate.reason ?? 'unknown'}`);
   notes.push('shell filters and conditions are never executed in a dry-run (not_evaluated)');
+  if (workflow.execute.keep.length > 0) {
+    const mb = Math.round((workflow.execute.keepMaxSizeBytes / 1024 ** 2) * 100) / 100;
+    notes.push(`files kept after each run (execute.keep, max ${mb} MB per run): ${workflow.execute.keep.join(', ')}`);
+  }
 
   const globalActive = deps.state.countActive();
   const workflowActive = deps.state.countActive(workflowId);
