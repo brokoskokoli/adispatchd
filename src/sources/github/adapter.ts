@@ -1,7 +1,8 @@
 /**
  * Source adapter `github` (Spec §5.2, §6, §10): issues and pull requests of
  * one repository, native "blocked by" dependencies, labels and comments, and
- * optionally the fields of one GitHub Projects (v2) project (`project.*`, WI-14).
+ * optionally the fields of one GitHub Projects (v2) project (`project.*`,
+ * read since WI-14, written by `source.update` since WI-16).
  */
 import {
   SourceError,
@@ -21,12 +22,14 @@ import {
   type SourceAdapterFactory,
   type SourceItem,
   type SourceUpdate,
+  type SourceUpdateApplied,
   type SourceUpdateResult,
   type Timers,
 } from '../../core/index.js';
 import { DEPENDENCY_FIELDS, GITHUB_FIELD_DEFINITIONS, projectFieldDefinitions, type ProjectFieldKind } from './fields.js';
 import { GitHubHttpClient, type GitHubHttpClientOptions } from './http.js';
 import { GitHubProjectReader, type ProjectLookupItem } from './project.js';
+import { GitHubProjectWriter } from './project-write.js';
 import { pushdownQuery } from './pushdown.js';
 import { ITEM_ID_PATTERN, parseGitHubItemRef } from './refs.js';
 
@@ -55,6 +58,11 @@ export interface GitHubSourceProjectConfig {
   number: number;
   /** Identity for reading the project; default: the source identity. */
   identity?: IdentityRef;
+  /**
+   * Identity for writing project fields (`source.update`), set only when
+   * `project.identity` is given explicitly; default: the identity of the update.
+   */
+  writeIdentity?: IdentityRef;
   /** Declared fields: name (as used in `project.<name>`) → kind. */
   fields: Readonly<Record<string, ProjectFieldKind>>;
 }
@@ -115,6 +123,7 @@ export class GitHubSourceAdapter implements SourceAdapter {
   private readonly repoPath: string;
   private readonly definitions: readonly FieldDefinition[];
   private readonly project: GitHubProjectReader | undefined;
+  private readonly projectWriter: GitHubProjectWriter | undefined;
   /** Login per `github_token` identity (from `GET /user`), for comment authorship checks. */
   private readonly userLogins = new Map<IdentityRef, Promise<string>>();
 
@@ -145,6 +154,22 @@ export class GitHubSourceAdapter implements SourceAdapter {
             number: project.number,
             identity: project.identity ?? config.identity,
             fields: project.fields,
+          },
+          {
+            http: this.http,
+            clock: deps.clock,
+            logger: this.logger,
+            withToken: (identity, signal, fn) => this.withToken(identity, signal, fn),
+          },
+        )
+      : undefined;
+    this.projectWriter = project
+      ? new GitHubProjectWriter(
+          {
+            owner: project.owner ?? config.owner,
+            number: project.number,
+            fields: project.fields,
+            ...(project.writeIdentity ? { writeIdentity: project.writeIdentity } : {}),
           },
           {
             http: this.http,
@@ -214,13 +239,45 @@ export class GitHubSourceAdapter implements SourceAdapter {
     return out;
   }
 
+  /**
+   * Labels first, then project fields (WI-16). Both re-read the current state
+   * and change only what differs, so repeating the whole update is safe; a
+   * failure in the project part fails the update after the labels were applied.
+   */
   async applyUpdate(item: SourceItem, update: SourceUpdate, identity: IdentityRef): Promise<SourceUpdateResult> {
     this.assertOwnItem(item);
+    const project = update.project && Object.keys(update.project).length > 0 ? update.project : undefined;
+    if (project && !this.projectWriter) {
+      throw new SourceError('invalid', `Source "${this.sourceId}" has no GitHub project; project fields cannot be set`, { retryable: false });
+    }
+    const labels = await this.applyLabels(item, update, identity);
+    const applied: SourceUpdateApplied = { ...labels.applied };
+    if (project && this.projectWriter) {
+      // Node ID of the issue/PR: from the label re-read, otherwise read now.
+      const issue = labels.fresh ?? (await this.fetchIssue(item.itemId, identity));
+      if (!issue) throw new SourceError('not_found', `Item ${this.repository}#${item.itemId} not found`, { retryable: false });
+      if (typeof issue.node_id !== 'string' || issue.node_id === '') {
+        throw new SourceError('invalid', `Item ${item.key} has no GraphQL node ID`, { retryable: false });
+      }
+      const result = await this.projectWriter.apply({ contentId: issue.node_id, key: item.key }, project, identity);
+      if (Object.keys(result.changed).length > 0) applied.projectFields = result.changed;
+      if (result.itemAdded) applied.projectItemAdded = true;
+    }
+    const changed = Object.keys(applied).length > 0;
+    return { changed, ...(changed ? { applied } : {}) };
+  }
+
+  /** Label part of {@link applyUpdate}; returns the freshly read issue when it was read. */
+  private async applyLabels(
+    item: SourceItem,
+    update: SourceUpdate,
+    identity: IdentityRef,
+  ): Promise<{ fresh?: GitHubIssueJson; applied: SourceUpdateApplied }> {
     const add = uniqueCaseInsensitive(update.labels?.add ?? []);
     const addLower = new Set(add.map((l) => l.toLowerCase()));
     // A label listed in both add and remove is added (remove ignored).
     const remove = uniqueCaseInsensitive(update.labels?.remove ?? []).filter((l) => !addLower.has(l.toLowerCase()));
-    if (add.length === 0 && remove.length === 0) return { changed: false };
+    if (add.length === 0 && remove.length === 0) return { applied: {} };
 
     // Re-read the item first so manual changes since the snapshot are respected (Spec §10).
     const fresh = await this.fetchIssue(item.itemId, identity);
@@ -251,11 +308,8 @@ export class GitHubSourceAdapter implements SourceAdapter {
       }
     }
     const changed = toAdd.length > 0 || removed.length > 0;
-    this.logger.info('Applied label update', { item: item.key, labelsAdded: toAdd, labelsRemoved: removed });
-    return {
-      changed,
-      ...(changed ? { applied: { labelsAdded: toAdd, labelsRemoved: removed } } : {}),
-    };
+    if (changed) this.logger.info('Applied label update', { item: item.key, labelsAdded: toAdd, labelsRemoved: removed });
+    return { fresh, applied: changed ? { labelsAdded: toAdd, labelsRemoved: removed } : {} };
   }
 
   async postComment(item: SourceItem, body: string, marker: string, identity: IdentityRef): Promise<CommentRef> {
