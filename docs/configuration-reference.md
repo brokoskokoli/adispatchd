@@ -1150,9 +1150,9 @@ info:
   - id: open-prs
     title: Offene PRs
     type: number
-    command: scripts/info/data-disk.sh   # nur zur Illustration dasselbe Skript
-    args: [--count]
-    env: { MODE: summary }
+    command: scripts/info/open-prs.sh
+    args: [--state, open]
+    env: { REPOSITORY: example/repo }
     unit: PRs
     cache: 10m
     warn_below: 1
@@ -1166,6 +1166,15 @@ info:
 df -P "${ADISPATCH_DATA_DIR:-.}" | awk 'NR == 2 { sub("%", "", $5); print $5; exit }'
 ```
 
+```sh
+#!/bin/sh
+# example: dashboard
+# file: scripts/info/open-prs.sh
+# Anzahl offener PRs; Argumente kommen ohne Shell an ("$1" = --state, "$2" = open).
+set -eu
+gh pr list --repo "$REPOSITORY" "$1" "$2" --json number --jq length
+```
+
 | Schlüssel | Typ | Pflicht | Default | Regeln | Bedeutung |
 |---|---|---|---|---|---|
 | `info` | Liste | nein | `[]` | höchstens 50 Kacheln | Kacheln in Anzeigereihenfolge |
@@ -1175,16 +1184,18 @@ df -P "${ADISPATCH_DATA_DIR:-.}" | awk 'NR == 2 { sub("%", "", $5); print $5; ex
 | `info[].command` | String | ja | | §2.4; ein Pfad (absolut oder mit `/`) **muss existieren** | Skript |
 | `info[].args` | Liste String | nein | `[]` | keine Templates | Argumente (ohne Shell) |
 | `info[].env` | Map | nein | `{}` | Namen ohne Präfix `ADISPATCH_`; geheim wirkende Namen mit Literalwert → Warnung | zusätzliche Umgebung |
-| `info[].timeout` | Dauer | nein | `15s` | > 0 | danach Fehler, Prozessgruppe wird beendet |
+| `info[].timeout` | Dauer | nein | `15s` | > 0, höchstens `5m` und nicht länger als `cache` | danach Fehler, Prozessgruppe wird beendet |
 | `info[].cache` | Dauer | nein | `5m` | ≥ 10s | Gültigkeit eines Werts |
 | `info[].unit` | String | nein | | max. 20 Zeichen; nur `number` | Einheit hinter der Zahl (`percent` zeigt immer `%`) |
-| `info[].warn_above` / `critical_above` | Zahl | nein | | nur `number`/`percent`; `critical_above` ≥ `warn_above` | gelb/rot, wenn Wert **≥** Schwelle |
+| `info[].warn_above` / `critical_above` | Zahl | nein | | nur `number`/`percent`; `critical_above` ≥ `warn_above`; bei `percent` außerhalb 0–100 → Warnung | gelb/rot, wenn Wert **≥** Schwelle |
 | `info[].warn_below` / `critical_below` | Zahl | nein | | nur `number`/`percent`; `critical_below` ≤ `warn_below` | gelb/rot, wenn Wert **≤** Schwelle |
 
 **Ausgabe:** erste nicht-leere stdout-Zeile, getrimmt. `text`: beliebiger Text (auf 200 Zeichen gekürzt, als Text
 dargestellt, redigiert). `number`: Dezimalzahl mit Punkt (`42`, `-1.5`), optional gefolgt von der konfigurierten
 `unit` (`12.5 GB`). `percent`: Zahl 0–100, optional mit `%`, Anzeige mit Balken. Exit ≠ 0, Timeout, Signal,
-Startfehler oder eine unlesbare Ausgabe → Fehlerzustand mit kurzer Meldung (inkl. erster stderr-Zeile, redigiert);
+Startfehler oder eine unlesbare Ausgabe → Fehlerzustand mit kurzer Meldung (`exit code 2: <erste stderr-Zeile>`,
+`timed out after 10000ms`, `unparsable output "…"`); Werte, Meldungen und stderr-Zeilen werden von ANSI-Escapes,
+Steuer- und Bidi-Zeichen bereinigt, dann redigiert und erst dann gekürzt;
 der letzte gültige Wert bleibt mit Zeitstempel sichtbar („stale“). Rot (`critical`) hat Vorrang vor Gelb (`warn`);
 `above` und `below` dürfen kombiniert werden.
 
@@ -1198,7 +1209,8 @@ warten). Mechanik wie Conditions: Argumentliste ohne Shell, Minimalumgebung + `e
 Arbeitsverzeichnis = config-dir, Timeout mit Beenden der Prozessgruppe, Ausgabe bis 4 KiB je Stream.
 
 **Prüfung beim Laden:** Schema (unbekannte Schlüssel mit „did you mean …“), eindeutige IDs, Schwellwerte nur bei
-`number`/`percent` und in sinnvoller Reihenfolge, `unit` nur bei `number`, `cache` ≥ 10 s, reservierte
+`number`/`percent` und in sinnvoller Reihenfolge, `unit` nur bei `number`, `cache` ≥ 10 s, `timeout` ≤ 5 min und
+≤ `cache`, reservierte
 Env-Namen, Existenz des Skripts (Pfade relativ zum config-dir). Die Datei ist Teil des Konfigurations-Hashs und der
 Dateiliste (`GET /api/v1/config/files`, UI: Configuration); `config reload` lädt sie mit (§1.5).
 
@@ -3216,6 +3228,8 @@ info:
 # expect: dashboard.yaml: info[1].warn_above: Thresholds are only supported for "number" and "percent" tiles (type is "text")
 # expect: dashboard.yaml: info[1].command: Script does not exist:
 # expect: dashboard.yaml: info[2].critical_above: "critical_above" (80) must not be lower than "warn_above" (90)
+# expect: dashboard.yaml: info[3].timeout: "timeout" (60s) must not be longer than "cache" (30s)
+# expect: dashboard.yaml: info[4].timeout: "timeout" must not exceed 5m
 # file: dashboard.yaml
 info:
   - id: disk
@@ -3231,6 +3245,16 @@ info:
     command: /bin/sh
     warn_above: 90
     critical_above: 80
+  - id: slow
+    type: number
+    command: /bin/sh
+    timeout: 1m
+    cache: 30s
+  - id: slower
+    type: number
+    command: /bin/sh
+    timeout: 10m
+    cache: 1h
 ```
 
 Weitere häufige Meldungen (ohne eigenes Beispiel):

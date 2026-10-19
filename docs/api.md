@@ -125,18 +125,24 @@ verwirft den Status geänderter/entfernter Workflows; nach einem Neustart `last:
 {
   "workflow": [{
     "index": 0, "name": "Credits verfügbar", "label": "Credits verfügbar",
-    "command": "/etc/adispatchd/scripts/check-credits.sh", "args": [], "timeoutMs": 15000, "cacheMs": 60000,
+    "command": "/etc/adispatchd/scripts/check-credits.sh", "displayCommand": "scripts/check-credits.sh",
+    "args": [], "timeoutMs": 15000, "cacheMs": 60000,
     "last": { "status": "ok", "checkedAt": "…", "ranAt": "…", "durationMs": 12, "cached": true,
               "exitCode": 0, "error": null, "stderr": null }
   }],
-  "item": [{ "index": 0, "name": null, "label": "scripts/check-item.sh {item.number}", "command": "…", "args": ["{item.number}"],
+  "item": [{ "index": 0, "name": null, "label": "scripts/check-item.sh {item.number}", "command": "…",
+             "displayCommand": "scripts/check-item.sh", "args": ["{item.number}"],
              "timeoutMs": 30000, "last": { "at": "…", "items": 3, "ok": 2, "notNow": 1, "error": 0, "notEvaluated": 0 } }],
-  "shellFilter": { "name": null, "label": "…", "command": "…", "timeoutMs": 30000,
+  "shellFilter": { "name": null, "label": "…", "command": "…", "displayCommand": "…", "timeoutMs": 30000,
                    "last": { "at": "…", "items": 4, "ok": 3, "notNow": 1, "error": 0, "notEvaluated": 0 } }
 }
 ```
 
-- `label` = `name`, sonst `command` (relativ zum config-dir, wenn darin) + `args`, auf 80 Zeichen gekürzt.
+- `command` = aufgelöster (absoluter) Pfad bzw. Programmname; `displayCommand` = relativ zum config-dir, wenn das
+  Skript darin liegt, sonst wie `command`. `label` = `name`, sonst `displayCommand` + `args`, auf 80 Zeichen gekürzt.
+  Auch Ablehnungsgründe (`workflow condition 0 "Name" (scripts/check.sh) is false`) zeigen den relativen Pfad.
+- `last.error` und `last.stderr` werden bereinigt (ANSI-Escapes, Steuer- und Bidi-Zeichen entfernt), dann redigiert,
+  dann gekürzt.
 - `last.status` (Workflow-Conditions): `ok` (Exit 0), `not_now` (Exit 1), `error` (Exit ≥ 2, Timeout, Signal,
   Startfehler, Template-Fehler; Detail in `error`), `skipped` (nicht ausgeführt, weil eine frühere Condition
   entschieden hat); `last: null` = seit Start/Reload nie ausgewertet. `checkedAt` = Auswertung durch Planung bzw.
@@ -278,12 +284,15 @@ Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_res
 | Methode | Pfad | Body | Antwort |
 |---|---|---|---|
 | GET | `/api/v1/dashboard/info` | – | `{"configured": bool, "file": "dashboard.yaml"\|null, "info": [InfoTile]}` – liest nur; startet **nie** ein Skript |
-| POST | `/api/v1/dashboard/info/:id/refresh` | `{}` | `202 {"accepted":true,"alreadyRunning":bool,"tile":InfoTile}` – sofortiger Abruf im Hintergrund (läuft schon einer: `alreadyRunning: true`, kein zweiter Start); `404 not_found`; `429 rate_limited` mit `Retry-After` und `details.retryAfterMs` (je Kachel höchstens alle 10 s, insgesamt 20 je Minute). CSRF-Header, Host-/Origin-Regeln wie bei jedem POST |
+| POST | `/api/v1/dashboard/info/:id/refresh` | `{}` | `202 {"accepted":true,"alreadyRunning":bool,"tile":InfoTile}` – sofortiger Abruf im Hintergrund (läuft schon einer: `alreadyRunning: true`, kein zweiter Start); `404 not_found`; `429 rate_limited` mit `Retry-After` und `details.retryAfterMs` (je Kachel höchstens alle 10 s, insgesamt 20 je Minute); `503 shutting_down` während des Herunterfahrens. CSRF-Header, Host-/Origin-Regeln wie bei jedem POST |
 
 `InfoTile`: `id, title, type (text|number|percent), value` (Zahl, Text oder `null`; der letzte gültige Wert bleibt bei
 Fehlern erhalten), `unit` (`%` bei `percent`), `status` (`ok` / `warn` / `critical` nach Schwellwerten, `error` =
 letzter Abruf fehlgeschlagen, `pending` = noch kein Wert), `updatedAt` (Zeit des gültigen Werts), `expiresAt`
-(nächster Abruf im Hintergrund), `error?` (kurz, redigiert), `stale` (Wert älter als der fehlgeschlagene Versuch),
+(Ablauf des letzten gültigen Werts, `null` ohne gültigen Wert), `nextAttemptAt` (nächster Abruf im Hintergrund – nach
+Erfolg = `expiresAt`, nach einem Fehler der Wiederholungszeitpunkt; `null`, solange ein Abruf läuft oder wartet),
+`error?` (kurz; z. B. `exit code 2: <erste stderr-Zeile>`, `timed out after 15000ms`, `unparsable output "…"`;
+bereinigt, redigiert, dann gekürzt), `stale` (Wert älter als der fehlgeschlagene Versuch),
 `refreshing`, `lastAttemptAt`, `durationMs`, `thresholds {warnAbove, criticalAbove, warnBelow, criticalBelow}`.
 
 ### Notifications
