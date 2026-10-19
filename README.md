@@ -12,6 +12,8 @@ Shell-Workflows in eigenen Workspaces aus, überwacht und protokolliert jeden Ru
   `unknown` statt eines falschen Starts.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per
   Prozessgruppe, Drain, Crash-Recovery, systemd-Integration.
+- **Mehr als zwei Ausgänge:** benannte Ergebnisse (`outcome` in der Ergebnisdatei → `on_result.<outcome>`) und ein
+  Sammel-Hook `on_error` für alle technischen Ausgänge.
 
 Dokumentation: [Änderungen](CHANGELOG.md) · [Betrieb](docs/operations.md) · [Worker-Protokoll](docs/worker-protocol.md) · [HTTP-API/SSE](docs/api.md) ·
 [Cron-Semantik](docs/cron-semantics.md) · [Spezifikation](docs/spec-v0.1.md) · Manuelle Tests:
@@ -120,8 +122,10 @@ on_failure: [ { type: source.update, labels: { add: [needs-maintainer], remove: 
 on_crash:   [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
 ```
 
-- Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`, `on_cancel`; Actions
-  `source.update`, `source.comment`, `shell`; Retry 3 × 30 s (`lifecycle.action_retry`), `continue_on_error`.
+- Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`, `on_cancel`, `on_error`
+  (Sammel-Hook, wenn der spezifische technische Hook fehlt) und `on_result.<outcome>` (benannte Ergebnisse statt
+  `on_success`/`on_failure`); Actions `source.update`, `source.comment`, `shell`; Retry 3 × 30 s
+  (`lifecycle.action_retry`), `continue_on_error`.
 - Platzhalter (feste Liste): `{run.id}`, `{workflow.id}`, `{item.number}`, `{item.url}`, `{result.message}`,
   `{parameters.<name>}`, `{workspace.base_dir}` … – unbekannte Platzhalter sind Konfigurationsfehler.
 - Manuelle Starts (UI/API) umgehen Filter, Conditions, Limits und Retry-Blocks, nie aber den aktiven Lock pro Workflow+Item.
@@ -142,7 +146,8 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **Exit-Code = technischer Status:** `0` = ok, alles andere = `crashed` (technischer Fehler, zählt zum Retry-Block).
 - **Fachliches Ergebnis** nur über die Ergebnisdatei (atomar schreiben):
   `{"schema_version":1,"result":"failure","message":"Requirements unclear"}` + `exit 0` → `on_failure` („Needs Maintainer“),
-  kein technischer Fehler. Ohne Datei gilt Exit 0 als `success`.
+  kein technischer Fehler. Ohne Datei gilt Exit 0 als `success`. Optional `"outcome": "needs_maintainer"` wählt
+  `on_result.needs_maintainer`.
 - **Events:** Zeilen `@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}` auf stdout/stderr – nur informativ.
 - **Cancel/Timeout:** SIGTERM an die Prozessgruppe, nach `cancel_grace` (30 s) SIGKILL. Eigene Sessions/Container räumt das
   Skript selbst auf.

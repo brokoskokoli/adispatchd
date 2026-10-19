@@ -3,6 +3,34 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.3.0] – unveröffentlicht
+
+### Hinzugefügt
+
+- **Benannte Ergebnisse (`on_result`):** Die Ergebnisdatei kann zusätzlich zu `result` ein `outcome` liefern
+  (Format der Konfigurations-IDs, z. B. `"outcome": "needs_maintainer"`). Ist `on_result.<outcome>` im Workflow
+  konfiguriert, läuft genau diese Kette **statt** `on_success`/`on_failure`; sonst bleibt alles wie bisher (ein
+  `outcome` ohne Eintrag ergibt eine Warnung am Run, ein `outcome` im falschen Format wird mit Warnung ignoriert).
+  `result` steuert weiter Statistik und Retry-Zähler. Neu: Platzhalter `{result.outcome}`, View-Feld
+  `run.last_outcome`, `outcome` im Kontext von `shell`-Actions.
+- **Sammel-Hook `on_error`:** läuft für `crashed`, `start_error`, `timed_out` und `cancelled`, wenn der jeweilige
+  spezifische Hook nicht definiert ist (eine leere Liste zählt als definiert) – nie beides. Die Validierung warnt,
+  wenn alle vier spezifischen Hooks definiert sind und `on_error` daher nie läuft.
+- Der gewählte Abschluss-Hook und das `outcome` werden am Run gespeichert (Schema-Migration v3) und in API
+  (`resultOutcome`, `completionHook`), SSE (`run.status` mit `outcome`/`hook`, Event `run.outcome_warning`) und UI
+  (Badge „outcome: …“, Run-Detail) angezeigt; die Recovery setzt nach einem Neustart genau diesen Hook fort.
+- `workflow dry-run` (CLI, API, UI) zeigt die `on_result`-Schlüssel und je technischem Ausgang den Hook, der liefe.
+- Unbekannte Schlüssel in YAML-Dateien bekommen einen „did you mean …“-Vorschlag; ungültige Schlüssel von Maps
+  (z. B. `on_result`) werden mit Grund gemeldet.
+
+### Geändert
+
+- In der normalisierten Konfiguration (Snapshots, `GET /api/v1/workflows/:id` → `hooks`) fehlen nicht angegebene
+  technische Hooks (`on_crash`, `on_start_error`, `on_cancel`, `on_timeout`) und `on_error` jetzt, statt als `[]`
+  zu erscheinen; `on_result.<outcome>`-Ketten erscheinen dort als eigene Einträge. Bestehende Konfigurationen und
+  Runs verhalten sich unverändert.
+- Beispiel `examples/config/workflows/reviewer-project-b.yaml` zeigt `on_result` und `on_error`.
+
 ## [0.2.0] – 2026-10-19
 
 ### Hinzugefügt
