@@ -74,6 +74,39 @@ export interface ShellExecutorOptions {
   workspaceBaseDir?: string;
 }
 
+/**
+ * How a supervised process is spawned and stopped. The shell executor spawns
+ * `spec.command` directly; the container executor (WI-19) spawns the engine
+ * CLI in the foreground and stops the container through the engine first.
+ * Internal to the `executors` component.
+ */
+export interface LaunchStrategy {
+  /** Logger component name. */
+  readonly component: string;
+  /** Extra checks/preparation after the context file was written; a rejection ends the run with `start_error`. */
+  prepare?(): Promise<void>;
+  /** Process to spawn (env = complete environment of the spawned process). */
+  process(orchEnv: Record<string, string>): { command: string; args: string[]; env: Record<string, string> };
+  /** Graceful stop (cancel/timeout) before the process group is signalled. Must not reject. */
+  stop?(graceMs: number): Promise<void>;
+  /** Max wait for the process to end after `stop` before the group is signalled. */
+  readonly stopSettleMs?: number;
+  /** After the process ended, before the outcome is reported; `abnormal` = stopped or killed by a signal. Must not reject. */
+  afterExit?(abnormal: boolean): Promise<void>;
+}
+
+/** The plain shell strategy: `spec.command` with the worker environment. */
+function shellStrategy(spec: ExecutionSpec, baseEnv: NodeJS.ProcessEnv): LaunchStrategy {
+  return {
+    component: 'shell-executor',
+    process: (orch) => ({
+      command: spec.command,
+      args: [...spec.args],
+      env: buildWorkerEnv({ base: baseEnv, env: spec.env, secrets: spec.secrets, orch }),
+    }),
+  };
+}
+
 /** Executor for local shell workers (V1). */
 export class ShellExecutor implements Executor {
   readonly type = 'shell';
@@ -83,31 +116,44 @@ export class ShellExecutor implements Executor {
   };
 
   constructor(options: ShellExecutorOptions = {}) {
-    this.deps = {
-      clock: options.clock ?? systemClock,
-      timers: options.timers ?? systemTimers,
-      logger: options.logger ?? noopLogger,
-      baseEnv: options.baseEnv ?? process.env,
-      inspector: options.inspector ?? defaultProcessInspector(),
-      kill: options.kill ?? ((pid, signal) => process.kill(pid, signal)),
-      killConfirmMs: options.killConfirmMs ?? 5000,
-      stdioDrainMs: options.stdioDrainMs ?? 2000,
-      pollIntervalMs: options.pollIntervalMs ?? 25,
-      workspaceBaseDir: options.workspaceBaseDir,
-    };
+    this.deps = supervisorDeps(options);
   }
 
   async start(spec: ExecutionSpec): Promise<RunningProcess> {
-    const proc = new ShellProcess(spec, this.deps);
-    await proc.launch();
-    // Delivery starts on a later turn, after the caller had the chance to subscribe.
-    proc.openDelivery();
-    return proc;
+    return startSupervised(spec, this.deps, shellStrategy(spec, this.deps.baseEnv));
   }
 }
 
+/** Resolved dependencies of a supervised process. */
+export type SupervisorDeps = ShellExecutor['deps'];
+
+/** Resolve {@link ShellExecutorOptions} to {@link SupervisorDeps} (shared with the container executor). */
+export function supervisorDeps(options: ShellExecutorOptions = {}): SupervisorDeps {
+  return {
+    clock: options.clock ?? systemClock,
+    timers: options.timers ?? systemTimers,
+    logger: options.logger ?? noopLogger,
+    baseEnv: options.baseEnv ?? process.env,
+    inspector: options.inspector ?? defaultProcessInspector(),
+    kill: options.kill ?? ((pid, signal) => process.kill(pid, signal)),
+    killConfirmMs: options.killConfirmMs ?? 5000,
+    stdioDrainMs: options.stdioDrainMs ?? 2000,
+    pollIntervalMs: options.pollIntervalMs ?? 25,
+    workspaceBaseDir: options.workspaceBaseDir,
+  };
+}
+
+/** Start a supervised process with the given strategy (logs, events, timeouts, cancel, result file). */
+export async function startSupervised(spec: ExecutionSpec, deps: SupervisorDeps, strategy: LaunchStrategy): Promise<RunningProcess> {
+  const proc = new ShellProcess(spec, deps, strategy);
+  await proc.launch();
+  // Delivery starts on a later turn, after the caller had the chance to subscribe.
+  proc.openDelivery();
+  return proc;
+}
+
 type StopReason = 'cancel' | 'max_duration' | 'idle';
-type Deps = ShellExecutor['deps'];
+type Deps = SupervisorDeps;
 
 class ShellProcess implements RunningProcess {
   private readonly log: Logger;
@@ -142,8 +188,9 @@ class ShellProcess implements RunningProcess {
   constructor(
     private readonly spec: ExecutionSpec,
     private readonly deps: Deps,
+    private readonly strategy: LaunchStrategy,
   ) {
-    this.log = deps.logger.child({ component: 'shell-executor', runId: spec.runId });
+    this.log = deps.logger.child({ component: strategy.component, runId: spec.runId });
     this.dispatcher = new Dispatcher(this.log);
     this.outputs = new Channel(this.dispatcher, this.log);
     this.events = new Channel(this.dispatcher, this.log);
@@ -205,31 +252,30 @@ class ShellProcess implements RunningProcess {
 
   async launch(): Promise<void> {
     const spec = this.spec;
+    let launch: ReturnType<LaunchStrategy['process']>;
     try {
       await this.prepareFiles();
+      await this.strategy.prepare?.();
+      launch = this.strategy.process(
+        buildOrchEnv({
+          runId: spec.runId,
+          context: spec.context,
+          workflowId: spec.workflowId,
+          contextFile: spec.files.contextFile,
+          resultFile: spec.files.resultFile,
+          workspace: spec.workingDirectory,
+        }),
+      );
     } catch (err) {
       this.failStart(err);
       return;
     }
     this.captures = await this.openCaptures();
-
-    const env = buildWorkerEnv({
-      base: this.deps.baseEnv,
-      env: spec.env,
-      secrets: spec.secrets,
-      orch: buildOrchEnv({
-        runId: spec.runId,
-        context: spec.context,
-        workflowId: spec.workflowId,
-        contextFile: spec.files.contextFile,
-        resultFile: spec.files.resultFile,
-        workspace: spec.workingDirectory,
-      }),
-    });
+    const env = launch.env;
 
     let child: ChildProcess;
     try {
-      child = spawn(spec.command, [...spec.args], {
+      child = spawn(launch.command, launch.args, {
         cwd: spec.workingDirectory,
         env,
         detached: true,
@@ -415,9 +461,12 @@ class ShellProcess implements RunningProcess {
   // Termination
   // -------------------------------------------------------------------------
 
-  /** SIGTERM to the group, SIGKILL after `graceMs`, then confirm the group is gone. */
-  private terminate(graceMs: number): Promise<void> {
-    this.terminating ??= this.doTerminate(graceMs).catch((err: unknown) => {
+  /**
+   * Graceful strategy stop (container: `<engine> stop`) unless `direct`, then
+   * SIGTERM to the group, SIGKILL after `graceMs`, then confirm the group is gone.
+   */
+  private terminate(graceMs: number, direct = false): Promise<void> {
+    this.terminating ??= this.doTerminate(graceMs, direct).catch((err: unknown) => {
       // Allow a later cancel() to retry.
       this.terminating = undefined;
       throw err;
@@ -425,7 +474,12 @@ class ShellProcess implements RunningProcess {
     return this.terminating;
   }
 
-  private async doTerminate(graceMs: number): Promise<void> {
+  private async doTerminate(graceMs: number, direct: boolean): Promise<void> {
+    if (!direct && this.strategy.stop) {
+      await this.strategy.stop(graceMs);
+      if (await this.waitGone(this.strategy.stopSettleMs ?? this.deps.killConfirmMs)) return;
+      this.log.warn('process still running after the graceful stop; signalling its process group', { pgid: this._pid });
+    }
     this.signalGroup('SIGTERM');
     if (await this.waitGone(graceMs)) return;
     this.signalGroup('SIGKILL');
@@ -494,7 +548,7 @@ class ShellProcess implements RunningProcess {
         this.log.warn('worker exited but left processes in its group; terminating them', { pgid });
       }
       try {
-        await this.terminate(this.spec.cancelGraceMs);
+        await this.terminate(this.spec.cancelGraceMs, true);
       } catch {
         // Never report the execution as finished while the group is alive (Spec §13).
         while (await processGroupAlive(pgid, this.deps.inspector)) await this.delay(1000);
@@ -517,6 +571,7 @@ class ShellProcess implements RunningProcess {
     }
 
     await this.endCaptures();
+    if (this.strategy.afterExit) await this.strategy.afterExit(this.stopReason !== undefined || this.exitSignal !== null);
     const [stdout, stderr] = this.captures;
     const resultFile = await this.inspectResultFile();
     this.complete({

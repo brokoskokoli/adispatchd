@@ -9,6 +9,9 @@
  */
 import {
   outcomeOfHook,
+  type ContainerEngine,
+  type ContainerMountMode,
+  type ContainerPullPolicy,
   type FilterNode,
   type HookName,
   type ListHookName,
@@ -101,6 +104,12 @@ export interface NotificationsConfig {
   channels: readonly NotificationChannelConfig[];
 }
 
+/** Container executor defaults (`container:` in config.yaml, WI-19). */
+export interface ContainerDefaultsConfig {
+  /** Engine of `execute.type: container` without own `engine` (default `docker`). */
+  engine: ContainerEngine;
+}
+
 /** Content of `config.yaml`. */
 export interface GlobalConfig {
   server: ServerConfig;
@@ -109,6 +118,11 @@ export interface GlobalConfig {
   lifecycle: LifecycleConfig;
   retention: RetentionConfig;
   notifications: NotificationsConfig;
+  /**
+   * Container defaults (WI-19). Snapshots and configurations of older
+   * versions lack it: readers must treat `undefined` as `{ engine: 'docker' }`.
+   */
+  container: ContainerDefaultsConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -277,13 +291,9 @@ export interface SecretRef {
   delivery: SecretDelivery;
 }
 
-/** Main worker execution (Spec §5.4, §8.3, §9). */
-export interface ShellExecuteConfig {
-  type: 'shell';
-  command: string;
-  /** Argument templates (text mode). */
-  args: readonly string[];
-  /** Path template (default `{workspace.base_dir}/{workflow.id}/{run.id}`). */
+/** Settings shared by every executor type (workspace on the host, env, secrets, timeouts, keep). */
+interface ExecuteCommon {
+  /** Path template of the host workspace (default `{workspace.base_dir}/{workflow.id}/{run.id}`). */
   workingDirectory: string;
   /** Default true. */
   createDirectory: boolean;
@@ -307,8 +317,48 @@ export interface ShellExecuteConfig {
   keepMaxSizeBytes: number;
 }
 
-/** Execution configuration (V1: shell only). */
-export type ExecuteConfig = ShellExecuteConfig;
+/** Main worker execution as a local process (Spec §5.4, §8.3, §9). */
+export interface ShellExecuteConfig extends ExecuteCommon {
+  type: 'shell';
+  command: string;
+  /** Argument templates (text mode). */
+  args: readonly string[];
+}
+
+/**
+ * One bind mount of a container run (WI-19). `source` is either an absolute
+ * host path (relative paths are resolved against the config dir) or a
+ * template `{workspace.path}` / `{workspace.path}/<sub>` (host workspace).
+ */
+export interface ContainerMountConfig {
+  source: string;
+  /** Absolute, normalized path inside the container. */
+  target: string;
+  mode: ContainerMountMode;
+}
+
+/** Main worker execution in a throw-away container (WI-19). */
+export interface ContainerExecuteConfig extends ExecuteCommon {
+  type: 'container';
+  /** Resolved engine (`execute.engine`, else `container.engine` of config.yaml). */
+  engine: ContainerEngine;
+  image: string;
+  /** Command run in the container (templates, text mode); empty = the image's default command. */
+  command: readonly string[];
+  /** Working directory in the container; `null` = target of the workspace mount. */
+  workdir: string | null;
+  /** Mounts in configuration order (the workspace is added at `/work` if no mount uses `{workspace.path}`). */
+  mounts: readonly ContainerMountConfig[];
+  resources: { memory: string | null; cpus: number | null; pids: number | null };
+  /** `--user`; `null` = the daemon's own `<uid>:<gid>`. */
+  user: string | null;
+  /** `default` (engine default network), `none` or a network name. */
+  network: string;
+  pull: ContainerPullPolicy;
+}
+
+/** Execution configuration: local process (`shell`) or container (`container`, WI-19). */
+export type ExecuteConfig = ShellExecuteConfig | ContainerExecuteConfig;
 
 /** Shared properties of lifecycle actions. */
 interface ActionBase {

@@ -146,6 +146,11 @@ export class ConfigManager {
     return new ConfigManager(result.config, options);
   }
 
+  /** The data dir the configuration was loaded for (defaults, container instance label). */
+  get dataDir(): string {
+    return this.options.dataDir;
+  }
+
   /** The active configuration (immutable). */
   get current(): LoadedConfig {
     return this.active;

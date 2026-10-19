@@ -7,6 +7,7 @@ import { dataPaths, HOOK_NAMES, parseSize, resultHookName, type FilterNode, type
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssuePath } from './issues.js';
 import type {
+  ExecuteConfig,
   GlobalConfig,
   HooksConfig,
   IdentityConfig,
@@ -87,6 +88,7 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
         on: [...(channel.on ?? raw.notifications.on)],
       })),
     },
+    container: { engine: raw.container.engine },
   };
 }
 
@@ -196,6 +198,51 @@ function normalizeSecrets(raw: Readonly<Record<string, { identity: string; deliv
   return Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, { identity: v.identity, delivery: v.delivery }]));
 }
 
+/** Template prefix of mount sources that refer to the host workspace (WI-19). */
+const WORKSPACE_SOURCE = /^\{\s*workspace\.path\s*\}/;
+
+/** Normalize `execute` (shell or container). */
+function normalizeExecute(exec: RawWorkflow['execute'], global: GlobalConfig, configDir: string): ExecuteConfig {
+  const common = {
+    workingDirectory: exec.working_directory,
+    createDirectory: exec.create_directory,
+    env: { ...exec.env },
+    secrets: normalizeSecrets(exec.secrets),
+    timeout: {
+      maxDurationMs: exec.timeout.max_duration ?? null,
+      idleTimeoutMs: exec.timeout.idle_timeout ?? null,
+    },
+    cancelGraceMs: exec.cancel_grace,
+    keep: [...exec.keep],
+    keepMaxSizeBytes: exec.keep_max_size ?? parseSize(DEFAULTS.keepMaxSize),
+  };
+  if (exec.type === 'shell') {
+    return { type: 'shell', command: resolveCommand(configDir, exec.command), args: [...exec.args], ...common };
+  }
+  return {
+    type: 'container',
+    engine: exec.engine ?? global.container.engine,
+    image: exec.image,
+    command: [...exec.command],
+    workdir: exec.workdir ?? null,
+    mounts: exec.mounts.map((m) => ({
+      // `{workspace.path}` templates stay; static sources are resolved against the config dir.
+      source: WORKSPACE_SOURCE.test(m.source) || m.source.includes('{') ? m.source : resolveConfigPath(configDir, m.source),
+      target: m.target,
+      mode: m.mode,
+    })),
+    resources: {
+      memory: exec.resources.memory ?? null,
+      cpus: exec.resources.cpus ?? null,
+      pids: exec.resources.pids ?? null,
+    },
+    user: exec.user ?? null,
+    network: exec.network,
+    pull: exec.pull,
+    ...common,
+  };
+}
+
 /** Normalize one workflow file. */
 export function normalizeWorkflow(
   raw: RawWorkflow,
@@ -258,22 +305,7 @@ export function normalizeWorkflow(
       })),
     },
     parameters,
-    execute: {
-      type: exec.type,
-      command: resolveCommand(configDir, exec.command),
-      args: [...exec.args],
-      workingDirectory: exec.working_directory,
-      createDirectory: exec.create_directory,
-      env: { ...exec.env },
-      secrets: normalizeSecrets(exec.secrets),
-      timeout: {
-        maxDurationMs: exec.timeout.max_duration ?? null,
-        idleTimeoutMs: exec.timeout.idle_timeout ?? null,
-      },
-      cancelGraceMs: exec.cancel_grace,
-      keep: [...exec.keep],
-      keepMaxSizeBytes: exec.keep_max_size ?? parseSize(DEFAULTS.keepMaxSize),
-    },
+    execute: normalizeExecute(exec, global, configDir),
     retry: { maxTechnicalFailures: raw.retry.max_technical_failures },
     hooks: hooks as unknown as HooksConfig,
   };

@@ -4,9 +4,12 @@
  * parameter defaults. Runs on the normalized model; paths in issues use the
  * YAML key names.
  */
+import { statSync } from 'node:fs';
 import path from 'node:path';
 import { Cron } from 'croner';
 import {
+  CONTAINER_PATHS,
+  CONTAINER_RESERVED_ENV_NAMES,
   extractPlaceholders,
   isSecretKey,
   keepPatternError,
@@ -24,6 +27,7 @@ import { formatIssuePath, type IssueCollector, type IssuePath } from './issues.j
 import {
   configuredHooks,
   resultHookOutcomes,
+  type ContainerExecuteConfig,
   type GlobalConfig,
   type IdentityConfig,
   type LifecycleActionConfig,
@@ -335,7 +339,12 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
     issues.error(file, ['execute', 'working_directory'], 'Must be absolute: start with "/" or "{workspace.base_dir}"');
   }
   const runScope: TemplateScope = { run: true, workspace: true, source: isSource, parameters: parameterNames };
-  exec.args.forEach((arg, i) => checkTemplate(arg, 'text', runScope, issues, file, ['execute', 'args', i]));
+  if (exec.type === 'shell') {
+    exec.args.forEach((arg, i) => checkTemplate(arg, 'text', runScope, issues, file, ['execute', 'args', i]));
+  } else {
+    exec.command.forEach((arg, i) => checkTemplate(arg, 'text', runScope, issues, file, ['execute', 'command', i]));
+    validateContainer(exec, issues, file);
+  }
   for (const [name, value] of Object.entries(exec.env)) {
     checkTemplate(value, 'text', runScope, issues, file, ['execute', 'env', name]);
   }
@@ -394,8 +403,98 @@ function validateHookRouting(wf: WorkflowConfig, issues: IssueCollector, file: s
 
 /** True if the executor of `execute` reads a worker result file (WI-17: needed for `on_result`). */
 function hasResultFile(execute: WorkflowConfig['execute']): boolean {
-  return execute.type === 'shell';
+  return execute.type === 'shell' || execute.type === 'container';
 }
+
+/** `{workspace.path}` alone or followed by `/<sub>` (the only template allowed in mount sources). */
+const WORKSPACE_MOUNT_SOURCE = /^\{\s*workspace\.path\s*\}(\/.*)?$/;
+
+/** Characters that would break the engine's `--mount type=bind,source=…,target=…` syntax. */
+const UNSAFE_MOUNT_CHARS = /[,"\n\r\0]/;
+
+/**
+ * Problem with a path inside the container (mount `target`, `workdir`), or
+ * `undefined`: absolute, normalized, not `/`, not the reserved `/adispatch` tree.
+ */
+export function containerPathError(p: string): string | undefined {
+  if (!p.startsWith('/')) return 'Must be an absolute path inside the container (start with "/")';
+  if (UNSAFE_MOUNT_CHARS.test(p)) return 'Must not contain commas, double quotes, line breaks or NUL';
+  const normalized = path.posix.normalize(p).replace(/(.)\/$/, '$1');
+  if (normalized !== p) return `Must be a normalized path ("${normalized}")`;
+  if (p === '/') return 'Must not be "/"';
+  if (p === CONTAINER_PATHS.root || p.startsWith(`${CONTAINER_PATHS.root}/`)) {
+    return `"${CONTAINER_PATHS.root}" is reserved for the daemon's own mounts (context, result, token files)`;
+  }
+  return undefined;
+}
+
+/**
+ * Checks of `execute.type: container` (WI-19): mount sources exist (static
+ * sources, resolved against the config dir) or use only `{workspace.path}`;
+ * targets are absolute, normalized, unique and outside `/adispatch`; secrets
+ * must not use names of the engine process environment. The engine binary is
+ * not checked here (offline validation) but when the daemon starts.
+ */
+function validateContainer(exec: ContainerExecuteConfig, issues: IssueCollector, file: string): void {
+  const targets = new Map<string, number>();
+  let workspaceMounted = false;
+  exec.mounts.forEach((mount, i) => {
+    const at: IssuePath = ['execute', 'mounts', i];
+    const source = mount.source;
+    if (UNSAFE_MOUNT_CHARS.test(source)) {
+      issues.error(file, [...at, 'source'], 'Must not contain commas, double quotes, line breaks or NUL');
+    } else if (source.includes('{') || source.includes('}')) {
+      const match = WORKSPACE_MOUNT_SOURCE.exec(source);
+      const sub = match?.[1] ?? '';
+      if (!match || sub.includes('{') || sub.includes('}')) {
+        issues.error(file, [...at, 'source'], 'Only "{workspace.path}" (optionally followed by "/<path>") is allowed as template in a mount source');
+      } else if (sub.split('/').includes('..')) {
+        issues.error(file, [...at, 'source'], 'Must not contain ".." (the mount must stay inside the workspace)');
+      } else if (sub === '' || sub === '/') {
+        workspaceMounted = true;
+      }
+    } else {
+      try {
+        statSync(source);
+      } catch {
+        issues.error(file, [...at, 'source'], `Mount source does not exist: ${source}`);
+      }
+    }
+    const targetError = containerPathError(mount.target);
+    if (targetError) {
+      issues.error(file, [...at, 'target'], targetError);
+      return;
+    }
+    const previous = targets.get(mount.target);
+    if (previous !== undefined) {
+      issues.error(file, [...at, 'target'], `Duplicate mount target "${mount.target}" (also used by mounts[${previous}])`);
+    } else {
+      targets.set(mount.target, i);
+    }
+  });
+  const autoTarget = targets.get(CONTAINER_PATHS.workspace);
+  if (!workspaceMounted && autoTarget !== undefined) {
+    issues.error(
+      file,
+      ['execute', 'mounts', autoTarget, 'target'],
+      `"${CONTAINER_PATHS.workspace}" is the target of the automatic workspace mount; mount "{workspace.path}" explicitly or use another target`,
+    );
+  }
+  if (exec.workdir !== null) {
+    const error = containerPathError(exec.workdir);
+    if (error) issues.error(file, ['execute', 'workdir'], error);
+  }
+  for (const name of Object.keys(exec.secrets)) {
+    if (CONTAINER_RESERVED_ENV_NAMES.includes(name)) {
+      issues.error(
+        file,
+        ['execute', 'secrets', name],
+        `"${name}" belongs to the environment of the container engine process and cannot be a secret of a container run`,
+      );
+    }
+  }
+}
+
 
 function safePlaceholders(template: string): string[] {
   try {

@@ -11,6 +11,9 @@
 import { z } from 'zod';
 import {
   CONFIG_ID_PATTERN,
+  CONTAINER_ENGINES,
+  CONTAINER_MOUNT_MODES,
+  CONTAINER_PULL_POLICIES,
   HOOK_NAMES,
   NOTIFICATION_EVENT_TYPES,
   parseDuration,
@@ -50,6 +53,9 @@ export const DEFAULTS = {
   cancelGrace: '30s',
   keepMaxSize: '100MB',
   scheduleTimezone: 'UTC',
+  containerEngine: 'docker',
+  containerPull: 'missing',
+  containerNetwork: 'default',
 } as const;
 
 const configId = z
@@ -180,6 +186,12 @@ export const globalConfigSchema = z.strictObject({
     .strictObject({
       on: z.array(notificationEvent).default([...NOTIFICATION_EVENT_TYPES]),
       channels: z.array(z.discriminatedUnion('type', [webhookChannelSchema])).default([]),
+    })
+    .prefault({}),
+  /** Container executor defaults (WI-19). */
+  container: z
+    .strictObject({
+      engine: z.enum(CONTAINER_ENGINES).default(DEFAULTS.containerEngine),
     })
     .prefault({}),
 });
@@ -314,25 +326,83 @@ const parameterSchema = z.discriminatedUnion('type', [
 /** Parsed parameter definition (default still unchecked; see validate.ts). */
 export type RawParameter = z.output<typeof parameterSchema>;
 
+/** Settings of `execute` shared by `shell` and `container`. */
+const executeCommon = {
+  working_directory: nonEmpty.default(DEFAULT_WORKING_DIRECTORY),
+  create_directory: z.boolean().default(true),
+  env: envMap,
+  secrets: secretsMap,
+  timeout: z
+    .strictObject({
+      max_duration: positiveDuration.optional(),
+      idle_timeout: positiveDuration.optional(),
+    })
+    .default({}),
+  cancel_grace: durationSchema.default(parseDuration(DEFAULTS.cancelGrace)),
+  // Patterns are checked in validate.ts (path + message per entry).
+  keep: z.array(z.string('Expected a pattern such as .agent/*.log')).default([]),
+  keep_max_size: positiveSize.optional(),
+};
+
+/** Memory limit as understood by docker/podman (`512m`, `8g`, `1.5g`, bytes without unit). */
+export const CONTAINER_MEMORY_PATTERN = /^[0-9]+(\.[0-9]+)?[bkmgBKMG]?$/;
+/** Container user: `name`, `uid`, `name:group` or `uid:gid`. */
+export const CONTAINER_USER_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9_.-]*(:[A-Za-z0-9_][A-Za-z0-9_.-]*)?$/;
+/** Container network name (`default` and `none` are special). */
+export const CONTAINER_NETWORK_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/;
+
+const containerMountSchema = z.strictObject({
+  source: nonEmpty,
+  target: nonEmpty,
+  mode: z.enum(CONTAINER_MOUNT_MODES),
+});
+
+/** Positive number of CPUs; numeric strings (`"1.5"`) are accepted. */
+const cpusSchema = z.union([z.number(), z.string()], 'Expected a number of CPUs such as 2 or 1.5').transform((value, ctx) => {
+  const n = typeof value === 'number' ? value : value.trim() === '' ? Number.NaN : Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    ctx.addIssue({ code: 'custom', message: 'Must be a number of CPUs greater than 0 (e.g. 2 or 1.5)' });
+    return z.NEVER;
+  }
+  return n;
+});
+
 const executeSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('shell'),
     command: nonEmpty,
     args: stringList,
-    working_directory: nonEmpty.default(DEFAULT_WORKING_DIRECTORY),
-    create_directory: z.boolean().default(true),
-    env: envMap,
-    secrets: secretsMap,
-    timeout: z
+    ...executeCommon,
+  }),
+  z.strictObject({
+    type: z.literal('container'),
+    engine: z.enum(CONTAINER_ENGINES).optional(),
+    image: nonEmpty.regex(/^[^\s-][^\s]*$/, 'Invalid image reference (no whitespace, must not start with "-")'),
+    command: stringList,
+    workdir: nonEmpty.optional(),
+    mounts: z.array(containerMountSchema).default([]),
+    resources: z
       .strictObject({
-        max_duration: positiveDuration.optional(),
-        idle_timeout: positiveDuration.optional(),
+        memory: z
+          .union([z.string(), z.number()], 'Expected a memory size such as 512m or 8g')
+          .transform(String)
+          .refine((v) => CONTAINER_MEMORY_PATTERN.test(v), 'Invalid memory size (expected e.g. 512m, 8g, 1.5g)')
+          .optional(),
+        cpus: cpusSchema.optional(),
+        pids: positiveInt.optional(),
       })
       .default({}),
-    cancel_grace: durationSchema.default(parseDuration(DEFAULTS.cancelGrace)),
-    // Patterns are checked in validate.ts (path + message per entry).
-    keep: z.array(z.string('Expected a pattern such as .agent/*.log')).default([]),
-    keep_max_size: positiveSize.optional(),
+    user: z
+      .union([z.string(), z.number()], 'Expected a user such as "1000:1000"')
+      .transform(String)
+      .refine((v) => CONTAINER_USER_PATTERN.test(v), 'Invalid user (expected "name", "uid", "name:group" or "uid:gid")')
+      .optional(),
+    network: z
+      .string()
+      .regex(CONTAINER_NETWORK_PATTERN, 'Invalid network (expected "default", "none" or a network name)')
+      .default(DEFAULTS.containerNetwork),
+    pull: z.enum(CONTAINER_PULL_POLICIES).default(DEFAULTS.containerPull),
+    ...executeCommon,
   }),
 ]);
 

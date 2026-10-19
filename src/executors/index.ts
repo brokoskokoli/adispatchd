@@ -4,6 +4,19 @@
  * Other components import from this module only.
  */
 export { ShellExecutor, type ShellExecutorOptions } from './shell-executor.js';
+export {
+  ContainerExecutor,
+  buildContainerInvocation,
+  describeContainerExecute,
+  type ContainerExecutorOptions,
+  type ContainerInvocation,
+} from './container-executor.js';
+export {
+  ContainerEngineClient,
+  ContainerEngineError,
+  type ContainerEngineClientOptions,
+  type EngineCommandResult,
+} from './container-engine.js';
 export { classifyOutcome } from './classify.js';
 export {
   checkProcessIdentity,

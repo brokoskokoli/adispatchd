@@ -121,6 +121,8 @@ export interface RunPaths {
   resultFile: string;
   /** `runs/<run-id>/kept/`: files kept from the workspace (`execute.keep`, WI-22) */
   keptDir: string;
+  /** `runs/<run-id>/out/`: output directory of a container run (WI-19), holds its `result.json` */
+  outDir: string;
   /** `logs/<run-id>/` */
   logDir: string;
   /** `logs/<run-id>/stdout.log` */
@@ -170,6 +172,7 @@ export function dataPaths(dataDir: string): DataPaths {
         contextFile: path.join(runDir, 'context.json'),
         resultFile: path.join(runDir, 'result.json'),
         keptDir: path.join(runDir, 'kept'),
+        outDir: path.join(runDir, 'out'),
         logDir,
         stdoutLog: path.join(logDir, 'stdout.log'),
         stderrLog: path.join(logDir, 'stderr.log'),

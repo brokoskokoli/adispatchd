@@ -3,6 +3,7 @@
  * small pure helpers. Other components import core only via this module.
  */
 export * from './clock.js';
+export * from './container.js';
 export * from './duration.js';
 export * from './errors.js';
 export * from './glob.js';

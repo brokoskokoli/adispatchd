@@ -5,6 +5,7 @@
  * owning components (sources, executors, identities, persistence, ...).
  */
 import type { Clock } from './clock.js';
+import type { ContainerExecution } from './container.js';
 import { CONFIG_ID_PATTERN } from './ids.js';
 import type { Logger } from './logger.js';
 import type { WorkerContext, WorkerResult } from './worker-protocol.js';
@@ -693,6 +694,14 @@ export interface ExecutionSpec {
    * `max_log_size_per_run`); beyond that a truncation diagnostic naming the stream is emitted.
    */
   maxLogBytes?: number;
+  /**
+   * Token files (`delivery: file`, WI-18) written for this execution: their
+   * directory and the `<NAME>_FILE` variables (host paths, also part of `env`).
+   * The container executor mounts the directory and rewrites the variables.
+   */
+  tokenFiles?: { dir: string; env: Readonly<Record<string, string>> };
+  /** Container execution (WI-19); set only for `execute.type: container`. */
+  container?: ContainerExecution;
 }
 
 /** A growing set of secret values to redact (see {@link ExecutionSpec.redactSecrets}). */
@@ -802,4 +811,9 @@ export interface Executor {
    * `ExecutionOutcome.spawnError` from `wait()`.
    */
   start(spec: ExecutionSpec): Promise<RunningProcess>;
+  /**
+   * The exact command line `start` would spawn for `spec` (persisted as the
+   * run's command; never contains secret values). Default: `command` + `args`.
+   */
+  describe?(spec: ExecutionSpec): { command: string; args: string[] };
 }
