@@ -32,8 +32,11 @@ export type TemplateMode = 'text' | 'path';
  * - `source`: only for source-bound runs (source trigger or manual with item)
  * - `result`: only in completion hooks (`on_success`, `on_failure`, ...)
  * - `parameters`: declared manual-start parameters, `{parameters.<name>}`
+ * - `linked`: work branch / PR of the item (WI-21, GitHub). Expensive: the
+ *   caller resolves them right before rendering (run start, action attempt);
+ *   only in `execute` and lifecycle actions of source-bound workflows.
  */
-export type PlaceholderGroup = 'always' | 'run' | 'workspace' | 'source' | 'result' | 'parameters';
+export type PlaceholderGroup = 'always' | 'run' | 'workspace' | 'source' | 'result' | 'parameters' | 'linked';
 
 /** Definition of a whitelisted placeholder. */
 export interface PlaceholderDefinition {
@@ -62,10 +65,44 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'item.key', group: 'source', description: 'Global item key <source>:<item>' },
   { name: 'item.url', group: 'source', description: 'Item URL' },
   { name: 'item.title', group: 'source', description: 'Item title' },
+  { name: 'item.work_branch', group: 'linked', description: 'Work branch of the item (field work_branch, GitHub); empty if none' },
+  { name: 'item.work_pr', group: 'linked', description: 'Number of the open PR of the item (field work_pr, GitHub); empty if none' },
   { name: 'result.status', group: 'result', description: 'Technical final status' },
   { name: 'result.result', group: 'result', description: 'Business result (success|failure|empty)' },
   { name: 'result.message', group: 'result', description: 'Message from the worker result file' },
 ];
+
+/**
+ * Placeholders of the `linked` group → the (expensive) item field that
+ * provides the value. Callers resolve these fields before rendering and fail
+ * (never render an empty string) when a used field is unknown.
+ */
+export const LINKED_PLACEHOLDER_FIELDS: Readonly<Record<string, string>> = {
+  'item.work_branch': 'work_branch',
+  'item.work_pr': 'work_pr',
+};
+
+/**
+ * Item fields (by name) behind the `linked` placeholders used in `templates`,
+ * in order of first use. Templates with syntax errors are skipped (they fail
+ * on rendering anyway).
+ */
+export function linkedFieldsUsed(templates: Iterable<string>): string[] {
+  const out: string[] = [];
+  for (const template of templates) {
+    let names: string[];
+    try {
+      names = extractPlaceholders(template);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      const field = Object.hasOwn(LINKED_PLACEHOLDER_FIELDS, name) ? LINKED_PLACEHOLDER_FIELDS[name] : undefined;
+      if (field !== undefined && !out.includes(field)) out.push(field);
+    }
+  }
+  return out;
+}
 
 /** Prefix of parameter placeholders: `{parameters.<name>}`. */
 export const PARAMETER_PLACEHOLDER_PREFIX = 'parameters.';
@@ -161,12 +198,14 @@ export interface TemplateScope {
   workspace?: boolean;
   source?: boolean;
   result?: boolean;
+  /** `{item.work_branch}` / `{item.work_pr}` (WI-21). */
+  linked?: boolean;
   /** Declared parameter names usable as `{parameters.<name>}`. */
   parameters?: readonly string[];
 }
 
 /** Scope with every group enabled (parameters: none). */
-export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true };
+export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true, linked: true };
 
 /** True if `name` is on the whitelist (parameters: any syntactically valid name). */
 export function isKnownPlaceholder(name: string): boolean {
@@ -319,7 +358,17 @@ export interface TemplateInput {
   workspace?: { baseDir?: string; path?: string };
   run?: { id: string; trigger?: TriggerType; startedAt?: Date };
   source?: { id: string; type: string; repository?: string };
-  item?: { id: string; key?: string; number?: number | string; url?: string; title?: string };
+  item?: {
+    id: string;
+    key?: string;
+    number?: number | string;
+    url?: string;
+    title?: string;
+    /** Resolved `work_branch` (`null` = none); omit when not resolved. */
+    workBranch?: string | null;
+    /** Resolved `work_pr` (`null` = none); omit when not resolved. */
+    workPr?: number | null;
+  };
   result?: { status?: TerminalStatus; result?: BusinessResult; message?: string };
   parameters?: Readonly<Record<string, string | number | boolean>>;
   /** Time used for `{timestamp}`. */
@@ -345,6 +394,8 @@ export function buildTemplateValues(input: TemplateInput): TemplateValues {
     'item.number': input.item?.number,
     'item.url': input.item?.url,
     'item.title': input.item?.title,
+    'item.work_branch': input.item?.workBranch,
+    'item.work_pr': input.item?.workPr,
     'result.status': input.result?.status,
     'result.result': input.result?.result ?? undefined,
     'result.message': input.result?.message,

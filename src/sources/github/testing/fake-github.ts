@@ -19,11 +19,15 @@
  *   (WI-16), and the mutations `addProjectV2ItemById`,
  *   `updateProjectV2ItemFieldValue` and `clearProjectV2ItemFieldValue`. Field
  *   names are taken from the variables `$f<i>` bound to the aliases `f<i>`;
- *   mutation inputs only from variables.
+ *   mutation inputs only from variables. Also `repository { issueOrPullRequest
+ *   }` with `linkedBranches` / `closedByPullRequestsReferences` of an issue or
+ *   `headRefName`/`state` of a PR (WI-21), with `owner`/`name`/`number` taken
+ *   from the variables only.
  *
  * Fault injection: {@link FakeGitHub.failNext}; access control:
  * {@link FakeGitHub.restrictRepo}, {@link FakeGitHub.denyDependencies},
- * {@link FakeGitHub.denyProject}, {@link FakeGitHub.denyProjectWrites}.
+ * {@link FakeGitHub.denyProject}, {@link FakeGitHub.denyProjectWrites},
+ * {@link FakeGitHub.denyLinked}.
  */
 import { createPublicKey, generateKeyPairSync, randomBytes, verify, type KeyObject } from 'node:crypto';
 import { systemClock, type AccessToken, type Clock, type CredentialProvider, type FetchLike } from '../../../core/index.js';
@@ -43,6 +47,14 @@ export interface FakeIssueInit {
   /** Issue type name (`type.name`). */
   issueType?: string;
   stateReason?: string;
+  /** PRs: head branch (default `pr-<number>`). */
+  headRef?: string;
+  /** PRs: draft. */
+  isDraft?: boolean;
+  /** PRs: numbers of issues in the same repository this PR closes ("Closes #n"). */
+  closes?: number[];
+  /** PRs: head branch lives in a fork (`isCrossRepository`). */
+  crossRepository?: boolean;
 }
 
 /** Stored issue / pull request. Mutate via the helper methods. */
@@ -66,6 +78,15 @@ export interface FakeIssue {
   milestone: string | null;
   issueType: string | null;
   stateReason: string | null;
+  /** PRs: head branch. */
+  headRef: string | null;
+  isDraft: boolean;
+  merged: boolean;
+  crossRepository: boolean;
+  /** PRs: issues this PR closes. */
+  closes: Array<{ repo: string; number: number }>;
+  /** Issues: branches linked under "Development". */
+  linkedBranches: Array<{ repo: string; name: string }>;
 }
 
 /** `dataType` of a fake project field (as in GitHub's `ProjectV2FieldType`). */
@@ -226,6 +247,9 @@ export class FakeGitHub {
   private readonly ownerTypes = new Map<string, 'User' | 'Organization'>();
   private readonly deniedProjects = new Set<string>();
   private readonly deniedProjectWrites = new Set<string>();
+  private readonly deniedLinked = new Set<string>();
+  /** Deleted branches as `repo:name`. */
+  private readonly deletedBranches = new Set<string>();
   private faults: Fault[] = [];
   private nextId = 1000;
   private nextCommentId = 5000;
@@ -266,6 +290,12 @@ export class FakeGitHub {
       milestone: init.milestone ?? null,
       issueType: init.issueType ?? null,
       stateReason: init.stateReason ?? null,
+      headRef: init.isPullRequest ? (init.headRef ?? `pr-${number}`) : null,
+      isDraft: init.isDraft ?? false,
+      merged: false,
+      crossRepository: init.crossRepository ?? false,
+      closes: (init.closes ?? []).map((n) => ({ repo: normalizeRepo(repo), number: n })),
+      linkedBranches: [],
     };
     issue.nodeId = `${issue.isPullRequest ? 'PR' : 'I'}_kw${issue.id}`;
     issues.set(number, issue);
@@ -309,6 +339,41 @@ export class FakeGitHub {
   removeBlockedBy(repo: string, number: number, blockerRepo: string, blockerNumber: number): void {
     const issue = this.touch(this.issue(repo, number));
     issue.blockedBy = issue.blockedBy.filter((b) => !(b.repo === normalizeRepo(blockerRepo) && b.number === blockerNumber));
+  }
+
+  /** Open a pull request in `repo` (`isPullRequest` with head ref, optional "Closes #n"). */
+  openPullRequest(repo: string, init: FakeIssueInit & { headRef: string }): FakeIssue {
+    return this.createIssue(repo, { ...init, isPullRequest: true });
+  }
+
+  /** Merge a PR (closed + merged). The issues it closes are left unchanged (close them explicitly if needed). */
+  mergePullRequest(repo: string, number: number): void {
+    const pr = this.touch(this.issue(repo, number));
+    if (!pr.isPullRequest) throw new Error(`${repo}#${number} is not a pull request`);
+    pr.state = 'closed';
+    pr.merged = true;
+  }
+
+  /** Let PR `prRepo#prNumber` close `repo#number` (cross-repository closing references). */
+  addClosingReference(prRepo: string, prNumber: number, repo: string, number: number): void {
+    this.issue(repo, number); // must exist
+    this.touch(this.issue(prRepo, prNumber)).closes.push({ repo: normalizeRepo(repo), number });
+  }
+
+  /** Link a branch to an issue ("Development"); `branchRepo` defaults to the issue's repository. */
+  linkBranch(repo: string, number: number, name: string, branchRepo: string = repo): void {
+    this.touch(this.issue(repo, number)).linkedBranches.push({ repo: normalizeRepo(branchRepo), name });
+    this.deletedBranches.delete(`${normalizeRepo(branchRepo)}:${name}`);
+  }
+
+  /** Delete a branch: links to it stay, but their `ref` is `null` (as on GitHub). */
+  deleteBranch(repo: string, name: string): void {
+    this.deletedBranches.add(`${normalizeRepo(repo)}:${name}`);
+  }
+
+  /** Answer the linked-branch query of one issue (or of all of `repo`) with a FORBIDDEN partial error. */
+  denyLinked(repo: string, number?: number): void {
+    this.deniedLinked.add(number === undefined ? normalizeRepo(repo) : `${normalizeRepo(repo)}#${number}`);
   }
 
   /** Comments of an issue (in creation order). */
@@ -672,6 +737,7 @@ export class FakeGitHub {
     const variables = (body.variables && typeof body.variables === 'object' ? body.variables : {}) as Record<string, unknown>;
     if (/^\s*mutation\b/.test(query)) return this.graphqlMutation(query, variables, auth);
     if (query.includes('repositoryOwner(')) return this.graphqlMetadata(variables, auth);
+    if (query.includes('issueOrPullRequest(')) return this.graphqlIssueOrPullRequest(query, variables);
     if (query.includes('nodes(ids:')) return this.graphqlNodes(query, variables, auth);
     if (query.includes('node(id:')) return this.graphqlNode(query, variables, auth);
     return json(200, { errors: [{ message: 'Unsupported query in FakeGitHub' }] });
@@ -796,6 +862,70 @@ export class FakeGitHub {
       },
     };
     return json(200, { data: { node }, ...(errors.length > 0 ? { errors } : {}) });
+  }
+
+  /** `repository(owner:, name:) { issueOrPullRequest(number:) { … } }` (WI-21); arguments from the variables only. */
+  private graphqlIssueOrPullRequest(query: string, variables: Record<string, unknown>): Response {
+    const repo = `${String(variables.owner ?? '')}/${String(variables.name ?? '')}`.toLowerCase();
+    if (this.restricted.has(repo) || !this.repos.has(repo)) {
+      return json(200, {
+        data: { repository: null },
+        errors: [{ type: 'NOT_FOUND', path: ['repository'], message: `Could not resolve to a Repository with the name '${repo}'.` }],
+      });
+    }
+    const issue = this.repoIssues(repo).get(Number(variables.number));
+    if (!issue) {
+      return json(200, {
+        data: { repository: { issueOrPullRequest: null } },
+        errors: [{ type: 'NOT_FOUND', path: ['repository', 'issueOrPullRequest'], message: 'Could not resolve to an issue or pull request.' }],
+      });
+    }
+    if (issue.isPullRequest) return json(200, { data: { repository: { issueOrPullRequest: this.pullRequestJson(issue) } } });
+    const firstOf = (field: string): number => Number(new RegExp(`${field}\\(first: (\\d+)`).exec(query)?.[1] ?? 20);
+    const links = issue.linkedBranches.map((b) => ({
+      ref: this.deletedBranches.has(`${b.repo}:${b.name}`) ? null : { name: b.name, repository: { nameWithOwner: b.repo } },
+    }));
+    const closing = [...this.repos.values()]
+      .flatMap((issues) => [...issues.values()])
+      .filter((pr) => pr.isPullRequest && pr.closes.some((c) => c.repo === issue.repo && c.number === issue.number))
+      .sort((a, b) => a.id - b.id)
+      .map((pr) => this.pullRequestJson(pr));
+    const denied = this.deniedLinked.has(repo) || this.deniedLinked.has(`${repo}#${issue.number}`);
+    const node = {
+      __typename: 'Issue',
+      linkedBranches: { totalCount: links.length, nodes: links.slice(0, firstOf('linkedBranches')) },
+      closedByPullRequestsReferences: denied
+        ? null
+        : { totalCount: closing.length, nodes: closing.slice(0, firstOf('closedByPullRequestsReferences')) },
+    };
+    return json(200, {
+      data: { repository: { issueOrPullRequest: node } },
+      ...(denied
+        ? {
+            errors: [
+              {
+                type: 'FORBIDDEN',
+                path: ['repository', 'issueOrPullRequest', 'closedByPullRequestsReferences'],
+                message: 'Resource not accessible by integration',
+              },
+            ],
+          }
+        : {}),
+    });
+  }
+
+  private pullRequestJson(pr: FakeIssue): Record<string, unknown> {
+    return {
+      __typename: 'PullRequest',
+      number: pr.number,
+      state: pr.merged ? 'MERGED' : pr.state === 'open' ? 'OPEN' : 'CLOSED',
+      merged: pr.merged,
+      isDraft: pr.isDraft,
+      headRefName: pr.headRef,
+      url: `${this.webBaseUrl}/${pr.repo}/pull/${pr.number}`,
+      isCrossRepository: pr.crossRepository,
+      repository: { nameWithOwner: pr.repo },
+    };
   }
 
   /** The three project mutations; inputs are read from the variables only. */

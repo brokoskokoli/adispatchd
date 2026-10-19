@@ -270,11 +270,18 @@ export function isFilterPredicate(node: FilterNode): node is FilterPredicate {
   return 'field' in node && 'operator' in node;
 }
 
-/** Field value types. `date` values are ISO-8601 strings. */
-export type FieldType = 'string' | 'number' | 'boolean' | 'date' | 'string[]';
+/**
+ * Field value types. `date` values are ISO-8601 strings. `object[]` fields
+ * (e.g. GitHub `closing_prs`) carry lists of flat objects; they are shown in
+ * views and worker contexts but cannot be used in filters (no operators).
+ */
+export type FieldType = 'string' | 'number' | 'boolean' | 'date' | 'string[]' | 'object[]';
+
+/** One element of an `object[]` field value: a flat record of scalars. */
+export type FieldObject = Readonly<Record<string, string | number | boolean | null>>;
 
 /** Runtime value of a field. `date` fields carry ISO-8601 strings; absent values are `null`. */
-export type FieldValue = string | number | boolean | null | readonly string[];
+export type FieldValue = string | number | boolean | null | readonly string[] | readonly FieldObject[];
 
 /** Field declared by a source adapter (Spec §17). */
 export interface FieldDefinition {
@@ -303,6 +310,11 @@ export interface FieldDefinition {
    * which GitHub itself treats case-insensitively).
    */
   caseInsensitive?: boolean;
+  /**
+   * Hint appended to the validation error when the field is used in a filter
+   * although it has no operators (e.g. `object[]` fields: which field to use instead).
+   */
+  filterHint?: string;
 }
 
 /**
@@ -316,6 +328,7 @@ export const OPERATORS_BY_TYPE: Readonly<Record<FieldType, readonly FilterOperat
   boolean: ['equals', 'not_equals'],
   date: ['equals', 'not_equals', 'greater_than', 'less_than'],
   'string[]': ['contains', 'in'],
+  'object[]': [],
 };
 
 /**

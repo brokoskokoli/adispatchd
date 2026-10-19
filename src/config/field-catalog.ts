@@ -164,6 +164,7 @@ const SCALAR_TYPE: Record<FieldType, 'string' | 'number' | 'boolean'> = {
   boolean: 'boolean',
   date: 'string',
   'string[]': 'string',
+  'object[]': 'string', // never reached: object[] fields have no operators
 };
 
 function describeValue(v: unknown): string {
@@ -253,6 +254,13 @@ export function checkFilterFields(node: FilterNode, ctx: FieldContext, options: 
       return;
     }
     const def = defs.find((d) => d.name === p.field) as FieldDefinition;
+    if (def.operators.length === 0) {
+      issues.push({
+        path: [...at, 'field'],
+        message: `Field "${p.field}" (type ${def.type}) cannot be used in filters${def.filterHint ? `; ${def.filterHint}` : ''}`,
+      });
+      return;
+    }
     if (!def.operators.includes(p.operator)) {
       issues.push({
         path: [...at, 'operator'],
