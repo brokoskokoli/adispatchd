@@ -4,15 +4,17 @@
  * `stats` / `inspect` output. All pure, never throwing.
  */
 
-/** One process of a `ps -A -o pid=,ppid=,pgid=,time=,rss=,comm=` listing. */
+/** One process of a `ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=` listing. */
 export interface PsProcess {
   pid: number;
   ppid: number;
   pgid: number;
+  /** Elapsed time since the process started, in seconds (1-s resolution). */
+  elapsedSeconds: number;
   /** Accumulated CPU time in seconds. */
   cpuSeconds: number;
   rssBytes: number;
-  /** Command name only (basename of `comm`, shortened) – never arguments. */
+  /** Command name only (accounting name, shortened) – never arguments. */
   name: string;
 }
 
@@ -20,9 +22,9 @@ export interface PsProcess {
 export const MAX_PROCESS_NAME_LENGTH = 48;
 
 /**
- * Parse the cumulative CPU time of `ps -o time`:
- * macOS `MM:SS.cc` (minutes may exceed 59) or `H:MM:SS.cc`, Linux `HH:MM:SS`
- * or `D-HH:MM:SS`. Returns seconds or `null` if the value is malformed.
+ * Parse a `ps` duration: CPU time (`time`: macOS `MM:SS.cc` – minutes may
+ * exceed 59 – or `H:MM:SS.cc`, Linux `HH:MM:SS` or `D-HH:MM:SS`) and elapsed
+ * time (`etime`: `[[DD-]HH:]MM:SS`). Returns seconds or `null` if malformed.
  */
 export function parseCpuTime(value: string): number | null {
   const m = /^(?:(\d+)-)?(\d+(?::\d+){0,2})(?:[.,](\d+))?$/.exec(value.trim());
@@ -38,40 +40,47 @@ export function parseCpuTime(value: string): number | null {
 }
 
 /**
- * Display name of a process from `comm`: basename of an absolute path (macOS
- * reports the executable path), control characters removed, shortened. `comm` never
- * contains arguments; nothing after the name is taken.
+ * Display name of a process from `ucomm` (the kernel's accounting name, not
+ * the rewritable `argv[0]`). Defence in depth against names that still carry
+ * arguments: an absolute path is reduced to its basename, any other value is
+ * cut at the first whitespace. Control characters are removed; the result is
+ * shortened. Residual on Linux: a process can set its task name itself
+ * (`prctl(PR_SET_NAME)`, max. 15 bytes) – that text is shown up to the first blank.
  */
 export function processName(comm: string): string {
-  let name = comm.trim();
-  // macOS reports the executable path; Linux task names may contain "/" themselves (e.g. kworker/0:1).
-  const slash = name.lastIndexOf('/');
-  if (name.startsWith('/') && slash < name.length - 1) name = name.slice(slash + 1);
   // eslint-disable-next-line no-control-regex
-  name = name.replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  let name = comm.replace(/[\u0000-\u001f\u007f]/g, ' ').trim();
+  if (name.startsWith('/')) {
+    // An executable path: its basename (paths may contain spaces, arguments never come after a path in ucomm).
+    name = name.slice(name.lastIndexOf('/') + 1).split(/\s/)[0] ?? '';
+  } else {
+    name = name.split(/\s/)[0] ?? '';
+  }
   if (name === '') return '?';
   return name.length > MAX_PROCESS_NAME_LENGTH ? `${name.slice(0, MAX_PROCESS_NAME_LENGTH - 1)}…` : name;
 }
 
 /**
- * Parse `ps -A -o pid=,ppid=,pgid=,time=,rss=,comm=` (no header). `comm` is
- * the last column and may contain spaces (macOS app paths). Malformed lines
- * are skipped. `rss` is in KiB on Linux and macOS.
+ * Parse `ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=` (no header).
+ * The name is the last column. Malformed lines are skipped. `rss` is in KiB on
+ * Linux and macOS.
  */
 export function parsePsOutput(text: string): PsProcess[] {
   const out: PsProcess[] = [];
   for (const line of text.split('\n')) {
-    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\d+)\s+(.*)$/.exec(line);
+    const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.*)$/.exec(line);
     if (!m) continue;
-    const cpuSeconds = parseCpuTime(m[4] as string);
-    if (cpuSeconds === null) continue;
+    const elapsedSeconds = parseCpuTime(m[4] as string);
+    const cpuSeconds = parseCpuTime(m[5] as string);
+    if (cpuSeconds === null || elapsedSeconds === null) continue;
     out.push({
       pid: Number(m[1]),
       ppid: Number(m[2]),
       pgid: Number(m[3]),
+      elapsedSeconds,
       cpuSeconds,
-      rssBytes: Number(m[5]) * 1024,
-      name: processName(m[6] as string),
+      rssBytes: Number(m[6]) * 1024,
+      name: processName(m[7] as string),
     });
   }
   return out;

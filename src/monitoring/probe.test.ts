@@ -4,7 +4,7 @@
  * plausible values, attributes a real worker process group to its run and
  * never reports process arguments.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import os from 'node:os';
 import { afterAll, describe, expect, it } from 'vitest';
 import { createSystemProbe, PS_ARGS } from './probe.js';
@@ -12,8 +12,16 @@ import { ResourceSampler } from './sampler.js';
 
 const SECRET_ARG = `adispatch-secret-arg-${process.pid}-${Date.now()}`;
 let child: ChildProcess | undefined;
+const extra: ChildProcess[] = [];
 
 afterAll(() => {
+  for (const c of extra) {
+    try {
+      process.kill(-c.pid!, 'SIGKILL');
+    } catch {
+      // already gone
+    }
+  }
   if (child?.pid) {
     try {
       process.kill(-child.pid, 'SIGKILL');
@@ -25,8 +33,8 @@ afterAll(() => {
 
 describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('default system probe (real OS)', () => {
   it('lists processes with ps (command name only), never with arguments', () => {
-    expect(PS_ARGS.join(' ')).toBe('-A -o pid=,ppid=,pgid=,time=,rss=,comm=');
-    expect(PS_ARGS.join(' ')).not.toMatch(/args|command/);
+    expect(PS_ARGS.join(' ')).toBe('-A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=');
+    expect(PS_ARGS.join(' ')).not.toMatch(/args|command|[^u]comm=/);
   });
 
   it('measures plausible values and attributes a worker process group to its run', async () => {
@@ -63,5 +71,27 @@ describe.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('
     expect(sample.processes.filter((g) => g.kind === 'rest' || g.kind === 'other').reduce((n, g) => n + g.count, 0)).toBeGreaterThan(0);
     expect(JSON.stringify(sample)).not.toContain(SECRET_ARG);
     expect(JSON.stringify(sample)).not.toContain('Date.now');
+  }, 30_000);
+
+  it('rewritten argv[0] (exec -a) and process titles never leak arguments (B1)', async () => {
+    const shell = spawn('bash', ['-c', 'exec -a "/bin/sleep --token=SECRET123 x" sleep 30'], { detached: true, stdio: 'ignore' });
+    const titled = spawn(process.execPath, ['-e', 'process.title = "node --password=HUNTER2"; setTimeout(() => {}, 30000)'], { detached: true, stdio: 'ignore' });
+    extra.push(shell, titled);
+    await new Promise((r) => setTimeout(r, 1000));
+    if (process.platform === 'darwin') {
+      // The attack works against `ps -o comm` (sanity check of the test itself) …
+      expect(execFileSync('ps', ['-o', 'comm=', '-p', String(shell.pid)], { encoding: 'utf8' })).toContain('SECRET123');
+    }
+    // … but not against the listing the monitor uses.
+    const probe = createSystemProbe();
+    const listing = await probe.processes();
+    expect(listing.text).not.toMatch(/SECRET123|HUNTER2/);
+    const sampler = new ResourceSampler({ probe });
+    const settings = { topProcesses: 50, minCpuPercent: 0, diskPaths: [] };
+    const targets = { daemonPid: process.pid, runs: [] };
+    await sampler.measure(targets, settings);
+    await new Promise((r) => setTimeout(r, 300));
+    const sample = await sampler.measure(targets, settings);
+    expect(JSON.stringify(sample)).not.toMatch(/SECRET123|HUNTER2/);
   }, 30_000);
 });

@@ -13,7 +13,7 @@ const supported = process.platform === 'linux' || process.platform === 'darwin';
 
 describe.runIf(supported)('system metrics API', () => {
   let env: AppEnv;
-  const probe = new FakeProbe();
+  const probe = new FakeProbe(() => Date.now());
 
   beforeAll(async () => {
     probe.processList = [{ pid: process.pid, ppid: 1, cpu: 0, comm: 'node' }];
@@ -92,7 +92,7 @@ describe.runIf(supported)('system metrics API', () => {
 
 describe.runIf(supported)('system metrics API with monitoring disabled', () => {
   let env: AppEnv;
-  const probe = new FakeProbe();
+  const probe = new FakeProbe(() => Date.now());
   beforeAll(async () => {
     env = await startAppEnv({ configExtra: 'monitoring:\n  enabled: false\n  interval: 10s\n', app: { monitoring: { probe, primeDelayMs: 0 } } });
   });

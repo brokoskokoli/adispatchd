@@ -14,10 +14,26 @@ export interface FakeProcess {
   cpu: number;
   rssKiB?: number;
   comm: string;
+  /** Start time (epoch ms) for `etime`; default: long before (an old process). */
+  startedAt?: number;
 }
 
-/** Render a fake process list in the `ps` format of `platform`. */
-export function renderPs(processes: readonly FakeProcess[], platform: 'linux' | 'darwin' = 'linux'): string {
+/** Default start of fake processes (long before the tests run). */
+const LONG_AGO = Date.parse('2026-09-01T00:00:00Z');
+
+/** `etime` format `[[DD-]HH:]MM:SS`. */
+function etime(sec: number): string {
+  const s = Math.max(0, Math.floor(sec));
+  const d = Math.floor(s / 86_400);
+  const h = Math.floor((s % 86_400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const p = (n: number): string => String(n).padStart(2, '0');
+  const ms = `${p(m)}:${p(s % 60)}`;
+  return d > 0 ? `${d}-${p(h)}:${ms}` : h > 0 ? `${p(h)}:${ms}` : ms;
+}
+
+/** Render a fake process list in the `ps` format of `platform` (`nowMs` for `etime`). */
+export function renderPs(processes: readonly FakeProcess[], platform: 'linux' | 'darwin' = 'linux', nowMs = Date.parse('2026-10-19T10:00:00Z')): string {
   const time = (sec: number): string => {
     if (platform === 'darwin') {
       const m = Math.floor(sec / 60);
@@ -33,12 +49,18 @@ export function renderPs(processes: readonly FakeProcess[], platform: 'linux' | 
     return d > 0 ? `${d}-${hms}` : hms;
   };
   return processes
-    .map((p) => `${String(p.pid).padStart(6)} ${String(p.ppid).padStart(6)} ${String(p.pgid ?? p.pid).padStart(6)} ${time(p.cpu).padStart(11)} ${String(p.rssKiB ?? 1000).padStart(8)} ${p.comm}`)
+    .map(
+      (p) =>
+        `${String(p.pid).padStart(6)} ${String(p.ppid).padStart(6)} ${String(p.pgid ?? p.pid).padStart(6)} ${etime((nowMs - (p.startedAt ?? LONG_AGO)) / 1000).padStart(11)} ${time(p.cpu).padStart(11)} ${String(p.rssKiB ?? 1000).padStart(8)} ${p.comm}`,
+    )
     .join('\n');
 }
 
 /** See module docs. */
 export class FakeProbe implements SystemProbe {
+  /** Current time for `etime` (tests pass their FakeClock). */
+  constructor(private readonly now: () => number = () => Date.parse('2026-10-19T10:00:00Z')) {}
+
   platform: NodeJS.Platform = 'linux';
   cpu: CpuTimes = { busyMs: 0, totalMs: 0, cores: 4 };
   load: [number, number, number] = [0.5, 0.4, 0.3];
@@ -93,7 +115,7 @@ export class FakeProbe implements SystemProbe {
     try {
       if (this.psGate) await this.psGate;
       if (this.psError) throw this.psError;
-      return { text: this.psText ?? renderPs(this.processList, this.psFormat), helperPid: this.helperPid };
+      return { text: this.psText ?? renderPs(this.processList, this.psFormat, this.now()), helperPid: this.helperPid };
     } finally {
       this.concurrentPs--;
     }

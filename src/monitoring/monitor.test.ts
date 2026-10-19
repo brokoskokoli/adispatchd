@@ -6,7 +6,7 @@ import type { MetricsSample, MonitorSettings } from './types.js';
 
 function setup(over: Partial<MonitorSettings> = {}) {
   const clock = new FakeClock('2026-10-19T10:00:00Z');
-  const probe = new FakeProbe();
+  const probe = new FakeProbe(() => clock.nowMs());
   probe.processList = [{ pid: 100, ppid: 1, cpu: 0, comm: 'node' }];
   const settings: MonitorSettings = { enabled: true, intervalMs: 10_000, retentionMs: 100_000, topProcesses: 5, minCpuPercent: 2, diskPaths: [], ...over };
   const published: MetricsSample[] = [];

@@ -24,7 +24,7 @@ export interface CpuTimes {
 
 /** Raw process listing. */
 export interface ProcessListing {
-  /** Output of `ps -A -o pid=,ppid=,pgid=,time=,rss=,comm=`. */
+  /** Output of `ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=`. */
   text: string;
   /** PID of the `ps` process itself (excluded from the results). */
   helperPid: number | null;
@@ -77,7 +77,7 @@ export interface SystemProbeOptions {
 }
 
 /** Arguments of the process listing (portable between Linux procps and macOS). */
-export const PS_ARGS: readonly string[] = ['-A', '-o', 'pid=,ppid=,pgid=,time=,rss=,comm='];
+export const PS_ARGS: readonly string[] = ['-A', '-o', 'pid=,ppid=,pgid=,etime=,time=,rss=,ucomm='];
 
 /** `execFile` with timeout and output cap; resolves stdout and the child PID. */
 function run(

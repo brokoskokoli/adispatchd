@@ -9,7 +9,7 @@ const settings = { topProcesses: 5, minCpuPercent: 2, diskPaths: [] as string[] 
 
 function setup(platform: NodeJS.Platform = 'linux') {
   const clock = new FakeClock('2026-10-19T10:00:00Z');
-  const probe = new FakeProbe();
+  const probe = new FakeProbe(() => clock.nowMs());
   probe.platform = platform;
   const logger = new MemoryLogger();
   const sampler = new ResourceSampler({ probe, clock, logger });
@@ -56,28 +56,77 @@ describe('ResourceSampler', () => {
     expect(group(s, (g) => g.kind === 'other')).toMatchObject({ label: 'thing', cpuPercent: 25 });
   });
 
-  it('handles PID reuse: other name or smaller CPU time → new process, whole CPU time counts', async () => {
+  it('handles PID reuse via start time (etime), also with the same name; new processes count all their CPU time', async () => {
     const { twice } = setup();
+    const started = Date.parse('2026-10-19T10:00:05Z'); // between the two listings
     const s = await twice(
       [
         { pid: 600, ppid: 1, cpu: 500, comm: 'old' },
         { pid: 601, ppid: 1, cpu: 500, comm: 'same' },
+        { pid: 603, ppid: 1, cpu: 1, comm: 'reused' },
+        { pid: 604, ppid: 1, cpu: 100, comm: 'before' },
       ],
       [
-        { pid: 600, ppid: 1, cpu: 3, comm: 'new' },
-        { pid: 601, ppid: 1, cpu: 2, comm: 'same' },
-        { pid: 602, ppid: 1, cpu: 1, comm: 'fresh' },
+        { pid: 600, ppid: 1, cpu: 3, comm: 'new', startedAt: started },
+        { pid: 601, ppid: 1, cpu: 2, comm: 'same', startedAt: started },
+        { pid: 602, ppid: 1, cpu: 1, comm: 'fresh', startedAt: started },
+        // same PID and name, higher CPU time – but started after the previous listing: a new process
+        { pid: 603, ppid: 1, cpu: 4, comm: 'reused', startedAt: started },
+        // existed before under another name (exec): baseline only, no spike
+        { pid: 604, ppid: 1, cpu: 900, comm: 'after' },
       ],
       undefined,
-      { ...settings, minCpuPercent: 0 },
+      { ...settings, minCpuPercent: 0, topProcesses: 10 },
     );
     const byName = Object.fromEntries(s.processes.filter((g) => g.kind === 'other').map((g) => [g.name, g.cpuPercent]));
-    expect(byName).toEqual({ new: 30, same: 20, fresh: 10 });
+    expect(byName).toEqual({ new: 30, same: 20, fresh: 10, reused: 40, after: 0 });
+  });
+
+  it('caps the CPU time of a new process at etime × cores', async () => {
+    const { twice } = setup();
+    const s = await twice([], [{ pid: 701, ppid: 1, cpu: 3600, comm: 'young', startedAt: Date.parse('2026-10-19T10:00:08Z') }]);
+    expect(group(s, (g) => g.name === 'young')?.cpuPercent).toBe(80); // 2 s × 4 cores in 10 s
+  });
+
+  it('Linux: smooths the 1-s resolution of ps over a 60-s window; macOS uses the last interval', async () => {
+    for (const [platform, expected] of [['linux', 5], ['darwin', 10]] as const) {
+      const { probe, sampler, clock } = setup(platform);
+      probe.psFormat = platform;
+      let last = 0;
+      for (const cpu of [0, 0, 1, 1, 2, 2, 3]) {
+        probe.processList = [{ pid: 500, ppid: 1, cpu, comm: 'steady' }];
+        const sample = await sampler.measure({ daemonPid: DAEMON, runs: [] }, { ...settings, minCpuPercent: 0 });
+        last = sample?.processes.find((g) => g.name === 'steady')?.cpuPercent ?? -1;
+        clock.advance(10_000);
+      }
+      expect(last, platform).toBe(expected);
+    }
+  });
+
+  it('runs ps alone before the other probes (no monitor helper shows up as hooks)', async () => {
+    const { probe, sampler } = setup();
+    let psRunning = false;
+    const orig = probe.processes.bind(probe);
+    probe.processes = async () => {
+      psRunning = true;
+      try {
+        return await orig();
+      } finally {
+        psRunning = false;
+      }
+    };
+    const seen: boolean[] = [];
+    probe.memory = async () => {
+      seen.push(psRunning);
+      return { totalBytes: 1, availableBytes: 1 };
+    };
+    await sampler.measure({ daemonPid: DAEMON, runs: [] }, settings);
+    expect(seen).toEqual([false]);
   });
 
   it('caps a process at the capacity of all cores and never reports negative values', async () => {
     const { twice } = setup();
-    const s = await twice([], [{ pid: 700, ppid: 1, cpu: 3600, comm: 'burner' }]);
+    const s = await twice([{ pid: 700, ppid: 1, cpu: 0, comm: 'burner' }], [{ pid: 700, ppid: 1, cpu: 3600, comm: 'burner' }]);
     expect(group(s, (g) => g.name === 'burner')?.cpuPercent).toBe(400);
   });
 
@@ -184,14 +233,15 @@ describe('ResourceSampler', () => {
   it('reports command names only, never arguments, and excludes the ps process itself', async () => {
     const { probe, sampler, clock } = setup();
     probe.helperPid = 77;
-    probe.psText = '   77   100   77 00:00:00  10 ps\n  500     1  500 00:00:01 100 /opt/tools/bin/tool\n';
+    probe.psText = '   77   100   77 00:01 00:00:00  10 ps\n  500     1  500 01:00:00 00:00:01 100 /opt/tools/bin/tool --token=SECRET1\n';
     await sampler.measure({ daemonPid: DAEMON, runs: [] }, settings);
     clock.advance(10_000);
-    probe.psText = '   77   100   77 00:00:00  10 ps\n  500     1  500 00:00:09 100 /opt/tools/bin/tool\n';
+    probe.psText = '   77   100   77 00:01 00:00:00  10 ps\n  500     1  500 01:00:10 00:00:09 100 /opt/tools/bin/tool --token=SECRET1\n';
     const s = (await sampler.measure({ daemonPid: DAEMON, runs: [] }, settings))!;
     const json = JSON.stringify(s);
     expect(json).toContain('"tool"');
     expect(json).not.toContain('/opt/tools');
+    expect(json).not.toContain('SECRET1');
     expect(s.processes.some((g) => g.kind === 'hooks')).toBe(false); // ps was a daemon child but is excluded
   });
 
@@ -223,5 +273,20 @@ describe('ResourceSampler', () => {
     clock.advance(10_000);
     expect((await sampler.measure({ daemonPid: DAEMON, runs: [] }, s))!.processes.length).toBeGreaterThan(0);
     expect(logger.records.some((r) => r.msg.includes('measurement works again'))).toBe(true);
+  });
+});
+
+describe('ResourceSampler – container VM on macOS', () => {
+  it('subtracts the container usage reported by stats from the VM process (no double counting)', async () => {
+    const { probe, twice } = setup('darwin');
+    const run: MonitoredRun = { runId: 'run-c-0000000e', workflowId: 'boxed', itemKey: null, pid: 400, pgid: 400, container: { engine: 'docker', name: 'adispatch-run-c-0000000e' } };
+    probe.stats.set('docker', '{"Name":"adispatch-run-c-0000000e","CPUPerc":"150.00%","MemUsage":"100MiB / 7GiB"}\n');
+    const procs = (cpu: number): FakeProcess[] => [
+      { pid: 400, ppid: DAEMON, cpu: 0, comm: 'docker' },
+      { pid: 800, ppid: 1, cpu, rssKiB: 400 * 1024, comm: 'com.apple.Virtu' },
+    ];
+    const s = await twice(procs(0), procs(20), { daemonPid: DAEMON, runs: [run] }, { ...settings, minCpuPercent: 0 });
+    expect(group(s, (g) => g.kind === 'run')).toMatchObject({ cpuPercent: 150 });
+    expect(group(s, (g) => g.name === 'com.apple.Virtu')).toMatchObject({ cpuPercent: 50, rssBytes: 300 * 1024 * 1024 });
   });
 });

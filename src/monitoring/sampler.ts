@@ -4,17 +4,24 @@
  * processes.
  *
  * - System CPU: delta of the `os.cpus()` times between two measurements.
- * - Process CPU: delta of the accumulated CPU time (`ps -o time`) between two
- *   listings divided by the wall time (100 % = one core). A delta is only
- *   taken for the same PID with the same command name and a CPU time that did
- *   not decrease; otherwise (new process or PID reused) the process started
- *   after the previous listing and its whole CPU time counts.
+ * - Process CPU: rate of the accumulated CPU time (`ps -o time`), 100 % = one
+ *   core. A process is identified by PID, name and start time (now − `etime`),
+ *   so a reused PID – even with the same name – starts a new history. A process
+ *   unknown at the previous listing counts as new only if it started after it
+ *   (`etime` < wall time); its CPU time is capped at `etime × cores`. A process
+ *   that existed before under another identity (e.g. after `exec`) reports 0 once.
+ * - Linux `ps` reports CPU time in whole seconds: there the rate is taken over
+ *   a sliding window of at least {@link LINUX_RATE_WINDOW_MS} to smooth the
+ *   1-s granularity (macOS has 10-ms resolution and uses the last interval).
  * - Attribution: own PID → daemon; process group or ancestor chain of a run's
  *   worker → that run (container runs add `<engine> stats`); other
  *   descendants of the daemon → hooks/checks; the rest → foreign, grouped by
  *   name (top N above `minCpuPercent`, others summed up). On Linux the host-
- *   visible processes of a run's container are skipped (counted via `stats`).
- * - Only command names are reported, never arguments.
+ *   visible processes of a run's container are skipped (counted via `stats`);
+ *   on macOS the `stats` usage is subtracted from the container VM's process.
+ * - `ps` runs alone first, then memory/disks/engine commands: helper
+ *   processes of the monitor never appear in its own listing (`ps` itself is excluded).
+ * - Only command names (`ucomm`) are reported, never arguments.
  *
  * The first call only primes the deltas and returns `null`. Errors of a part
  * (e.g. `ps` missing) leave that part empty and are logged (throttled).
@@ -32,10 +39,16 @@ export const HOOKS_LABEL = 'adispatchd (hooks/checks)';
 export const REST_LABEL = 'Others';
 /** Default minimum time between two log entries of the same failing part. */
 export const DEFAULT_ERROR_LOG_INTERVAL_MS = 10 * 60_000;
+/** Minimum window of the CPU rate on Linux (1-s resolution of `ps -o time`). */
+export const LINUX_RATE_WINDOW_MS = 60_000;
 /** Process names of container runtimes whose descendants are container processes (Linux de-duplication). */
 const CONTAINER_SHIM = /^(containerd-shim|conmon|crun|runc)/;
+/** Process names (accounting names, ≤ 16 chars on macOS) of container VMs (macOS de-duplication). */
+export const CONTAINER_VM_NAMES = /^(com\.apple\.Virtu|Virtualization|qemu-system|vfkit|krunkit|com\.docker\.virt|com\.docker\.hyper)/;
 /** Max. depth when walking up the parent chain. */
 const MAX_ANCESTRY = 128;
+/** Tolerance when matching start times (`etime` has 1-s resolution, measurement takes time). */
+const START_TOLERANCE_MS = 2_500;
 
 /** Options of {@link ResourceSampler}. */
 export interface ResourceSamplerOptions {
@@ -44,11 +57,16 @@ export interface ResourceSamplerOptions {
   logger?: Logger;
   /** Min. time between two warnings about the same failing part (default 10 min). */
   errorLogIntervalMs?: number;
+  /** Window of the per-process CPU rate (default: Linux {@link LINUX_RATE_WINDOW_MS}, otherwise 0 = last interval). */
+  rateWindowMs?: number;
 }
 
-interface ProcessState {
+interface ProcessHistory {
   name: string;
-  cpuSeconds: number;
+  /** Start time (epoch ms) derived from `etime`. */
+  startMs: number;
+  /** CPU time at earlier listings, oldest first (bounded by the rate window). */
+  points: Array<{ at: number; cpu: number }>;
 }
 
 type Owner = { kind: 'daemon' } | { kind: 'hooks' } | { kind: 'run'; run: MonitoredRun } | { kind: 'skip' } | { kind: 'other' };
@@ -67,9 +85,10 @@ export class ResourceSampler {
   private readonly clock: Clock;
   private readonly logger: Logger;
   private readonly errorLogIntervalMs: number;
+  private readonly rateWindowMs: number;
   private readonly lastLogged = new Map<string, number>();
   private prevCpu: CpuTimes | undefined;
-  private prevProcs: Map<number, ProcessState> | undefined;
+  private history: Map<number, ProcessHistory> | undefined;
   private prevProcsAt = 0;
 
   constructor(options: ResourceSamplerOptions) {
@@ -77,34 +96,31 @@ export class ResourceSampler {
     this.clock = options.clock ?? systemClock;
     this.logger = (options.logger ?? noopLogger).child({ component: 'monitoring' });
     this.errorLogIntervalMs = options.errorLogIntervalMs ?? DEFAULT_ERROR_LOG_INTERVAL_MS;
+    this.rateWindowMs = options.rateWindowMs ?? (options.probe.platform === 'linux' ? LINUX_RATE_WINDOW_MS : 0);
   }
 
   /** Forget previous values (the next call primes again). */
   reset(): void {
     this.prevCpu = undefined;
-    this.prevProcs = undefined;
+    this.history = undefined;
   }
 
   /** Take one measurement; `null` on the first (priming) call. */
   async measure(targets: AttributionTargets, settings: Pick<MonitorSettings, 'topProcesses' | 'minCpuPercent' | 'diskPaths'>): Promise<MetricsSample | null> {
-    const containerRuns = targets.runs.filter((r) => r.container);
     const byEngine = new Map<ContainerEngine, MonitoredRun[]>();
-    for (const r of containerRuns) {
-      const list = byEngine.get(r.container!.engine) ?? [];
+    for (const r of targets.runs) {
+      if (!r.container) continue;
+      const list = byEngine.get(r.container.engine) ?? [];
       list.push(r);
-      byEngine.set(r.container!.engine, list);
+      byEngine.set(r.container.engine, list);
     }
 
-    const psPromise = this.probe.processes().then(
+    // `ps` first and alone: no other helper process of the monitor can show up in the listing.
+    const ps = await this.probe.processes().then(
       (listing) => ({ ok: true as const, listing, at: this.clock.now().getTime(), cpu: this.probe.cpuTimes() }),
       (err: unknown) => ({ ok: false as const, error: errorMessage(err), at: this.clock.now().getTime(), cpu: this.probe.cpuTimes() }),
     );
-    const [ps, memory, disks, engineData] = await Promise.all([
-      psPromise,
-      this.probe.memory(),
-      this.disks(settings.diskPaths),
-      this.engineData(byEngine),
-    ]);
+    const [memory, disks, engineData] = await Promise.all([this.probe.memory(), this.disks(settings.diskPaths), this.engineData(byEngine)]);
 
     // --- system CPU
     const cpuNow = ps.cpu;
@@ -122,16 +138,11 @@ export class ResourceSampler {
     if (ps.ok) {
       this.recovered('ps');
       const list = parsePsOutput(ps.listing.text).filter((p) => p.pid !== ps.listing.helperPid);
-      const prev = this.prevProcs;
-      const wallMs = ps.at - this.prevProcsAt;
-      this.prevProcs = new Map(list.map((p) => [p.pid, { name: p.name, cpuSeconds: p.cpuSeconds }]));
-      this.prevProcsAt = ps.at;
-      if (prev && wallMs > 0) {
-        processes = this.attribute(list, prev, wallMs, cpuNow.cores, targets, engineData, settings);
-      }
+      const rates = this.rates(list, ps.at, cpuNow.cores);
+      if (rates) processes = this.attribute(list, rates, cpuNow.cores, targets, engineData, settings);
     } else {
       this.warn('ps', 'process list unavailable', { error: ps.error });
-      this.prevProcs = undefined;
+      this.history = undefined;
     }
 
     if (!prevCpu) return null;
@@ -142,6 +153,42 @@ export class ResourceSampler {
       disks,
       processes,
     };
+  }
+
+  /**
+   * CPU rate per PID (100 % = one core) and the new history; `null` when
+   * there was no previous listing (priming).
+   */
+  private rates(list: readonly PsProcess[], at: number, cores: number): Map<number, number> | null {
+    const prev = this.history;
+    const wallMs = at - this.prevProcsAt;
+    const next = new Map<number, ProcessHistory>();
+    const rates = new Map<number, number>();
+    const maxPercent = cores * 100;
+    for (const p of list) {
+      const startMs = at - p.elapsedSeconds * 1000;
+      const h = prev?.get(p.pid);
+      const same = h !== undefined && h.name === p.name && Math.abs(h.startMs - startMs) <= START_TOLERANCE_MS && p.cpuSeconds >= (h.points.at(-1)?.cpu ?? 0);
+      let rate = 0;
+      let points: ProcessHistory['points'] = [];
+      if (same) {
+        // Oldest point inside the window (at least the previous listing).
+        const kept = h.points.filter((pt) => pt.at >= at - this.rateWindowMs - 1000);
+        const ref = kept[0] ?? h.points.at(-1)!;
+        const dt = at - ref.at;
+        rate = dt > 0 ? (((p.cpuSeconds - ref.cpu) * 1000) / dt) * 100 : 0;
+        points = kept.length > 0 ? kept : [ref];
+      } else if (prev && wallMs > 0 && p.elapsedSeconds * 1000 <= wallMs + START_TOLERANCE_MS) {
+        // Started after the previous listing: all its CPU time falls into this interval (at most etime × cores).
+        const cpu = Math.min(p.cpuSeconds, Math.max(1, p.elapsedSeconds) * cores);
+        rate = ((cpu * 1000) / wallMs) * 100;
+      }
+      rates.set(p.pid, Math.min(maxPercent, Math.max(0, rate)));
+      next.set(p.pid, { name: p.name, startMs: same ? h.startMs : startMs, points: [...points, { at, cpu: p.cpuSeconds }] });
+    }
+    this.history = next;
+    this.prevProcsAt = at;
+    return prev && wallMs > 0 ? rates : null;
   }
 
   private async disks(paths: readonly string[]): Promise<DiskUsage[]> {
@@ -190,8 +237,7 @@ export class ResourceSampler {
 
   private attribute(
     list: readonly PsProcess[],
-    prev: Map<number, ProcessState>,
-    wallMs: number,
+    rates: Map<number, number>,
     cores: number,
     targets: AttributionTargets,
     engine: { stats: Map<string, EngineStat>; containerPids: Map<string, number> },
@@ -246,12 +292,6 @@ export class ResourceSampler {
     };
 
     const maxPercent = cores * 100;
-    const cpuOf = (p: PsProcess): number => {
-      const before = prev.get(p.pid);
-      const delta = before && before.name === p.name && p.cpuSeconds >= before.cpuSeconds ? p.cpuSeconds - before.cpuSeconds : p.cpuSeconds;
-      return Math.min(maxPercent, Math.max(0, ((delta * 1000) / wallMs) * 100));
-    };
-
     const daemon: ProcessGroup = { kind: 'daemon', label: DAEMON_LABEL, cpuPercent: 0, rssBytes: 0, count: 0 };
     const hooks: ProcessGroup = { kind: 'hooks', label: HOOKS_LABEL, cpuPercent: 0, rssBytes: 0, count: 0 };
     const runs = new Map<string, ProcessGroup>();
@@ -277,7 +317,7 @@ export class ResourceSampler {
     for (const p of list) {
       const owner = ownerOf(p);
       if (owner.kind === 'skip') continue;
-      const cpu = cpuOf(p);
+      const cpu = rates.get(p.pid) ?? 0;
       if (owner.kind === 'daemon') add(daemon, cpu, p.rssBytes);
       else if (owner.kind === 'hooks') add(hooks, cpu, p.rssBytes);
       else if (owner.kind === 'run') add(runs.get(owner.run.runId)!, cpu, p.rssBytes);
@@ -289,12 +329,30 @@ export class ResourceSampler {
         others.set(p.name, o);
       }
     }
+    let statsCpu = 0;
+    let statsMem = 0;
     for (const r of targets.runs) {
       const s = r.container ? engine.stats.get(r.container.name) : undefined;
       if (!s) continue;
       const g = runs.get(r.runId)!;
-      g.cpuPercent += Math.min(maxPercent, s.cpuPercent);
+      const cpu = Math.min(maxPercent, s.cpuPercent);
+      g.cpuPercent += cpu;
       g.rssBytes += s.memBytes;
+      statsCpu += cpu;
+      statsMem += s.memBytes;
+    }
+    // macOS (and other non-Linux hosts): container processes run inside a VM process; its usage already
+    // contains the container's. Subtract what was attributed to runs via `stats` (no double counting).
+    if (this.probe.platform !== 'linux' && (statsCpu > 0 || statsMem > 0)) {
+      for (const [name, o] of [...others].sort((a, b) => b[1].cpu - a[1].cpu)) {
+        if (!CONTAINER_VM_NAMES.test(name)) continue;
+        const dc = Math.min(o.cpu, statsCpu);
+        const dm = Math.min(o.rss, statsMem);
+        o.cpu -= dc;
+        o.rss -= dm;
+        statsCpu -= dc;
+        statsMem -= dm;
+      }
     }
 
     const groups: ProcessGroup[] = [daemon, ...runs.values()];

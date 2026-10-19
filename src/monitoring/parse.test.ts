@@ -31,12 +31,13 @@ describe('parseCpuTime', () => {
 });
 
 describe('processName', () => {
-  it('takes the basename of macOS executable paths, keeps spaces, strips control characters and shortens', () => {
+  it('takes the basename of paths, cuts at the first whitespace, strips control characters and shortens', () => {
     expect(processName('/usr/libexec/logd')).toBe('logd');
-    expect(processName('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')).toBe('Google Chrome');
+    expect(processName('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')).toBe('Google');
+    expect(processName('sleep --token=SECRET123 x')).toBe('sleep');
     expect(processName('kworker/0:1')).toBe('kworker/0:1');
     expect(processName('node')).toBe('node');
-    expect(processName('a\u0007b\u001b')).toBe('ab');
+    expect(processName('a\u0007b\u001b')).toBe('a');
     expect(processName('   ')).toBe('?');
     const long = processName('x'.repeat(200));
     expect(long.length).toBe(48);
@@ -45,36 +46,50 @@ describe('processName', () => {
 });
 
 describe('parsePsOutput', () => {
-  it('parses the Linux procps format', () => {
+  it('parses the Linux procps format (pid, ppid, pgid, etime, time, rss, ucomm)', () => {
     const text = [
-      '      1       0       1 00:00:05  11520 systemd',
-      '   4242       1    4242 1-02:03:04 204800 node',
-      '   4300    4242    4300 00:00:12   3072 bash',
-      '   4301    4300    4300 00:01:00   2048 Web Content',
+      '      1       0       1 3-01:00:00 00:00:05  11520 systemd',
+      '   4242       1    4242    02:03:04 1-02:03:04 204800 node',
+      '   4300    4242    4300       00:42 00:00:12   3072 bash',
+      '   4301    4300    4300       01:10 00:01:00   2048 kworker/0:1',
       '',
     ].join('\n');
     expect(parsePsOutput(text)).toEqual([
-      { pid: 1, ppid: 0, pgid: 1, cpuSeconds: 5, rssBytes: 11520 * 1024, name: 'systemd' },
-      { pid: 4242, ppid: 1, pgid: 4242, cpuSeconds: 93_784, rssBytes: 204_800 * 1024, name: 'node' },
-      { pid: 4300, ppid: 4242, pgid: 4300, cpuSeconds: 12, rssBytes: 3072 * 1024, name: 'bash' },
-      { pid: 4301, ppid: 4300, pgid: 4300, cpuSeconds: 60, rssBytes: 2048 * 1024, name: 'Web Content' },
+      { pid: 1, ppid: 0, pgid: 1, elapsedSeconds: 3 * 86_400 + 3600, cpuSeconds: 5, rssBytes: 11520 * 1024, name: 'systemd' },
+      { pid: 4242, ppid: 1, pgid: 4242, elapsedSeconds: 7384, cpuSeconds: 93_784, rssBytes: 204_800 * 1024, name: 'node' },
+      { pid: 4300, ppid: 4242, pgid: 4300, elapsedSeconds: 42, cpuSeconds: 12, rssBytes: 3072 * 1024, name: 'bash' },
+      { pid: 4301, ppid: 4300, pgid: 4300, elapsedSeconds: 70, cpuSeconds: 60, rssBytes: 2048 * 1024, name: 'kworker/0:1' },
     ]);
   });
 
-  it('parses the macOS format (paths with spaces as last column)', () => {
+  it('parses the macOS format (ucomm: short accounting name, padded)', () => {
     const text = [
-      '    1     0     1  21:27.67   8640 /sbin/launchd',
-      ' 1270     1  1270  19:47.97  97728 /Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      ' 1400  1270  1270   0:10.69   3776 /Applications/X.app/Contents/MacOS/X Helper (Renderer)',
+      '    1     0     1 01-02:35:19  21:27.67   8640 launchd         ',
+      ' 1270     1  1270    05:01:02  19:47.97  97728 Google Chrome   ',
+      ' 1400  1270  1270       00:09   0:10.69   3776 Google Chrome He',
     ].join('\n');
     const out = parsePsOutput(text);
-    expect(out.map((p) => p.name)).toEqual(['launchd', 'Google Chrome', 'X Helper (Renderer)']);
+    expect(out.map((p) => p.name)).toEqual(['launchd', 'Google', 'Google']);
     expect(out[1]!.cpuSeconds).toBeCloseTo(19 * 60 + 47.97);
-    expect(out[2]).toMatchObject({ pid: 1400, ppid: 1270, pgid: 1270, rssBytes: 3776 * 1024 });
+    expect(out[0]!.elapsedSeconds).toBe(86_400 + 2 * 3600 + 35 * 60 + 19);
+    expect(out[2]).toMatchObject({ pid: 1400, ppid: 1270, pgid: 1270, elapsedSeconds: 9, rssBytes: 3776 * 1024 });
+  });
+
+  it('never returns arguments, even from rewritten argv[0] / process titles (B1)', () => {
+    // What `ps -o comm` shows for `exec -a "/bin/sleep --token=SECRET123 x" sleep` and process.title = "node --password=HUNTER2".
+    const text = [
+      '  501     1   501    00:03   0:00.00    800 /bin/sleep --token=SECRET123 x',
+      '  502     1   502    00:03   0:00.00    800 sleep --token=SECRET123 x',
+      '  503     1   503    00:03   0:00.10  40000 node --password=HUNTER2',
+      '  504     1   504    00:03   0:00.10  40000 /usr/local/bin/my tool --api-key=abc',
+    ].join('\n');
+    const out = parsePsOutput(text);
+    expect(out.map((p) => p.name)).toEqual(['sleep', 'sleep', 'node', 'my']);
+    expect(JSON.stringify(out)).not.toMatch(/SECRET123|HUNTER2|api-key|--/);
   });
 
   it('skips headers and malformed lines', () => {
-    const text = ['  PID  PPID  PGID     TIME   RSS COMM', 'garbage', ' 10 1 10 bad 5 x', ' 11 1 11 00:00:01 5 ok'].join('\n');
+    const text = ['  PID  PPID  PGID ELAPSED  TIME   RSS UCOMM', 'garbage', ' 10 1 10 00:01 bad 5 x', ' 12 1 12 bad 00:00:01 5 x', ' 11 1 11 00:01 00:00:01 5 ok'].join('\n');
     expect(parsePsOutput(text).map((p) => p.pid)).toEqual([11]);
   });
 });
