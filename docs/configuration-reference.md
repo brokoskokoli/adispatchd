@@ -323,11 +323,14 @@ sources:
     owner: example           # GitHub-Owner/Organisation
     repository: project-a    # Repository-Name
     identity: maintainer     # Identity für lesende Aufrufe (und Fallback für Schreiben)
+    vars:                    # optional (seit 0.3.0): freie Variablen, {source.vars.<Name>}
+      base_branch: main
   project_b:
     type: github
     owner: example
     repository: project-b
     identity: maintainer
+    vars: { base_branch: develop }
     project:                 # optional: Felder eines GitHub-Projects-(v2)-Boards als project.<Name>
       owner: example         # User- oder Org-Login des Projekts (Default: owner der Source)
       number: 3              # Projektnummer aus der URL …/projects/3
@@ -353,6 +356,13 @@ sources:
 | `<id>.project.number` | Integer | ja | > 0 | Projektnummer aus `https://github.com/orgs/<org>/projects/<n>` bzw. `…/users/<user>/projects/<n>` |
 | `<id>.project.identity` | Identity-ID | nein | muss existieren; Default = `<id>.identity` | Identity für die Projekt-Abfragen (z. B. eine `github_token`-Identity für User-Projekte, §3.3); **wenn gesetzt**, schreibt sie auch die Projektfelder von `source.update` (§3.4.11, §6.10) |
 | `<id>.project.fields` | Map Feldname → Art | ja | mind. ein Eintrag; Name nicht leer, ohne führende/abschließende Leerzeichen und ohne Steuerzeichen; Art `single_select`, `text`, `number`, `date`, `iteration` | Felder, auf die gefiltert/sortiert werden soll |
+| `<id>.vars` | Map Name → String | nein (Default `{}`) | Name wie Parameternamen (`[A-Za-z_][A-Za-z0-9_-]*`); Werte String, Zahlen/Booleans werden zu Text (`port: 8080` → `"8080"`) | freie Variablen der Source, als `{source.vars.<Name>}` überall dort nutzbar, wo `{source.*}` erlaubt ist (§5) |
+
+**Source-Variablen (`vars`, seit 0.3.0).** Werte, die sich je Repository unterscheiden (Basis-Branch,
+Build-Kommando, Zielumgebung …), stehen an der Source statt in jedem Workflow: `{source.vars.base_branch}` in
+`execute.args`/`env`/`working_directory`, Hook-Templates und `conditions.item[].args`. Die Prüfung beim Laden
+verlangt die Variable in **jeder** Source des Workflows (bei mehreren Sources §3.4.2) und nennt sonst die Sources,
+in denen sie fehlt. Variablen sind keine Secrets (sie stehen in API und Run-Snapshot) – Tokens gehören in `secrets`.
 
 Nur `github.com` wird unterstützt (keine Einstellung für GitHub Enterprise). Gelesen werden Issues **und** Pull
 Requests des Repositories über `GET /repos/{owner}/{repo}/issues`, standardmäßig **nur offene** (siehe §4.5).
@@ -466,7 +476,7 @@ identity: coder                  # Default: Identity der Source; Schreib-Identit
 
 trigger:
   type: source                   # source | schedule | manual
-  source: project_a
+  source: project_a              # oder (seit 0.3.0) sources: [project_a, project_b] – §3.4.2
 
 filter:                          # deklarativ, nur bei trigger.type: source
   all:
@@ -511,6 +521,7 @@ execute:
   env:
     NODE_ENV: production
     ISSUE_URL: '{item.url}'
+    BASE_BRANCH: '{source.vars.base_branch}'   # Variable der Source (§3.2)
   secrets:
     GH_TOKEN: { identity: coder }  # kurzlebiges Installation-Token der Identity
   timeout:
@@ -564,6 +575,7 @@ on_timeout:
 | `enabled` | Boolean | nein | `true` | | `false`: keine automatischen Starts (Source/Cron); **manuelle Starts bleiben möglich** |
 | `priority` | Zahl | nein | `0` | | Workflow-Priorität, wird vor der Item-Priorität sortiert (§6.2) |
 | `max_concurrent` | Integer | nein | `1` | ≥ 1 | Limit gleichzeitig aktiver Runs dieses Workflows für automatische Starts |
+| `max_concurrent_per_source` | Integer | nein | (kein Limit) | ≥ 1; nur `trigger.type: source` | zusätzliches Limit je Source (seit 0.3.0, §3.4.2, §6.3); `max_concurrent` bleibt das Limit des Workflows insgesamt |
 | `identity` | Identity-ID | nein | Source-Identity | muss existieren | Schreib-Identity für `source.update`/`source.comment` (§6.10) |
 | `trigger` | Objekt | ja | | §3.4.2 | |
 | `filter` | Filter-AST | nein | (alles passt) | nur `trigger.type: source` | §4 |
@@ -579,9 +591,29 @@ on_timeout:
 
 | `type` | weitere Schlüssel | Bedeutung |
 |---|---|---|
-| `source` | `source` (Pflicht, Source-ID, muss existieren) | Items der Source werden jeden Planungsschritt gepollt; ein Run ist an genau ein Item gebunden. |
+| `source` | **entweder** `source` (Source-ID, muss existieren) **oder** (seit 0.3.0) `sources` (Liste von Source-IDs: nicht leer, ohne Duplikate, alle existieren, alle mit demselben Adaptertyp) | Items der Source(s) werden jeden Planungsschritt gepollt; ein Run ist an genau ein Item gebunden. |
 | `schedule` | `cron` (Pflicht, nicht leer), `timezone` (Default `UTC`, IANA-Name wie `Europe/Berlin`) | höchstens ein Run pro Cron-Slot, ohne Item (§6.7). |
 | `manual` | – | nur manuelle Starts (UI/API), ohne Item. |
+
+**Mehrere Sources (`sources`, seit 0.3.0).** Ein Workflow für mehrere Repositories statt fast gleicher Kopien:
+
+- Jede Source wird im Planungsschritt abgefragt (parallel, Pushdown je Source); die Kandidaten aller Sources
+  konkurrieren nach Item-Priorität. Bei gleicher Item-Priorität entscheidet die **Reihenfolge der Liste**, danach die
+  bisherigen Tie-Breaker (§6.2).
+- Lock, Retry-Block, Fehlerzähler und Historie bleiben pro globalem Item-Schlüssel `<source>:<nr>` – gleiche
+  Nummern in zwei Repositories sind zwei Items.
+- `max_concurrent` gilt für den Workflow insgesamt; `max_concurrent_per_source` begrenzt zusätzlich je Source
+  (Entscheidung `source_limit`).
+- Fällt eine Source beim Pollen aus, laufen die anderen weiter; die Diagnose (API, Dry-Run, UI) zeigt Status und
+  Fehler **je Source**.
+- Felder: `project.*` in `filter`, `item_priority` und `source.update.project` nur, wenn **alle** Sources das Feld
+  mit gleicher Art deklarieren (Regel wie bei Views, §4.7.1); die `state`-Regel (§4.5) und der Pushdown gelten je
+  Source. `{source.vars.<Name>}` muss in allen Sources definiert sein.
+- Ein Run kennt nur seine Source: `{source.*}`, `{item.*}`, Lifecycle-Actions, Identity-Fallback und Run-Snapshot
+  beziehen sich auf die Source des Items.
+- Manueller Start: die Source folgt aus der Item-Referenz (URL, `owner/repo#nr` oder `<source>:<nr>`); eine bloße
+  Nummer ist bei mehreren Sources mehrdeutig und wird mit Hinweis abgelehnt (§6.6).
+- `sources: [x]` mit einem Eintrag verhält sich wie `source: x`.
 
 Cron-Syntax: [croner](https://github.com/hexagon/croner) – 5 Felder (`min std tag monat wochentag`) oder 6 mit
 führenden Sekunden; Listen, Bereiche, Schritte (`*/15`), Namen (`MON`, `JAN`) und croner-Erweiterungen (`L`, `#`)
@@ -1138,6 +1170,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{source.id}` | Source-ID | Run ohne Item |
 | `{source.type}` | `github` | Run ohne Item |
 | `{source.repository}` | `owner/repository` | Run ohne Item |
+| `{source.vars.<name>}` | Variable `vars.<name>` der Source des Items (§3.2, seit 0.3.0) | Run ohne Item |
 | `{item.id}` | Item-ID (GitHub: Nummer als String) | Run ohne Item |
 | `{item.number}` | Nummer (nur bei numerischer Item-ID) | Run ohne Item |
 | `{item.key}` | globaler Schlüssel `<source>:<id>` | Run ohne Item |
@@ -1160,9 +1193,13 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 | `run.id`, `run.trigger` | ✓ | ✓ | ✓ | ✓ | – | – |
 | `run.started_at` | ✓ | ✓ | ✓ (leer) | ✓ | – | – |
 | `workspace.path` | – | ✓ | ✓ (leer) | ✓ | – | – |
-| `source.*`, `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | – | ✓ |
+| `source.*` (inkl. `source.vars.<name>`), `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | – | ✓ |
 | `result.*` | – | – | – | ✓ | – | – |
 | `parameters.<name>` | ✓ nur `required` oder mit `default` | ✓ | ✓ | ✓ | – | – |
+
+`{source.vars.<name>}` muss zusätzlich in `vars` **jeder** Source des Workflows stehen (sonst Fehler mit der Liste
+der Sources, in denen sie fehlt); im Pfadmodus wird der Wert wie jeder Platzhalter zu genau einem sicheren
+Pfadsegment.
 
 Nicht als Template ausgewertet (Platzhalter bleiben wörtlich stehen): alle `command`, `source.update.labels`,
 `source.update.project`, `shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
@@ -1178,15 +1215,17 @@ nach jedem erfolgreichen Reload. Schritte überlappen nie; es gibt keine persist
 
 0. **Gate:** Ist der Controller nicht bereit (Recovery läuft), pausiert oder im Drain/Shutdown, wird der ganze
    Schritt übersprungen.
-1. **Pollen** (alle aktiven Source-Workflows parallel; deaktivierte erscheinen nur als `disabled`): Liste der Source
-   mit dem pushbaren Filterteil (gleiche Source + gleicher Pushdown = ein API-Aufruf pro Schritt). Fehler einer
-   Source betreffen nur deren Workflows (`source_error`).
+1. **Pollen** (alle aktiven Source-Workflows parallel; deaktivierte erscheinen nur als `disabled`): Liste jeder
+   Source des Workflows mit dem pushbaren Filterteil (gleiche Source + gleicher Pushdown = ein API-Aufruf pro
+   Schritt). Fehler einer Source betreffen nur deren Workflows bzw. bei mehreren Sources nur deren Items
+   (`source_error` am Workflow und an der Source; die übrigen Sources werden normal geplant).
 2. **Deduplizieren** pro `(Source, Item, Workflow)`.
 3. **Billiger Filter** (teure Felder = unknown): `false` → verworfen. **Item-Priorität** bestimmen (darf teure
    Felder laden).
 4. **Sortieren** aller Kandidaten aller Workflows (§6.2).
 5. Pro Kandidat **sequentiell** in dieser Reihenfolge:
-   1. freie Kapazität global und für den Workflow? (zuerst, damit volle Limits keine API-Aufrufe kosten)
+   1. freie Kapazität global, für den Workflow und ggf. je Source (`max_concurrent_per_source`)? (zuerst, damit
+      volle Limits keine API-Aufrufe kosten)
    2. aktiver Run desselben Workflows für dieses Item (Lock) → `locked`
    3. aktiver Retry-Block → `blocked`
    4. Workflow-Conditions (einmal pro Schritt und Workflow, ggf. aus dem `cache`)
@@ -1203,14 +1242,17 @@ Diagnose je Workflow (letzter Schritt, max. 500 Kandidaten) unter `GET /api/v1/w
 ### 6.2 Priorität und Tie-Breaker
 
 Totale Ordnung über alle Kandidaten: (1) **Workflow-Priorität** absteigend (effektiv, inkl. Override),
-(2) **Item-Priorität** absteigend, (3) Erstellungszeit des Items aufsteigend (fehlend/ungültig zuletzt),
-(4) Item-Schlüssel natürlich aufsteigend (`repo:9` < `repo:10`), (5) Workflow-ID aufsteigend. Ein Item mit hoher
+(2) **Item-Priorität** absteigend, (3) Position der Source in `trigger.sources` aufsteigend (seit 0.3.0; bei
+`source: <id>` immer 0), (4) Erstellungszeit des Items aufsteigend (fehlend/ungültig zuletzt),
+(5) Item-Schlüssel natürlich aufsteigend (`repo:9` < `repo:10`), (6) Workflow-ID aufsteigend. Ein Item mit hoher
 Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität. Kein Aging.
 
 ### 6.3 Limits
 
-- Global `scheduler.max_concurrent` und pro Workflow `max_concurrent` gelten nur für **automatische** Starts
-  (Source, Cron). Aktive Runs **aller** Trigger zählen (inkl. manueller und `recovery_pending`).
+- Global `scheduler.max_concurrent`, pro Workflow `max_concurrent` und (seit 0.3.0) pro Source des Workflows
+  `max_concurrent_per_source` gelten nur für **automatische** Starts (Source, Cron). Aktive Runs **aller** Trigger
+  zählen (inkl. manueller und `recovery_pending`; für das Source-Limit die Runs des Workflows mit Items dieser
+  Source).
 - Aktiv = `reserved`, `starting`, `running`, `cancelling`, `finalizing`, `recovery_pending` (also auch während
   Abschluss-Hooks laufen).
 - Overrides wirken sofort.
@@ -1245,9 +1287,12 @@ UI oder `POST /api/v1/workflows/:id/start` `{"item"?: "…", "parameters"?: {…
   den Filter-Recheck vor `on_start`.
 - **Umgeht nicht:** den Lock pro Workflow+Item (HTTP 409 `lock_conflict`), Drain/Shutdown, laufende Recovery,
   Parametervalidierung.
-- Source-Workflow: Item-Referenz Pflicht – `123`, `#123`, `owner/repo#123` oder
+- Source-Workflow: Item-Referenz Pflicht – `123`, `#123`, `owner/repo#123`,
   `https://github.com/owner/repo/issues/123` bzw. `/pull/123` (Owner/Repo ohne Groß-/Kleinschreibung, muss zur
-  Source passen); das Item muss existieren. Andere Trigger: Item verboten.
+  Source passen) oder (seit 0.3.0) `<source>:<ref>` wie `project_a:123`; das Item muss existieren. Bei mehreren
+  Sources wird die Source aus der Referenz abgeleitet (URL, `owner/repo#123`, `<source>:123`); passt keine oder –
+  bei einer bloßen Nummer – mehr als eine Source, folgt `400 manual_item_invalid_ref` mit Hinweis. Andere Trigger:
+  Item verboten.
 - Manuelle Runs zählen zu den Limits automatischer Starts und zum Fehlerzähler.
 
 ### 6.7 Cron
@@ -1347,7 +1392,9 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
 `project.*`-Felder (`projectFields`), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
-Textausgabe `filter:`). Reserviert nichts, startet keine Worker oder Actions
+Textausgabe `filter:`). Bei mehreren Sources (seit 0.3.0) je Source eine Zeile mit gepollten Items, Pushdown und
+ggf. Fehler (`source.sources`), je Kandidat `sourceId`, bei `max_concurrent_per_source` die Auslastung je Source
+(`capacity.perSource`, Textzeile `capacity per source:`). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 
@@ -1793,6 +1840,76 @@ Der geladene Workflow enthält den eingesetzten Baum
 `all: [ { all: [labels…, is_pull_request…, dependencies…] }, labels contains backend ]`; der Pushdown flacht ihn
 zu `labels=ready-for-coding,backend` ab. Eine Änderung an `filters/ready-for-coding.yaml` wirkt nach
 `config reload` auf Coder und View zugleich.
+
+### 7.9 Ein Workflow für mehrere Repositories
+
+Ein Coder für zwei Repositories mit unterschiedlichem Basis-Branch. Je Repository läuft höchstens ein Run, zusammen
+höchstens zwei; bei gleicher Item-Priorität wird `project_a` vor `project_b` bedient.
+
+```yaml
+# example: multi-source
+# extends: github
+# file: sources.yaml
+sources:
+  project_a:
+    type: github
+    owner: example
+    repository: project-a
+    identity: maintainer
+    vars: { base_branch: main, test_command: npm test }
+  project_b:
+    type: github
+    owner: example
+    repository: project-b
+    identity: maintainer
+    vars: { base_branch: develop, test_command: make check }
+```
+
+```yaml
+# example: multi-source
+# file: workflows/coder-all.yaml
+id: coder-all
+identity: coder
+max_concurrent: 2
+max_concurrent_per_source: 1
+trigger: { type: source, sources: [project_a, project_b] }
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-coding }
+    - { field: is_pull_request, operator: equals, value: false }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  args: ['{item.url}']
+  env:
+    BASE_BRANCH: '{source.vars.base_branch}'
+    TEST_COMMAND: '{source.vars.test_command}'
+  secrets:
+    GH_TOKEN: { identity: coder }
+on_start:
+  - type: source.update
+    labels: { add: [coding], remove: [ready-for-coding] }
+on_success:
+  - type: source.update
+    labels: { add: [ready-for-review], remove: [coding] }
+  - type: source.comment
+    message: 'Fertig für {source.repository} (Basis {source.vars.base_branch}): {result.message}'
+on_failure:     [ { type: source.update, labels: { add: [needs-maintainer], remove: [coding] } } ]
+on_crash:       [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+on_start_error: [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+on_timeout:     [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+on_cancel:      [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
+```
+
+Labels, Kommentare und `{source.*}` beziehen sich immer auf das Repository des Items. Manuell gestartet wird mit
+URL oder `project_b:12`. Der Dry-Run zeigt je Source die gepollten Items:
+
+```text
+  trigger: sources project_a, project_b
+  capacity per source: project_a 0/1, project_b 0/1
+  source project_a: 3 item(s) polled, pushdown {…}
+  source project_b: 1 item(s) polled, pushdown {…}
+```
 
 ---
 
@@ -2307,6 +2424,49 @@ to reference a named filter write { use: x }` (Kurzform `x` gibt es nur an der W
 **Null-Intervalle und -Timeouts**
 
 ```yaml
+# example: err-multi-source
+# extends: multi-source
+# invalid
+# expect: workflows/both.yaml: trigger.sources: "source" and "sources" are mutually exclusive
+# expect: workflows/dup.yaml: trigger.sources[1]: Source "project_a" is listed more than once
+# expect: workflows/vars.yaml: trigger.sources[2]: Unknown source "project_c"
+# expect: workflows/vars.yaml: execute.env.DEPLOY: Source variable "deploy_target" is not defined in "vars" of sources "project_a", "project_b" (sources.yaml)
+# file: workflows/both.yaml
+id: both
+trigger: { type: source, source: project_a, sources: [project_b] }
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+```yaml
+# example: err-multi-source
+# file: workflows/dup.yaml
+id: dup
+trigger: { type: source, sources: [project_a, project_a] }
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+```yaml
+# example: err-multi-source
+# file: workflows/vars.yaml
+id: vars
+trigger: { type: source, sources: [project_a, project_b, project_c] }
+execute:
+  type: shell
+  command: scripts/coder.sh
+  env:
+    BASE_BRANCH: '{source.vars.base_branch}'   # in beiden bekannten Sources definiert
+    DEPLOY: '{source.vars.deploy_target}'      # fehlt in beiden
+```
+
+`sources: []` → `"sources" must not be empty`; `max_concurrent_per_source: 0` → `Must be greater than 0`; weder `source` noch `sources` → `A source trigger needs "source:
+<id>" or "sources: [<id>, ...]"`; `max_concurrent_per_source` an einem Cron-/Manual-Workflow →
+`"max_concurrent_per_source" is only allowed for workflows with a source trigger`. Projektfelder, die nicht alle
+Sources mit gleicher Art deklarieren: im Filter `… workflows with several sources only offer project fields declared
+by all their sources (missing in "…")`, in `source.update.project` `… it is not declared in "project.fields" of all
+sources of the workflow (missing in "…")` bzw. `Project field "…" has different kinds in the sources of the
+workflow`.
+
+```yaml
 # example: err-zero-durations
 # extends: minimal
 # invalid
@@ -2378,7 +2538,9 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 
 ## 9. Checkliste „neuen Workflow anlegen“
 
-1. **Trigger wählen:** `source` (Items), `schedule` (Cron) oder `manual`.
+1. **Trigger wählen:** `source` (Items), `schedule` (Cron) oder `manual`. Gleiche Abläufe für mehrere Repositories
+   als **ein** Workflow mit `sources: [...]` (Reihenfolge = Tie-Breaker), Unterschiede je Repository als
+   `vars` an der Source (`{source.vars.<Name>}`), bei Bedarf `max_concurrent_per_source`.
 2. **Voraussetzungen:** Source in `sources.yaml`, Identities in `identities.yaml`, Private Keys/Tokens als
    Umgebungsvariablen des Dienstes (Env-Datei, danach Neustart), App-Rechte prüfen. Für Projektfelder: `project`
    an der Source mit allen benötigten Feldern und passender Art; Org-Projekt → App-Recht **Projects: Read**,
@@ -2399,7 +2561,8 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 7. **Validieren:** `adispatch config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
 8. **Trockenlauf:** `adispatch workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
    (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität; bei Projektfeldern die Zeilen
-   `project fields:` (Werte oder Unknown-Grund, z. B. fehlende Rechte).
+   `project fields:` (Werte oder Unknown-Grund, z. B. fehlende Rechte); bei mehreren Sources je Source eine Zeile
+   `source <id>: … polled` (und ggf. `SOURCE ERROR`).
 9. **Aktivieren:** `enabled: true` setzen und `adispatch config reload --config-dir <dir>` (bei Fehlern
    bleibt die alte Konfiguration aktiv). Alternativ zuerst ein manueller Start über die UI.
 10. **Beobachten:** erster Run in der UI (Status, Logs, Lifecycle-Journal), ggf. `max_concurrent` per Override

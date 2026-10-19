@@ -22,6 +22,22 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   fassen geänderte Labels und Projektfelder zusammen.
 - Beispiele: `examples/config/workflows/reviewer-project-b.yaml` setzt den Status, Coder-Workflows in `init` und
   `examples/config` enthalten ein auskommentiertes `project:`-Beispiel; Konfigurationsreferenz §3.4.11, §7.7, §8.
+- **Ein Workflow für mehrere Sources:** `trigger: { type: source, sources: [project_a, project_b] }` als Alternative zu
+  `source: <id>` (nicht leer, eindeutig, gleicher Adaptertyp). Der Planer fragt jede Source ab; Kandidaten aller
+  Sources konkurrieren nach Item-Priorität, bei Gleichstand gilt die Reihenfolge der Liste. Locks, Retry-Blocks und
+  Historie bleiben pro Item-Schlüssel `<source>:<nr>`; `max_concurrent` gilt für den Workflow insgesamt, neu ist
+  `max_concurrent_per_source` (Entscheidung `source_limit`). Fällt eine Source aus, laufen die anderen weiter.
+  `project.*` in Filter, `item_priority` und `source.update.project` nur, wenn alle Sources das Feld mit gleicher Art
+  deklarieren.
+- **Source-Variablen:** `sources.<id>.vars` (Name → String) und der Platzhalter `{source.vars.<name>}` überall, wo
+  `{source.*}` erlaubt ist (auch bei einer Source); fehlt die Variable in einer Source des Workflows, nennt die
+  Validierung diese Sources.
+- Dry-Run, Planungsdiagnose, API und Weboberfläche zeigen alle Sources: `trigger.sources`,
+  `maxConcurrentPerSource`, je Source gepollte Items, Pushdown und Fehler (`sources[]` neben den bisherigen Feldern
+  `sourceId`, `polled`, `pushdown`, `error`), `capacity.perSource`; Textausgabe mit einer Zeile je Source.
+- Manuelle Starts akzeptieren `<source>:<nr>` als Item-Referenz; bei mehreren Sources wird die Source aus URL bzw.
+  Präfix abgeleitet, eine mehrdeutige Referenz (`#7`) wird mit Hinweis abgelehnt. Konfigurationsreferenz §3.2,
+  §3.4.2, §5, §6, §7.9, §8.
 
 ### Geändert
 

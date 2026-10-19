@@ -109,7 +109,7 @@ async function load(name: string): Promise<Awaited<ReturnType<typeof loadConfig>
 
 describe('docs/configuration-reference.md', () => {
   it('contains the documented example sets', () => {
-    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters']) {
+    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters', 'multi-source']) {
       expect(sets.get(name)?.invalid, name).toBe(false);
     }
     expect([...sets.values()].filter((s) => s.invalid).length).toBeGreaterThanOrEqual(10);
@@ -151,6 +151,7 @@ describe('docs/configuration-reference.md', () => {
   it('documents every placeholder', () => {
     for (const p of PLACEHOLDERS) expect(markdown, p.name).toContain(`\`{${p.name}}\``);
     expect(markdown).toContain('`{parameters.<name>}`');
+    expect(markdown).toContain('`{source.vars.<name>}`');
     expect(markdown).toContain(`\`${DEFAULT_WORKING_DIRECTORY}\``);
   });
 
