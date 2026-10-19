@@ -629,7 +629,9 @@ on_result:                       # benannte Ergebnisse (Ergebnisdatei "outcome")
   mit gleicher Art deklarieren (Regel wie bei Views, §4.7.1); die `state`-Regel (§4.5) und der Pushdown gelten je
   Source. `{source.vars.<Name>}` muss in allen Sources definiert sein.
 - Ein Run kennt nur seine Source: `{source.*}`, `{item.*}`, Lifecycle-Actions, Identity-Fallback und Run-Snapshot
-  beziehen sich auf die Source des Items.
+  beziehen sich auf die Source des Items. Ein eigenes `execute.working_directory` sollte `{source.id}` oder
+  `{item.key}` enthalten (oder beim Default `{workflow.id}/{run.id}` bleiben), damit sich gleiche Nummern aus
+  verschiedenen Repositories nicht dasselbe Verzeichnis teilen.
 - Manueller Start: die Source folgt aus der Item-Referenz (URL, `owner/repo#nr` oder `<source>:<nr>`); eine bloße
   Nummer ist bei mehreren Sources mehrdeutig und wird mit Hinweis abgelehnt (§6.6).
 - `sources: [x]` mit einem Eintrag verhält sich wie `source: x`.
@@ -1345,7 +1347,13 @@ Diagnose je Workflow (letzter Schritt, max. 500 Kandidaten) unter `GET /api/v1/w
 Totale Ordnung über alle Kandidaten: (1) **Workflow-Priorität** absteigend (effektiv, inkl. Override),
 (2) **Item-Priorität** absteigend, (3) Position der Source in `trigger.sources` aufsteigend (seit 0.3.0; bei
 `source: <id>` immer 0), (4) Erstellungszeit des Items aufsteigend (fehlend/ungültig zuletzt),
-(5) Item-Schlüssel natürlich aufsteigend (`repo:9` < `repo:10`), (6) Workflow-ID aufsteigend. Ein Item mit hoher
+(5) Item-Schlüssel natürlich aufsteigend (`repo:9` < `repo:10`), (6) Workflow-ID aufsteigend.
+
+Die Source-Position (3) gilt über alle Workflows hinweg, nicht nur innerhalb eines Workflows (sonst wäre die Ordnung
+nicht eindeutig). Nebeneffekt: Bei gleicher Workflow- **und** Item-Priorität verliert ein Item einer späteren Source
+eines Multi-Source-Workflows einen knappen globalen Slot auch gegen gleichrangige Items anderer Workflows (deren
+Items haben Position 0 bzw. eine frühere Position) – unabhängig von der Erstellungszeit. Wer das nicht will, gibt dem
+Workflow bzw. den Items eine passende Priorität. Ein Item mit hoher
 Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität. Kein Aging.
 
 ### 6.3 Limits

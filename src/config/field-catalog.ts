@@ -61,6 +61,12 @@ export interface FieldContext {
   extra?: readonly FieldDefinition[];
   /** Explanation for an undeclared `project.*` field (e.g. which view sources lack it). */
   projectHint?: (field: string) => string | undefined;
+  /**
+   * True if some source declares `project.<name>` (only not with the same kind
+   * everywhere): then no other field is suggested ("did you mean"), the hint
+   * explains what is missing or differs.
+   */
+  projectDeclared?: (field: string) => boolean;
 }
 
 function definitions(ctx: FieldContext): readonly FieldDefinition[] | undefined {
@@ -108,6 +114,11 @@ function commonProjectHint(sources: readonly SourceConfig[], field: string, owne
   return `its kind differs between the sources of the ${owner} (${kinds.join(', ')}); declare it with the same kind everywhere`;
 }
 
+function declaredBySome(sources: readonly SourceConfig[], field: string): boolean {
+  const name = field.slice(PROJECT_FIELD_PREFIX.length);
+  return sources.some((s) => s.project !== null && Object.hasOwn(s.project.fields, name));
+}
+
 /**
  * Field context of a view over `sources` (all of the same type): only
  * `project.*` fields declared by every source with the same kind.
@@ -118,6 +129,7 @@ export function viewFieldContext(sources: readonly SourceConfig[]): FieldContext
     view: true,
     extra: commonProjectFields(sources),
     projectHint: (field) => commonProjectHint(sources, field, 'view'),
+    projectDeclared: (field) => declaredBySome(sources, field),
   };
 }
 
@@ -134,6 +146,7 @@ export function workflowFieldContext(sources: readonly SourceConfig[]): FieldCon
     view: false,
     extra: commonProjectFields(sources),
     projectHint: (field) => commonProjectHint(sources, field, 'workflow'),
+    projectDeclared: (field) => declaredBySome(sources, field),
   };
 }
 
@@ -172,7 +185,8 @@ function unknownFieldMessage(field: string, ctx: FieldContext, defs: readonly Fi
   if (!ctx.view && VIEW_RUN_FIELDS.some((d) => d.name === field)) {
     return `Field "${field}" is only available in views, not in workflows`;
   }
-  const suggestion = suggestField(field, defs.map((d) => d.name));
+  const declared = field.startsWith(PROJECT_FIELD_PREFIX) && (ctx.projectDeclared?.(field) ?? false);
+  const suggestion = declared ? undefined : suggestField(field, defs.map((d) => d.name));
   const hint = suggestion ? ` (did you mean "${suggestion}"?)` : '';
   if (field.startsWith(PROJECT_FIELD_PREFIX) && ctx.projectHint) {
     const why = ctx.projectHint(field);

@@ -165,7 +165,7 @@ describe('config: multi-source workflows and source variables (WI-20)', () => {
     expect(r.errors.sort()).toEqual(
       [
         'workflows/w.yaml: filter.all[1].field: Unknown project field "project.Sprint": workflows with several sources only offer project fields declared by all their sources (missing in "repo_b")',
-        'workflows/w.yaml: item_priority.rules[0].when.field: Unknown project field "project.Estimate": its kind differs between the sources of the workflow ("repo_a": number, "repo_b": text); declare it with the same kind everywhere (did you mean "project.Status"?)',
+        'workflows/w.yaml: item_priority.rules[0].when.field: Unknown project field "project.Estimate": its kind differs between the sources of the workflow ("repo_a": number, "repo_b": text); declare it with the same kind everywhere',
         'workflows/w.yaml: on_start[0].project.Estimate: Project field "Estimate" has different kinds in the sources of the workflow ("repo_a": number, "repo_b": text); declare it with the same kind everywhere',
         'workflows/w.yaml: on_start[0].project.Sprint: Unknown project field "Sprint": it is not declared in "project.fields" of all sources of the workflow (missing in "repo_b")',
         'workflows/w.yaml: on_start[0].project.Statsu: Unknown project field "Statsu": it is not declared in "project.fields" of any source of the workflow ("repo_a", "repo_b") (did you mean "Status"?)',
