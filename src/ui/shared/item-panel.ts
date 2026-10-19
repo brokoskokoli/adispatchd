@@ -391,7 +391,7 @@ export function itemPanel<E extends ElementLike>(h: HFn<E>, item: PanelItem, sta
     return h(
       'tr',
       null,
-      h('td', null, h('strong', null, f.name), h('div', { class: 'muted' }, f.kind)),
+      h('td', null, h('strong', null, f.name), h('div', { class: 'muted field-kind' }, f.kind)),
       h('td', null, fieldValueText(f)),
       h('td', null, input, f.problem ? h('div', { class: 'error-text' }, f.problem) : null),
       h('td', null, h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: cleared, on: { change: (ev: unknown) => on.onFieldClear(f.name, ev) } }), 'clear')),
@@ -401,7 +401,7 @@ export function itemPanel<E extends ElementLike>(h: HFn<E>, item: PanelItem, sta
   const project = item.project
     ? h(
         'section',
-        { class: 'card' },
+        { class: 'card span-all' },
         h('h2', null, `Project fields (${item.project.owner}/${item.project.number})`),
         item.project.error ? h('div', { class: 'alert alert-warn' }, `Project metadata unavailable: ${item.project.error}`) : null,
         item.project.fields.length === 0
@@ -421,6 +421,7 @@ export function itemPanel<E extends ElementLike>(h: HFn<E>, item: PanelItem, sta
     { class: 'item-panel' },
     header,
     h('div', { class: 'grid' }, identity, comment, labels, project),
+    h('div', { class: 'spacer' }),
     h('section', { class: 'card' }, h('h2', null, 'Recent UI actions on this item'), auditTable(h, item.recentActions, { time: on.time, link: on.link, showItem: false })),
   );
 }

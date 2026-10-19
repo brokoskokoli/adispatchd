@@ -252,6 +252,8 @@ pre.comment-preview, pre.confirm-line {
 .identity-field select { max-width: 320px; }
 a.item-act { font-size: 12.5px; white-space: nowrap; }
 .item-search .input { flex: 1 1 320px; }
+.item-panel .check, .item-panel .field-kind { white-space: nowrap; }
+.item-panel .spacer { height: 14px; }
 
 /* ---------- dialog ---------- */
 .dialog {
