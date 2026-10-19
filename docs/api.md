@@ -78,7 +78,7 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 
 ```json
 {
-  "version": "0.2.0", "startedAt": "…", "time": "…",
+  "version": "0.3.0", "startedAt": "…", "time": "…",
   "readiness": { "ready": true, "checks": { … } },
   "scheduler": { "state": "running|paused|draining|stopping|recovering", "ready": true, "paused": false, "draining": false,
                  "stopping": false, "pollingIntervalMs": 30000,

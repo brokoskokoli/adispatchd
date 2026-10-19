@@ -61,7 +61,7 @@ import { createApiServer, EventHub, type ReadinessReport } from './api/index.js'
 import type { FastifyInstance } from 'fastify';
 
 /** Package version reported by `/api/v1/status`. */
-export const APP_VERSION = '0.2.0';
+export const APP_VERSION = '0.3.0';
 /** Default drain timeout on SIGTERM before cancel-all (see docs/handoff/WI-08.md). */
 export const DEFAULT_DRAIN_TIMEOUT_MS = 10 * 60_000;
 /** Default time for cancelled runs (incl. `on_cancel`) before hooks are interrupted. */
