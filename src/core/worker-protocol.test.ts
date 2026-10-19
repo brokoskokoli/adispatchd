@@ -44,6 +44,19 @@ describe('parseWorkerResult', () => {
     expect(parsed.warnings).toEqual([expect.stringMatching(/^outcome ignored: expected an ID/)]);
   });
 
+  it('describes an ignored outcome with a bounded preview only', () => {
+    const preview = (outcome: unknown): string => {
+      const parsed = parseWorkerResult(JSON.stringify({ schema_version: 1, result: 'success', outcome }));
+      return parsed.ok ? (parsed.warnings[0] ?? '') : '';
+    };
+    expect(preview('x'.repeat(500_000))).toMatch(new RegExp(`got "${'x'.repeat(80)}"…$`));
+    expect(preview('bad id')).toMatch(/got "bad id"$/);
+    expect(preview(Array.from({ length: 1000 }, () => 'y'.repeat(100)))).toMatch(/got an array \(1000 entries\)$/);
+    expect(preview({ nested: 'z'.repeat(10_000) })).toMatch(/got an object$/);
+    expect(preview(42)).toMatch(/got 42$/);
+    expect(preview('x'.repeat(500_000)).length).toBeLessThan(250);
+  });
+
   it('rejects oversized files', () => {
     const big = JSON.stringify({ schema_version: 1, result: 'success', message: 'x'.repeat(MAX_RESULT_FILE_BYTES) });
     const parsed = parseWorkerResult(big);

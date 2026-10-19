@@ -14,6 +14,7 @@ import {
   ACTIVE_STATUSES,
   canTransition,
   createRunId,
+  isHookName,
   isTechnicalFailure,
   isTerminalStatus,
   type BusinessResult,
@@ -596,7 +597,7 @@ function toRun(row: Row): RunRecord {
     statusMessage: str(row.status_message),
     result: fromJson(row.result_json),
     outcome: str(row.outcome),
-    completionHook: (str(row.completion_hook) as HookName | null) ?? null,
+    completionHook: completionHookOf(row.completion_hook),
     error: fromJson(row.error_json),
     lifecycleStatus: (str(row.lifecycle_status) as LifecycleStatus | null) ?? null,
     blockGeneration: num(row.block_generation),
@@ -607,6 +608,12 @@ function toRun(row: Row): RunRecord {
     finishedAt: str(row.finished_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+/** Persisted completion hook; a value that is no valid hook name (should not happen) reads as `null`. */
+function completionHookOf(value: unknown): HookName | null {
+  const hook = str(value);
+  return hook !== null && isHookName(hook) ? hook : null;
 }
 
 function toLock(row: Row): LockRecord {

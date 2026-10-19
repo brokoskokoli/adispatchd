@@ -121,11 +121,20 @@ function dropInvalidOutcome(json: unknown, warnings: string[]): unknown {
   if (typeof json !== 'object' || json === null || Array.isArray(json) || !Object.hasOwn(json, 'outcome')) return json;
   const { outcome, ...rest } = json as Record<string, unknown>;
   if (typeof outcome === 'string' && CONFIG_ID_PATTERN.test(outcome)) return json;
-  const shown = JSON.stringify(outcome) ?? String(outcome);
   warnings.push(
-    `outcome ignored: expected an ID (letters, digits, "_" and "-", starting with a letter or digit, max. 64), got ${shown.length > 80 ? `${shown.slice(0, 80)}…` : shown}`,
+    `outcome ignored: expected an ID (letters, digits, "_" and "-", starting with a letter or digit, max. 64), got ${previewValue(outcome)}`,
   );
   return rest;
+}
+
+/** Short description of an untrusted JSON value; never serializes more than a bounded prefix. */
+function previewValue(value: unknown, max = 80): string {
+  if (typeof value === 'string') {
+    return value.length > max ? `${JSON.stringify(value.slice(0, max))}…` : JSON.stringify(value);
+  }
+  if (Array.isArray(value)) return `an array (${value.length} entries)`;
+  if (typeof value === 'object' && value !== null) return 'an object';
+  return String(value);
 }
 
 /** Reserved line prefix for structured worker events (Spec §9.3). */

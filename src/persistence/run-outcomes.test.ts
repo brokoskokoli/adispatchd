@@ -60,6 +60,10 @@ describe('schema v3 – run outcomes and completion hooks', () => {
 
       const plain = completeRun(p, reserveSource(p, 'reviewer', 'project_a:2').id, SUCCESS);
       expect(plain).toMatchObject({ outcome: null, completionHook: null });
+
+      // A stored value that is no hook name reads as null instead of being cast blindly.
+      p.db.prepare('UPDATE runs SET completion_hook = ? WHERE id = ?').run('garbage', plain.id);
+      expect(p.runs.require(plain.id).completionHook).toBeNull();
     } finally {
       p.close();
     }
