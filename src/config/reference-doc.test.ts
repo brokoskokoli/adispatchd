@@ -166,6 +166,13 @@ describe('docs/configuration-reference.md', () => {
     }
   });
 
+  it('documents the value of every project field kind in source.update and the write mutations (WI-16)', () => {
+    for (const kind of PROJECT_FIELD_KINDS) expect(markdown, kind).toMatch(new RegExp(`\\| \`${kind}\` \\| (String|Zahl|Datum)`));
+    for (const name of ['addProjectV2ItemById', 'updateProjectV2ItemFieldValue', 'clearProjectV2ItemFieldValue', 'Projects: Read and write']) {
+      expect(markdown, name).toContain(name);
+    }
+  });
+
   it('documents the allowed operators per field type (validated since WI-13)', () => {
     for (const [type, operators] of Object.entries(OPERATORS_BY_TYPE)) {
       expect(markdown, type).toContain(`| \`${type}\` | ${operators.join(', ')} |`);

@@ -61,7 +61,8 @@ export class LifecycleBusyError extends LifecycleError {
 /**
  * Convert any thrown value into an {@link ActionErrorInfo}.
  *
- * - `SourceError`: keeps `kind`, `retryable`, `outcomeUnknown`, `status`, `retryAfterMs`.
+ * - `SourceError`: keeps `kind`, `retryable`, `outcomeUnknown`, `status`, `retryAfterMs` and
+ *   `details.applied` (changes made before the failure).
  * - `TemplateError` and other `OrchestratorError`s: not retryable (configuration problem).
  * - {@link LifecycleError}: its own flags.
  * - Anything else (unexpected exception): retryable, so the configured attempts apply.
@@ -69,6 +70,8 @@ export class LifecycleBusyError extends LifecycleError {
 export function describeActionError(err: unknown, redact: Redactor = (s) => s): ActionErrorInfo {
   const message = redact(errorMessage(err));
   if (err instanceof SourceError) {
+    // What a partially successful `source.update` applied before failing (journal, WI-16 review).
+    const applied = err.details?.applied;
     return compact({
       code: err.code,
       message,
@@ -77,6 +80,7 @@ export function describeActionError(err: unknown, redact: Redactor = (s) => s): 
       kind: err.kind,
       status: err.status,
       retryAfterMs: err.retryAfterMs,
+      details: applied !== undefined ? { applied: redactValue(applied, redact) } : undefined,
     });
   }
   if (err instanceof LifecycleError) {

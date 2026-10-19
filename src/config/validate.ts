@@ -15,7 +15,8 @@ import {
   type TemplateMode,
   type TemplateScope,
 } from '../core/index.js';
-import { checkFieldName, checkFilterFields, sourceFieldContext, viewFieldContext, type FieldIssue } from './field-catalog.js';
+import { PROJECT_FIELD_PREFIX, valueProblem } from '../sources/index.js';
+import { checkFieldName, checkFilterFields, sourceFieldContext, suggestField, viewFieldContext, type FieldIssue } from './field-catalog.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssueCollector, IssuePath } from './issues.js';
 import type {
@@ -315,6 +316,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   }
 
   // Hooks
+  const triggerSource = wf.trigger.type === 'source' ? input.sources[wf.trigger.source] : undefined;
   const actionIds = new Map<string, string>();
   for (const hook of HOOK_NAMES) {
     wf.hooks[hook].forEach((action, i) => {
@@ -325,7 +327,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
         issues.error(file, [...at, 'id'], `Duplicate action ID "${action.id}" (also used at ${previous})`);
       }
       actionIds.set(action.id, where);
-      validateAction(action, hook, at, isSource, parameterNames, input, issues, file);
+      validateAction(action, hook, at, isSource, parameterNames, input, issues, file, triggerSource);
     });
   }
 }
@@ -347,6 +349,7 @@ function validateAction(
   input: SemanticInput,
   issues: IssueCollector,
   file: string,
+  source: SourceConfig | undefined,
 ): void {
   const scope: TemplateScope = {
     run: true,
@@ -360,8 +363,9 @@ function validateAction(
   }
   switch (action.type) {
     case 'source.update':
-      if (action.labels.add.length === 0 && action.labels.remove.length === 0) {
-        issues.error(file, [...at, 'labels'], '"source.update" must add or remove at least one label');
+      if (action.project !== undefined) checkProjectUpdate(action.project, source, issues, file, [...at, 'project']);
+      if (action.labels.add.length === 0 && action.labels.remove.length === 0 && action.project === undefined) {
+        issues.error(file, [...at, 'labels'], '"source.update" must add or remove at least one label or set a project field');
       }
       // Labels compare case-insensitively (GitHub, adapter): `Ready` and `ready` are the same label.
       for (const label of action.labels.add) {
@@ -382,6 +386,49 @@ function validateAction(
       checkEnvNames(Object.keys(action.env), issues, file, [...at, 'env']);
       checkLiteralSecrets(action.env, issues, file, [...at, 'env']);
       break;
+  }
+}
+
+/**
+ * `source.update.project` (WI-16): at least one field, every key declared in
+ * `project.fields` of the trigger source, value type per kind. Values are no
+ * templates (like labels). Without a known trigger source other errors are
+ * reported already.
+ */
+function checkProjectUpdate(
+  project: Readonly<Record<string, unknown>>,
+  source: SourceConfig | undefined,
+  issues: IssueCollector,
+  file: string,
+  at: IssuePath,
+): void {
+  const names = Object.keys(project);
+  if (names.length === 0) {
+    issues.error(file, at, '"project" must set at least one field');
+    return;
+  }
+  if (!source) return;
+  if (!source.project) {
+    issues.error(file, at, `Source "${source.id}" has no "project" in sources.yaml; project fields cannot be set`);
+    return;
+  }
+  const declared = source.project.fields;
+  for (const name of names) {
+    const kind = Object.hasOwn(declared, name) ? declared[name] : undefined;
+    if (!kind) {
+      const bare = name.startsWith(PROJECT_FIELD_PREFIX) ? name.slice(PROJECT_FIELD_PREFIX.length) : undefined;
+      // `project.<Name>` written as key: suggest on the name without the prefix.
+      const suggestion = suggestField(bare ?? name, Object.keys(declared));
+      const hint = suggestion ? ` (did you mean "${suggestion}"?)` : '';
+      issues.error(
+        file,
+        [...at, name],
+        `Unknown project field "${name}": it is not declared in "project.fields" of source "${source.id}"${hint}`,
+      );
+      continue;
+    }
+    const problem = valueProblem(kind, project[name]);
+    if (problem) issues.error(file, [...at, name], `Invalid value for project field "${name}" (${kind}): ${problem}`);
   }
 }
 

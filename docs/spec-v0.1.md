@@ -500,6 +500,11 @@ Unterstützte Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_sta
 Aktionstypen V1:
 
 - `source.update`: durch Adapter unterstützte Änderung am Source-Item (z. B. GitHub Labels).
+  **Nachtrag 0.3.0 (WI-16):** zusätzlich `project: { <Feld>: <Wert> }` – setzt Felder des in `sources.yaml`
+  deklarierten GitHub-Projekts (Option, Text, Zahl, Datum, Iteration; `null` leert). Erst Labels, dann
+  Projektfelder; vorher frisch lesen und nur Abweichungen schreiben, fehlendes Item wird dem Projekt hinzugefügt.
+  Schreib-Identity: `project.identity` der Source, wenn ausdrücklich gesetzt, sonst die der Action. Details:
+  [Konfigurationsreferenz §3.4.11](configuration-reference.md#3411-actions).
 - `source.comment`: Kommentar über Adapter, mit optionaler Action-Identity.
 - `shell`: beliebiges Shell-Skript mit Run-/Result-Kontext, isolierter Umgebung und konfigurierbarem Timeout.
 

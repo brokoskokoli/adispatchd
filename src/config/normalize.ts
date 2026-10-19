@@ -102,6 +102,7 @@ export function normalizeSources(raw: RawSourcesFile): Record<string, SourceConf
             owner: source.project.owner ?? source.owner,
             number: source.project.number,
             identity: source.project.identity ?? source.identity,
+            writeIdentity: source.project.identity ?? null,
             fields: { ...source.project.fields },
           }
         : null,
@@ -165,7 +166,13 @@ function normalizeAction(
   };
   switch (raw.type) {
     case 'source.update':
-      return { ...common, type: 'source.update', labels: { add: [...raw.labels.add], remove: [...raw.labels.remove] } };
+      return {
+        ...common,
+        type: 'source.update',
+        labels: { add: [...(raw.labels?.add ?? [])], remove: [...(raw.labels?.remove ?? [])] },
+        // Only present when configured, so hashes of label-only actions stay unchanged.
+        ...(raw.project !== undefined ? { project: { ...raw.project } } : {}),
+      };
     case 'source.comment':
       return { ...common, type: 'source.comment', message: raw.message, identity: raw.identity ?? null };
     case 'shell':

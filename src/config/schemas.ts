@@ -333,11 +333,26 @@ const actionCommon = {
     .optional(),
 };
 
+/**
+ * Desired value of a project field in `source.update` (WI-16): string,
+ * number or `null` (= clear). A YAML timestamp parsed as Date (YAML 1.1
+ * documents) becomes `YYYY-MM-DD` at UTC midnight, otherwise its ISO string
+ * (which the date check then rejects). Checked per kind in validate.ts.
+ */
+const projectUpdateValue = z
+  .union([z.string(), z.number(), z.null(), z.date()], { error: 'Expected a string, a number, a date or null' })
+  .transform((value) => {
+    if (!(value instanceof Date)) return value;
+    const iso = value.toISOString();
+    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso;
+  });
+
 const actionSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('source.update'),
     ...actionCommon,
-    labels: z.strictObject({ add: stringList, remove: stringList }),
+    labels: z.strictObject({ add: stringList, remove: stringList }).optional(),
+    project: z.record(z.string(), projectUpdateValue).optional(),
   }),
   z.strictObject({
     type: z.literal('source.comment'),

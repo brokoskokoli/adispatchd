@@ -70,12 +70,13 @@ sources:
     repository: project-a
     identity: maintainer
     # Optional: fields of a GitHub Projects (v2) board, usable as project.<name> in filters,
-    # item_priority and views (e.g. project.Status in [Todo, Ready]). Org projects need the app
-    # permission "Organization → Projects: Read"; user-owned projects need a github_token identity.
+    # item_priority and views (e.g. project.Status in [Todo, Ready]) and settable by source.update.
+    # Org projects need the app permission "Organization → Projects: Read" ("Read and write" to set
+    # fields); user-owned projects need a github_token identity.
     # project:
     #   owner: example        # user/org login of the project (default: owner above)
     #   number: 3             # from the project URL …/projects/3
-    #   identity: maintainer  # reads the project (default: identity above)
+    #   identity: maintainer  # reads the project (default: identity above); if set, also writes it
     #   fields:               # name as in the project (matched case-insensitively) → kind
     #     Status: single_select
     #     Priority: single_select
@@ -100,7 +101,8 @@ identities:
     private_key_env: GITHUB_CODER_PRIVATE_KEY
   # A token identity, needed to read user-owned GitHub Projects: recommended is a classic personal access
   # token of the project owner with read:project (plus repo for private repositories) – it must also be able
-  # to read the repository's issues/PRs. Fine-grained tokens are unverified for user-owned projects.
+  # to read the repository's issues/PRs. To set project fields (source.update → project) use the scope
+  # project instead of read:project. Fine-grained tokens are unverified for user-owned projects.
   # token_env names the environment variable holding the token.
   # project_reader:
   #   type: github_token
@@ -188,6 +190,8 @@ retry:
 on_start:
   - type: source.update
     labels: { add: [coding], remove: [ready-for-coding] }
+    # With a project in sources.yaml, project fields can be set too (after the labels; null clears):
+    # project: { Status: In Progress }
 on_success:
   - type: source.update
     labels: { add: [ready-for-review], remove: [coding] }

@@ -3,6 +3,34 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.3.0] – 2026-10-19
+
+### Hinzugefügt
+
+- **Projektfelder setzen:** `source.update` hat neben `labels` einen optionalen Block `project` (Feldname aus
+  `project.fields` der Trigger-Source → Wert), z. B. `project: { Status: In Progress }` in `on_start` und
+  `{ Status: Review }` in `on_success`. Werte je Art: Optionsname (`single_select`), Iterationstitel (`iteration`,
+  auch abgeschlossene), Text, Zahl, Datum `YYYY-MM-DD`; `null` leert das Feld. Die Werte werden beim Laden geprüft
+  (nicht deklarierte Felder mit „did you mean …“, falscher Werttyp, Source ohne `project`, leerer Block).
+- Ausführung im GitHub-Adapter: erst Labels, dann Projektfelder; Metadaten (Feld-IDs, Optionen, Iterationen) und das
+  Projekt-Item werden per GraphQL gelesen, gleiche Werte übersprungen, fehlende Items mit `addProjectV2ItemById`
+  hinzugefügt, sonst `updateProjectV2ItemFieldValue` bzw. `clearProjectV2ItemFieldValue` – Werte nur als
+  GraphQL-Variablen. Unbekannte/mehrdeutige Optionen, fehlende Felder oder falsche Arten sind nicht wiederholbare
+  Fehler (Meldung listet die vorhandenen Optionen); Rate-Limits und transiente Fehler laufen über
+  `lifecycle.action_retry`.
+- Das Action-Journal enthält `applied.projectFields` (und `projectItemAdded`); die Run-Events in der Weboberfläche
+  fassen geänderte Labels und Projektfelder zusammen.
+- Beispiele: `examples/config/workflows/reviewer-project-b.yaml` setzt den Status, Coder-Workflows in `init` und
+  `examples/config` enthalten ein auskommentiertes `project:`-Beispiel; Konfigurationsreferenz §3.4.11, §7.7, §8.
+
+### Geändert
+
+- `source.update.labels` ist optional, wenn `project` gesetzt ist; die Meldung ohne beides lautet jetzt
+  `"source.update" must add or remove at least one label or set a project field`.
+- Ein ausdrücklich gesetztes `project.identity` der Source schreibt auch die Projektfelder; ohne schreibt die
+  Identity der Action (Workflow → Source). Schreibrechte: App **Organization → Projects: Read and write**,
+  klassischer PAT mit Scope `project` (statt `read:project`) plus `repo`.
+
 ## [0.2.0] – 2026-10-19
 
 ### Hinzugefügt
@@ -66,5 +94,6 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
+[0.3.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/brokoskokoli/adispatchd/releases/tag/v0.1.0

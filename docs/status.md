@@ -1,9 +1,10 @@
 # Projektstand
 
-Stand: 19. Oktober 2026 · `main`, Version 0.2.0
+Stand: 19. Oktober 2026 · Branch `wi-16-project-updates`, Version 0.3.0 (noch nicht gemergt)
 
-Alle Work-Items WI-01 bis WI-15 (siehe `docs/work-items/`) sind umgesetzt. WI-14 brachte Filter auf GitHub-Projects-Felder (`project.<Feld>`), die Felder `state_reason`/`milestone`/`issue_type`, die Identity-Art `github_token` und `CHANGELOG.md`; WI-15 brachte benannte, wiederverwendbare Filter in `filters/*.yaml` (`filter: <id>` / `{ use: <id> }`, Größengrenze 10 000 Knoten). Jedes Work-Item wurde von einem Reviewer-Agent gegen seine Acceptance Criteria und die Spec geprüft, die Findings wurden behoben, dann wurde es gemergt. Details zu jedem Work-Item stehen in `docs/handoff/WI-NN.md`.
+Alle Work-Items WI-01 bis WI-16 (siehe `docs/work-items/`) sind umgesetzt. WI-14 brachte Filter auf GitHub-Projects-Felder (`project.<Feld>`), die Felder `state_reason`/`milestone`/`issue_type`, die Identity-Art `github_token` und `CHANGELOG.md`; WI-15 brachte benannte, wiederverwendbare Filter in `filters/*.yaml` (`filter: <id>` / `{ use: <id> }`, Größengrenze 10 000 Knoten); WI-16 (0.3.0) setzt GitHub-Projects-Felder per `source.update` → `project` (Item wird bei Bedarf hinzugefügt, erst lesen, dann schreiben). Jedes Work-Item wurde von einem Reviewer-Agent gegen seine Acceptance Criteria und die Spec geprüft, die Findings wurden behoben, dann wurde es gemergt. Details zu jedem Work-Item stehen in `docs/handoff/WI-NN.md`.
 
+- **Gate (0.3.0, WI-16):** `npm run check` grün auf macOS: 840 Tests (1 übersprungen); `npm run test:pack` grün. Linux-Lauf für 0.3.0 steht noch aus.
 - **Gate (0.2.0):** `npm run check` grün auf macOS und Linux (Container `node:24`): 813 Tests (1 übersprungen); `npm run test:pack` grün auf beiden.
 - **Paket-Test:** `npm run test:pack` grün (pack → install → init → start → Run → drain → Update).
 - **Dateiformate:** verbindliche Referenz in `docs/configuration-reference.md`; ein Test validiert alle Beispiele darin gegen den echten Loader.
@@ -26,7 +27,7 @@ Alle Work-Items WI-01 bis WI-15 (siehe `docs/work-items/`) sind umgesetzt. WI-14
 **P1 – blockierend**
 1. Die systemd-Tests auf einer Linux-VM durchführen (`docs/manual-tests/systemd.md`).
 2. Den Prozess-Supervisor-Spike unter Linux durchführen (`docs/manual-tests/process-supervision.md`), auch das Zusammenspiel mit `KillMode=mixed`.
-3. Den GitHub-Integrationstest gegen echte Repos durchführen: Anleitung mit 25 Testfällen, Fixture und `gh`-Befehlen in `docs/manual-tests/github.md`. Dabei die Dependencies-API, die App-Rechte und den Kommentar-Marker über `performed_via_github_app` prüfen und API-Version `2026-03-10` bestätigen; seit WI-14 auch die GitHub-Projects-Abfragen (GraphQL, org- und user-eigene Projekte, `github_token`, T25 / A12–A17).
+3. Den GitHub-Integrationstest gegen echte Repos durchführen: Anleitung mit 26 Testfällen, Fixture und `gh`-Befehlen in `docs/manual-tests/github.md`. Dabei die Dependencies-API, die App-Rechte und den Kommentar-Marker über `performed_via_github_app` prüfen und API-Version `2026-03-10` bestätigen; seit WI-14 auch die GitHub-Projects-Abfragen (GraphQL, org- und user-eigene Projekte, `github_token`, T25 / A12–A17), seit WI-16 das Setzen von Projektfeldern (Mutationen, Schreibrechte, T26 / A18–A21).
 4. Name: **Agent Dispatch Daemon**, Paket `adispatchd`, Befehl `adispatch`, Lizenz MIT. Öffentlich: https://github.com/brokoskokoli/adispatchd und npm `adispatchd`. Optional noch offen: npm-Org `@adispatchd` reservieren.
 
 **P2 – vor Release**
