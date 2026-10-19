@@ -7,6 +7,10 @@ Implementierung: `src/api/` (WI-10). Spec §15, §16, §17, §18, §21.
   Bei Nicht-Loopback-Bind wird beim Start gewarnt (Log + CLI).
 - Antworten von `/api/*`, `/health`, `/ready` tragen `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`. Es werden **nie CORS-Header** gesendet.
+- Die statische Web-UI (alle anderen Pfade) trägt dieselben Header plus die **Content-Security-Policy** als HTTP-Header:
+  `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'`,
+  ergänzt um `frame-src <origin> …` genau für die aktivierten `ui.external_links` mit `embed: true` (seit 0.3.1, WI-25;
+  aus der aktiven Konfiguration, nach einem Reload sofort; ohne solche Einträge kein `frame-src`).
 - Antworten enthalten keine Secrets (Identities nur als ID, Webhook-URLs redigiert, Fehlertexte redigiert).
   Strings aus Events/Results/Logs/Titeln sind **untrusted** – die UI rendert sie nur als Text.
 
@@ -240,7 +244,7 @@ Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_res
 
 | Methode | Pfad | Antwort |
 |---|---|---|
-| GET | `/api/v1/config` | `{"config": LoadedConfig (Webhook-URLs redigiert), "overrides"}`; `config.filters` listet die benannten Filter (`{id, file, description, filter}`, Filter expandiert) |
+| GET | `/api/v1/config` | `{"config": LoadedConfig (Webhook-URLs redigiert), "overrides", "externalLinks"}`; `config.filters` listet die benannten Filter (`{id, file, description, filter}`, Filter expandiert); `externalLinks` = nur die aktivierten `ui.external_links` in Konfigurationsreihenfolge als `[{"id","label","url","embed"}]` (seit 0.3.1, WI-25; die UI baut daraus die Toolbar-Einträge) |
 | GET | `/api/v1/config/files` | `{"files":[{"file":"workflows/coder.yaml","content":"…"}]}` – YAML read-only (Top-Level-Dateien, `workflows/`, `views/`, `filters/`), **strukturell redigiert** (unabhängig vom geladenen Stand): Werte von `url`-Keys, alles unter `headers`/`headers_env`, jeder String-Wert mit `http(s)://` auf Schema+Host gekürzt (z. B. Webhook-Literale in `env:`), Keys wie `*token`, `*secret`, `password`, … sowie Pfad/Query von URLs in Kommentaren → `[REDACTED]`. Nicht parsebare Dateien werden nicht roh ausgeliefert (`content: null`, `error` mit Zeilennummer) |
 | POST | `/api/v1/config/validate` | `{"ok", "errors":[ConfigIssue], "warnings", "hash"?}` – prüft Dateien, aktiviert nichts |
 | POST | `/api/v1/config/reload` | `200 {"ok":true,"version","hash","changed","diff","resetOverrides","warnings"}` / `422 config_invalid` (`details.errors`) – atomar, bei Fehler bleibt die aktive Konfiguration |

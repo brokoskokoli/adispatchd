@@ -117,6 +117,7 @@ Konfigurationsänderungen wirken **nur** durch einen manuellen Reload (`adispatc
 |---|---|
 | `server.host`, `server.port` | erst nach Neustart |
 | `server.allowed_hosts` | sofort (nächster Request) |
+| `ui.external_links` | sofort: Toolbar der geöffneten UI, `GET /api/v1/config`, CSP `frame-src` für neu geladene Seiten (ein neu eingebettetes Tool braucht im bereits geöffneten Tab einen Browser-Reload; die UI weist darauf hin) |
 | `scheduler.polling_interval` | für den nächsten Timer (nach dem laufenden Planungsschritt) |
 | `scheduler.max_concurrent` | sofort |
 | `workspace.*`, `lifecycle.action_retry` | für neu reservierte Runs (Snapshot) |
@@ -258,6 +259,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `notifications.on` | Liste Enum | alle drei | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. |
 | `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
 | `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
+| `ui.external_links` | Liste | `[]` | | externe Tools in der Toolbar der Web-UI (seit 0.3.1), siehe unten. `[]` = keine Einträge sichtbar. |
 
 Retention löscht nie aktive Runs, Runs mit unfertiger oder gescheiterter Lifecycle-Kette und Runs eines **aktiven**
 Retry-Blocks. Gelöscht werden DB-Zeilen, `runs/<id>/`, `logs/<id>/` und der Workspace (nur unter `base_dir`).
@@ -279,6 +281,62 @@ Zustellung: `POST` mit `content-type: application/json`, Body
 6-mal versucht (Pausen 5 s, 30 s, 2 min, 10 min, 30 min); andere Status sind endgültig. Ereignisse:
 `retry_block_created` (Retry-Block entstanden), `lifecycle_action_failed` (Action endgültig gescheitert und
 **ohne** `continue_on_error`), `recovery_failed` (Run nach Neustart nicht sicher zuordenbar → `recovery_pending`).
+
+**Externe Tools `ui.external_links`** (seit 0.3.1): beliebige lokale Werkzeuge, z. B. das Agenten-Dashboard
+[claude-inspect](https://github.com/brokoskokoli/claude_inspect), als Eintrag in der Navigation – als Link in neuem Tab
+oder eingebettet als eigene Seite. Kein Proxy: Der **Browser** spricht das Tool direkt an; die URL muss also vom Browser
+aus erreichbar sein (lokal oder über einen Reverse Proxy). Betrieb von claude-inspect: [operations.md](operations.md).
+
+| Schlüssel | Typ | Pflicht | Default | Bedeutung |
+|---|---|---|---|---|
+| `id` | Konfigurations-ID | ja | | eindeutig innerhalb der Liste; Teil der Route `#/tools/<id>` |
+| `label` | String | ja | | Text des Eintrags, 1–40 Zeichen (nur als Text dargestellt, nie als HTML) |
+| `url` | String | ja | | absolute `http(s)`-URL, wie der Browser das Tool erreicht. Keine Zugangsdaten (`user:pass@` → Fehler). Query-Parameter sind erlaubt; ein Parameter, der wie ein Token aussieht (`t`, `token`, `access_token`, `key`, `secret`, `password`, …), ergibt eine **Warnung** – der Wert wäre in `GET /api/v1/config` und in der UI sichtbar. |
+| `enabled` | Boolean | nein | `true` | `false` blendet den Eintrag aus (auch in API und CSP) |
+| `embed` | Boolean | nein | `false` | `false` = Link in neuem Tab (`noopener noreferrer`, Symbol „↗“); `true` = Seite `#/tools/<id>` mit dem Tool in einem `iframe` (Sandbox `allow-scripts allow-same-origin allow-forms allow-popups allow-downloads`, kein Referrer) und „Open in new tab“ |
+
+Für jeden aktivierten Eintrag mit `embed: true` erlaubt die Content-Security-Policy der UI dessen Origin
+(`schema://host[:port]`) in `frame-src`; sonst bleibt die Policy unverändert. Ob das Tool sich einbetten lässt, entscheidet
+das Tool selbst (`X-Frame-Options`/`frame-ancestors`); verbietet es das, nicht läuft oder die Anfrage ablehnt (z. B.
+Host-Prüfung), bleibt die Seite leer – der Link „Open in new tab“ und ein Hinweis bleiben sichtbar. IPv6-Literale
+(`http://[::1]:…`) lassen sich in der CSP nicht ausdrücken (Warnung bei `embed: true`; einen Hostnamen wie `localhost`
+verwenden). Die UI liegt meist auf einer anderen Origin als das Tool; Cookies des Tools (z. B. ein Zugangstoken-Cookie)
+gelten im Frame nur, wenn der Browser sie dort zulässt.
+
+```yaml
+# example: external-links
+# extends: minimal
+# file: config.yaml
+# expect-warning: config.yaml: ui.external_links[2].url: Query parameter "t" looks like an access token
+ui:
+  external_links:
+    - id: claude-inspect                 # lokales Agenten-Dashboard (Dienst auf Port 47717, ohne Token)
+      label: Claude Inspect
+      url: http://127.0.0.1:47717/       # so, wie der Browser das Tool erreicht
+      embed: true                        # Seite in der UI (#/tools/claude-inspect)
+    - id: grafana
+      label: Grafana
+      url: https://grafana.example.com/d/agents?orgId=1   # Link in neuem Tab (embed: false)
+    - id: inspect-manual
+      label: Inspect (manuell)
+      url: http://localhost:7717/?t=example-token          # Warnung: Token in der URL
+      enabled: false
+```
+
+```yaml
+# example: external-links-invalid
+# extends: minimal
+# file: config.yaml
+# invalid
+# expect: config.yaml: ui.external_links[0].url: Must be an absolute http(s) URL
+# expect: config.yaml: ui.external_links[1].url: Must not contain credentials
+# expect: config.yaml: ui.external_links[2].id: Duplicate external link ID "tool"
+ui:
+  external_links:
+    - { id: tool, label: Tool, url: "/inspect/" }                          # relativ → Fehler
+    - { id: proxy, label: Proxy, url: "https://admin:secret@tools.example.com/" }
+    - { id: tool, label: Tool 2, url: "https://tools.example.com/" }
+```
 
 Vollständige `config.yaml` mit allen Schlüsseln (Defaults, außer wo kommentiert):
 
@@ -315,6 +373,13 @@ notifications:
       on: [retry_block_created, recovery_failed]
 container:
   engine: docker                                     # docker | podman (für execute.type: container)
+ui:
+  external_links:                                    # Default: [] (keine Einträge)
+    - id: claude-inspect
+      label: Claude Inspect
+      url: http://127.0.0.1:47717/
+      enabled: true
+      embed: true                                    # Default: false (Link in neuem Tab)
 ```
 
 ### 3.2 sources.yaml
@@ -3093,6 +3158,8 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Duration must be greater than 0` | `max_duration`/`idle_timeout: 0s` |
 | `Invalid host name (expected "name" or "name:port")` | Schema/Pfad in `allowed_hosts` (`https://…`) |
 | `Invalid environment variable name` | z. B. `private_key_env: my-key` |
+| `Must be an absolute http(s) URL` (Pfad `ui.external_links[n].url`) | relative URL oder anderes Schema – volle URL angeben, wie der Browser das Tool erreicht |
+| `Query parameter "t" looks like an access token …` (Warnung) | Token in `ui.external_links[n].url`; besser Tool ohne Token nur lokal betreiben bzw. hinter dem authentifizierenden Proxy |
 | `Expected a size such as 100MB` | Größe als Zahl statt String (`max_log_size_per_run: 100`) |
 | `Invalid size "100" (expected e.g. 512KB, 100MB, 1GB)` | String ohne oder mit unbekannter Einheit (`'100'`, `'100MiBs'`) |
 | `Must be greater than 0` (Pfad `execute.keep_max_size`) | `keep_max_size: 0MB` |

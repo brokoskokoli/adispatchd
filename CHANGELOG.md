@@ -3,6 +3,25 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [0.3.1] – unveröffentlicht
+
+### Hinzugefügt
+
+- **Externe Tools in der Toolbar (`ui.external_links`):** Weitere lokale Werkzeuge – z. B. das Dashboard
+  [claude-inspect](https://github.com/brokoskokoli/claude_inspect) – erscheinen als Eintrag in der Navigation der
+  Weboberfläche: `embed: false` (Default) öffnet sie in einem neuen Tab, `embed: true` zeigt sie auf einer eigenen Seite
+  `#/tools/<id>` in einem `iframe` (Sandbox, kein Referrer) mit „Open in new tab“ und Hinweis, falls nichts erscheint.
+  Schlüssel `id`, `label` (1–40 Zeichen), `url` (absolut, `http`/`https`, ohne Zugangsdaten), `enabled`, `embed`;
+  Token-ähnliche Query-Parameter (`t`, `token`, …) ergeben eine Warnung. Kein Proxy – der Browser spricht das Tool
+  direkt an. `GET /api/v1/config` liefert die aktiven Einträge als `externalLinks`. Betrieb neben adispatchd (lokal
+  und auf dem Server hinter dem Reverse Proxy): `docs/operations.md`.
+
+### Geändert
+
+- Die Content-Security-Policy der Weboberfläche kommt als HTTP-Header statt als `<meta>`-Tag (Inhalt unverändert) und
+  erlaubt `frame-src` genau für die Origins der aktivierten eingebetteten Tools; ein Reload der Konfiguration wirkt sofort
+  für neu geladene Seiten.
+
 ## [0.3.0] – 2026-10-19
 
 ### Hinzugefügt
