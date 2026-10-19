@@ -149,7 +149,7 @@ describe('GitHubAppCredentialProvider', () => {
     await expect(first).rejects.toThrow('caller gone');
     await expect(second).resolves.toMatchObject({ token: expect.stringMatching(/^ghs_fake/) });
     expect(gh.tokenRequestCount()).toBe(1);
-    expect(p.describe('coder')).toEqual({ appId: a.appId });
+    expect(p.describe('coder')).toEqual({ kind: 'github_app', appId: a.appId });
     expect(p.describe('nobody')).toBeUndefined();
   });
 

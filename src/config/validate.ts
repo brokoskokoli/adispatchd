@@ -15,7 +15,7 @@ import {
   type TemplateMode,
   type TemplateScope,
 } from '../core/index.js';
-import { checkFieldName, checkFilterFields, type FieldIssue } from './field-catalog.js';
+import { checkFieldName, checkFilterFields, sourceFieldContext, viewFieldContext, type FieldIssue } from './field-catalog.js';
 import type { IssueCollector, IssuePath } from './issues.js';
 import type {
   GlobalConfig,
@@ -135,6 +135,10 @@ function validateSources(input: SemanticInput, issues: IssueCollector): void {
     if (!input.identities[source.identity]) {
       issues.error(SOURCES_FILE, ['sources', source.id, 'identity'], `Unknown identity "${source.identity}"`);
     }
+    // Only check an explicit project identity (the default is the source identity, checked above).
+    if (source.project && source.project.identity !== source.identity && !input.identities[source.project.identity]) {
+      issues.error(SOURCES_FILE, ['sources', source.id, 'project', 'identity'], `Unknown identity "${source.project.identity}"`);
+    }
   }
 }
 
@@ -208,7 +212,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   if (wf.trigger.type === 'source') {
     const source = input.sources[wf.trigger.source];
     if (source) {
-      const ctx = { sourceType: source.type, view: false };
+      const ctx = sourceFieldContext(source);
       if (wf.filter) addFieldIssues(checkFilterFields(wf.filter, ctx, { listing: true }), issues, file, ['filter']);
       wf.itemPriority?.rules.forEach((rule, i) =>
         addFieldIssues(checkFilterFields(rule.when, ctx, { listing: false }), issues, file, ['item_priority', 'rules', i, 'when']),
@@ -409,10 +413,14 @@ function validateView(entry: ViewEntry, input: SemanticInput, issues: IssueColle
     issues.error(file, ['shell_filter'], 'Views do not support "shell_filter"; views never run shell scripts (Spec §17)');
   }
   const types = new Set<string>();
+  const known: SourceConfig[] = [];
   view.sources.forEach((id, i) => {
     const source = input.sources[id];
     if (!source) issues.error(file, ['sources', i], `Unknown source "${id}"`);
-    else types.add(source.type);
+    else {
+      types.add(source.type);
+      known.push(source);
+    }
   });
   if (new Set(view.sources).size !== view.sources.length) {
     issues.error(file, ['sources'], 'Sources of a view must be unique');
@@ -421,7 +429,7 @@ function validateView(entry: ViewEntry, input: SemanticInput, issues: IssueColle
     issues.error(file, ['sources'], `All sources of a view must have the same adapter type (found: ${[...types].join(', ')})`);
   }
   if (types.size === 1) {
-    const ctx = { sourceType: [...types][0] as string, view: true };
+    const ctx = viewFieldContext(known);
     if (view.filter) addFieldIssues(checkFilterFields(view.filter, ctx, { listing: true }), issues, file, ['filter']);
     const checkName = (field: string, at: IssuePath): void => {
       const message = checkFieldName(field, ctx);

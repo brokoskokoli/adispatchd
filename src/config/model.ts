@@ -8,6 +8,7 @@
  * and notification headers only carry the *names* of environment variables.
  */
 import type { FilterNode, HookName, NotificationEventType } from '../core/index.js';
+import type { ProjectFieldKind } from '../sources/index.js';
 
 // ---------------------------------------------------------------------------
 // Global settings (config.yaml, Spec §5.1)
@@ -114,6 +115,19 @@ export interface GithubSourceConfig {
   repository: string;
   /** Default identity for reading API calls. */
   identity: string;
+  /** GitHub Projects (v2) project whose declared fields are available as `project.<name>`; `null` = none. */
+  project: GithubProjectConfig | null;
+}
+
+/** Project settings of a GitHub source (defaults resolved). */
+export interface GithubProjectConfig {
+  /** User or organisation login of the project (default: the source owner). */
+  owner: string;
+  number: number;
+  /** Identity reading the project (default: the source identity). */
+  identity: string;
+  /** Declared field name (case as written) → kind. */
+  fields: Readonly<Record<string, ProjectFieldKind>>;
 }
 
 /** A configured source (V1: only GitHub). */
@@ -129,8 +143,19 @@ export interface GithubAppIdentityConfig {
   privateKeyEnv: string;
 }
 
-/** A configured identity (V1: only GitHub Apps). */
-export type IdentityConfig = GithubAppIdentityConfig;
+/**
+ * GitHub token identity (e.g. a fine-grained personal access token, needed
+ * for user-owned projects). The token is read from `tokenEnv` at runtime.
+ */
+export interface GithubTokenIdentityConfig {
+  id: string;
+  type: 'github_token';
+  /** Name of the environment variable holding the token (never the token itself). */
+  tokenEnv: string;
+}
+
+/** A configured identity. */
+export type IdentityConfig = GithubAppIdentityConfig | GithubTokenIdentityConfig;
 
 // ---------------------------------------------------------------------------
 // Workflows (Spec §5.4, §5.5, §6, §10)

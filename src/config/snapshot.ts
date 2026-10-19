@@ -37,6 +37,7 @@ export function workflowIdentityRefs(workflow: WorkflowConfig, source: SourceCon
   const refs = new Set<string>();
   if (workflow.identity) refs.add(workflow.identity);
   if (source) refs.add(source.identity);
+  if (source?.project) refs.add(source.project.identity);
   for (const ref of Object.values(workflow.execute.secrets)) refs.add(ref.identity);
   for (const actions of Object.values(workflow.hooks)) {
     for (const action of actions) if (action.type === 'source.comment' && action.identity) refs.add(action.identity);

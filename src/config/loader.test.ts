@@ -585,7 +585,7 @@ describe('loadConfig – secrets', () => {
     try {
       const result = await loadConfig(EXAMPLE_CONFIG_DIR, { dataDir: '/data' });
       const config = expectOk(result);
-      expect(config.identities.coder?.privateKeyEnv).toBe('GITHUB_CODER_PRIVATE_KEY');
+      expect(config.identities.coder).toMatchObject({ type: 'github_app', privateKeyEnv: 'GITHUB_CODER_PRIVATE_KEY' });
       expect(JSON.stringify(result)).not.toContain('TOP-SECRET-KEY-MATERIAL');
     } finally {
       delete process.env.GITHUB_CODER_PRIVATE_KEY;

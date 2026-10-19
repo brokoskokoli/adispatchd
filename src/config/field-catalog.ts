@@ -4,6 +4,10 @@
  * operators per field type, value types, view-only `run.last_*` fields and
  * listing-selector fields such as GitHub `state` that only work at the top
  * level of a filter (pushdown).
+ *
+ * The catalogue is extended per source by the declared GitHub Projects
+ * fields `project.<name>` (WI-14): a workflow sees the fields of its trigger
+ * source, a view only the fields that ALL its sources declare with the same kind.
  */
 import {
   VIEW_RUN_FIELDS,
@@ -16,7 +20,8 @@ import {
   type FilterPredicate,
 } from '../core/index.js';
 import { parseIsoDate } from '../filters/index.js';
-import { GITHUB_FIELD_DEFINITIONS } from '../sources/index.js';
+import { GITHUB_FIELD_DEFINITIONS, PROJECT_FIELD_PREFIX, projectFieldDefinitions } from '../sources/index.js';
+import type { SourceConfig } from './model.js';
 
 /** Static field catalogue per source adapter type. */
 export const FIELD_CATALOG: Readonly<Record<string, readonly FieldDefinition[]>> = {
@@ -51,12 +56,57 @@ export interface FieldContext {
   sourceType: string;
   /** View context: `run.last_*` fields are available. */
   view: boolean;
+  /** Per-source fields in addition to the static catalogue (declared `project.*` fields). */
+  extra?: readonly FieldDefinition[];
+  /** Explanation for an undeclared `project.*` field (e.g. which view sources lack it). */
+  projectHint?: (field: string) => string | undefined;
 }
 
 function definitions(ctx: FieldContext): readonly FieldDefinition[] | undefined {
   const base = FIELD_CATALOG[ctx.sourceType];
   if (!base) return undefined;
-  return ctx.view ? [...base, ...VIEW_RUN_FIELDS] : base;
+  return [...base, ...(ctx.extra ?? []), ...(ctx.view ? VIEW_RUN_FIELDS : [])];
+}
+
+/** Field context of a workflow triggered by `source`. */
+export function sourceFieldContext(source: SourceConfig): FieldContext {
+  const extra = source.project ? projectFieldDefinitions(source.project.fields) : [];
+  return {
+    sourceType: source.type,
+    view: false,
+    extra,
+    projectHint: () =>
+      source.project
+        ? `it is not declared in "project.fields" of source "${source.id}"`
+        : `source "${source.id}" has no "project" configured in sources.yaml`,
+  };
+}
+
+/**
+ * Field context of a view over `sources` (all of the same type): only
+ * `project.*` fields declared by every source with the same kind.
+ */
+export function viewFieldContext(sources: readonly SourceConfig[]): FieldContext {
+  const first = sources[0];
+  const common = (first?.project ? projectFieldDefinitions(first.project.fields) : []).filter((def) => {
+    const name = def.name.slice(PROJECT_FIELD_PREFIX.length);
+    const kind = first?.project?.fields[name];
+    return sources.every((s) => s.project !== null && Object.hasOwn(s.project.fields, name) && s.project.fields[name] === kind);
+  });
+  return {
+    sourceType: first?.type ?? '',
+    view: true,
+    extra: common,
+    projectHint: (field) => {
+      const name = field.slice(PROJECT_FIELD_PREFIX.length);
+      const declaring = sources.filter((s) => s.project && Object.hasOwn(s.project.fields, name));
+      if (declaring.length === 0) return `no source of the view declares it in "project.fields"`;
+      const missing = sources.filter((s) => !declaring.includes(s)).map((s) => `"${s.id}"`);
+      if (missing.length > 0) return `views only offer project fields declared by all their sources (missing in ${missing.join(', ')})`;
+      const kinds = declaring.map((s) => `"${s.id}": ${s.project?.fields[name] ?? '?'}`);
+      return `its kind differs between the sources of the view (${kinds.join(', ')}); declare it with the same kind everywhere`;
+    },
+  };
 }
 
 function distance(a: string, b: string): number {
@@ -95,6 +145,10 @@ function unknownFieldMessage(field: string, ctx: FieldContext, defs: readonly Fi
   }
   const suggestion = suggestField(field, defs.map((d) => d.name));
   const hint = suggestion ? ` (did you mean "${suggestion}"?)` : '';
+  if (field.startsWith(PROJECT_FIELD_PREFIX) && ctx.projectHint) {
+    const why = ctx.projectHint(field);
+    if (why) return `Unknown project field "${field}": ${why}${hint}`;
+  }
   return `Unknown field "${field}" for source type ${ctx.sourceType}${hint}`;
 }
 

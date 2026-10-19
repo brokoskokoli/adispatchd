@@ -119,7 +119,7 @@ export class GitHubAppCredentialProvider implements CredentialProvider {
 
   describe(identity: IdentityRef): IdentityDescription | undefined {
     const config = this.identities.get(identity);
-    return config ? { appId: String(config.appId) } : undefined;
+    return config ? { kind: 'github_app', appId: String(config.appId) } : undefined;
   }
 
   invalidate(identity: IdentityRef): void {

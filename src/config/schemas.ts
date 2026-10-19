@@ -16,6 +16,7 @@ import {
   parseDuration,
   parseSize,
 } from '../core/index.js';
+import { PROJECT_FIELD_KINDS } from '../sources/index.js';
 import { filterNodeSchema } from './filter-schema.js';
 
 /** Pattern for environment variable names. */
@@ -179,11 +180,42 @@ export type RawGlobalConfig = z.output<typeof globalConfigSchema>;
 // sources.yaml / identities.yaml
 // ---------------------------------------------------------------------------
 
+/**
+ * Problem with a declared project field name (`project.<name>`), or
+ * `undefined`: the name is used as written, so it must not be empty, start or
+ * end with whitespace, or contain control characters.
+ */
+function projectFieldNameError(name: string): string | undefined {
+  if (name === '') return 'Project field name must not be empty';
+  if (name.trim() !== name) return 'Project field name must not start or end with whitespace';
+  if (/[\u0000-\u001f\u007f]/.test(name)) return 'Project field name must not contain control characters';
+  return undefined;
+}
+
+const githubProjectSchema = z.strictObject({
+  /** User or organisation login of the project; default: the source owner. */
+  owner: nonEmpty.optional(),
+  number: positiveInt,
+  /** Identity for reading the project; default: the source identity. */
+  identity: configId.optional(),
+  fields: z
+    .record(z.string(), z.enum(PROJECT_FIELD_KINDS, `Expected one of: ${PROJECT_FIELD_KINDS.join(', ')}`))
+    .superRefine((fields, ctx) => {
+      const names = Object.keys(fields);
+      if (names.length === 0) ctx.addIssue({ code: 'custom', message: 'Declare at least one project field' });
+      for (const name of names) {
+        const message = projectFieldNameError(name);
+        if (message) ctx.addIssue({ code: 'custom', path: [name], message });
+      }
+    }),
+});
+
 const githubSourceSchema = z.strictObject({
   type: z.literal('github'),
   owner: nonEmpty,
   repository: nonEmpty,
   identity: configId,
+  project: githubProjectSchema.optional(),
 });
 
 /** Schema of `sources.yaml`. */
@@ -201,9 +233,15 @@ const githubAppIdentitySchema = z.strictObject({
   private_key_env: envName,
 });
 
+/** Token identity (e.g. a fine-grained personal access token); the token is read from `token_env`. */
+const githubTokenIdentitySchema = z.strictObject({
+  type: z.literal('github_token'),
+  token_env: envName,
+});
+
 /** Schema of `identities.yaml`. */
 export const identitiesFileSchema = z.strictObject({
-  identities: z.record(configId, z.discriminatedUnion('type', [githubAppIdentitySchema])).default({}),
+  identities: z.record(configId, z.discriminatedUnion('type', [githubAppIdentitySchema, githubTokenIdentitySchema])).default({}),
 });
 
 /** Parsed `identities.yaml`. */

@@ -83,7 +83,21 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
 export function normalizeSources(raw: RawSourcesFile): Record<string, SourceConfig> {
   const out: Record<string, SourceConfig> = {};
   for (const [id, source] of Object.entries(raw.sources)) {
-    out[id] = { id, type: source.type, owner: source.owner, repository: source.repository, identity: source.identity };
+    out[id] = {
+      id,
+      type: source.type,
+      owner: source.owner,
+      repository: source.repository,
+      identity: source.identity,
+      project: source.project
+        ? {
+            owner: source.project.owner ?? source.owner,
+            number: source.project.number,
+            identity: source.project.identity ?? source.identity,
+            fields: { ...source.project.fields },
+          }
+        : null,
+    };
   }
   return out;
 }
@@ -92,13 +106,16 @@ export function normalizeSources(raw: RawSourcesFile): Record<string, SourceConf
 export function normalizeIdentities(raw: RawIdentitiesFile): Record<string, IdentityConfig> {
   const out: Record<string, IdentityConfig> = {};
   for (const [id, identity] of Object.entries(raw.identities)) {
-    out[id] = {
-      id,
-      type: identity.type,
-      appId: identity.app_id,
-      installationId: identity.installation_id,
-      privateKeyEnv: identity.private_key_env,
-    };
+    out[id] =
+      identity.type === 'github_app'
+        ? {
+            id,
+            type: identity.type,
+            appId: identity.app_id,
+            installationId: identity.installation_id,
+            privateKeyEnv: identity.private_key_env,
+          }
+        : { id, type: identity.type, tokenEnv: identity.token_env };
   }
   return out;
 }

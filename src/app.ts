@@ -34,8 +34,14 @@ import {
   type SourceAdapter,
   type Timers,
 } from './core/index.js';
-import { ConfigManager, type LoadedConfig, type ReloadResult } from './config/index.js';
-import { GitHubAppCredentialProvider, type GitHubAppIdentityConfig } from './identities/index.js';
+import { ConfigManager, type IdentityConfig, type LoadedConfig, type ReloadResult } from './config/index.js';
+import {
+  CompositeCredentialProvider,
+  GitHubAppCredentialProvider,
+  GitHubTokenCredentialProvider,
+  type GitHubAppIdentityConfig,
+  type GitHubTokenIdentityConfig,
+} from './identities/index.js';
 import { LifecycleEngine } from './lifecycle/index.js';
 import { NotificationService } from './notifications/index.js';
 import { acquireInstanceLock, openPersistence, type InstanceLock, type Persistence } from './persistence/index.js';
@@ -69,7 +75,7 @@ export interface SourceRegistryDeps {
   clock?: Clock;
   /** HTTP client for GitHub (tests: Fake-GitHub). */
   fetch?: FetchLike;
-  /** Environment holding the private keys (default `process.env`). */
+  /** Environment holding the private keys and tokens (default `process.env`). */
   env?: Readonly<Record<string, string | undefined>>;
   /** Shared redactor: keys and tokens are registered here (Logger uses the same instance). */
   redactor?: SecretRedactor;
@@ -77,8 +83,9 @@ export interface SourceRegistryDeps {
 }
 
 /**
- * Source adapters per configured source plus the GitHub App credential
- * provider (V1: GitHub only). Also a {@link CredentialProvider} itself that
+ * Source adapters per configured source plus the credential providers (one
+ * per identity kind: `github_app`, `github_token`, routed by a
+ * {@link CompositeCredentialProvider}). Also a {@link CredentialProvider} itself that
  * delegates to the current provider, so components keep a stable reference
  * across reloads. On reload adapters/credentials are rebuilt only if sources
  * or identities changed; adapters/identities that disappeared stay available
@@ -86,8 +93,8 @@ export interface SourceRegistryDeps {
  */
 export class SourceRegistry implements CredentialProvider {
   private adapters = new Map<string, SourceAdapter>();
-  private identities: Record<string, GitHubAppIdentityConfig> = {};
-  private provider: GitHubAppCredentialProvider;
+  private identities: Record<string, IdentityConfig> = {};
+  private provider: CompositeCredentialProvider;
   private signature = '';
   private readonly clock: Clock;
   private readonly redactor: SecretRedactor;
@@ -117,12 +124,7 @@ export class SourceRegistry implements CredentialProvider {
     const signature = JSON.stringify({ sources: config.sources, identities: config.identities });
     if (signature === this.signature) return;
     this.signature = signature;
-    this.identities = {
-      ...this.identities,
-      ...Object.fromEntries(
-        Object.values(config.identities).map((i) => [i.id, { appId: i.appId, installationId: i.installationId, privateKeyEnv: i.privateKeyEnv }]),
-      ),
-    };
+    this.identities = { ...this.identities, ...config.identities };
     this.provider = this.createProvider();
     const factory = createGitHubSourceFactory();
     const next = new Map(this.adapters);
@@ -131,7 +133,21 @@ export class SourceRegistry implements CredentialProvider {
         source.id,
         factory.create(
           source.id,
-          { owner: source.owner, repository: source.repository, identity: source.identity },
+          {
+            owner: source.owner,
+            repository: source.repository,
+            identity: source.identity,
+            ...(source.project
+              ? {
+                  project: {
+                    owner: source.project.owner,
+                    number: source.project.number,
+                    identity: source.project.identity,
+                    fields: source.project.fields,
+                  },
+                }
+              : {}),
+          },
           {
             credentials: this,
             logger: this.deps.logger?.child({ component: 'source', sourceId: source.id }) ?? noopLogger,
@@ -156,13 +172,31 @@ export class SourceRegistry implements CredentialProvider {
     return this.provider.describe(identity);
   }
 
-  private createProvider(): GitHubAppCredentialProvider {
-    return new GitHubAppCredentialProvider(this.identities, {
+  private createProvider(): CompositeCredentialProvider {
+    const apps: Record<string, GitHubAppIdentityConfig> = {};
+    const tokens: Record<string, GitHubTokenIdentityConfig> = {};
+    for (const identity of Object.values(this.identities)) {
+      if (identity.type === 'github_app') {
+        apps[identity.id] = { appId: identity.appId, installationId: identity.installationId, privateKeyEnv: identity.privateKeyEnv };
+      } else {
+        tokens[identity.id] = { tokenEnv: identity.tokenEnv };
+      }
+    }
+    const appProvider = new GitHubAppCredentialProvider(apps, {
       clock: this.clock,
       redactor: this.redactor,
       ...(this.deps.logger ? { logger: this.deps.logger } : {}),
       ...(this.deps.fetch ? { fetch: this.deps.fetch } : {}),
       ...(this.deps.env ? { env: this.deps.env } : {}),
+    });
+    const tokenProvider = new GitHubTokenCredentialProvider(tokens, {
+      redactor: this.redactor,
+      ...(this.deps.logger ? { logger: this.deps.logger } : {}),
+      ...(this.deps.env ? { env: this.deps.env } : {}),
+    });
+    return new CompositeCredentialProvider({
+      ...Object.fromEntries(Object.keys(apps).map((id) => [id, appProvider])),
+      ...Object.fromEntries(Object.keys(tokens).map((id) => [id, tokenProvider])),
     });
   }
 }
