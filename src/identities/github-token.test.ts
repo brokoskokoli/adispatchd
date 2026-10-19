@@ -90,6 +90,26 @@ describe('source.comment markers with github_token identities', () => {
     expect(JSON.stringify(logger.records)).not.toContain(token);
   });
 
+  it('a 401 (credential invalidation) drops the cached login', async () => {
+    const clock = new FakeClock('2026-10-19T12:00:00Z');
+    const github = new FakeGitHub({ clock });
+    const env: Record<string, string> = { PAT: github.createUserToken('first-user') };
+    const credentials = new GitHubTokenCredentialProvider({ commenter: { tokenEnv: 'PAT' } }, { env });
+    const adapter = createFakeGitHubSource(github, { clock, credentials, identity: 'commenter' });
+    github.createIssue(REPO);
+    const item = (await adapter.getItem('1')) as SourceItem;
+    const marker = commentMarker('run-1', 'a1');
+    github.addComment(REPO, 1, `<!-- ${marker} -->`, 'second-user');
+    expect(await adapter.findCommentByMarker(item, marker, 'commenter')).toBeNull();
+    expect(github.requests.filter((r) => r.path === '/user')).toHaveLength(1);
+
+    // Token rotated to another user; the old token is rejected once → invalidate → new token, new login.
+    env.PAT = github.createUserToken('second-user');
+    github.failNext({ path: /\/comments$/ }, { status: 401, body: { message: 'Bad credentials' } });
+    expect(await adapter.findCommentByMarker(item, marker, 'commenter')).not.toBeNull();
+    expect(github.requests.filter((r) => r.path === '/user')).toHaveLength(2);
+  });
+
   it('a failing GET /user fails the lookup and is retried next time', async () => {
     const clock = new FakeClock('2026-10-19T12:00:00Z');
     const github = new FakeGitHub({ clock });
