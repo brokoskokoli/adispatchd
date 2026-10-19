@@ -111,14 +111,14 @@ das nächste `service install`.
 
 | Ereignis | Verhalten | Exit | systemd |
 |---|---|---|---|
-| `systemctl stop` / `restart` | SIGTERM an den **Hauptprozess** → Drain bis `--drain-timeout`, dann Cancel-All (`on_cancel`) bis `--cancel-timeout`, danach werden Hooks unterbrochen (Recovery setzt sie beim nächsten Start fort) | 0 | gestoppt |
+| `systemctl stop` / `restart` | SIGTERM an den **Hauptprozess** → Drain bis `--drain-timeout`, dann Cancel-All (`on_cancel` bzw. `on_error`) bis `--cancel-timeout`, danach werden Hooks unterbrochen (Recovery setzt sie beim nächsten Start fort) | 0 | gestoppt |
 | zweites SIGTERM (`systemctl kill --kill-whom=main --signal=SIGTERM adispatchd`) | sofort Cancel-All | 0 | gestoppt |
 | drittes Signal | sofortiger Exit (Recovery räumt beim nächsten Start auf) | 1 | – |
 | `adispatch drain` / UI „Drain“ | keine neuen Runs, aktive laufen zu Ende, dann Ende | 0 | inactive, **kein** Neustart |
-| `adispatch cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel`, dann Ende | 0 | inactive, **kein** Neustart |
+| `adispatch cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel` bzw. `on_error`, dann Ende | 0 | inactive, **kein** Neustart |
 | Konfigurations-/Startfehler (ungültige YAML, Instanz-Lock belegt, DB-Schema neuer als der Code) | Start abgebrochen | 78 (EX_CONFIG) | **kein** Neustart (`RestartPreventExitStatus=78`) – Fehler beheben, dann `systemctl start` |
 | Absturz / Exit ≠ 0 | – | ≠ 0 | Neustart nach 5 s → Recovery |
-| `TimeoutStopSec` abgelaufen | systemd SIGKILLt die ganze cgroup inkl. Worker | – | gestoppt; nächster Start: Runs `crashed` + `on_crash` |
+| `TimeoutStopSec` abgelaufen | systemd SIGKILLt die ganze cgroup inkl. Worker | – | gestoppt; nächster Start: Runs `crashed` + `on_crash` bzw. `on_error` |
 
 - **`KillMode=mixed`**: SIGTERM geht nur an den Orchestrator, Worker laufen während des Drains weiter. Mit dem Default
   `control-group` bekämen alle Worker sofort SIGTERM (gleiche cgroup trotz eigener Prozessgruppe) → kein Drain möglich.
@@ -133,9 +133,12 @@ das nächste `service install`.
   und erst danach `systemctl stop`/Update/Reboot.
 - **Absturz unter systemd:** Stirbt der Hauptprozess, beendet systemd (bei `KillMode=mixed`) auch alle Worker der cgroup per
   SIGKILL. Die Recovery findet beim Neustart die Prozessgruppen daher i. d. R. bereits beendet und finalisiert die Runs als
-  `crashed` mit `on_crash` (zählt als technischer Fehler, ggf. Retry-Block). Verwaiste, noch lebende Worker (Recovery tötet
+  `crashed` mit `on_crash` bzw. `on_error` (zählt als technischer Fehler, ggf. Retry-Block). Verwaiste, noch lebende Worker (Recovery tötet
   sie nur bei sicher verifizierter Identität) entstehen v. a. außerhalb von systemd (lokaler Start, `KillMode=process`).
-- **Reboot:** wie Absturz – alle Worker sind weg → `crashed` + `on_crash`. Geplante Reboots daher vorher drainen.
+- **Reboot:** wie Absturz – alle Worker sind weg → `crashed` + `on_crash` bzw. `on_error`. Geplante Reboots daher vorher drainen.
+
+Überall gilt: Ist der spezifische Hook (`on_cancel`, `on_crash`, …) im Workflow nicht definiert, läuft `on_error`
+(ab 0.3.0; Konfigurationsreferenz §3.4.10).
 
 ## Pause, Drain, Cancel-All
 
@@ -176,9 +179,12 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 ```
 
 - **DB-Migrationen** sind versioniert und laufen beim Start automatisch. Existiert die DB und stehen Migrationen aus, wird
-  **vorher** eine konsistente Kopie geschrieben: `data-dir/backups/orchestrator-<alte-version>-<zeitstempel>.sqlite`
+  **vorher** eine konsistente Kopie geschrieben: `data-dir/backups/adispatchd-<alte-schemaversion>-<zeitstempel>.sqlite`
   (`VACUUM INTO`, auch im WAL-Modus konsistent). Schlägt eine Migration fehl, wird sie zurückgerollt und der Start abgebrochen.
 - Eine DB mit **neuerer** Schemaversion als der Code kennt wird abgelehnt (kein stilles Downgrade).
+- **0.3.0 hebt das Schema auf v3** (benannte Ergebnisse, gespeicherter Abschluss-Hook). Das ist eine Einbahnstraße:
+  0.2.x startet mit einer v3-DB nicht mehr. Zurück auf 0.2.x nur über das vor der Migration geschriebene Backup
+  (`backups/adispatchd-2-<zeitstempel>.sqlite`, siehe Rollback).
 - **Rollback:** Dienst stoppen, alte Paketversion installieren, `adispatchd.sqlite`, `adispatchd.sqlite-wal` und
   `adispatchd.sqlite-shm` beiseitelegen, das passende Backup als `adispatchd.sqlite` zurückkopieren (Eigentümer
   `adispatchd`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).
@@ -212,7 +218,8 @@ Wiederherstellen nur bei gestopptem Dienst; die Lock-Dateien legt der Orchestrat
 Beim Start erfasst die Recovery alle zuvor aktiven Runs, **bevor** der Scheduler startet (`/ready` erst danach `200`):
 
 - noch lebende, sicher identifizierte Worker-Prozessgruppen (PID + Startzeit/Boot-ID) werden beendet; verschwundene Runs
-  werden `crashed` mit `on_crash` (zählt als technischer Fehler); halb abgearbeitete Lifecycle-Ketten werden fortgesetzt
+  werden `crashed` mit `on_crash` bzw. `on_error` (zählt als technischer Fehler); halb abgearbeitete Lifecycle-Ketten
+  werden fortgesetzt – ab 0.3.0 genau der beim Übergang nach `finalizing` gespeicherte Abschluss-Hook
   (bereits erfolgreiche Actions laufen nicht erneut; Kommentare werden über Marker abgeglichen).
 - **`recovery_pending`**: Prozess nicht sicher identifizierbar oder nicht beendbar → der Run bleibt sichtbar aktiv, hält
   seinen Lock (kein Doppelstart) und erzeugt die Notification `recovery_failed`. Lösung: Prozess prüfen/beenden, dann in der
