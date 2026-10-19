@@ -63,6 +63,8 @@ export const ROUTE_ROLES: Readonly<Record<string, RouteAccess>> = {
   // Notifications
   'GET /api/v1/notifications': 'viewer',
   'POST /api/v1/notifications/:id/retry': 'operator',
+  // Server resources (WI-23)
+  'GET /api/v1/system/metrics': 'viewer',
   // SSE
   'GET /api/v1/events': 'viewer',
   // Static web UI (WI-11): the shell is public so the login page can load; all data comes from the API.

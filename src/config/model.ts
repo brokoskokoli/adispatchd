@@ -110,6 +110,19 @@ export interface ContainerDefaultsConfig {
   engine: ContainerEngine;
 }
 
+/** Server resource monitor (`monitoring:` in config.yaml, WI-23). */
+export interface MonitoringConfig {
+  enabled: boolean;
+  /** Sampling interval (≥ 5 s; default `scheduler.polling_interval`, at most 60 s). */
+  intervalMs: number;
+  /** How long samples are kept in memory (≥ 10 intervals). */
+  retentionMs: number;
+  /** Foreign processes shown by name (0 = none). */
+  topProcesses: number;
+  /** Foreign processes below this CPU share (100 = one core) are summed up as "Others". */
+  minCpuPercent: number;
+}
+
 /** External tool linked from the web UI toolbar (`ui.external_links`, WI-25). */
 export interface ExternalLinkConfig {
   id: string;
@@ -133,7 +146,7 @@ export const AUTH_ROLES = ['viewer', 'operator', 'admin'] as const;
 export type AuthRole = (typeof AUTH_ROLES)[number];
 /** Authentication modes (WI-26). */
 export const AUTH_MODES = ['none', 'password', 'trusted_header'] as const;
-/** Authentication mode: `none` = no login (behaviour before 0.3.1). */
+/** Authentication mode: `none` = no login (behaviour before 0.4.0). */
 export type AuthMode = (typeof AUTH_MODES)[number];
 
 /** Built-in user of `auth.mode: password`. */
@@ -182,6 +195,11 @@ export interface GlobalConfig {
    * versions lack it: readers must treat `undefined` as `{ engine: 'docker' }`.
    */
   container: ContainerDefaultsConfig;
+  /**
+   * Resource monitor (WI-23). Snapshots of older versions lack it; it is only
+   * read from the live configuration.
+   */
+  monitoring: MonitoringConfig;
   /** Web UI settings (WI-25). */
   ui: UiConfig;
   /** Authentication of web UI and API (WI-26); `mode: none` without the section. */

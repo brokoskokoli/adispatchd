@@ -9,6 +9,7 @@ import path from 'node:path';
 import { Cron } from 'croner';
 import {
   CONTAINER_PATHS,
+  formatDuration,
   isContainerEngineEnvName,
   extractPlaceholders,
   isSecretKey,
@@ -48,7 +49,7 @@ import {
   type WorkflowConfig,
 } from './model.js';
 import type { NamedFilters } from './named-filters.js';
-import type { RawParameter } from './schemas.js';
+import { MAX_MONITORING_SAMPLES, MIN_MONITORING_SAMPLES, type RawParameter } from './schemas.js';
 
 /** Files of the top-level documents. */
 export const CONFIG_FILE = 'config.yaml';
@@ -136,6 +137,12 @@ export function validateSemantics(input: SemanticInput, issues: IssueCollector):
 }
 
 function validateGlobal(global: GlobalConfig, issues: IssueCollector): void {
+  const { intervalMs, retentionMs } = global.monitoring;
+  if (retentionMs < intervalMs * MIN_MONITORING_SAMPLES) {
+    issues.error(CONFIG_FILE, ['monitoring', 'retention'], `Must be at least ${MIN_MONITORING_SAMPLES} sampling intervals (${MIN_MONITORING_SAMPLES} × ${formatDuration(intervalMs)})`);
+  } else if (retentionMs > intervalMs * MAX_MONITORING_SAMPLES) {
+    issues.error(CONFIG_FILE, ['monitoring', 'retention'], `Must be at most ${MAX_MONITORING_SAMPLES} sampling intervals (${MAX_MONITORING_SAMPLES} × ${formatDuration(intervalMs)})`);
+  }
   validateExternalLinks(global.ui.externalLinks, CONFIG_FILE, issues);
   validateAuth(global, issues);
   const ids = new Set<string>();

@@ -264,8 +264,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `notifications.on` | Liste Enum | alle drei | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. |
 | `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
 | `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
-| `ui.external_links` | Liste | `[]` | | externe Tools in der Toolbar der Web-UI (seit 0.3.1), siehe unten. `[]` = keine Einträge sichtbar. |
-| `auth.mode` | Enum | `none` | `none`, `password`, `trusted_header` | Anmeldung für Web-UI und API (seit 0.3.1), siehe unten. `none` = keine Anmeldung (Verhalten bis 0.3.0). |
+| `auth.mode` | Enum | `none` | `none`, `password`, `trusted_header` | Anmeldung für Web-UI und API (seit 0.4.0), siehe unten. `none` = keine Anmeldung (Verhalten bis 0.3.0). |
 | `auth.users` | Liste | `[]` | | Benutzer für `mode: password`: `name`, `password_hash_env`, `role`. |
 | `auth.trusted_header.header` | String | `Tailscale-User-Login` | HTTP-Header-Name | Header mit dem Login für `mode: trusted_header` (z. B. `X-Forwarded-User` bei oauth2-proxy). |
 | `auth.trusted_header.trusted_proxies` | Liste IP/CIDR | `[127.0.0.1, ::1]` | | Nur von diesen TCP-Gegenstellen wird der Header geglaubt. |
@@ -273,6 +272,12 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `auth.trusted_proxies` | Liste IP/CIDR | `[127.0.0.1, ::1]` | | `mode: password`: Proxys, deren `X-Forwarded-Proto` (Cookie-Flag `Secure`) und `X-Forwarded-For` (Login-Rate-Limit je IP) geglaubt werden. |
 | `auth.session_ttl` | Dauer | `12h` | 1 m – 30 d | Gültigkeit einer Session ab Anmeldung (`mode: password`). |
 | `auth.read_requires_login` | Boolean | `true` | | `false`: Lesen (`GET`, inkl. Live-Updates) ohne Anmeldung als `viewer`, Schreiben nur angemeldet. |
+| `monitoring.enabled` | Boolean | `true` | | Bereich „Server“ im Dashboard: CPU, RAM, Platte und Prozesse messen (seit 0.4.0). `false` → keine Messung, Dashboard zeigt einen Hinweis. |
+| `monitoring.interval` | Dauer | `scheduler.polling_interval`, höchstens `60s` | ≥ 5 s | Abtastintervall. Ohne Angabe gilt das Polling-Intervall, begrenzt auf 5 s … 60 s. Messungen laufen nie parallel. |
+| `monitoring.retention` | Dauer | `6h` | ≥ 10 und ≤ 5 000 Intervalle | wie lange Messpunkte **im Speicher** gehalten werden (Ringpuffer; geht beim Neustart verloren). |
+| `monitoring.top_processes` | Integer | `5` | 0–20 | fremde Prozesse (weder Daemon noch Run noch Hook), die einzeln mit Namen gezeigt werden; gleichnamige werden zusammengefasst (`node ×3`). `0` = keine. |
+| `monitoring.min_cpu_percent` | Zahl | `2` | ≥ 0 | fremde Prozesse(-gruppen) mit weniger CPU landen in „Others“. 100 = ein voll ausgelasteter Kern. |
+| `ui.external_links` | Liste | `[]` | | externe Tools in der Toolbar der Web-UI (seit 0.4.0), siehe unten. `[]` = keine Einträge sichtbar. |
 
 Retention löscht nie aktive Runs, Runs mit unfertiger oder gescheiterter Lifecycle-Kette und Runs eines **aktiven**
 Retry-Blocks. Gelöscht werden DB-Zeilen, `runs/<id>/`, `logs/<id>/` und der Workspace (nur unter `base_dir`).
@@ -295,7 +300,7 @@ Zustellung: `POST` mit `content-type: application/json`, Body
 `retry_block_created` (Retry-Block entstanden), `lifecycle_action_failed` (Action endgültig gescheitert und
 **ohne** `continue_on_error`), `recovery_failed` (Run nach Neustart nicht sicher zuordenbar → `recovery_pending`).
 
-**Externe Tools `ui.external_links`** (seit 0.3.1): beliebige lokale Werkzeuge, z. B. das Agenten-Dashboard
+**Externe Tools `ui.external_links`** (seit 0.4.0): beliebige lokale Werkzeuge, z. B. das Agenten-Dashboard
 [claude-inspect](https://github.com/brokoskokoli/claude_inspect), als Eintrag in der Navigation – als Link in neuem Tab
 oder eingebettet als eigene Seite. Kein Proxy: Der **Browser** spricht das Tool direkt an; die URL muss also vom Browser
 aus erreichbar sein (lokal oder über einen Reverse Proxy). Betrieb von claude-inspect: [operations.md](operations.md).
@@ -361,7 +366,7 @@ ui:
     - { id: tool, label: Tool 2, url: "https://tools.example.com/" }
 ```
 
-**Anmeldung `auth`** (seit 0.3.1): Ohne den Abschnitt gilt `mode: none` – keine Anmeldung, alles wie bis 0.3.0.
+**Anmeldung `auth`** (seit 0.4.0): Ohne den Abschnitt gilt `mode: none` – keine Anmeldung, alles wie bis 0.3.0.
 Mit `password` oder `trusted_header` verlangt jeder Endpunkt außer `/health`, `/ready`, den Auth-Endpunkten und der
 statischen UI-Hülle eine Anmeldung und eine **Mindestrolle** (Tabelle je Endpunkt: [api.md](api.md#mindestrolle-je-endpunkt)):
 
@@ -393,7 +398,7 @@ statischen UI-Hülle eine Anmeldung und eine **Mindestrolle** (Tabelle je Endpun
   als derselbe Dienstbenutzer und könnten die Datei lesen; das entspricht der bestehenden Vertrauensgrenze (Skripte sind
   vertrauenswürdiger Konfigurationscode, Spec §20.2).
 - **Audit:** schreibende Aktionen protokollieren den Benutzer (Daemon-Log, Run-Event `audit.user_action`, `clearedBy` bei
-  Blocks), siehe [api.md](api.md#anmeldung-und-rollen-seit-031-wi-26).
+  Blocks), siehe [api.md](api.md#anmeldung-und-rollen-seit-040-wi-26).
 
 | Schlüssel (Eintrag in `auth.users`) | Typ | Pflicht | Bedeutung |
 |---|---|---|---|
@@ -483,6 +488,12 @@ notifications:
       on: [retry_block_created, recovery_failed]
 container:
   engine: docker                                     # docker | podman (für execute.type: container)
+monitoring:                                          # Server-Ressourcen im Dashboard (seit 0.4.0)
+  enabled: true
+  interval: 30s                                      # Default: scheduler.polling_interval, 5s … 60s
+  retention: 6h                                      # nur im Speicher
+  top_processes: 5
+  min_cpu_percent: 2
 ui:
   external_links:                                    # Default: [] (keine Einträge)
     - id: claude-inspect
@@ -503,6 +514,23 @@ auth:
   session_ttl: 12h
   read_requires_login: true
 ```
+
+**Ressourcen-Monitor (`monitoring`, seit 0.4.0).** Der Daemon misst im Abstand `interval` die CPU-Auslastung
+(Delta der `os.cpus()`-Zeiten), Kerne und Load Average, den Arbeitsspeicher (Linux: `MemAvailable` aus
+`/proc/meminfo`; macOS: verfügbar = free + inactive + speculative aus `vm_stat`, sonst `os.freemem()`), den freien
+Platz des data-dir und – falls auf einem anderen Dateisystem – von `workspace.base_dir`, sowie einmal je Intervall die
+Prozessliste (`ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=`, ohne Shell, mit Timeout). Die CPU je Prozess ist die
+Rate der kumulierten CPU-Zeit (100 % = ein Kern); ein Prozess wird über PID, Namen und Startzeit (jetzt − `etime`)
+wiedererkannt, PID-Wiederverwendung startet also eine neue Reihe. Linux-`ps` liefert die CPU-Zeit nur in ganzen Sekunden,
+dort wird die Rate über ein gleitendes Fenster von mindestens 60 s gebildet. Zuordnung:
+eigene PID → Daemon; Prozessgruppe bzw. Vorfahrenkette des Workers → der Run (Container-Runs zusätzlich
+`<engine> stats --no-stream`, das selbst über ein kurzes Fenster von 1–2 s misst); andere Kindprozesse des Daemons →
+„adispatchd (hooks/checks)“; der Rest → fremde Prozesse. Gezeigt werden **nur Befehlsnamen, nie Argumente**: `ucomm` ist
+der Abrechnungsname des Kernels (nicht das umschreibbare `argv[0]`), zusätzlich wird ein Name an der ersten Leerstelle
+abgeschnitten (bei Pfaden: Basename). Restrisiko unter Linux: Ein Prozess kann seinen Namen selbst setzen
+(`prctl(PR_SET_NAME)`, max. 15 Zeichen) – fremde Prozessnamen sind in der UI sichtbar (UI nur hinter Authentifizierung
+freigeben). Fehler einer Messung (z. B. `ps` fehlt) werden gedrosselt geloggt und lassen den
+Teilwert leer. API: `GET /api/v1/system/metrics`, SSE-Event `system.metrics` ([api.md](api.md)).
 
 ### 3.2 sources.yaml
 
@@ -843,7 +871,7 @@ Filters stehen (`filter: ready-for-coding`, §3.6); `{ use: <id> }` geht an jede
 
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
-| `name` | String (1–80 Zeichen) | nein | | Anzeigename in UI und Dry-Run (seit 0.3.1); ohne `name` wird das Kommando angezeigt |
+| `name` | String (1–80 Zeichen) | nein | | Anzeigename in UI und Dry-Run (seit 0.4.0); ohne `name` wird das Kommando angezeigt |
 | `command` | String | ja | | Programm (§2.4). **Keine `args`** – das Item kommt über `ADISPATCH_CHECK_CONTEXT_FILE`. |
 | `timeout` | Dauer | nein | `30s` | > 0; danach `unknown` |
 
@@ -865,7 +893,7 @@ Ohne `item_priority` ist die Item-Priorität 0. Regeln dürfen teure Felder verw
 
 | Schlüssel | Typ | Pflicht | Default | Regeln | Bedeutung |
 |---|---|---|---|---|---|
-| `name` | String | nein | | 1–80 Zeichen, nicht leer | Anzeigename in UI, Dry-Run und Ablehnungsgründen (seit 0.3.1); ohne `name` zeigt die UI `command` + `args` (gekürzt, relativ zum config-dir) |
+| `name` | String | nein | | 1–80 Zeichen, nicht leer | Anzeigename in UI, Dry-Run und Ablehnungsgründen (seit 0.4.0); ohne `name` zeigt die UI `command` + `args` (gekürzt, relativ zum config-dir) |
 | `type` | `shell` | ja | | | |
 | `command` | String | ja | | §2.4 | Prüfprogramm |
 | `args` | Liste String | nein | `[]` | Templates (§5) | |
@@ -877,7 +905,7 @@ Ohne `item_priority` ist die Item-Priorität 0. Regeln dürfen teure Felder verw
   (manuelle Starts umgehen Conditions).
 - `item`: pro Kandidat, nur Source-Workflows, nie gecacht.
 - Exit-Semantik wie `shell_filter`. Dry-Runs führen Conditions nie aus.
-- **Anzeige (seit 0.3.1):** Workflows → Workflow-Detail (Bereich „Conditions“) und kompakt in der Workflow-Liste
+- **Anzeige (seit 0.4.0):** Workflows → Workflow-Detail (Bereich „Conditions“) und kompakt in der Workflow-Liste
   zeigen jede Condition mit Anzeigename, Timeout, Cache und dem **letzten Status**: Workflow-Conditions grün = ok
   (Exit 0), rot = „nicht jetzt“ (Exit 1), gelb = Prüffehler (Exit ≥ 2, Timeout, Signal), grau = nicht ausgewertet
   (eine frühere Condition hat entschieden) bzw. seit Start/Reload noch nie geprüft – dazu Zeitpunkt, Dauer, ob aus
@@ -1313,7 +1341,7 @@ erscheinen in `GET /api/v1/config/files` (UI: Configuration).
 
 ### 3.7 dashboard.yaml
 
-Optionale Datei mit **Info-Kacheln** für den Dashboard-Bereich „Information“ (seit 0.3.1). Jede Kachel ist ein
+Optionale Datei mit **Info-Kacheln** für den Dashboard-Bereich „Information“ (seit 0.4.0). Jede Kachel ist ein
 vertrauenswürdiges Skript wie eine Condition; seine erste Ausgabezeile ist der angezeigte Wert. Fehlt die Datei,
 gibt es keinen Info-Bereich.
 
@@ -1988,7 +2016,7 @@ seit 0.3.0 alle deklarierten Secrets von `execute` und `shell`-Actions mit Ort, 
 kein Token geholt). Bei mehreren Sources (seit 0.3.0) je Source eine Zeile mit gepollten Items, Pushdown und
 ggf. Fehler (`source.sources`), je Kandidat `sourceId`, bei `max_concurrent_per_source` die Auslastung je Source
 (`capacity.perSource`, Textzeile `capacity per source:`). Reserviert nichts, startet keine Worker oder Actions
-und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`); seit 0.3.1 mit
+und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`); seit 0.4.0 mit
 ihrem Anzeigenamen (`name`, Textausgabe `workflow condition 0 "Credits verfügbar" (/pfad/check.sh): …`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 

@@ -62,10 +62,11 @@ import { DashboardInfoService, type DashboardInfoServiceOptions } from './dashbo
 import { createGitHubSourceFactory } from './sources/index.js';
 import { ViewService } from './views/index.js';
 import { AuthService, createApiServer, EventHub, removeControlToken, writeControlToken, type AuthServiceOptions, type ReadinessReport } from './api/index.js';
+import { createSystemProbe, ResourceMonitor, type SystemProbe } from './monitoring/index.js';
 import type { FastifyInstance } from 'fastify';
 
 /** Package version reported by `/api/v1/status`. */
-export const APP_VERSION = '0.3.0';
+export const APP_VERSION = '0.4.0';
 /** Default drain timeout on SIGTERM before cancel-all (see docs/handoff/WI-08.md). */
 export const DEFAULT_DRAIN_TIMEOUT_MS = 10 * 60_000;
 /** Default time for cancelled runs (incl. `on_cancel`) before hooks are interrupted. */
@@ -272,6 +273,8 @@ export interface AppOptions {
   uiDir?: string;
   /** Authentication tuning (WI-26; tests: fake scrypt, no failure delay, fixed control token). */
   auth?: Partial<Pick<AuthServiceOptions, 'scrypt' | 'sleep' | 'controlToken'>>;
+  /** Resource monitor (WI-23); tests inject a fake OS probe. */
+  monitoring?: { probe?: SystemProbe; primeDelayMs?: number };
   /** Tuning of the dashboard info tiles (WI-24; tests). */
   dashboardInfo?: Partial<Pick<DashboardInfoServiceOptions, 'maxParallel' | 'manualMinIntervalMs' | 'manualPerMinute'>>;
 }
@@ -309,6 +312,8 @@ export interface App {
   readonly events: EventHub;
   /** Authentication (WI-26). */
   readonly auth: AuthService;
+  /** Server resource monitor (WI-23). */
+  readonly monitor: ResourceMonitor;
   readonly http: FastifyInstance;
   readonly redactor: SecretRedactor;
   readonly logger: Logger;
@@ -466,6 +471,20 @@ export async function createApp(options: AppOptions): Promise<App> {
       events.publish('retention.finished', { finishedAt: r.finishedAt, deletedRuns: r.deletedRuns, errors: r.errors.length }),
   });
 
+  const monitor = new ResourceMonitor({
+    probe: options.monitoring?.probe ?? createSystemProbe({ engines: containers }),
+    settings: () => {
+      const g = config.current.global;
+      return { ...g.monitoring, diskPaths: [dataDir, g.workspace.baseDir] };
+    },
+    targets: () => ({ daemonPid: process.pid, runs: controller.supervisedProcesses() }),
+    clock,
+    timers,
+    logger,
+    onSample: (sample) => events.publish('system.metrics', sample),
+    ...(options.monitoring?.primeDelayMs !== undefined ? { primeDelayMs: options.monitoring.primeDelayMs } : {}),
+  });
+
   // --- State ----------------------------------------------------------------
   const host = options.host ?? config.current.global.server.host;
   const port = options.port ?? config.current.global.server.port;
@@ -582,6 +601,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     retention,
     dashboard,
     events,
+    monitor,
     dataDir,
     clock,
     logger,
@@ -625,6 +645,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     }
     await retention.stop().catch(() => undefined);
     await notifications.stop().catch(() => undefined);
+    await monitor.stop().catch(() => undefined);
     events.close();
     auth.stop();
     removeControlToken(dataDir, auth.controlToken);
@@ -698,6 +719,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     url = `http://${host.includes(':') ? `[${host}]` : host}:${p ?? port}`;
     log.info('HTTP API listening', { url });
     notifications.start();
+    monitor.start();
     void (async () => {
       try {
         const engines = containerEngines(config.current);
@@ -740,6 +762,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     dashboard,
     events,
     auth,
+    monitor,
     http,
     redactor,
     logger,

@@ -14,6 +14,7 @@ export {
   type ShutdownOptions,
   type ShutdownResult,
   type StartRunOptions,
+  type SupervisedProcess,
 } from './controller.js';
 export {
   RunEventBus,

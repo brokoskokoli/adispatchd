@@ -62,7 +62,19 @@ export const DEFAULTS = {
   authHeader: 'Tailscale-User-Login',
   authTrustedProxies: ['127.0.0.1', '::1'],
   sessionTtl: '12h',
+  monitoringRetention: '6h',
+  monitoringTopProcesses: 5,
+  monitoringMinCpuPercent: 2,
 } as const;
+
+/** Lower bound of `monitoring.interval` (WI-23). */
+export const MIN_MONITORING_INTERVAL_MS = 5_000;
+/** Upper bound of the default `monitoring.interval` (the default follows `scheduler.polling_interval`). */
+export const MAX_DEFAULT_MONITORING_INTERVAL_MS = 60_000;
+/** `monitoring.retention` must hold at least this many intervals … */
+export const MIN_MONITORING_SAMPLES = 10;
+/** … and at most this many (memory bound of the in-memory ring buffer). */
+export const MAX_MONITORING_SAMPLES = 5_000;
 
 const configId = z
   .string()
@@ -263,6 +275,17 @@ export const globalConfigSchema = z.strictObject({
   container: z
     .strictObject({
       engine: z.enum(CONTAINER_ENGINES).default(DEFAULTS.containerEngine),
+    })
+    .prefault({}),
+  /** Server resource monitor in the dashboard (WI-23). */
+  monitoring: z
+    .strictObject({
+      enabled: z.boolean().default(true),
+      /** Default: `scheduler.polling_interval`, at most 60s (applied when normalizing). */
+      interval: durationSchema.refine((ms) => ms >= MIN_MONITORING_INTERVAL_MS, 'Duration must be at least 5s').optional(),
+      retention: positiveDuration.default(parseDuration(DEFAULTS.monitoringRetention)),
+      top_processes: z.number().int('Must be an integer').min(0, 'Must be 0 or greater').max(20, 'Must be at most 20').default(DEFAULTS.monitoringTopProcesses),
+      min_cpu_percent: z.number().finite().min(0, 'Must be 0 or greater').default(DEFAULTS.monitoringMinCpuPercent),
     })
     .prefault({}),
   /** Web UI settings (WI-25). */

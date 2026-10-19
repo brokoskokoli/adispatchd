@@ -59,6 +59,10 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Dateien sichern:** `execute.keep` kopiert Mitschnitte und Logs (Glob-Muster) vor dem Workspace-Cleanup nach
   `runs/<run-id>/kept/` – mit Größenlimit, ohne Symlinks zu folgen; Download in UI und API, gelöscht mit dem Run.
 - **Weboberfläche mit Live-Updates** (SSE): Workflows, Runs mit Live-Output, Events und gesicherten Dateien, Views
+  über mehrere Repositories; dazu eine JSON-HTTP-API.
+- **Server-Ressourcen im Dashboard:** CPU über die Zeit, gestapelt nach Daemon, jedem Run (Klick → Run), Hooks/Checks
+  und den größten fremden Prozessen, dazu RAM, Load und freier Plattenplatz; Messwerte nur im Speicher (`monitoring` in
+  `config.yaml`), gezeigt werden nur Befehlsnamen, nie Argumente.
   über mehrere Repositories; dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools in der Toolbar
   (z. B. das Dashboard [claude-inspect](https://github.com/brokoskokoli/claude_inspect)), im neuen Tab oder eingebettet
   (`ui.external_links`).
@@ -98,14 +102,14 @@ Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 2
 Paket `adispatchd` auf npm, Befehl `adispatch`. Für Dienste immer eine **feste Version** global installieren (kein `npx`):
 
 ```bash
-npm install -g adispatchd@0.3.0                 # aus der npm-Registry
+npm install -g adispatchd@0.4.0                 # aus der npm-Registry
 npx adispatchd --help                           # nur zum Ausprobieren, ohne Installation
 
 # alternativ aus dem Repository-Checkout:
 git clone https://github.com/brokoskokoli/adispatchd.git && cd adispatchd
 npm install
-npm pack                                        # baut (prepack) und erzeugt adispatchd-0.3.0.tgz
-npm install -g ./adispatchd-0.3.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
+npm pack                                        # baut (prepack) und erzeugt adispatchd-0.4.0.tgz
+npm install -g ./adispatchd-0.4.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
 # lokal ohne globale Installation: npm run build && node dist/cli/main.js <kommando> …
 ```
 
@@ -299,14 +303,16 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
 ## Sicherheit
 
-- **Anmeldung optional (seit 0.3.1).** Ohne `auth` (`mode: none`) gibt es keine Anmeldung: Die API bindet
+- **Anmeldung optional (seit 0.4.0).** Ohne `auth` (`mode: none`) gibt es keine Anmeldung: Die API bindet
   standardmäßig nur an `127.0.0.1`; Fernzugriff dann ausschließlich über einen **authentifizierenden** Reverse Proxy, VPN
   oder Tailscale; dessen Hostnamen in `server.allowed_hosts` eintragen (DNS-Rebinding-Schutz). Bei Nicht-Loopback-Bind
   ohne Anmeldung warnt `start`. Mit `auth.mode: password` oder `trusted_header` verlangt jeder Endpunkt eine Rolle
-  (`viewer`, `operator`, `admin`). Anleitung: [Betrieb → Anmeldung](docs/operations.md#anmeldung-web-ui-und-api-seit-031)
+  (`viewer`, `operator`, `admin`). Anleitung: [Betrieb → Anmeldung](docs/operations.md#anmeldung-web-ui-und-api-seit-040)
   (Tailscale Serve, oauth2-proxy, Passwort-Modus hinter HTTPS-Proxy, `adispatch auth hash-password`) und
   [Betrieb → Fernzugriff](docs/operations.md#fernzugriff-reverse-proxy-spec-15-201).
 - Mutierende Requests brauchen den Header `X-Adispatch-Request: 1`; es gibt keine CORS-Freigaben.
+- Das Dashboard zeigt die Befehlsnamen aller Prozesse des Servers (nie deren Argumente) – ein Grund mehr, die UI nur
+  hinter Authentifizierung freizugeben (oder `monitoring.enabled: false` zu setzen).
 - **Skripte und YAML sind vertrauenswürdiger Code** mit den Rechten des Dienstes – keine Sandbox. Schreibrecht auf das
   config-dir ist gleichbedeutend mit Codeausführung; `service install` legt es `root`-eigen an und lässt den Dienst unter einem
   eigenen Benutzer laufen.
@@ -338,7 +344,7 @@ Kurzfassung – Details in [docs/operations.md](docs/operations.md):
 
 ## Projektstand und Roadmap
 
-Version 0.3.0. Alle geplanten Work-Items sind umgesetzt und durch eine automatisierte Testsuite abgedeckt (CI auf
+Version 0.4.0. Alle geplanten Work-Items sind umgesetzt und durch eine automatisierte Testsuite abgedeckt (CI auf
 Node 22 und 24). Die manuelle Prüfung gegen echte GitHub-Repositories und systemd unter Linux steht noch aus – was vor
 dem Produktivbetrieb offen ist, steht in [docs/status.md](docs/status.md), Release-Notizen in [CHANGELOG.md](CHANGELOG.md).
 

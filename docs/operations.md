@@ -70,8 +70,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.3.0
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.3.0.tgz
+sudo npm install -g adispatchd@0.4.0
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.4.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -202,8 +202,8 @@ aus `config.yaml` (Wildcard-Binds `0.0.0.0`/`::` werden über Loopback angesproc
 meldet das Kommando dann „not readable (permission denied)“ und fällt auf `http://127.0.0.1:8787` zurück. URLs mit
 Zugangsdaten (`user:pass@`) werden abgelehnt (Exit 2) – Proxy-Authentifizierung unterstützt die CLI nicht; auf dem Host
 selbst die lokale URL nutzen. Sie senden den CSRF-Header
-`X-Adispatch-Request: 1`. Mit Anmeldung (`auth.mode` ≠ `none`, seit 0.3.1) senden sie zusätzlich den lokalen
-Steuer-Token aus `<data-dir>/control.token` (siehe [Anmeldung](#anmeldung-web-ui-und-api-seit-031)) – dafür als
+`X-Adispatch-Request: 1`. Mit Anmeldung (`auth.mode` ≠ `none`, seit 0.4.0) senden sie zusätzlich den lokalen
+Steuer-Token aus `<data-dir>/control.token` (siehe [Anmeldung](#anmeldung-web-ui-und-api-seit-040)) – dafür als
 Dienstbenutzer oder root mit `--data-dir` aufrufen, z. B. `sudo adispatch status --config-dir /etc/adispatchd
 --data-dir /var/lib/adispatchd` (ohne `--data-dir` werden `./data` und `/var/lib/adispatchd` probiert). Exit-Codes: 0 ok, 1 API-Fehler (z. B. Reload abgelehnt), 2 Aufruffehler, 3 Instanz nicht
 erreichbar, 4 `--wait`-Timeout (der Shutdown läuft im Hintergrund weiter). `workflow dry-run` fällt ohne erreichbare Instanz
@@ -289,8 +289,8 @@ Beim Start erfasst die Recovery alle zuvor aktiven Runs, **bevor** der Scheduler
 ## Fernzugriff, Reverse Proxy (Spec §15, §20.1)
 
 Ohne `auth` (Default `mode: none`) gibt es **keine Anmeldung**. Standard ist `server.host: 127.0.0.1`. Bei einem
-Nicht-Loopback-Bind ohne Anmeldung warnt `start` deutlich. Seit 0.3.1 kann adispatchd selbst anmelden
-(siehe [Anmeldung](#anmeldung-web-ui-und-api-seit-031)) – dann darf der Proxy die Identität liefern (`trusted_header`)
+Nicht-Loopback-Bind ohne Anmeldung warnt `start` deutlich. Seit 0.4.0 kann adispatchd selbst anmelden
+(siehe [Anmeldung](#anmeldung-web-ui-und-api-seit-040)) – dann darf der Proxy die Identität liefern (`trusted_header`)
 oder nur TLS terminieren (`password`).
 
 - Mit `auth.mode: none`: Zugriff von außen nur über einen **authentifizierenden** Reverse Proxy (z. B. nginx/Caddy mit
@@ -327,7 +327,7 @@ server {
 
 Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen in `allowed_hosts` eintragen.
 
-## Anmeldung (Web-UI und API, seit 0.3.1)
+## Anmeldung (Web-UI und API, seit 0.4.0)
 
 `auth` in `config.yaml` (Referenz: [configuration-reference.md](configuration-reference.md) §3.1; Rollen je Endpunkt:
 [api.md](api.md#mindestrolle-je-endpunkt)). Rollen: `viewer` (lesen), `operator` (alle schreibenden Aktionen), `admin`.
@@ -440,7 +440,7 @@ zusätzlich als Event `audit.user_action` in den Run-Details, entfernte Blocks m
 | Warnung „user cannot log in – password hash variable missing or malformed“ | Env-Variable fehlt oder Hash unvollständig → `adispatch auth hash-password`, Env-Datei, Neustart |
 | Login-Seite erscheint nach jedem Neustart | erwartet: Sessions liegen im Speicher |
 
-## Externe Tools in der UI, z. B. claude-inspect (seit 0.3.1)
+## Externe Tools in der UI, z. B. claude-inspect (seit 0.4.0)
 
 `ui.external_links` in `config.yaml` nimmt lokale Werkzeuge in die Navigation auf – als Link in neuem Tab oder
 eingebettet (`embed: true`, Details und Validierung: [configuration-reference.md](configuration-reference.md) §3.1).
@@ -507,6 +507,35 @@ Beispiel [claude-inspect](https://github.com/brokoskokoli/claude_inspect) (Dashb
 - Run-Logs: `data-dir/logs/<run-id>/{stdout,stderr}.log`, Events/Status in SQLite, live per SSE.
 - Aufbewahrung über `retention` in `config.yaml` (Default: erfolgreiche Runs 30 d, fehlgeschlagene 90 d, Block-Runs nie,
   100 MB Log pro Run, Prüfung alle 24 h). Aktive Runs, offene Blocks und unvollständige Aktionsketten werden nie gelöscht.
+
+### Server-Ressourcen im Dashboard (`monitoring`, seit 0.4.0)
+
+- Der Daemon misst CPU, Load, RAM, freien Plattenplatz (data-dir und – falls anderes Dateisystem – `workspace.base_dir`)
+  und die Prozessliste (`ps`, einmal je `monitoring.interval`, ohne Shell, Timeout 10 s). Die Werte liegen nur im
+  Speicher (`monitoring.retention`, Default 6 h) und **gehen beim Neustart verloren**; es gibt keine DB-Migration.
+  API: `GET /api/v1/system/metrics`, live per SSE `system.metrics`.
+- **Sichtbarkeit:** Die UI zeigt die **Befehlsnamen fremder Prozesse** des Servers (nie Argumente – die können Secrets
+  enthalten). Die UI daher nur hinter Authentifizierung/Reverse Proxy freigeben; wer das nicht will, setzt
+  `monitoring.enabled: false` (keine Messung, kein `ps`).
+- **Zuordnung:** eigene PID → Daemon; Prozessgruppe bzw. Prozessbaum eines Workers → dessen Run; andere Kindprozesse des
+  Daemons (Shell-Actions, Conditions) → „adispatchd (hooks/checks)“. Container-Runs: der Engine-CLI-Prozess plus – wenn
+  möglich – `<engine> stats --no-stream` (misst selbst nur ein kurzes Fenster von 1–2 s, nicht das ganze Intervall); unter
+  Linux sichtbare Container-Prozesse werden nicht doppelt gezählt. Docker Desktop/Podman-Maschine auf macOS: die Container
+  laufen in einer VM; der per `stats` gezählte Verbrauch wird vom VM-Prozess (`com.apple.Virtualization…`, `qemu-system*`,
+  `vfkit`, `krunkit`) abgezogen.
+- **macOS-RAM:** „verfügbar“ = free + inactive + speculative Seiten aus `vm_stat` (vergleichbar mit Linux `MemAvailable`;
+  komprimierter Speicher zählt als belegt). Linux: `MemAvailable` aus `/proc/meminfo`. Fehlt beides: `os.freemem()`.
+- **Genauigkeit:** CPU je Prozess = Rate der kumulierten CPU-Zeit aus `ps`; Prozesse werden über PID, Name und Startzeit
+  (`etime`) wiedererkannt. Linux-`ps` liefert ganze Sekunden, deshalb wird dort über mindestens 60 s gemittelt (kurze
+  Spitzen erscheinen geglättet). Prozesse, die zwischen zwei Messungen starten und enden, fehlen in der Aufteilung; die
+  Differenz zur Gesamtauslastung erscheint als „System / unattributed“.
+- **Prozessnamen:** `ps -o ucomm` (Abrechnungsname des Kernels, nicht das umschreibbare `argv[0]`/`process.title`),
+  zusätzlich an der ersten Leerstelle abgeschnitten. Restrisiko Linux: `prctl(PR_SET_NAME)` erlaubt einem Prozess, seinen
+  Namen (max. 15 Zeichen) selbst zu setzen.
+- **Speicher/Payload:** höchstens 5 000 Messpunkte (`retention` ≤ 5 000 Intervalle) mit je höchstens
+  `top_processes` (≤ 20) fremden Gruppen, typisch wenige MB. Die API liefert höchstens `points` (Default 600) Punkte –
+  bei längeren Zeiträumen Mittelwerte je Zeitfenster.
+- Fehler (z. B. `ps` fehlt im Container-Image) werden höchstens alle 10 min geloggt; der Teilwert bleibt leer.
 
 ## Fehlerbilder
 

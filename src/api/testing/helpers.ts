@@ -10,6 +10,7 @@ import path from 'node:path';
 import { isTerminalStatus, MemoryLogger, type FetchLike } from '../../core/index.js';
 import { FakeGitHub } from '../../sources/github/testing/index.js';
 import { createApp, type App, type AppOptions } from '../../app.js';
+import { FakeProbe } from '../../monitoring/testing/fake-probe.js';
 import type { RunRecord } from '../../persistence/index.js';
 import { CSRF_HEADER } from '../server.js';
 
@@ -125,6 +126,8 @@ export async function createAppEnv(options: AppEnvOptions = {}): Promise<AppEnv>
     cancelTimeoutMs: 5_000,
     sse: { heartbeatMs: 200 },
     controller: { recoveryGraceMs: 300, recoveryKillConfirmMs: 2_000 },
+    // No real `ps`/`vm_stat` in API tests (WI-23); tests that need samples inject their own probe.
+    monitoring: { probe: new FakeProbe() },
     ...options.app,
     ...extra,
   });

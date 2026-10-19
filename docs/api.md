@@ -3,16 +3,16 @@
 Implementierung: `src/api/` (WI-10). Spec §15, §16, §17, §18, §21.
 
 - Basis: `http://<server.host>:<server.port>` (Default `127.0.0.1:8787`), API unter `/api/v1`, JSON (UTF-8).
-- **Anmeldung** (seit 0.3.1, WI-26): `auth.mode` in `config.yaml` – `none` (Default, keine Anmeldung wie bisher: nur auf
+- **Anmeldung** (seit 0.4.0, WI-26): `auth.mode` in `config.yaml` – `none` (Default, keine Anmeldung wie bisher: nur auf
   Loopback binden oder hinter einem authentifizierenden Reverse Proxy/VPN betreiben; bei Nicht-Loopback-Bind wird beim
   Start gewarnt), `password` (eingebaute Benutzer, Session-Cookie) oder `trusted_header` (Identität vom vorgeschalteten
   Proxy). Jeder Endpunkt hat eine **Mindestrolle** (`viewer` < `operator` < `admin`), siehe
-  [Anmeldung und Rollen](#anmeldung-und-rollen-seit-031-wi-26).
+  [Anmeldung und Rollen](#anmeldung-und-rollen-seit-040-wi-26).
 - Antworten von `/api/*`, `/health`, `/ready` tragen `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`. Es werden **nie CORS-Header** gesendet.
 - Die statische Web-UI (alle anderen Pfade) trägt dieselben Header plus die **Content-Security-Policy** als HTTP-Header:
   `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'`,
-  ergänzt um `frame-src <origin> …` genau für die aktivierten `ui.external_links` mit `embed: true` (seit 0.3.1, WI-25;
+  ergänzt um `frame-src <origin> …` genau für die aktivierten `ui.external_links` mit `embed: true` (seit 0.4.0, WI-25;
   aus der aktiven Konfiguration, nach einem Reload sofort; ohne solche Einträge kein `frame-src`).
 - Antworten enthalten keine Secrets (Identities nur als ID, Webhook-URLs redigiert, Fehlertexte redigiert).
   Strings aus Events/Results/Logs/Titeln sind **untrusted** – die UI rendert sie nur als Text.
@@ -55,11 +55,11 @@ Für `POST`, `PATCH`, `PUT`, `DELETE` gilt:
 
 Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1/scheduler/pause`
 
-## Anmeldung und Rollen (seit 0.3.1, WI-26)
+## Anmeldung und Rollen (seit 0.4.0, WI-26)
 
 Konfiguration: [configuration-reference.md](configuration-reference.md) §3.1 (`auth`); Betrieb (Tailscale Serve,
 oauth2-proxy, HTTPS-Proxy, Hash erzeugen): [operations.md](operations.md). Mit `auth.mode: none` (Default) gilt nichts aus
-diesem Abschnitt außer `GET /api/v1/auth/me`; alle Endpunkte verhalten sich wie vor 0.3.1.
+diesem Abschnitt außer `GET /api/v1/auth/me`; alle Endpunkte verhalten sich wie vor 0.4.0.
 
 **Reihenfolge der Prüfungen** je Request: Host-/Origin-Allowlist → CSRF (mutierend) → Anmeldung → Mindestrolle der Route.
 
@@ -160,6 +160,7 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | `POST /api/v1/dashboard/info/:id/refresh` | operator |
 | `GET /api/v1/notifications` | viewer |
 | `POST /api/v1/notifications/:id/retry` | operator |
+| `GET /api/v1/system/metrics` | viewer |
 | `GET /api/v1/events` | viewer |
 | `GET /*` | public |
 
@@ -236,9 +237,9 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
 `overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?}}`,
 `execute {type, command, args, workingDirectory, timeout, secrets: [Namen], secretDelivery: {Name: env|file}, keep: [Muster], keepMaxSizeBytes, container?}` (seit 0.3.0 `secretDelivery`; nie Werte; bei `type: container` sind `command`/`args` der Engine-Aufruf mit `<run-id>`/`<data-dir>` und `container = {engine, image, command, workdir, mounts, resources, user, network, pull}`, WI-19), `secrets` (seit 0.3.0: alle deklarierten Secrets von `execute` und `shell`-Actions als `[{where, name, identity, delivery, variable}]`, nie Werte), `hasFilter`, `hasShellFilter`,
-`conditions` (seit 0.3.1, siehe unten; vorher nur Anzahlen), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
+`conditions` (seit 0.4.0, siehe unten; vorher nur Anzahlen), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
 
-**`conditions` (seit 0.3.1, WI-24)** – Definition und letzter Status aller Shell-Prüfungen (nur im Speicher; ein Reload
+**`conditions` (seit 0.4.0, WI-24)** – Definition und letzter Status aller Shell-Prüfungen (nur im Speicher; ein Reload
 verwirft den Status geänderter/entfernter Workflows; nach einem Neustart `last: null`):
 
 ```json
@@ -394,12 +395,38 @@ Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_res
 
 | Methode | Pfad | Antwort |
 |---|---|---|
-| GET | `/api/v1/config` | `{"config": LoadedConfig (Webhook-URLs redigiert), "overrides", "externalLinks"}`; `config.filters` listet die benannten Filter (`{id, file, description, filter}`, Filter expandiert); `externalLinks` = nur die aktivierten `ui.external_links` in Konfigurationsreihenfolge als `[{"id","label","url","embed"}]` mit **vollständiger** URL (seit 0.3.1, WI-25; die UI baut daraus die Toolbar-Einträge – sichtbar für jeden, der die API erreicht); `config.global.ui.externalLinks` enthält ebenfalls nur aktive Einträge, Query-String und Fragment der URL als `[REDACTED]` |
+| GET | `/api/v1/config` | `{"config": LoadedConfig (Webhook-URLs redigiert), "overrides", "externalLinks"}`; `config.filters` listet die benannten Filter (`{id, file, description, filter}`, Filter expandiert); `externalLinks` = nur die aktivierten `ui.external_links` in Konfigurationsreihenfolge als `[{"id","label","url","embed"}]` mit **vollständiger** URL (seit 0.4.0, WI-25; die UI baut daraus die Toolbar-Einträge – sichtbar für jeden, der die API erreicht); `config.global.ui.externalLinks` enthält ebenfalls nur aktive Einträge, Query-String und Fragment der URL als `[REDACTED]` |
 | GET | `/api/v1/config/files` | `{"files":[{"file":"workflows/coder.yaml","content":"…"}]}` – YAML read-only (Top-Level-Dateien inkl. `dashboard.yaml`, `workflows/`, `views/`, `filters/`), **strukturell redigiert** (unabhängig vom geladenen Stand): Werte von `url`-Keys, alles unter `headers`/`headers_env`, jeder String-Wert mit `http(s)://` auf Schema+Host gekürzt (z. B. Webhook-Literale in `env:`), Keys wie `*token`, `*secret`, `password`, … sowie Pfad/Query von URLs in Kommentaren → `[REDACTED]`. Nicht parsebare Dateien werden nicht roh ausgeliefert (`content: null`, `error` mit Zeilennummer) |
 | POST | `/api/v1/config/validate` | `{"ok", "errors":[ConfigIssue], "warnings", "hash"?}` – prüft Dateien, aktiviert nichts |
 | POST | `/api/v1/config/reload` | `200 {"ok":true,"version","hash","changed","diff","resetOverrides","warnings"}` / `422 config_invalid` (`details.errors`) – atomar, bei Fehler bleibt die aktive Konfiguration |
 
-### Dashboard-Infos (seit 0.3.1, WI-24)
+### System-Ressourcen (seit 0.4.0)
+
+| Methode | Pfad | Antwort |
+|---|---|---|
+| GET | `/api/v1/system/metrics?since=<ISO>&range=<Dauer>&points=<n>` | `{"enabled", "intervalMs", "retentionMs", "bucketMs", "samples":[Sample]}` – Messpunkte des Ressourcen-Monitors (älteste zuerst). `since`: nur jüngere; `range` (z. B. `15m`, `1h`, `3600000ms`): nur die letzte Zeitspanne (mit `since`: der spätere Beginn gilt). `points` (10–2000, Default 600): höchstens so viele Punkte – bei mehr Messpunkten Mittelwerte je Zeitfenster (`bucketMs`; sonst `null`; benannte fremde Gruppen je Fenster auf 6 begrenzt, Rest in „Others“). `enabled: false` (`monitoring.enabled: false`) → `samples: []`. Schreibgeschützt, Host-/Origin-Regeln wie alle GET-Endpunkte; ungültige Parameter → `400 invalid_request` |
+
+Sample:
+```json
+{"at":"2026-10-19T10:00:30.000Z",
+ "cpu":{"totalPercent":46.2,"cores":8,"load":[2.1,1.8,1.5]},
+ "memory":{"totalBytes":17179869184,"availableBytes":6442450944},
+ "disks":[{"path":"/var/lib/adispatchd","freeBytes":52613349376,"totalBytes":214748364800}],
+ "processes":[
+   {"kind":"daemon","label":"adispatchd","cpuPercent":0.6,"rssBytes":96944128,"count":1},
+   {"kind":"run","label":"coder · 1a2b3c4d · project_a:12","runId":"run-…-1a2b3c4d","workflowId":"coder","itemKey":"project_a:12","cpuPercent":98.0,"rssBytes":412000000,"count":4},
+   {"kind":"hooks","label":"adispatchd (hooks/checks)","cpuPercent":1.5,"rssBytes":8000000,"count":2},
+   {"kind":"other","label":"node ×3","name":"node","cpuPercent":37.2,"rssBytes":300000000,"count":3},
+   {"kind":"rest","label":"Others","cpuPercent":120.6,"rssBytes":6937321472,"count":728}]}
+```
+- `cpu.totalPercent`: Auslastung aller Kerne seit der vorigen Messung (0–100). `processes[].cpuPercent`: 100 = ein Kern
+  (Rate der CPU-Zeit aus `ps`, unter Linux über mindestens 60 s); im Diagramm ÷ `cores`. Der Rest bis `totalPercent` ist „System / unattributed“.
+- `kind`: `daemon` (eigene PID), `run` (Prozessgruppe/Prozessbaum des Workers; Container-Runs zusätzlich `<engine> stats`),
+  `hooks` (andere Kindprozesse des Daemons: Shell-Actions, Conditions), `other` (fremde Prozesse, nach Namen gruppiert, die
+  `monitoring.top_processes` größten über `min_cpu_percent`), `rest` (übrige fremde Prozesse).
+- Nur Befehlsnamen (`ucomm`, an der ersten Leerstelle abgeschnitten, gekürzt), **nie Argumente**. Konnte die Prozessliste nicht gelesen werden, ist
+  `processes` leer. Werte liegen nur im Speicher (gehen beim Neustart verloren).
+### Dashboard-Infos (seit 0.4.0, WI-24)
 
 | Methode | Pfad | Body | Antwort |
 |---|---|---|---|
@@ -448,8 +475,9 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 | `notification` | nein | Notification inkl. `deliveries` (bei Anlage und jedem Zustellversuch) |
 | `config.reloaded` | nein | `{version, hash, changed, diff, resetOverrides}` |
 | `retention.finished` | nein | `{finishedAt, deletedRuns, errors}` |
-| `workflow.conditions` | nein | `{workflowId}` – der letzte Status einer Workflow-Condition oder die Item-Check-Zusammenfassung hat sich geändert (seit 0.3.1); Details per `GET /api/v1/workflows/:id` |
-| `dashboard.info` | nein | `InfoTile` nach jeder Änderung (Abruf gestartet/fertig, Wert, Status; seit 0.3.1) |
+| `system.metrics` | nein | neuester Messpunkt des Ressourcen-Monitors (Sample wie bei `GET /api/v1/system/metrics`), je Intervall; nicht bei `?run=` |
+| `workflow.conditions` | nein | `{workflowId}` – der letzte Status einer Workflow-Condition oder die Item-Check-Zusammenfassung hat sich geändert (seit 0.4.0); Details per `GET /api/v1/workflows/:id` |
+| `dashboard.info` | nein | `InfoTile` nach jeder Änderung (Abruf gestartet/fertig, Wert, Status; seit 0.4.0) |
 
 - **Reconnect:** `EventSource` sendet `Last-Event-ID` automatisch; alternativ `?lastEventId=`. Verpasste persistente
   Events werden aus SQLite nachgeliefert (max. 5000, sonst `stream.reset`), danach live – ohne Lücken/Duplikate.

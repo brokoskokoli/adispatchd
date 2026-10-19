@@ -32,8 +32,14 @@ export type PageFactory = (ctx: PageContext) => Page;
 
 /** True for live messages that change run/system state (used for coalesced refreshes). */
 export function isStateChange(msg: LiveMessage): boolean {
-  // `dashboard.info` (WI-24) is handled by the info section itself (no page reload).
-  return msg.type !== 'run.output' && msg.type !== 'stream.open' && msg.type !== 'retention.finished' && msg.type !== 'dashboard.info';
+  // `dashboard.info` (WI-24) and `system.metrics` (WI-23) are handled by their dashboard sections (no page reload).
+  return (
+    msg.type !== 'run.output' &&
+    msg.type !== 'stream.open' &&
+    msg.type !== 'retention.finished' &&
+    msg.type !== 'dashboard.info' &&
+    msg.type !== 'system.metrics'
+  );
 }
 
 /** Run ID a live message refers to, if any. */

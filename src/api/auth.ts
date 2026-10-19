@@ -1,8 +1,8 @@
 /**
- * Authentication of web UI and API (WI-26, Spec §20 addendum 0.3.1).
+ * Authentication of web UI and API (WI-26, Spec §20 addendum 0.4.0).
  *
  * Modes (`auth.mode` in config.yaml, read per request – a reload applies):
- * - `none`: no login (behaviour before 0.3.1); this service is not consulted.
+ * - `none`: no login (behaviour before 0.4.0); this service is not consulted.
  * - `password`: built-in users with scrypt hashes from environment variables,
  *   in-memory sessions (cookie `adispatch_session`, `HttpOnly; SameSite=Strict;
  *   Path=/`, `Secure` over HTTPS), login rate limits per client IP and per

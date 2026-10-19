@@ -16,7 +16,7 @@ describe('auth (WI-26)', () => {
     return res.config;
   }
 
-  it('defaults to mode none (behaviour before 0.3.1)', async () => {
+  it('defaults to mode none (behaviour before 0.4.0)', async () => {
     const config = await loadOk('server: { port: 8787 }\n');
     expect(config.global.auth).toEqual({
       mode: 'none',

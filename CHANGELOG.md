@@ -3,7 +3,7 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
-## [0.3.1] – unveröffentlicht
+## [0.4.0] – unveröffentlicht
 
 ### Hinzugefügt
 
@@ -19,6 +19,24 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   (`<data-dir>/control.token`, `0600`, nur über Loopback). Audit: schreibende Aktionen stehen mit Benutzer im Dienstlog,
   Run-Aktionen zusätzlich als Run-Event `audit.user_action`. Einrichtung: `docs/operations.md`.
 
+- **Server-Ressourcen im Dashboard:** neuer Bereich „Server“ mit gestapeltem CPU-Diagramm über die Zeit (Daemon, jeder
+  aktive Run mit stabiler Farbe je Workflow und Link zum Run, Hooks/Checks des Daemons, die größten fremden Prozesse
+  nach Namen, „Others“ und der nicht zuordenbare Rest bis zur Gesamtauslastung; Skala 0–100 % der Gesamtkapazität),
+  Diagrammen für RAM (belegt/verfügbar) und freien Plattenplatz (data-dir und – falls anderes Dateisystem –
+  `workspace.base_dir`), aktuellen Werten (CPU, Load, RAM, Platte) als Zahlen und Tabelle, Tooltip je Zeitpunkt,
+  Zeitraum-Auswahl und Live-Aktualisierung per SSE. Eigenes SVG-Rendering ohne Bibliotheken, Hell/Dunkel.
+- **Messung:** CPU aus den `os.cpus()`-Zeiten, RAM über `MemAvailable` (Linux) bzw. `vm_stat` (macOS), Platte über
+  `statfs`, Prozesse über eine `ps`-Ausführung je Intervall (`execFile`, Timeout, Ausgabe begrenzt; Namen aus `ucomm`,
+  nicht dem umschreibbaren `argv[0]`); CPU je Prozess als Rate der CPU-Zeit, Prozesse über PID, Name und Startzeit
+  (`etime`) erkannt, unter Linux über mindestens 60 s gemittelt. API mit serverseitigem Downsampling (`range`,
+  `points`, Default höchstens 600 Punkte). Zuordnung zu Runs über Prozessgruppe/Prozessbaum, bei
+  Container-Runs zusätzlich `<engine> stats`. **Nur Befehlsnamen, nie Argumente.** Messungen laufen nie parallel;
+  Fehler (z. B. fehlendes `ps`) werden gedrosselt geloggt und lassen den Teilwert leer. Werte nur im Speicher
+  (Ringpuffer, gehen beim Neustart verloren).
+- **Konfiguration `monitoring`** in `config.yaml` (alles optional): `enabled` (`true`), `interval` (Default
+  `scheduler.polling_interval`, 5 s … 60 s), `retention` (`6h`, 10 … 5 000 Intervalle), `top_processes` (`5`),
+  `min_cpu_percent` (`2`). Die Konfigurationsseite zeigt die Werte.
+- **API:** `GET /api/v1/system/metrics?since=<ISO>` und SSE-Event `system.metrics`.
 - **Conditions sichtbar (WI-24):** Shell-Prüfungen in `conditions.workflow[]`, `conditions.item[]` und `shell_filter`
   haben ein optionales Feld `name` (1–80 Zeichen; abwärtskompatibel). Workflows → Workflow-Detail (Bereich
   „Conditions“) und kompakt die Workflow-Liste zeigen jede Prüfung mit Anzeigename (sonst `command` + `args`, gekürzt),
@@ -59,6 +77,11 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 - Die Content-Security-Policy der Weboberfläche kommt als HTTP-Header statt als `<meta>`-Tag (Inhalt unverändert) und
   erlaubt `frame-src` genau für die Origins der aktivierten eingebetteten Tools; ein Reload der Konfiguration wirkt sofort
   für neu geladene Seiten.
+
+### Hinweis
+
+- Die UI zeigt die Befehlsnamen fremder Prozesse des Servers – UI nur hinter Authentifizierung freigeben oder
+  `monitoring.enabled: false` setzen.
 
 ## [0.3.0] – 2026-10-19
 
@@ -260,6 +283,7 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
+[0.4.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.3.0...HEAD
 [0.3.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/brokoskokoli/adispatchd/releases/tag/v0.1.0

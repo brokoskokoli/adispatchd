@@ -27,7 +27,14 @@ import {
 } from '../sources/github/index.js';
 import { VIEW_RUN_FIELDS } from '../views/index.js';
 import { KEEP_MAX_ENTRIES, KEEP_MAX_FILES } from '../runs/index.js';
-import { DEFAULT_WORKING_DIRECTORY, DEFAULTS, loadConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
+import {
+  DEFAULT_WORKING_DIRECTORY,
+  DEFAULTS,
+  MAX_DEFAULT_MONITORING_INTERVAL_MS,
+  MAX_MONITORING_SAMPLES,
+  MIN_MONITORING_INTERVAL_MS,
+  MIN_MONITORING_SAMPLES,
+  loadConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
 import { createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
 
 const DOC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../docs/configuration-reference.md');
@@ -228,6 +235,17 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain('--cap-drop ALL --security-opt no-new-privileges');
     expect(markdown).toContain('`recovery.container_stopped`');
     expect(sets.get('container')?.invalid).toBe(false);
+  });
+
+  it('documents the monitoring section: keys, defaults and limits (WI-23)', () => {
+    for (const key of ['enabled', 'interval', 'retention', 'top_processes', 'min_cpu_percent']) expect(markdown, key).toContain(`| \`monitoring.${key}\` |`);
+    expect(markdown).toContain(`| \`monitoring.retention\` | Dauer | \`${DEFAULTS.monitoringRetention}\` | ≥ ${MIN_MONITORING_SAMPLES} und ≤ ${String(MAX_MONITORING_SAMPLES).replace(/\B(?=(\d{3})+$)/g, ' ')} Intervalle |`);
+    expect(markdown).toContain(`| \`monitoring.top_processes\` | Integer | \`${DEFAULTS.monitoringTopProcesses}\` |`);
+    expect(markdown).toContain(`| \`monitoring.min_cpu_percent\` | Zahl | \`${DEFAULTS.monitoringMinCpuPercent}\` |`);
+    expect(markdown).toContain(`höchstens \`${MAX_DEFAULT_MONITORING_INTERVAL_MS / 1000}s\` | ≥ ${MIN_MONITORING_INTERVAL_MS / 1000} s |`);
+    expect(markdown).toContain('ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=');
+    expect(markdown).toContain('PR_SET_NAME');
+    expect(markdown).toContain('**nur Befehlsnamen, nie Argumente**');
   });
 
   it('documents all hooks, operators and notification events', () => {
