@@ -179,6 +179,37 @@ describe('config: multi-source workflows and source variables (WI-20)', () => {
     ]);
   });
 
+  it('checks named filters (WI-15) at the place of use against all sources of the workflow', async () => {
+    const named = [
+      'id: ready',
+      'filter:',
+      '  all:',
+      '    - { field: labels, operator: contains, value: ready }',
+      '    - { field: project.Status, operator: equals, value: Todo }',
+      '',
+    ].join('\n');
+    const ok = await load({
+      'filters/ready.yaml': named,
+      'workflows/w.yaml': workflow('{ type: source, sources: [repo_a, repo_b] }', 'filter: ready\n'),
+    });
+    expect(ok.errors).toEqual([]);
+    expect(ok.config?.workflows.w?.filter).toEqual({
+      all: [
+        { field: 'labels', operator: 'contains', value: 'ready' },
+        { field: 'project.Status', operator: 'equals', value: 'Todo' },
+      ],
+    });
+    // repo_c has no project: the same named filter is invalid for a workflow that includes it.
+    const bad = await load({
+      'filters/ready.yaml': named,
+      'workflows/w.yaml': workflow('{ type: source, sources: [repo_a, repo_c] }', 'filter:\n  all:\n    - { use: ready }\n'),
+    });
+    expect(bad.errors).toEqual([
+      'workflows/w.yaml: filter.all[0] (use "ready" → filters/ready.yaml: filter.all[1].field): Unknown project field "project.Status": ' +
+        'workflows with several sources only offer project fields declared by all their sources (missing in "repo_c")',
+    ]);
+  });
+
   it('keeps the "state" rule per source and accepts a common project field', async () => {
     const rest = [
       'filter:',

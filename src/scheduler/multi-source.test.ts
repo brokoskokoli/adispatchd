@@ -119,6 +119,51 @@ describe('Scheduler – multi-source workflows (WI-20)', () => {
     expect(formatDryRun(dry)).toContain('capacity per source: repo_a 1/1, repo_b 1/1');
   });
 
+  it('the per-source limit counts runs started before a reload from "source: a" to "sources: [a, b]"', async () => {
+    s.env.github.createIssue(REPO, { number: 8, labels: ['ready-for-coding'] });
+    s.env.github.createIssue(REPO_B, { number: 1, labels: ['ready-for-coding'] });
+    const block = s.blockingScript();
+    s.workflow('coder', multiWorkflow('coder', block, 'repo_a').replace('sources: [repo_a]', 'source: repo_a'));
+    const b = await s.build();
+    const first = await b.scheduler.planOnce();
+    expect(first.startedRunIds).toHaveLength(1);
+    await waitStatus(b, s.env, first.startedRunIds[0] as string, 'running');
+
+    s.workflow('coder', multiWorkflow('coder', block, 'repo_a, repo_b', 'max_concurrent: 3\nmax_concurrent_per_source: 1'));
+    expect((await b.config.reload()).ok).toBe(true);
+    const second = await b.scheduler.planOnce();
+    expect(decisions(b.scheduler.lastDiagnosis('coder'))).toEqual([
+      ['repo_a:8', 'source_limit'],
+      ['repo_b:1', 'started'],
+    ]);
+    expect(second.startedRunIds).toHaveLength(1);
+  });
+
+  it('a reload during a multi-source planning step makes its candidates workflow_unavailable', async () => {
+    s.env.github.createIssue(REPO_B, { number: 1, labels: ['ready-for-coding'] });
+    const worker = s.env.script('ok.sh', 'exit 0');
+    s.workflow('coder', multiWorkflow('coder', worker, 'repo_a, repo_b', 'max_concurrent: 3'));
+    let reload: (() => Promise<unknown>) | undefined;
+    const reloading: SourceAdapter = Object.assign(Object.create(Object.getPrototypeOf(s.adapterB) as object) as SourceAdapter, s.adapterB, {
+      listCandidates: async (...a: Parameters<SourceAdapter['listCandidates']>) => {
+        const items = await s.adapterB.listCandidates(...a);
+        // The workflow changes while the step polls: its hash no longer matches.
+        s.workflow('coder', multiWorkflow('coder', worker, 'repo_a, repo_b', 'max_concurrent: 2'));
+        await reload?.();
+        return items;
+      },
+    });
+    const b = await s.build({ sources: (id) => (id === 'repo_a' ? s.env.adapter : id === 'repo_b' ? reloading : undefined) });
+    reload = () => b.config.reload();
+    const report = await b.scheduler.planOnce();
+    expect(report.startedRunIds).toEqual([]);
+    expect(decisions(b.scheduler.lastDiagnosis('coder'))).toEqual([
+      [ITEM_KEY, 'workflow_unavailable'],
+      ['repo_b:1', 'workflow_unavailable'],
+    ]);
+    expect(s.env.p.runs.list({}).total).toBe(0);
+  });
+
   it('a failing source does not stop the others; the diagnosis names it per source', async () => {
     s.env.github.createIssue(REPO_B, { number: 3, labels: ['ready-for-coding'] });
     const broken: SourceAdapter = Object.assign(Object.create(Object.getPrototypeOf(s.adapterB) as object) as SourceAdapter, s.adapterB, {
