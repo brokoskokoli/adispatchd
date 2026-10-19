@@ -176,7 +176,8 @@ item_priority:
 
 conditions:
   workflow:                 # exit 0 = ok, 1 = not now, >=2 = check error (unknown → no start)
-    - type: shell
+    - name: Credits available   # optional display name (UI, dry-run); default: command + args
+      type: shell
       command: scripts/check-credits.sh
       timeout: 15s
       cache: 60s
@@ -320,6 +321,41 @@ const CHECK_CREDITS_SH = `#!/bin/sh
 exit 0
 `;
 
+const DASHBOARD_YAML = `# dashboard.yaml – info tiles in the "Information" section of the dashboard (optional file;
+# without it the section is not shown). Each tile runs a trusted script like a condition:
+# no shell, minimal environment (+ env), working directory = this config dir, timeout, output
+# limit. Scripts run only in the BACKGROUND – once at start, when a value expired (cache) and
+# after config reload for new/changed tiles – never because somebody opens the page; the
+# refresh button per tile is throttled.
+# Output: the value on the first non-empty stdout line, exit 0. Exit != 0, timeout or an
+# unparsable value show an error; the last valid value stays visible (stale).
+# Scripts get ADISPATCH_INFO_ID, ADISPATCH_CONFIG_DIR and ADISPATCH_DATA_DIR.
+
+info:
+  - id: data-disk
+    title: Disk usage of the data dir
+    type: percent             # text | number | percent (0-100, optionally with %)
+    command: scripts/info/data-disk.sh
+    timeout: 10s
+    cache: 5m                 # how long a value is valid (min. 10s)
+    warn_above: 80            # number/percent: yellow from 80 (warn_below / critical_below also exist)
+    critical_above: 95        # red from 95
+  # - id: open-prs
+  #   title: Open PRs
+  #   type: number
+  #   command: scripts/info/open-prs.sh
+  #   env: { REPO: owner/repo }
+  #   unit: PRs
+  #   cache: 10m
+`;
+
+const DATA_DISK_SH = `#!/bin/sh
+# Dashboard info script (dashboard.yaml): disk usage of the data dir in percent.
+# Contract: print the value on the first stdout line and exit 0.
+set -eu
+df -P "\${ADISPATCH_DATA_DIR:-.}" | awk 'NR == 2 { sub("%", "", $5); print $5; exit }'
+`;
+
 const MAINTENANCE_SH = `#!/bin/sh
 set -eu
 echo "nightly maintenance at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -337,11 +373,13 @@ export function initTemplates(options: { port?: number } = {}): TemplateFile[] {
     { path: 'workflows/nightly-maintenance.yaml', content: NIGHTLY_YAML, mode: 0o640 },
     { path: 'views/needs-maintainer.yaml', content: VIEW_YAML, mode: 0o640 },
     { path: 'filters/needs-maintainer.yaml', content: FILTER_YAML, mode: 0o640 },
+    { path: 'dashboard.yaml', content: DASHBOARD_YAML, mode: 0o640 },
     { path: 'scripts/hello.sh', content: HELLO_SH, mode: 0o750 },
     { path: 'scripts/notify.sh', content: NOTIFY_SH, mode: 0o750 },
     { path: 'scripts/coder.sh', content: CODER_SH, mode: 0o750 },
     { path: 'scripts/check-credits.sh', content: CHECK_CREDITS_SH, mode: 0o750 },
     { path: 'scripts/maintenance.sh', content: MAINTENANCE_SH, mode: 0o750 },
+    { path: 'scripts/info/data-disk.sh', content: DATA_DISK_SH, mode: 0o750 },
   ];
 }
 

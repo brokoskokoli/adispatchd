@@ -294,7 +294,13 @@ export function normalizeWorkflow(
             : { type: 'source', source: raw.trigger.source ?? '' }
           : { type: 'manual' },
     filter: raw.filter ? expand(raw.filter, ['filter']) : null,
-    shellFilter: raw.shell_filter ? { command: resolveCommand(configDir, raw.shell_filter.command), timeoutMs: raw.shell_filter.timeout } : null,
+    shellFilter: raw.shell_filter
+      ? {
+          ...(raw.shell_filter.name !== undefined ? { name: raw.shell_filter.name } : {}),
+          command: resolveCommand(configDir, raw.shell_filter.command),
+          timeoutMs: raw.shell_filter.timeout,
+        }
+      : null,
     itemPriority: raw.item_priority
       ? {
           rules: raw.item_priority.rules.map((r, i) => ({ when: expand(r.when, ['item_priority', 'rules', i, 'when']), value: r.value })),
@@ -303,6 +309,7 @@ export function normalizeWorkflow(
       : null,
     conditions: {
       workflow: raw.conditions.workflow.map((c) => ({
+        ...(c.name !== undefined ? { name: c.name } : {}),
         type: c.type,
         command: resolveCommand(configDir, c.command),
         args: [...c.args],
@@ -310,6 +317,7 @@ export function normalizeWorkflow(
         cacheMs: c.cache ?? null,
       })),
       item: raw.conditions.item.map((c) => ({
+        ...(c.name !== undefined ? { name: c.name } : {}),
         type: c.type,
         command: resolveCommand(configDir, c.command),
         args: [...c.args],

@@ -25,7 +25,8 @@ function traceLines(trace: FilterTrace, indent: string): string[] {
 function checkLine(c: CheckDiagnosis): string {
   const what = c.kind === 'shell_filter' ? 'shell filter' : `${c.kind.replace('_', ' ')} ${c.index}`;
   const value = c.value === 'not_evaluated' ? 'unknown / not evaluated' : String(c.value);
-  return `${what} ${c.command}: ${value}${c.error ? ` – ${c.error}` : ''}`;
+  const label = c.name !== undefined ? `"${c.name}" (${c.command})` : c.command;
+  return `${what} ${label}: ${value}${c.error ? ` – ${c.error}` : ''}`;
 }
 
 function candidateLines(c: CandidateDiagnosis, n: number): string[] {

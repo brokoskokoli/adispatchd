@@ -13,7 +13,8 @@ import { isMap, isSeq, LineCounter, parseDocument, type Document } from 'yaml';
 import type { z } from 'zod';
 import { CONFIG_ID_PATTERN, systemClock, toAbsolutePath, type Clock } from '../core/index.js';
 import { formatIssuePath, IssueCollector, sortIssues, type IssuePath } from './issues.js';
-import type { ConfigIssue, GlobalConfig, LoadedConfig, ViewConfig, WorkflowConfig } from './model.js';
+import type { ConfigIssue, DashboardConfig, GlobalConfig, LoadedConfig, ViewConfig, WorkflowConfig } from './model.js';
+import { DASHBOARD_FILE, normalizeDashboard, validateDashboard } from './dashboard.js';
 import { editDistance, suggestField } from './field-catalog.js';
 import { NamedFilters, type NamedFilterEntry } from './named-filters.js';
 import {
@@ -24,6 +25,7 @@ import {
   normalizeWorkflow,
 } from './normalize.js';
 import {
+  dashboardFileSchema,
   globalConfigSchema,
   identitiesFileSchema,
   namedFilterSchema,
@@ -99,6 +101,7 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
   const configFile = await readTop(CONFIG_FILE, true);
   const sourcesFile = await readTop(SOURCES_FILE, false);
   const identitiesFile = await readTop(IDENTITIES_FILE, false);
+  const dashboardFile = await readTop(DASHBOARD_FILE, false);
   const workflowFiles = await readDir(dir, WORKFLOWS_DIR, issues, files);
   const viewFiles = await readDir(dir, VIEWS_DIR, issues, files);
   // Unreadable filter files still count by name, so places of use report "invalid" rather than "unknown".
@@ -162,6 +165,16 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
 
   validateSemantics({ global, sources, identities, workflows: workflowEntries, views: viewEntries, namedFilters }, issues);
 
+  // dashboard.yaml (WI-24): optional; absent = no info tiles.
+  let dashboard: DashboardConfig | null = null;
+  if (dashboardFile) {
+    const rawDashboard = parseWith(dashboardFileSchema, dashboardFile, DASHBOARD_FILE, issues);
+    if (rawDashboard) {
+      dashboard = normalizeDashboard(rawDashboard, dir);
+      validateDashboard(dashboard, issues);
+    }
+  }
+
   if (issues.hasErrors) return finish(issues, files);
 
   const workflows: Record<string, WorkflowConfig> = {};
@@ -177,9 +190,11 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
   const config: LoadedConfig = {
     configDir: dir,
     version: options.version ?? 1,
-    hash: hashOf(content),
+    // The dashboard is part of the hash only when present (hashes of configurations without it stay unchanged).
+    hash: hashOf(dashboard ? { ...content, dashboard } : content),
     loadedAt: new Date(clock.now()).toISOString(),
     ...content,
+    dashboard,
     workflowHashes,
   };
   const result = finish(issues, files);

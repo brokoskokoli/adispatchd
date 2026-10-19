@@ -7,10 +7,11 @@ import { ApiError, api, qs, seg } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { buildRuntimeBody, buildStartBody } from '../../shared/params.js';
-import { checkValueLabel, decisionTone, formatBytes, formatDuration, triggerSummary } from '../../shared/format.js';
+import { checkValueLabel, decisionTone, formatBytes, formatDuration, triggerSummary, truncate } from '../../shared/format.js';
+import { checkCountsText, checkCountsTone, checkTitle, conditionStatusInfo } from '../../shared/checks.js';
 import { buildHash } from '../../shared/route.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
-import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, SecretInfo, SourcePoll, Workflow } from '../types.js';
+import type { CheckCountsView, CheckDiagnosis, DryRunResult, FilterTrace, LastConditionCheck, RunSummary, SecretInfo, SourcePoll, Workflow, WorkflowConditions } from '../types.js';
 import { act, badge, button, errorBox, externalLink, isEditing, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, toast } from '../ui.js';
 
 function timeoutText(t: unknown): string {
@@ -39,6 +40,85 @@ function enabledBadge(wf: Workflow): HTMLElement {
   return h('span', null, wf.enabled ? badge('active', 'ok') : badge('inactive', 'muted'), overridden(wf, 'enabled'));
 }
 
+// ---------------------------------------------------------------------------
+// Conditions (WI-24)
+
+/** Compact badges for the workflow list: one per workflow condition (by last status), item conditions and shell filter as summary. */
+function conditionBadges(c: WorkflowConditions | undefined): HTMLElement {
+  if (!c || (c.workflow.length === 0 && c.item.length === 0 && !c.shellFilter)) return text(null);
+  const badges: HTMLElement[] = c.workflow.map((cond) => {
+    const s = conditionStatusInfo(cond.last?.status);
+    return badge(truncate(cond.label, 24), s.tone, `Workflow condition ${cond.index + 1}: ${cond.label} – ${s.label}`);
+  });
+  if (c.shellFilter) {
+    const last = c.shellFilter.last;
+    badges.push(badge('shell filter', last ? checkCountsTone(last) : 'muted', `Shell filter ${c.shellFilter.label}: ${last ? checkCountsText(last) : 'not checked yet'}`));
+  }
+  if (c.item.length > 0) {
+    const tone = c.item.reduce<'ok' | 'warn' | 'error' | 'muted'>((worst, i) => {
+      const t = i.last ? checkCountsTone(i.last) : 'muted';
+      const rank = { error: 3, warn: 2, ok: 1, muted: 0, info: 0 } as const;
+      return rank[t] > rank[worst] ? (t as 'ok' | 'warn' | 'error') : worst;
+    }, 'muted');
+    badges.push(badge(`${c.item.length} item`, tone, c.item.map((i) => `Item condition ${i.index + 1}: ${i.label} – ${i.last ? checkCountsText(i.last) : 'not checked yet'}`).join('\n')));
+  }
+  return h('span', { class: 'cond-badges' }, badges);
+}
+
+function lastCheckDetail(last: LastConditionCheck | null): HTMLElement {
+  if (!last) return h('span', { class: 'muted' }, 'not evaluated since start/reload');
+  return h(
+    'span',
+    { class: 'cond-detail' },
+    time(last.checkedAt),
+    last.durationMs !== null ? ` · ${formatDuration(last.durationMs)}` : null,
+    last.cached ? h('span', { title: last.ranAt ? `cached result from ${last.ranAt}` : 'cached result' }, ' · from cache') : null,
+    last.exitCode !== null ? ` · exit ${last.exitCode}` : null,
+    last.status === 'skipped' ? h('span', { class: 'muted' }, ' · an earlier condition decided') : null,
+    last.error ? h('div', { class: 'error-text' }, last.error) : null,
+    last.stderr ? h('div', null, h('span', { class: 'muted' }, 'stderr: '), h('code', { class: 'wrap' }, last.stderr)) : null,
+  );
+}
+
+function countsCell(last: CheckCountsView | null): HTMLElement {
+  if (!last) return h('span', { class: 'muted' }, 'not checked since start/reload');
+  return h('span', { class: 'cond-detail' }, badge(checkCountsText(last), checkCountsTone(last)), ' ', h('small', { class: 'muted' }, 'last planning step '), time(last.at));
+}
+
+function timing(timeoutMs: number, cacheMs?: number | null): string {
+  return `timeout ${formatDuration(timeoutMs)}${cacheMs ? ` · cache ${formatDuration(cacheMs)}` : ''}`;
+}
+
+function nameCell(c: { name: string | null; label: string; command: string; displayCommand?: string; args?: string[] }): HTMLElement {
+  // Command relative to the config dir when inside it; the absolute command in the tooltip.
+  const shown = [c.displayCommand ?? c.command, ...(c.args ?? [])].join(' ');
+  return h(
+    'span',
+    null,
+    c.name ? h('strong', null, c.name) : null,
+    c.name ? h('br') : null,
+    h('code', { class: 'wrap', title: [c.command, ...(c.args ?? [])].join(' ') }, c.name ? shown : c.label),
+  );
+}
+
+/** Detail table of all shell checks with their last status. */
+function conditionsTable(c: WorkflowConditions): HTMLElement {
+  const rows: Array<HTMLElement[]> = [];
+  for (const cond of c.workflow) {
+    const s = conditionStatusInfo(cond.last?.status);
+    rows.push([h('span', null, `Workflow #${cond.index + 1}`), nameCell(cond), h('span', null, timing(cond.timeoutMs, cond.cacheMs)), badge(s.label, s.tone), lastCheckDetail(cond.last)]);
+  }
+  if (c.shellFilter) {
+    const last = c.shellFilter.last;
+    rows.push([h('span', null, 'Shell filter'), nameCell(c.shellFilter), h('span', null, timing(c.shellFilter.timeoutMs)), last ? badge(last.items ? 'checked' : 'idle', checkCountsTone(last)) : badge('never checked', 'muted'), countsCell(last)]);
+  }
+  for (const cond of c.item) {
+    const last = cond.last;
+    rows.push([h('span', null, `Item #${cond.index + 1}`), nameCell(cond), h('span', null, timing(cond.timeoutMs)), last ? badge(last.items ? 'checked' : 'idle', checkCountsTone(last)) : badge('never checked', 'muted'), countsCell(last)]);
+  }
+  return table(['Kind', 'Check', 'Timing', 'Last status', 'Details'], rows, { empty: 'No conditions configured.' });
+}
+
 export const workflowsPage = (ctx: PageContext): Page => {
   ctx.setTitle('Workflows');
   const body = h('div', null, loading());
@@ -49,7 +129,7 @@ export const workflowsPage = (ctx: PageContext): Page => {
       rerender(
         body,
         table(
-          ['Workflow', 'Trigger', 'Status', 'Priority', 'Active / max', 'Blocks', 'Last planning / next slot'],
+          ['Workflow', 'Trigger', 'Status', 'Priority', 'Active / max', 'Blocks', 'Conditions', 'Last planning / next slot'],
           res.workflows.map((wf) => [
             h('span', null, routeLink(['workflows', wf.id], wf.name), h('br'), h('small', { class: 'muted' }, wf.id)),
             triggerText(wf),
@@ -57,6 +137,7 @@ export const workflowsPage = (ctx: PageContext): Page => {
             h('span', null, String(wf.priority), overridden(wf, 'priority')),
             h('span', null, `${wf.activeRuns} / ${wf.maxConcurrent}`, overridden(wf, 'maxConcurrent')),
             wf.activeBlocks > 0 ? routeLink(['blocked'], badge(String(wf.activeBlocks), 'warn')) : '0',
+            conditionBadges(wf.conditions),
             wf.cron
               ? h('span', null, 'next ', time(wf.cron.nextSlot))
               : wf.lastPlanning
@@ -85,10 +166,34 @@ export const workflowsPage = (ctx: PageContext): Page => {
 // ---------------------------------------------------------------------------
 // Dry-run rendering
 
-function checkRow(c: CheckDiagnosis): HTMLElement {
+/** Display command of a diagnosed check (relative to the config dir), looked up in the workflow's `conditions`. */
+export type CheckCommandLookup = (c: CheckDiagnosis) => string | undefined;
+
+/** Lookup from a workflow view (WI-24). */
+export function commandLookup(conds: WorkflowConditions | undefined): CheckCommandLookup {
+  return (c) => {
+    if (!conds) return undefined;
+    if (c.kind === 'shell_filter') return conds.shellFilter?.displayCommand;
+    const list = c.kind === 'item_condition' ? conds.item : conds.workflow;
+    const entry = list[c.index];
+    return entry && entry.command === c.command ? entry.displayCommand : undefined;
+  };
+}
+
+function checkRow(c: CheckDiagnosis, lookup: CheckCommandLookup): HTMLElement {
+  const shown = lookup(c) ?? c.command;
   const v = checkValueLabel(c.value);
   const what = c.kind === 'shell_filter' ? 'shell filter' : `${c.kind.replace('_', ' ')} #${c.index + 1}`;
-  return h('li', null, badge(v.label, v.tone), ' ', what, ': ', h('code', null, c.command), c.error ? h('span', { class: 'error-text' }, ` – ${c.error}`) : null);
+  return h(
+    'li',
+    null,
+    badge(v.label, v.tone),
+    ' ',
+    what,
+    ': ',
+    c.name ? h('span', { title: c.command }, checkTitle(c)) : h('code', { title: c.command }, shown),
+    c.error ? h('span', { class: 'error-text' }, ` – ${c.error}`) : null,
+  );
 }
 
 export function traceNode(t: FilterTrace): HTMLElement {
@@ -123,7 +228,8 @@ function secretsTable(secrets: readonly SecretInfo[]): HTMLElement {
   );
 }
 
-export function renderDryRun(r: DryRunResult): HTMLElement {
+export function renderDryRun(r: DryRunResult, lookup: CheckCommandLookup = () => undefined): HTMLElement {
+  const row = (c: CheckDiagnosis): HTMLElement => checkRow(c, lookup);
   const parts: HTMLElement[] = [];
   parts.push(
     kv([
@@ -150,7 +256,7 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
       'Dry-run: no workers, no lifecycle actions, no shell filters/conditions. Checks that were not executed are shown as "unknown / not evaluated", never as pass.',
     ),
   );
-  if (r.conditions.length) parts.push(h('h3', null, 'Workflow conditions'), h('ul', { class: 'checks' }, r.conditions.map(checkRow)));
+  if (r.conditions.length) parts.push(h('h3', null, 'Workflow conditions'), h('ul', { class: 'checks' }, r.conditions.map(row)));
   if (r.secrets?.length) parts.push(h('h3', null, 'Secrets'), secretsTable(r.secrets));
   if (r.container) {
     parts.push(
@@ -201,7 +307,7 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
                     )
                   : null,
                 c.filter ? h('ul', { class: 'trace' }, traceNode(c.filter)) : null,
-                c.shellFilter || c.itemConditions.length ? h('ul', { class: 'checks' }, c.shellFilter ? checkRow(c.shellFilter) : null, c.itemConditions.map(checkRow)) : null,
+                c.shellFilter || c.itemConditions.length ? h('ul', { class: 'checks' }, c.shellFilter ? row(c.shellFilter) : null, c.itemConditions.map(row)) : null,
               )
             : text(null),
         ]),
@@ -241,20 +347,22 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
   const dryBtn: HTMLButtonElement = button('Run dry-run', () => void dryRun(), { kind: 'primary' });
   const dryBox = h('section', { class: 'card span-all' }, h('h2', null, 'Dry-run'), h('div', { class: 'actions' }, dryBtn), dryRunOut);
   const runsBox = h('section', { class: 'card span-all' }, h('h2', null, 'Recent runs'), loading());
+  const conditionsBox = h('section', { class: 'card span-all', hidden: true }, h('h2', null, 'Conditions'));
   const configBox = h('section', { class: 'card span-all' });
   const el = h(
     'div',
     { class: 'page' },
     h('p', { class: 'crumbs' }, routeLink(['workflows'], '← Workflows')),
     header,
-    h('div', { class: 'grid' }, info, overridesBox, startBox, dryBox, runsBox, configBox),
+    h('div', { class: 'grid' }, info, overridesBox, startBox, conditionsBox, dryBox, runsBox, configBox),
   );
   let formsBuilt = false;
+  let lastConditions: WorkflowConditions | undefined;
 
   const dryRun = async (): Promise<void> => {
     replaceChildren(dryRunOut, loading());
     const res = await act(dryBtn, () => api.post<DryRunResult>(`/api/v1/workflows/${seg(id)}/dry-run`));
-    replaceChildren(dryRunOut, res ? renderDryRun(res) : h('p', { class: 'muted' }, 'Dry-run failed.'));
+    replaceChildren(dryRunOut, res ? renderDryRun(res, commandLookup(lastConditions)) : h('p', { class: 'muted' }, 'Dry-run failed.'));
   };
 
   const buildOverrides = (wf: Workflow): void => {
@@ -413,7 +521,7 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
                   : text(null),
             ],
             ['Kept files', wf.execute.keep?.length ? h('span', null, h('code', { class: 'wrap' }, wf.execute.keep.join(', ')), h('small', { class: 'muted' }, ` (max ${formatBytes(wf.execute.keepMaxSizeBytes ?? null)} per run)`)) : text(null)],
-            ['Filter', `${wf.hasFilter ? 'declarative' : 'none'}${wf.hasShellFilter ? ' + shell filter' : ''}; conditions: ${wf.conditions.workflow} workflow, ${wf.conditions.item} item`],
+            ['Filter', `${wf.hasFilter ? 'declarative' : 'none'}${wf.hasShellFilter ? ' + shell filter' : ''}; conditions: ${wf.conditions.workflow.length} workflow, ${wf.conditions.item.length} item`],
             ['Max technical failures', String(wf.maxTechnicalFailures)],
             ['File', h('code', null, wf.file)],
             ...(wf.cron
@@ -442,6 +550,18 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
           ]),
         ),
       );
+      const conds = wf.conditions;
+      lastConditions = conds;
+      const hasChecks = conds.workflow.length > 0 || conds.item.length > 0 || conds.shellFilter !== null;
+      conditionsBox.hidden = !hasChecks;
+      if (hasChecks) {
+        rerender(
+          conditionsBox,
+          h('h2', null, 'Conditions'),
+          h('p', { class: 'hint' }, 'Green = ok (exit 0), red = not now (exit 1), yellow = check error (exit ≥ 2, timeout, signal), grey = not evaluated / never checked. Item checks: counts over the items of the last planning step.'),
+          conditionsTable(conds),
+        );
+      }
       if (!formsBuilt) {
         formsBuilt = true;
         buildOverrides(wf);

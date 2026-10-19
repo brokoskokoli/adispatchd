@@ -120,7 +120,41 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
 `overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?}}`,
 `execute {type, command, args, workingDirectory, timeout, secrets: [Namen], secretDelivery: {Name: env|file}, keep: [Muster], keepMaxSizeBytes, container?}` (seit 0.3.0 `secretDelivery`; nie Werte; bei `type: container` sind `command`/`args` der Engine-Aufruf mit `<run-id>`/`<data-dir>` und `container = {engine, image, command, workdir, mounts, resources, user, network, pull}`, WI-19), `secrets` (seit 0.3.0: alle deklarierten Secrets von `execute` und `shell`-Actions als `[{where, name, identity, delivery, variable}]`, nie Werte), `hasFilter`, `hasShellFilter`,
-`conditions {workflow, item}` (Anzahl), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
+`conditions` (seit 0.3.1, siehe unten; vorher nur Anzahlen), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
+
+**`conditions` (seit 0.3.1, WI-24)** – Definition und letzter Status aller Shell-Prüfungen (nur im Speicher; ein Reload
+verwirft den Status geänderter/entfernter Workflows; nach einem Neustart `last: null`):
+
+```json
+{
+  "workflow": [{
+    "index": 0, "name": "Credits verfügbar", "label": "Credits verfügbar",
+    "command": "/etc/adispatchd/scripts/check-credits.sh", "displayCommand": "scripts/check-credits.sh",
+    "args": [], "timeoutMs": 15000, "cacheMs": 60000,
+    "last": { "status": "ok", "checkedAt": "…", "ranAt": "…", "durationMs": 12, "cached": true,
+              "exitCode": 0, "error": null, "stderr": null }
+  }],
+  "item": [{ "index": 0, "name": null, "label": "scripts/check-item.sh {item.number}", "command": "…",
+             "displayCommand": "scripts/check-item.sh", "args": ["{item.number}"],
+             "timeoutMs": 30000, "last": { "at": "…", "items": 3, "ok": 2, "notNow": 1, "error": 0, "notEvaluated": 0 } }],
+  "shellFilter": { "name": null, "label": "…", "command": "…", "displayCommand": "…", "timeoutMs": 30000,
+                   "last": { "at": "…", "items": 4, "ok": 3, "notNow": 1, "error": 0, "notEvaluated": 0 } }
+}
+```
+
+- `command` = aufgelöster (absoluter) Pfad bzw. Programmname; `displayCommand` = relativ zum config-dir, wenn das
+  Skript darin liegt, sonst wie `command`. `label` = `name`, sonst `displayCommand` + `args`, auf 80 Zeichen gekürzt.
+  Auch Ablehnungsgründe (`workflow condition 0 "Name" (scripts/check.sh) is false`) zeigen den relativen Pfad.
+- `last.error` und `last.stderr` werden bereinigt (ANSI-Escapes, Steuer- und Bidi-Zeichen entfernt), dann redigiert,
+  dann gekürzt.
+- `last.status` (Workflow-Conditions): `ok` (Exit 0), `not_now` (Exit 1), `error` (Exit ≥ 2, Timeout, Signal,
+  Startfehler, Template-Fehler; Detail in `error`), `skipped` (nicht ausgeführt, weil eine frühere Condition
+  entschieden hat); `last: null` = seit Start/Reload nie ausgewertet. `checkedAt` = Auswertung durch Planung bzw.
+  Cron-Slot, `ranAt` = Start der Ausführung (bei `cached: true` älter). `stderr` = erste nicht-leere stderr-Zeile,
+  gekürzt; `error` und `stderr` sind redigiert.
+- Item-Conditions und `shellFilter`: `last` = Zusammenfassung des letzten Planungsschritts (`items` = Items, deren
+  Item-Conditions bzw. Shell-Filter ausgeführt wurden; Zählung je Ergebnis); kein Einzelstatus pro Item.
+- Die Planungsdiagnose und das DryRunResult enthalten in jedem `CheckDiagnosis` zusätzlich `name`, wenn konfiguriert.
 
 Mehrere Sources (WI-20): `trigger` enthält dann zusätzlich `sources: [<id>, …]` (`source` = erste Source, wie bisher);
 `maxConcurrentPerSource` (`null` = nicht konfiguriert); `lastPlanning.sources: [{sourceId, status, error, polled}]` (auch
@@ -245,9 +279,25 @@ Run-Felder: `run.last_id`, `run.last_workflow`, `run.last_status`, `run.last_res
 | Methode | Pfad | Antwort |
 |---|---|---|
 | GET | `/api/v1/config` | `{"config": LoadedConfig (Webhook-URLs redigiert), "overrides", "externalLinks"}`; `config.filters` listet die benannten Filter (`{id, file, description, filter}`, Filter expandiert); `externalLinks` = nur die aktivierten `ui.external_links` in Konfigurationsreihenfolge als `[{"id","label","url","embed"}]` mit **vollständiger** URL (seit 0.3.1, WI-25; die UI baut daraus die Toolbar-Einträge – sichtbar für jeden, der die API erreicht); `config.global.ui.externalLinks` enthält ebenfalls nur aktive Einträge, Query-String und Fragment der URL als `[REDACTED]` |
-| GET | `/api/v1/config/files` | `{"files":[{"file":"workflows/coder.yaml","content":"…"}]}` – YAML read-only (Top-Level-Dateien, `workflows/`, `views/`, `filters/`), **strukturell redigiert** (unabhängig vom geladenen Stand): Werte von `url`-Keys, alles unter `headers`/`headers_env`, jeder String-Wert mit `http(s)://` auf Schema+Host gekürzt (z. B. Webhook-Literale in `env:`), Keys wie `*token`, `*secret`, `password`, … sowie Pfad/Query von URLs in Kommentaren → `[REDACTED]`. Nicht parsebare Dateien werden nicht roh ausgeliefert (`content: null`, `error` mit Zeilennummer) |
+| GET | `/api/v1/config/files` | `{"files":[{"file":"workflows/coder.yaml","content":"…"}]}` – YAML read-only (Top-Level-Dateien inkl. `dashboard.yaml`, `workflows/`, `views/`, `filters/`), **strukturell redigiert** (unabhängig vom geladenen Stand): Werte von `url`-Keys, alles unter `headers`/`headers_env`, jeder String-Wert mit `http(s)://` auf Schema+Host gekürzt (z. B. Webhook-Literale in `env:`), Keys wie `*token`, `*secret`, `password`, … sowie Pfad/Query von URLs in Kommentaren → `[REDACTED]`. Nicht parsebare Dateien werden nicht roh ausgeliefert (`content: null`, `error` mit Zeilennummer) |
 | POST | `/api/v1/config/validate` | `{"ok", "errors":[ConfigIssue], "warnings", "hash"?}` – prüft Dateien, aktiviert nichts |
 | POST | `/api/v1/config/reload` | `200 {"ok":true,"version","hash","changed","diff","resetOverrides","warnings"}` / `422 config_invalid` (`details.errors`) – atomar, bei Fehler bleibt die aktive Konfiguration |
+
+### Dashboard-Infos (seit 0.3.1, WI-24)
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/v1/dashboard/info` | – | `{"configured": bool, "file": "dashboard.yaml"\|null, "info": [InfoTile]}` – liest nur; startet **nie** ein Skript |
+| POST | `/api/v1/dashboard/info/:id/refresh` | `{}` | `202 {"accepted":true,"alreadyRunning":bool,"tile":InfoTile}` – sofortiger Abruf im Hintergrund (läuft schon einer: `alreadyRunning: true`, kein zweiter Start); `404 not_found`; `429 rate_limited` mit `Retry-After` und `details.retryAfterMs` (je Kachel höchstens alle 10 s, insgesamt 20 je Minute); `503 shutting_down` während des Herunterfahrens. CSRF-Header, Host-/Origin-Regeln wie bei jedem POST |
+
+`InfoTile`: `id, title, type (text|number|percent), value` (Zahl, Text oder `null`; der letzte gültige Wert bleibt bei
+Fehlern erhalten), `unit` (`%` bei `percent`), `status` (`ok` / `warn` / `critical` nach Schwellwerten, `error` =
+letzter Abruf fehlgeschlagen, `pending` = noch kein Wert), `updatedAt` (Zeit des gültigen Werts), `expiresAt`
+(Ablauf des letzten gültigen Werts, `null` ohne gültigen Wert), `nextAttemptAt` (nächster Abruf im Hintergrund – nach
+Erfolg = `expiresAt`, nach einem Fehler der Wiederholungszeitpunkt; `null`, solange ein Abruf läuft oder wartet),
+`error?` (kurz; z. B. `exit code 2: <erste stderr-Zeile>`, `timed out after 15000ms`, `unparsable output "…"`;
+bereinigt, redigiert, dann gekürzt), `stale` (Wert älter als der fehlgeschlagene Versuch),
+`refreshing`, `lastAttemptAt`, `durationMs`, `thresholds {warnAbove, criticalAbove, warnBelow, criticalBelow}`.
 
 ### Notifications
 
@@ -282,6 +332,8 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 | `notification` | nein | Notification inkl. `deliveries` (bei Anlage und jedem Zustellversuch) |
 | `config.reloaded` | nein | `{version, hash, changed, diff, resetOverrides}` |
 | `retention.finished` | nein | `{finishedAt, deletedRuns, errors}` |
+| `workflow.conditions` | nein | `{workflowId}` – der letzte Status einer Workflow-Condition oder die Item-Check-Zusammenfassung hat sich geändert (seit 0.3.1); Details per `GET /api/v1/workflows/:id` |
+| `dashboard.info` | nein | `InfoTile` nach jeder Änderung (Abruf gestartet/fertig, Wert, Status; seit 0.3.1) |
 
 - **Reconnect:** `EventSource` sendet `Last-Event-ID` automatisch; alternativ `?lastEventId=`. Verpasste persistente
   Events werden aus SQLite nachgeliefert (max. 5000, sonst `stream.reset`), danach live – ohne Lücken/Duplikate.
