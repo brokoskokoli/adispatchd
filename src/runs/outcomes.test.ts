@@ -253,6 +253,37 @@ describe.runIf(supported)('RunController – named outcomes and on_error (WI-17)
       expect(hooksOf(reserved.id)).toEqual(['on_error']);
     });
 
+    it('a run finalized before 0.3.0 (no persisted hook, old snapshot) resumes with the specific hook', async () => {
+      const current = await env.snapshot(reviewerYaml('/bin/true'));
+      // Pre-0.3.0 snapshot shape: every list hook present (empty if unused), no on_error, no on_result.
+      const crashAction = { ...current.workflow.hooks.on_success[0]!, id: 'on_crash.0', labels: { add: ['ready-for-review'], remove: ['reviewing'] } };
+      const legacy = {
+        ...current,
+        workflow: {
+          ...current.workflow,
+          hooks: {
+            on_start: current.workflow.hooks.on_start,
+            on_success: current.workflow.hooks.on_success,
+            on_failure: current.workflow.hooks.on_failure,
+            on_crash: [crashAction],
+            on_start_error: [],
+            on_cancel: [],
+            on_timeout: [],
+          },
+        },
+      };
+      const reserved = env.reserve(legacy as typeof current);
+      env.p.runs.transition(reserved.id, 'starting');
+      env.p.runs.transition(reserved.id, 'running', { update: { pid: 999_999 } });
+      env.github.setLabels(REPO, ISSUE, ['reviewing']);
+      env.p.runs.beginFinalization(reserved.id, { status: 'crashed', businessResult: null, reason: 'exit code 1' });
+      expect(env.p.runs.require(reserved.id)).toMatchObject({ status: 'finalizing', completionHook: null, outcome: null });
+      await env.harness().controller.recover();
+      expect(env.p.runs.require(reserved.id).status).toBe('crashed');
+      expect(hooksOf(reserved.id)).toEqual(['on_crash']);
+      expect(env.github.labels(REPO, ISSUE)).toEqual(['ready-for-review']);
+    });
+
     it('continues interrupted on_result chains of finished runs', async () => {
       const runId = await interruptedIn('on_result.approved', 'completed');
       env.p.actions.finishAttempt(env.p.actions.listAttempts(env.p.actions.listForHook(runId, 'on_result.approved')[0]!.id)[0]!.id, 'failed');
