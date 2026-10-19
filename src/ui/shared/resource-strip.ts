@@ -83,12 +83,20 @@ export function topEntries(sample: MetricsSample, max = MAX_TOP): TopEntry[] {
   }));
 }
 
-/** Summary of the latest sample plus the sparkline window ending at it; `null` without samples. */
-export function stripSummary(samples: readonly MetricsSample[], rangeMs = SPARK_RANGE_MS): StripSummary | null {
-  const latest = samples[samples.length - 1];
+/**
+ * Summary of the latest sample plus the sparkline window ending at it; `null`
+ * without samples. `current` (a live sample newer than the last sparkline
+ * point, not yet at the sparkline spacing) provides the current values and
+ * the last sparkline point.
+ */
+export function stripSummary(samples: readonly MetricsSample[], rangeMs = SPARK_RANGE_MS, current: MetricsSample | null = null): StripSummary | null {
+  const last = samples[samples.length - 1];
+  const newer = current && (!last || Date.parse(current.at) > Date.parse(last.at)) ? current : null;
+  const latest = newer ?? last;
   if (!latest) return null;
   const end = Date.parse(latest.at);
-  const spark = samples.filter((s) => Date.parse(s.at) >= end - rangeMs).map((s) => clampPercent(s.cpu.totalPercent));
+  const window = newer ? [...samples, newer] : samples;
+  const spark = window.filter((s) => Date.parse(s.at) >= end - rangeMs).map((s) => clampPercent(s.cpu.totalPercent));
   const total = Math.max(0, latest.memory.totalBytes);
   const used = Math.max(0, total - latest.memory.availableBytes);
   let disk: StripSummary['disk'] = null;
@@ -131,11 +139,11 @@ export type StripState =
   | { kind: 'ok'; summary: StripSummary };
 
 /** State from the current data of the feed. */
-export function stripState(data: MetricsResponse | null, error: unknown): StripState {
+export function stripState(data: MetricsResponse | null, error: unknown, current: MetricsSample | null = null): StripState {
   if (error) return { kind: 'error', message: error instanceof Error ? error.message : String(error) };
   if (!data) return { kind: 'loading' };
   if (!data.enabled) return { kind: 'disabled' };
-  const summary = stripSummary(data.samples);
+  const summary = stripSummary(data.samples, SPARK_RANGE_MS, current);
   return summary ? { kind: 'ok', summary } : { kind: 'empty', intervalMs: data.intervalMs };
 }
 
@@ -216,18 +224,41 @@ export function renderResourceStrip<E extends ElementLike, S extends ElementLike
     'strip-ok',
     h(
       'a',
-      { class: 'strip-link', href: RESOURCES_HASH, title: 'Open the Resources tab (charts, time range, process table)' },
+      {
+        class: 'strip-link',
+        href: RESOURCES_HASH,
+        title: 'Open the Resources tab (charts, time range, process table)',
+        'aria-label': stripAriaLabel(s),
+      },
       h('div', { class: 'strip-cells' }, cells, h('span', { class: 'strip-more' }, 'Resources →')),
       top,
     ),
   );
 }
 
+/** Accessible name of the strip link: a one-line summary plus where it leads. */
+export function stripAriaLabel(s: StripSummary): string {
+  const parts = [
+    `CPU ${formatPercent(s.cpu.percent)}`,
+    `memory ${formatBytes(s.memory.usedBytes)} of ${formatBytes(s.memory.totalBytes)}`,
+    ...(s.disk ? [`disk ${s.disk.path} ${formatPercent(s.disk.fraction * 100)} used`] : []),
+    `load ${s.load.map((l) => l.toFixed(2)).join(' / ')}`,
+  ];
+  return `Server resources: ${parts.join(', ')}. Open the Resources tab`;
+}
+
+/** First retry delay after a failed load (doubles per failure, see {@link MAX_RETRY_MS}). */
+export const RETRY_BASE_MS = 5_000;
+/** Upper bound of the retry delay. */
+export const MAX_RETRY_MS = 60_000;
+
 /** Dependencies of {@link createStripFeed} (injected for tests). */
 export interface StripFeedDeps {
   fetch(path: string): Promise<MetricsResponse>;
   /** Called after every state change (not after `dispose()`). */
   onChange(state: StripState): void;
+  /** Clock for the retry backoff (default `Date.now`). */
+  now?: () => number;
 }
 
 /** Live data of the strip. */
@@ -246,28 +277,46 @@ export interface StripFeed {
  * then live samples from SSE `system.metrics` (kept for the sparkline window
  * only). `config.reloaded` and resyncs reload (monitoring may have been
  * switched on/off). Out-of-date loads (a newer one started) are dropped.
+ *
+ * - Live samples update the current values at once but join the sparkline
+ *   only at the spacing of the loaded points (`bucketMs`, else the interval),
+ *   so the evenly spaced line keeps its time scale.
+ * - After a failed load, a `system.metrics` message (the server is reachable
+ *   again) triggers a new load, with a backoff of 5 s doubling up to 60 s.
  */
 export function createStripFeed(deps: StripFeedDeps): StripFeed {
+  const now = deps.now ?? (() => Date.now());
   let data: MetricsResponse | null = null;
+  let current: MetricsSample | null = null;
   let error: unknown = null;
   let disposed = false;
   let gen = 0;
+  let inFlight = 0;
+  let failures = 0;
+  let retryAt = 0;
   let state: StripState = { kind: 'loading' };
   const emit = (): void => {
-    state = stripState(data, error);
+    state = stripState(data, error, current);
     if (!disposed) deps.onChange(state);
   };
   const load = async (): Promise<void> => {
     if (disposed) return;
     const mine = ++gen;
+    inFlight++;
     try {
       const res = await deps.fetch(stripMetricsPath());
       if (disposed || mine !== gen) return;
       data = res;
+      current = null;
       error = null;
+      failures = 0;
     } catch (err) {
       if (disposed || mine !== gen) return;
       error = err;
+      failures++;
+      retryAt = now() + Math.min(MAX_RETRY_MS, RETRY_BASE_MS * 2 ** (failures - 1));
+    } finally {
+      inFlight--;
     }
     emit();
   };
@@ -279,8 +328,22 @@ export function createStripFeed(deps: StripFeedDeps): StripFeed {
         void load();
         return;
       }
-      if (msg.type !== 'system.metrics' || !data?.enabled) return;
-      data = { ...data, samples: appendSample(data.samples, msg.payload as unknown as MetricsSample, SPARK_RANGE_MS) };
+      if (msg.type !== 'system.metrics') return;
+      if (error) {
+        if (inFlight === 0 && now() >= retryAt) void load();
+        return;
+      }
+      if (!data?.enabled) return;
+      const sample = msg.payload as unknown as MetricsSample;
+      const t = Date.parse(sample.at);
+      const last = data.samples[data.samples.length - 1];
+      const spacing = data.bucketMs ?? data.intervalMs;
+      if (!last || t - Date.parse(last.at) >= spacing) {
+        data = { ...data, samples: appendSample(data.samples, sample, SPARK_RANGE_MS) };
+        current = null;
+      } else if (t > Date.parse(last.at) && (!current || t > Date.parse(current.at))) {
+        current = sample;
+      } else return;
       emit();
     },
     onResync: () => void load(),

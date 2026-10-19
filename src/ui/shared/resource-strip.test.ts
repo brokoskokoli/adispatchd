@@ -3,9 +3,11 @@ import { createH, createSvg, type DocLike, type ElementLike, type NodeLike, type
 import type { MetricsProcess, MetricsResponse, MetricsSample } from './metrics.js';
 import {
   createStripFeed,
+  MAX_RETRY_MS,
   MAX_TOP,
   renderResourceStrip,
   RESOURCES_HASH,
+  RETRY_BASE_MS,
   SPARK_POINTS,
   SPARK_RANGE_MS,
   sparklinePaths,
@@ -144,6 +146,9 @@ describe('renderResourceStrip', () => {
     const link = el.find((e) => e.tag === 'a');
     expect(link).toHaveLength(1);
     expect(link[0]!.attrs.href).toBe(RESOURCES_HASH);
+    expect(link[0]!.attrs['aria-label']).toBe(
+      'Server resources: CPU 33.3 %, memory 6.0 GiB of 16.0 GiB, disk /work 90.0 % used, load 1.50 / 1.25 / 0.50. Open the Resources tab',
+    );
     expect(parseHash(RESOURCES_HASH).segments).toEqual(['resources']);
     const values = el.byClass('strip-value').map((e) => e.textContent);
     expect(values).toEqual(['33.3 %', '6.0 GiB / 16.0 GiB', '90.0 % used', '1.50 / 1.25 / 0.50']);
@@ -252,6 +257,66 @@ describe('createStripFeed (lifecycle)', () => {
     expect(feed.disposed).toBe(true);
     expect(states).toEqual([]);
     expect(paths).toHaveLength(1);
+  });
+
+  it('recovers from a failed first load on the next system.metrics message, with backoff', async () => {
+    let clock = 1_000_000;
+    const paths: string[] = [];
+    const states: StripState[] = [];
+    let next: MetricsResponse | Error = new Error('HTTP 503');
+    const feed = createStripFeed({
+      fetch: async (path) => {
+        paths.push(path);
+        if (next instanceof Error) throw next;
+        return next;
+      },
+      onChange: (s) => states.push(s),
+      now: () => clock,
+    });
+    await feed.load();
+    expect(states.at(-1)).toEqual({ kind: 'error', message: 'HTTP 503' });
+    // Within the first backoff (5 s): no new request.
+    clock += RETRY_BASE_MS - 1;
+    feed.onLive(live(sample(1, 40)));
+    expect(paths).toHaveLength(1);
+    // After it: one retry, still failing → backoff doubles (10 s).
+    clock += 1;
+    feed.onLive(live(sample(2, 40)));
+    feed.onLive(live(sample(2, 41))); // while the retry is in flight: nothing else
+    await new Promise((r) => setTimeout(r, 0));
+    expect(paths).toHaveLength(2);
+    clock += 2 * RETRY_BASE_MS - 1;
+    feed.onLive(live(sample(3, 40)));
+    expect(paths).toHaveLength(2);
+    // Server back: the next allowed message reloads and the strip shows data again.
+    next = response([sample(4, 25)]);
+    clock += 1;
+    feed.onLive(live(sample(4, 40)));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(paths).toHaveLength(3);
+    expect(states.at(-1)).toMatchObject({ kind: 'ok', summary: { cpu: { percent: 25 } } });
+    // The delay is capped.
+    expect(MAX_RETRY_MS).toBe(60_000);
+  });
+
+  it('live samples join the sparkline only at the spacing of the loaded points; current values update at once', async () => {
+    const base = { enabled: true, intervalMs: 5000, retentionMs: 3_600_000, bucketMs: 60_000 };
+    const { feed, states } = setup({ ...base, samples: [sample(-1, 10), sample(0, 20)] });
+    await feed.load();
+    const at = (ms: number, total: number): MetricsSample => ({ ...sample(0, total), at: new Date(T0 + ms).toISOString() });
+    feed.onLive(live(at(5_000, 70)));
+    let last = states.at(-1) as Extract<StripState, { kind: 'ok' }>;
+    expect(last.summary.cpu.percent).toBe(70);
+    expect(last.summary.spark).toEqual([10, 20, 70]); // provisional last point
+    feed.onLive(live(at(10_000, 80)));
+    last = states.at(-1) as Extract<StripState, { kind: 'ok' }>;
+    expect(last.summary.spark).toEqual([10, 20, 80]); // still one provisional point, not one per sample
+    feed.onLive(live(at(60_000, 30)));
+    last = states.at(-1) as Extract<StripState, { kind: 'ok' }>;
+    expect(last.summary.spark).toEqual([10, 20, 30]); // committed at the bucket spacing
+    feed.onLive(live(at(65_000, 35)));
+    last = states.at(-1) as Extract<StripState, { kind: 'ok' }>;
+    expect(last.summary.spark).toEqual([10, 20, 30, 35]);
   });
 
   it('a slower older load does not overwrite a newer one', async () => {
