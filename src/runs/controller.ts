@@ -236,6 +236,16 @@ export interface RunControllerOptions {
   onStop?: (result: ShutdownResult) => void | Promise<void>;
 }
 
+/** A started worker process of a supervised run (see {@link RunController.supervisedProcesses}). */
+export interface SupervisedProcess {
+  runId: string;
+  workflowId: string;
+  itemKey: string | null;
+  pid: number;
+  pgid: number;
+  container?: { engine: ContainerEngine; name: string };
+}
+
 interface ActiveRun {
   runId: string;
   /** `run`: supervised execution; `recovery`: recovery / retryRecovery in progress (not cancellable). */
@@ -349,6 +359,30 @@ export class RunController {
   /** Run IDs currently supervised by this process. */
   activeRunIds(): string[] {
     return [...this.active.keys()];
+  }
+
+  /**
+   * Worker processes of the supervised runs (resource monitor, WI-23): PID and
+   * process group of every started worker, plus the container of container runs.
+   */
+  supervisedProcesses(): SupervisedProcess[] {
+    const out: SupervisedProcess[] = [];
+    for (const entry of this.active.values()) {
+      const pid = entry.proc?.pid;
+      if (entry.kind !== 'run' || pid === undefined) continue;
+      const run = this.repos.runs.get(entry.runId);
+      if (!run) continue;
+      const execute = tryParseSnapshot(run)?.workflow.execute;
+      out.push({
+        runId: run.id,
+        workflowId: run.workflowId,
+        itemKey: run.sourceItemKey,
+        pid,
+        pgid: entry.proc?.startIdentity?.pgid ?? pid,
+        ...(execute?.type === 'container' ? { container: { engine: execute.engine, name: containerName(run.id) } } : {}),
+      });
+    }
+    return out;
   }
 
   /** Pause automatic starts (running runs are not touched). */

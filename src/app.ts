@@ -61,6 +61,7 @@ import { Scheduler } from './scheduler/index.js';
 import { createGitHubSourceFactory } from './sources/index.js';
 import { ViewService } from './views/index.js';
 import { createApiServer, EventHub, type ReadinessReport } from './api/index.js';
+import { createSystemProbe, ResourceMonitor, type SystemProbe } from './monitoring/index.js';
 import type { FastifyInstance } from 'fastify';
 
 /** Package version reported by `/api/v1/status`. */
@@ -269,6 +270,8 @@ export interface AppOptions {
   allowedOrigins?: readonly string[];
   /** Static web UI directory (WI-11). */
   uiDir?: string;
+  /** Resource monitor (WI-23); tests inject a fake OS probe. */
+  monitoring?: { probe?: SystemProbe; primeDelayMs?: number };
 }
 
 /** Options of {@link App.shutdown}. */
@@ -300,6 +303,8 @@ export interface App {
   readonly views: ViewService;
   readonly retention: RetentionService;
   readonly events: EventHub;
+  /** Server resource monitor (WI-23). */
+  readonly monitor: ResourceMonitor;
   readonly http: FastifyInstance;
   readonly redactor: SecretRedactor;
   readonly logger: Logger;
@@ -434,6 +439,20 @@ export async function createApp(options: AppOptions): Promise<App> {
       events.publish('retention.finished', { finishedAt: r.finishedAt, deletedRuns: r.deletedRuns, errors: r.errors.length }),
   });
 
+  const monitor = new ResourceMonitor({
+    probe: options.monitoring?.probe ?? createSystemProbe({ engines: containers }),
+    settings: () => {
+      const g = config.current.global;
+      return { ...g.monitoring, diskPaths: [dataDir, g.workspace.baseDir] };
+    },
+    targets: () => ({ daemonPid: process.pid, runs: controller.supervisedProcesses() }),
+    clock,
+    timers,
+    logger,
+    onSample: (sample) => events.publish('system.metrics', sample),
+    ...(options.monitoring?.primeDelayMs !== undefined ? { primeDelayMs: options.monitoring.primeDelayMs } : {}),
+  });
+
   // --- State ----------------------------------------------------------------
   const host = options.host ?? config.current.global.server.host;
   const port = options.port ?? config.current.global.server.port;
@@ -531,6 +550,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     notifications,
     retention,
     events,
+    monitor,
     dataDir,
     clock,
     logger,
@@ -573,6 +593,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     }
     await retention.stop().catch(() => undefined);
     await notifications.stop().catch(() => undefined);
+    await monitor.stop().catch(() => undefined);
     events.close();
     if (listening) {
       await http.close().catch((err: unknown) => log.warn('closing HTTP server failed', { error: errorMessage(err) }));
@@ -635,6 +656,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     url = `http://${host.includes(':') ? `[${host}]` : host}:${p ?? port}`;
     log.info('HTTP API listening', { url });
     notifications.start();
+    monitor.start();
     void (async () => {
       try {
         const engines = containerEngines(config.current);
@@ -674,6 +696,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     views,
     retention,
     events,
+    monitor,
     http,
     redactor,
     logger,

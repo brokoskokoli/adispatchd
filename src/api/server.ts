@@ -42,6 +42,7 @@ import type { NotificationService } from '../notifications/index.js';
 import type { Repositories, RunRecord } from '../persistence/index.js';
 import { listKeptFiles, RUN_EVENTS, type RetentionService, type RunController } from '../runs/index.js';
 import type { Scheduler } from '../scheduler/index.js';
+import type { ResourceMonitor } from '../monitoring/index.js';
 import type { ViewService } from '../views/index.js';
 import { ApiError, toErrorResponse } from './errors.js';
 import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile } from './kept.js';
@@ -78,6 +79,8 @@ export interface ApiDeps {
   notifications: NotificationService;
   retention?: RetentionService;
   events: EventHub;
+  /** Server resource monitor (WI-23); without it `/system/metrics` reports `enabled: false`. */
+  monitor?: ResourceMonitor;
   dataDir: string;
   clock?: Clock;
   logger?: Logger;
@@ -146,6 +149,7 @@ const logsQuery = z
     tail: z.coerce.number().int().min(0).optional(),
   })
   .strict();
+const metricsQuery = z.object({ since: z.string().datetime({ offset: true }).optional() }).strict();
 const sseQuery = z
   .object({ run: z.string().optional(), lastEventId: z.coerce.number().int().min(0).optional() })
   .strict();
@@ -764,6 +768,20 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const res = deps.notifications.retry(id);
     if (!res) throw new ApiError(404, 'not_found', `Notification ${id} not found`);
     return accepted(reply, res);
+  });
+
+  // --- System resources (WI-23) ---------------------------------------------
+  app.get('/api/v1/system/metrics', async (req) => {
+    const q = parse(metricsQuery, req.query, 'query');
+    const monitor = deps.monitor;
+    const settings = monitor?.settings ?? { ...deps.config.current.global.monitoring, enabled: false };
+    const enabled = monitor !== undefined && settings.enabled;
+    return {
+      enabled,
+      intervalMs: settings.intervalMs,
+      retentionMs: settings.retentionMs,
+      samples: enabled && monitor ? monitor.list(q.since ? new Date(q.since) : undefined) : [],
+    };
   });
 
   // --- SSE --------------------------------------------------------------------
