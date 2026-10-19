@@ -1448,7 +1448,7 @@ sections:
 hide_empty_sections: false
 ```
 
-![View mit Abschnitten, Wertereihenfolge und Gruppenzeilen](screenshots/view-sections.png)
+![View mit Abschnitten, Wertereihenfolge und Gruppenzeilen](https://raw.githubusercontent.com/brokoskokoli/adispatchd/main/docs/screenshots/view-sections.png)
 
 ### 3.6 filters/*.yaml
 

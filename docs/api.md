@@ -486,7 +486,7 @@ bereinigt, redigiert, dann gekürzt), `stale` (Wert älter als der fehlgeschlage
 
 ### UI-Aktionen als Identity (seit 0.4.0, WI-27)
 
-![Item-Panel der Web-UI](screenshots/item-panel.png)
+![Item-Panel der Web-UI](https://raw.githubusercontent.com/brokoskokoli/adispatchd/main/docs/screenshots/item-panel.png)
 
 Ein angemeldeter Benutzer mit Rolle `admin` kommentiert ein Issue/PR, setzt/entfernt Labels oder ändert Projektfelder
 **als eine konfigurierte Identity** (z. B. eine GitHub App) – nicht als er selbst. Voraussetzungen, alle serverseitig

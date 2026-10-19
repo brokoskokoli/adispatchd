@@ -465,7 +465,7 @@ Administratoren können in der Web-UI (Menü **UI Actions**, Link „Act as iden
 Issue/PR **als eine konfigurierte Identity** antworten, Labels setzen/entfernen und Projektfelder ändern – etwa als
 `maintainer`-App statt mit dem eigenen GitHub-Konto.
 
-![Item-Panel: Identity, Kommentar, Labels, Projektfelder, letzte Aktionen](screenshots/item-panel.png)
+![Item-Panel: Identity, Kommentar, Labels, Projektfelder, letzte Aktionen](https://raw.githubusercontent.com/brokoskokoli/adispatchd/main/docs/screenshots/item-panel.png)
 
 Einrichtung:
 

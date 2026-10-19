@@ -16,11 +16,15 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   `exclusive`, `hide_empty_sections`); die Sources werden dabei nur einmal gelesen. UI: „Default order“ stellt nach
   einem Spaltenklick die konfigurierte Sortierung wieder her, Sprungmarken ab vier Abschnitten. Beispiel:
   `examples/config/views/pipeline.yaml`; Referenz §3.5.1, §3.5.2.
-- **API:** `GET /api/v1/views` und `/views/:id` liefern `sort` jetzt **immer als Liste** (`[{field, direction, order}]`,
-  vorher ein Objekt oder `null`) sowie `sections`, `exclusive`, `hideEmptySections`, `groupByFirst`; View-Ergebnisse
-  haben `warnings` und bei Abschnitten `sections: [{ title, rows, counts, sort, fields, … }]` (dann `rows: []`).
+- **API (Views):** Definitionen enthalten zusätzlich `sections`, `exclusive`, `hideEmptySections`, `groupByFirst`;
+  View-Ergebnisse haben `warnings` und bei Abschnitten `sections: [{ title, rows, counts, sort, fields, … }]`.
 
 ### Geändert
+
+- **Inkompatible API-Änderung (Views):** `GET /api/v1/views` und `/views/:id` liefern `sort` jetzt **immer als Liste**
+  (`[{field, direction, order}]`, `[]` = unsortiert; vorher ein Objekt oder `null`). Bei Views **mit Abschnitten** ist
+  `rows` im Ergebnis von `/views/:id/items` leer (`[]`), die Zeilen stehen in `sections[].rows`. Views ohne
+  Abschnitte liefern ihre Zeilen unverändert.
 
 - **Dashboard: kompakte Ressourcenleiste statt großer Server-Sektion.** Oben im Dashboard (vor den Info-Kacheln und den
   Scheduler-Karten) zeigt eine schmale Leiste CPU gesamt mit Verlauf der letzten 15 Minuten, RAM belegt/gesamt, die am
