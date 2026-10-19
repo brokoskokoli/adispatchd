@@ -226,9 +226,9 @@ describe('auth.mode: trusted_header', () => {
     expect(spoofed.json.error.code).toBe('untrusted_proxy');
   });
 
-  it('does not warn about local forging when a non-loopback proxy range is trusted', () => {
-    // 100.64.0.0/10 is not loopback, so this configuration is not "only loopback" – no warning.
-    expect(env.logger.records.some((r) => r.msg.includes('trusted_header without proxy_secret_env'))).toBe(false);
+  it('warns about local forging as soon as one trusted proxy entry is loopback (WI-27 review)', () => {
+    // 127.0.0.1 is trusted next to 100.64.0.0/10: local processes can still connect through loopback.
+    expect(env.logger.records.some((r) => r.msg.includes('trusted_header without proxy_secret_env and a trusted loopback proxy'))).toBe(true);
   });
 
   it('missing header → 401, unknown login → 403, viewer cannot write; logins are case-insensitive', async () => {
@@ -272,7 +272,7 @@ describe('auth.mode: trusted_header behind Tailscale Serve (loopback only)', () 
     const base = ['auth:', '  mode: trusted_header', '  trusted_header:', '    users: [{ login: alice@example.com, role: operator }]'];
     const forgeable = await startAppEnv({ configExtra: `${base.join('\n')}\n` });
     try {
-      expect(forgeable.logger.records.some((r) => r.level === 'warn' && r.msg.includes('trusted_header without proxy_secret_env and only loopback proxies'))).toBe(true);
+      expect(forgeable.logger.records.some((r) => r.level === 'warn' && r.msg.includes('trusted_header without proxy_secret_env and a trusted loopback proxy'))).toBe(true);
     } finally {
       await forgeable.cleanup();
     }

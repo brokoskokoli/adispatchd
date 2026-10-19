@@ -75,6 +75,8 @@ export interface RetentionConfig {
   blockedRunsMs: number | null;
   maxLogSizePerRunBytes: number;
   cleanupIntervalMs: number;
+  /** `retention.ui_actions` (WI-27): audit entries of UI actions, any result; `null` = keep forever. */
+  uiActionsMs: number | null;
 }
 
 /**
@@ -176,7 +178,7 @@ export interface AuthConfig {
     /**
      * Environment variable with a shared secret the proxy must send in
      * `X-Adispatch-Proxy-Secret` (`null` = not required). Without it, any local
-     * process can forge the identity header when only loopback proxies are trusted.
+     * process can forge the identity header when a loopback proxy is trusted.
      */
     proxySecretEnv: string | null;
     users: readonly TrustedHeaderUserConfig[];

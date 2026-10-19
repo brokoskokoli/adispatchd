@@ -61,7 +61,7 @@ import { Scheduler } from './scheduler/index.js';
 import { DashboardInfoService, type DashboardInfoServiceOptions } from './dashboard/index.js';
 import { createGitHubSourceFactory } from './sources/index.js';
 import { ViewService } from './views/index.js';
-import { AuthService, createApiServer, EventHub, removeControlToken, writeControlToken, type AuthServiceOptions, type ReadinessReport } from './api/index.js';
+import { AuthService, createApiServer, type UiActionLimits, EventHub, removeControlToken, writeControlToken, type AuthServiceOptions, type ReadinessReport } from './api/index.js';
 import { createSystemProbe, ResourceMonitor, type SystemProbe } from './monitoring/index.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -273,6 +273,8 @@ export interface AppOptions {
   uiDir?: string;
   /** Authentication tuning (WI-26; tests: fake scrypt, no failure delay, fixed control token). */
   auth?: Partial<Pick<AuthServiceOptions, 'scrypt' | 'sleep' | 'controlToken'>>;
+  /** Per-user limits of UI actions (WI-27; tests). */
+  uiActionLimits?: Partial<UiActionLimits>;
   /** Resource monitor (WI-23); tests inject a fake OS probe. */
   monitoring?: { probe?: SystemProbe; primeDelayMs?: number };
   /** Tuning of the dashboard info tiles (WI-24; tests). */
@@ -596,7 +598,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     }
     if (isIdentityForgeableLocally(cfg)) {
       log.warn(
-        'auth: trusted_header without proxy_secret_env and only loopback proxies – any local process (including workers) can claim any configured login; set auth.trusted_header.proxy_secret_env where the proxy supports it',
+        'auth: trusted_header without proxy_secret_env and a trusted loopback proxy – any local process (including workers) can claim any configured login; set auth.trusted_header.proxy_secret_env where the proxy supports it',
       );
     }
   };
@@ -633,6 +635,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     background,
     info: { version: APP_VERSION, startedAt, host, port: () => (listening ? actualPort() : null) },
     ...(options.allowedOrigins ? { allowedOrigins: options.allowedOrigins } : {}),
+    ...(options.uiActionLimits ? { uiActionLimits: options.uiActionLimits } : {}),
     ...(options.uiDir ? { uiDir: options.uiDir } : {}),
     auth,
     sources: sourceLookup,

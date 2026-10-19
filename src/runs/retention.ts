@@ -51,7 +51,7 @@ export interface RetentionReport {
   deletedBlocks: number;
   deletedNotifications: number;
   deletedCronFirings: number;
-  /** Audit entries of UI actions (WI-27): succeeded like completed runs, others like failed runs. */
+  /** Audit entries of UI actions (WI-27) older than `retention.ui_actions`. */
   deletedUiActions: number;
   orphanDirsRemoved: number;
   /** Left-over token directories (WI-18) removed. */
@@ -171,7 +171,7 @@ export class RetentionService {
     if (notificationsBefore) report.deletedNotifications = retention.deleteNotifications(notificationsBefore);
     const firingsBefore = cutoff(settings.completedRunsMs ?? CRON_FIRINGS_FALLBACK_MS);
     if (firingsBefore) report.deletedCronFirings = retention.deleteCronFirings(firingsBefore);
-    report.deletedUiActions = this.options.repositories.uiActions?.deleteOlderThan(cutoff(settings.completedRunsMs), cutoff(settings.failedRunsMs)) ?? 0;
+    report.deletedUiActions = this.options.repositories.uiActions?.deleteOlderThan(cutoff(settings.uiActionsMs)) ?? 0;
     const runDirNames = await readdir(dataPaths(this.options.dataDir).runsDir).catch(() => [] as string[]);
     if (!this.stopped) await this.removeOrphans(report, runDirNames);
     if (!this.stopped) await this.removeTokenFiles(report, runDirNames);

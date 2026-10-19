@@ -7,7 +7,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONTROL_TOKEN_HEADER } from './auth.js';
 import { authEnvSetup, AUTH_PASSWORDS, FAST_AUTH, PASSWORD_AUTH_CONFIG } from './testing/auth.js';
 import { REPO_A, REPO_B, startAppEnv, type AppEnv } from './testing/helpers.js';
@@ -49,7 +49,8 @@ const as = (user: string): Record<string, string> => ({ cookie: cookies[user]! }
 const comments = () => env.github.requests.filter((r) => r.method === 'POST' && r.path.endsWith('/comments'));
 
 beforeAll(async () => {
-  env = await startAppEnv({ configExtra: PASSWORD_AUTH_CONFIG, app: FAST_AUTH }, (e) => {
+  // Generous limits here; throttling has its own test below.
+  env = await startAppEnv({ configExtra: PASSWORD_AUTH_CONFIG, app: { ...FAST_AUTH, uiActionLimits: { actionsPerMinute: 1000, readsPerMinute: 1000 } } }, (e) => {
     authEnvSetup(e);
     setup(e);
   });
@@ -76,7 +77,6 @@ describe('comments', () => {
     const res = await env.request('POST', '/api/v1/items/repo_a/1/comment', { identity: 'maintainer', body: 'Thanks, **looking** into it' }, as('alice'));
     expect(res.status).toBe(200);
     expect(res.json.comment.url).toContain('/issues/1#issuecomment-');
-    expect(res.json.redacted).toBe(false);
     expect(res.json.action).toMatchObject({ actor: 'alice', actorVia: 'password', identity: 'maintainer', itemKey: 'repo_a:1', kind: 'comment', result: 'succeeded', commentUrl: res.json.comment.url });
     const posted = env.github.comments(REPO_A, 1).at(-1)!;
     expect(posted).toMatchObject({ body: 'Thanks, **looking** into it', author: 'maintainer[bot]' });
@@ -84,15 +84,73 @@ describe('comments', () => {
     expect(JSON.stringify(row)).not.toContain('looking');
   });
 
-  it('redacts secrets in the text before sending', async () => {
-    const token = `ghp_${'a1B2'.repeat(9)}`;
-    const res = await env.request('POST', '/api/v1/items/repo_a/1/comment', { identity: 'maintainer', body: `token ${token} and key ${env.env.MAINTAINER_KEY}` }, as('alice'));
+  it('rejects (never silently changes) a comment that looks like it contains a secret', async () => {
+    const before = env.github.comments(REPO_A, 1).length;
+    env.app.redactor.add('known-instance-secret-4711');
+    const cases: Array<[string, string]> = [
+      [`token ghp_${'a1B2'.repeat(9)}`, 'GitHub token ×1'],
+      [`key ${env.env.MAINTAINER_KEY}`, 'private key'],
+      ['-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk (truncated)', 'private key ×1'],
+      [`sk-ant-api03-${'Q'.repeat(30)}`, 'Anthropic API key ×1'],
+      ['AKIAIOSFODNN7EXAMPLE', 'AWS access key ID ×1'],
+      ['pw known-instance-secret-4711', 'secret known to adispatchd ×1'],
+    ];
+    for (const [body, kinds] of cases) {
+      const res = await env.request('POST', '/api/v1/items/repo_a/1/comment', { identity: 'maintainer', body }, as('alice'));
+      expect(res.status, kinds).toBe(400);
+      expect(res.json.error.code).toBe('comment_contains_secret');
+      expect(res.json.error.message).toContain(kinds);
+      // Only kinds and counts, never the value.
+      expect(JSON.stringify(res.json)).not.toMatch(/ghp_a1B2|IOSFODNN|known-instance-secret|QQQQ|b3BlbnNz/);
+    }
+    expect(env.github.comments(REPO_A, 1)).toHaveLength(before);
+    expect(comments()).toHaveLength(0);
+  });
+
+  it('neutralises HTML comments so no orchestrator marker can be forged', async () => {
+    const body = 'Done.\n\n<!-- adispatchd:run-20261019-120000-abcd:a7 -->';
+    const res = await env.request('POST', '/api/v1/items/repo_a/1/comment', { identity: 'maintainer', body }, as('alice'));
     expect(res.status).toBe(200);
-    expect(res.json.redacted).toBe(true);
-    const body = env.github.comments(REPO_A, 1).at(-1)!.body;
-    expect(body).not.toContain(token);
-    expect(body).not.toContain('PRIVATE KEY');
-    expect(body).toContain('[REDACTED]');
+    const posted = env.github.comments(REPO_A, 1).at(-1)!.body;
+    expect(posted).toBe('Done.\n\n&lt;!-- adispatchd:run-20261019-120000-abcd:a7 -->');
+    expect(posted).not.toContain('<!--');
+  });
+
+  it('checks the length limit on the body as sent', async () => {
+    const res = await env.request('POST', '/api/v1/items/repo_a/1/comment', { identity: 'maintainer', body: `${'x'.repeat(65_528)}<!--<!--` }, as('alice'));
+    expect(res.status).toBe(400);
+    expect(res.json.error.code).toBe('comment_too_long');
+    expect(comments()).toHaveLength(0);
+  });
+
+  it('refuses an identical comment within 60 s unless the first one definitely failed', async () => {
+    const send = (body: string) => env.request('POST', '/api/v1/items/repo_a/1/comment', { identity: 'maintainer', body }, as('alice'));
+    expect((await send('Same text')).status).toBe(200);
+    const again = await send('Same text');
+    expect(again.status).toBe(409);
+    expect(again.json.error.code).toBe('duplicate_comment');
+    // A definite failure frees the text again; an unknown outcome does not.
+    env.github.failNext({ method: 'POST', path: /\/comments$/ }, { status: 403, body: { message: 'locked' } });
+    expect((await send('Other text')).status).toBe(502);
+    expect((await send('Other text')).status).toBe(200);
+    env.github.failNext({ method: 'POST', path: /\/comments$/ }, { status: 502 });
+    expect((await send('Lost text')).json.error.code).toBe('github_outcome_unknown');
+    expect((await send('Lost text')).json.error.code).toBe('duplicate_comment');
+  });
+
+  it('answers 2xx with auditWarning when the audit fails after a successful write', async () => {
+    const spy = vi.spyOn(env.app.persistence.uiActions, 'record').mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+    try {
+      const res = await env.request('POST', '/api/v1/items/repo_a/1/comment', { identity: 'maintainer', body: 'Audit will fail' }, as('alice'));
+      expect(res.status).toBe(200);
+      expect(res.json).toMatchObject({ action: null, auditWarning: expect.stringContaining('could not be recorded') });
+      expect(env.github.comments(REPO_A, 1).at(-1)!.body).toBe('Audit will fail');
+      expect(env.logger.records.some((r) => r.level === 'error' && r.msg.includes('ui action audit failed after a successful GitHub write'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('is never retried: rate limit, server error and lost response are audited', async () => {
@@ -197,7 +255,23 @@ describe('access control', () => {
 });
 
 describe('labels and project fields', () => {
+  it('adds only existing repository labels unless create: true is sent', async () => {
+    const missing = await env.request('POST', '/api/v1/items/repo_a/1/labels', { identity: 'maintainer', add: ['brand-new'] }, as('alice'));
+    expect(missing.status).toBe(400);
+    expect(missing.json.error).toMatchObject({ code: 'label_not_found', details: { labels: ['brand-new'] } });
+    expect(env.github.labels(REPO_A, 1)).not.toContain('brand-new');
+    expect(env.app.persistence.uiActions.list({ limit: 1 }).actions[0]).toMatchObject({ kind: 'labels', result: 'failed', errorCode: 'label_not_found' });
+    const tooLong = await env.request('POST', '/api/v1/items/repo_a/1/labels', { identity: 'maintainer', add: ['x'.repeat(51)], create: true }, as('alice'));
+    expect(tooLong.status).toBe(400);
+    const created = await env.request('POST', '/api/v1/items/repo_a/1/labels', { identity: 'maintainer', add: ['brand-new'], create: true }, as('alice'));
+    expect(created.status).toBe(200);
+    expect(created.json.action.details).toMatchObject({ add: ['brand-new'], create: true });
+    expect(env.github.labels(REPO_A, 1)).toContain('brand-new');
+    await env.request('POST', '/api/v1/items/repo_a/1/labels', { identity: 'maintainer', remove: ['brand-new'] }, as('alice'));
+  });
+
   it('adds/removes labels idempotently as the identity', async () => {
+    env.github.addRepoLabels(REPO_A, 'ready');
     const res = await env.request('POST', '/api/v1/items/repo_a/1/labels', { identity: 'maintainer', add: ['ready'], remove: ['bug'] }, as('alice'));
     expect(res.status).toBe(200);
     expect(res.json).toMatchObject({ changed: true, applied: { labelsAdded: ['ready'], labelsRemoved: ['bug'] }, action: { kind: 'labels', result: 'succeeded' } });
@@ -224,6 +298,19 @@ describe('labels and project fields', () => {
     expect(env.app.persistence.uiActions.list({ limit: 1 }).actions[0]).toMatchObject({ kind: 'project', result: 'failed', errorCode: 'github_rejected' });
     const noProject = await env.request('POST', '/api/v1/items/repo_b/5/project', { identity: 'maintainer', fields: { Status: 'Review' } }, as('alice'));
     expect(noProject.json.error.code).toBe('project_not_configured');
+    const unknownSource = await env.request('POST', '/api/v1/items/nope/1/project', { identity: 'maintainer', fields: { Status: 'Review' } }, as('alice'));
+    expect(unknownSource.json.error.code).toBe('source_not_found');
+    expect(env.app.persistence.uiActions.list({ limit: 1 }).actions[0]).toMatchObject({ kind: 'project', sourceId: 'nope', errorCode: 'source_not_found' });
+  });
+
+  it('stores label names and project text values redacted in the audit', async () => {
+    const secret = `ghp_${'Zz9'.repeat(10)}`;
+    const res = await env.request('POST', '/api/v1/items/repo_a/1/project', { identity: 'maintainer', fields: { Notes: `token ${secret}` } }, as('alice'));
+    expect(res.status).toBe(200);
+    const row = JSON.stringify(env.app.persistence.uiActions.get(res.json.action.id));
+    expect(row).not.toContain(secret);
+    expect(row).toContain('[REDACTED]');
+    await env.request('POST', '/api/v1/items/repo_a/1/project', { identity: 'maintainer', fields: { Notes: null } }, as('alice'));
   });
 });
 
@@ -246,6 +333,13 @@ describe('item details, resolve and audit list', () => {
     expect(res.json.project.fields[0]).toMatchObject({ name: 'Status', kind: 'single_select', known: true, choices: ['Ready', 'Review'] });
     expect(res.json.recentActions.length).toBeGreaterThan(0);
     expect((await env.request('GET', '/api/v1/items/repo_a/5', undefined, as('alice'))).status).toBe(404);
+  });
+
+  it('names the source identity when reading the item fails', async () => {
+    env.github.failNext({ method: 'GET', path: '/repos/example/a/issues/1' }, { status: 403, body: { message: 'Resource not accessible by integration' } });
+    const res = await env.request('GET', '/api/v1/items/repo_a/1', undefined, as('alice'));
+    expect(res.status).toBe(502);
+    expect(res.json.error.message).toContain('identity "maintainer" (source identity, used for reading the item)');
   });
 
   it('resolves references', async () => {
@@ -276,9 +370,35 @@ describe('without authentication', () => {
       expect(res.json.error.code).toBe('ui_actions_disabled');
       expect((await plain.request('GET', '/api/v1/items/repo_a/1')).json.error.code).toBe('ui_actions_disabled');
       expect(plain.github.comments(REPO_A, 1)).toEqual([]);
-      expect((await plain.request('GET', '/api/v1/ui-actions')).json.enabled).toBe(false);
+      expect((await plain.request('GET', '/api/v1/ui-actions')).json.error.code).toBe('ui_actions_disabled');
     } finally {
       await plain.cleanup();
+    }
+  });
+});
+
+describe('per-user rate limits', () => {
+  it('throttles actions and item reads per user (429 ui_actions_throttled)', async () => {
+    const limited = await startAppEnv({ configExtra: PASSWORD_AUTH_CONFIG, app: { ...FAST_AUTH, uiActionLimits: { actionsPerMinute: 2, readsPerMinute: 3 } } }, (e) => {
+      authEnvSetup(e);
+      setup(e);
+    });
+    try {
+      limited.github.createIssue(REPO_A, { number: 1 });
+      const login = await limited.request('POST', '/api/v1/auth/login', { name: 'alice', password: AUTH_PASSWORDS.alice });
+      const cookie = { cookie: String(login.headers['set-cookie']).split(';')[0]! };
+      const post = (body: string) => limited.request('POST', '/api/v1/items/repo_a/1/comment', { identity: 'maintainer', body }, cookie);
+      expect((await post('one')).status).toBe(200);
+      expect((await post('two')).status).toBe(200);
+      const third = await post('three');
+      expect(third.status).toBe(429);
+      expect(third.json.error.code).toBe('ui_actions_throttled');
+      expect(Number(third.headers['retry-after'])).toBeGreaterThan(0);
+      expect(limited.github.comments(REPO_A, 1)).toHaveLength(2);
+      for (let i = 0; i < 3; i++) expect((await limited.request('GET', '/api/v1/items/repo_a/1', undefined, cookie)).status).toBe(200);
+      expect((await limited.request('GET', '/api/v1/items/repo_a/1', undefined, cookie)).json.error.code).toBe('ui_actions_throttled');
+    } finally {
+      await limited.cleanup();
     }
   });
 });

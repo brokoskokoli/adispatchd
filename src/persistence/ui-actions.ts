@@ -113,19 +113,10 @@ export class UiActionRepository {
     return { actions, total };
   }
 
-  /**
-   * Retention (like runs): succeeded entries older than `succeededBefore`,
-   * failed/unknown ones older than `failedBefore` (`null` = keep). Returns count.
-   */
-  deleteOlderThan(succeededBefore: Date | string | null, failedBefore: Date | string | null): number {
-    let deleted = 0;
-    if (succeededBefore !== null) {
-      deleted += run(this.db, `DELETE FROM ui_actions WHERE result = 'succeeded' AND created_at < ?`, [iso(succeededBefore)]).changes;
-    }
-    if (failedBefore !== null) {
-      deleted += run(this.db, `DELETE FROM ui_actions WHERE result <> 'succeeded' AND created_at < ?`, [iso(failedBefore)]).changes;
-    }
-    return deleted;
+  /** Retention (`retention.ui_actions`): delete entries of any result created before `before` (`null` = keep). Returns count. */
+  deleteOlderThan(before: Date | string | null): number {
+    if (before === null) return 0;
+    return run(this.db, 'DELETE FROM ui_actions WHERE created_at < ?', [iso(before)]).changes;
   }
 }
 

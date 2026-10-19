@@ -359,7 +359,7 @@ Nicht gelistete Logins erhalten `403`, Anfragen ohne Header (z. B. über Tailsca
 > Mit Tailscale Serve ist das `127.0.0.1` – also kann **jeder Prozess auf diesem Host, auch jeder Worker und jede
 > Shell-Action**, `curl -H 'Tailscale-User-Login: alice@example.com' http://127.0.0.1:8787/…` senden und mit Alices Rolle
 > handeln. Tailscale Serve kann kein zusätzliches Geheimnis mitsenden; adispatchd warnt beim Start
-> („trusted_header without proxy_secret_env and only loopback proxies“). Diese Konfiguration nur verwenden, wenn alle
+> („trusted_header without proxy_secret_env and a trusted loopback proxy“). Diese Konfiguration nur verwenden, wenn alle
 > lokalen Prozesse vertrauenswürdig sind (Workers sind ohnehin vertrauenswürdiger Code, Spec §20.2) – sonst einen Proxy
 > mit `proxy_secret_env` (unten) oder `password` verwenden. adispatchd nie an eine Nicht-Loopback-Adresse binden (sonst
 > Warnung beim Start) und `trusted_proxies` so eng wie möglich halten.
@@ -451,7 +451,7 @@ zusätzlich als Event `audit.user_action` in den Run-Details, entfernte Blocks m
 | `401 invalid_control_token` | Token einer anderen/neu gestarteten Instanz → richtiges `--data-dir` |
 | `403 control_token_not_allowed` | Steuer-Token auf einer Route außerhalb der CLI-Befehle (z. B. Run starten) – dafür in der UI anmelden |
 | `401 invalid_proxy_secret` | Proxy sendet `X-Adispatch-Proxy-Secret` nicht/falsch oder `proxy_secret_env` fehlt in der Env-Datei |
-| Warnung „trusted_header without proxy_secret_env and only loopback proxies …“ | Identität lokal fälschbar (siehe Tailscale Serve oben) |
+| Warnung „trusted_header without proxy_secret_env and a trusted loopback proxy …“ | Identität lokal fälschbar (siehe Tailscale Serve oben) |
 | `401 untrusted_proxy` | Identitäts-Header kam nicht von `trusted_header.trusted_proxies` (Proxy auf anderem Host? Adresse eintragen) |
 | `403 login_not_allowed` | Login fehlt in `auth.trusted_header.users` (Schreibweise wie vom Proxy gesendet, ohne Groß-/Kleinschreibung) |
 | Warnung „user cannot log in – password hash variable missing or malformed“ | Env-Variable fehlt oder Hash unvollständig → `adispatch auth hash-password`, Env-Datei, Neustart |

@@ -15,7 +15,10 @@ import {
   confirmTitle,
   initialState,
   itemPanel,
+  commentSecretWarning,
+  commentSendable,
   labelsRequest,
+  newLabels,
   parseItemDetails,
   parseUiAction,
   projectRequest,
@@ -80,8 +83,8 @@ export const uiActionsPage = (ctx: PageContext): Page => {
     h('section', { class: 'card' }, h('h2', null, 'Audit log'), body),
   );
   const load = (): void => {
-    if (unavailable && currentAuth().mode !== 'none') {
-      replaceChildren(body, h('p', { class: 'empty' }, 'Only administrators can see the audit log.'));
+    if (unavailable) {
+      replaceChildren(body, h('p', { class: 'empty' }, currentAuth().mode === 'none' ? 'Not available without a login.' : 'Only administrators can see the audit log.'));
       return;
     }
     void api
@@ -130,7 +133,13 @@ export const itemPage = (ctx: PageContext, source: string, itemId: string): Page
         const hint = preview?.previousElementSibling;
         if (hint) hint.textContent = `${s.comment.length} / 65536 characters · preview (plain text):`;
         const send = preview?.nextElementSibling?.querySelector('button') as HTMLButtonElement | null | undefined;
-        if (send) send.disabled = busy || s.identity === '' || s.comment.trim() === '';
+        if (send) send.disabled = busy || s.identity === '' || !commentSendable(s.comment);
+        const warning = el.querySelector('.secret-warning') as HTMLElement | null;
+        if (warning) {
+          const text = commentSecretWarning(s.comment);
+          warning.textContent = text ?? '';
+          warning.hidden = text === null;
+        }
       },
       onSendComment: () => void send('comment', s.comment, () => ({ body: s.comment })),
       onToggleLabel: (name) => {
@@ -152,7 +161,26 @@ export const itemPage = (ctx: PageContext, source: string, itemId: string): Page
       },
       onApplyLabels: () => {
         const req = labelsRequest(s, it);
-        if (req) void send('labels', req, () => req);
+        if (!req) return;
+        const created = newLabels(req.add, it);
+        if (created.length === 0) {
+          void send('labels', req, () => req);
+          return;
+        }
+        // Unknown labels are created by GitHub: a separate, explicit confirmation first.
+        void confirmDialog({
+          title: 'Create new label(s)?',
+          message: h(
+            'div',
+            null,
+            h('p', null, `These labels do not exist in ${it.repository ?? it.source} yet and will be created there:`),
+            h('pre', { class: 'confirm-line' }, created.join('\n')),
+          ),
+          confirmLabel: 'Create and continue',
+          danger: true,
+        }).then((res) => {
+          if (res.ok) void send('labels', req, () => ({ ...req, create: true }));
+        });
       },
       onFieldInput: (name, ev) => {
         s.fields[name] = { value: ((ev as Event).target as HTMLInputElement | HTMLSelectElement).value };
@@ -188,14 +216,15 @@ export const itemPage = (ctx: PageContext, source: string, itemId: string): Page
       b.disabled = true;
     });
     try {
-      const out = await api.post<{ comment?: { url: string | null }; changed?: boolean; redacted?: boolean }>(`${path}/${kind}`, { identity: s.identity, ...payload() });
-      const text =
+      const out = await api.post<{ comment?: { url: string | null }; changed?: boolean; auditWarning?: string }>(`${path}/${kind}`, { identity: s.identity, ...payload() });
+      const done =
         kind === 'comment'
-          ? `Comment posted as ${s.identity}${out.redacted ? ' (secrets were redacted)' : ''}.`
+          ? `Comment posted as ${s.identity}.`
           : out.changed
             ? `${kind === 'labels' ? 'Labels' : 'Project fields'} updated as ${s.identity}.`
             : 'Nothing changed: the item already had this state.';
-      s.result = { tone: 'ok', text, url: out.comment?.url ?? null };
+      const text = out.auditWarning ? `${done} Warning: ${out.auditWarning}` : done;
+      s.result = { tone: out.auditWarning ? 'error' : 'ok', text, url: out.comment?.url ?? null };
       toast(text, 'ok');
       if (kind === 'comment') s.comment = '';
       if (kind === 'labels') {

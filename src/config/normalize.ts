@@ -76,6 +76,7 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
       blockedRunsMs: raw.retention.blocked_runs,
       maxLogSizePerRunBytes: raw.retention.max_log_size_per_run,
       cleanupIntervalMs: raw.retention.cleanup_interval,
+      uiActionsMs: raw.retention.ui_actions,
     },
     notifications: {
       on: [...raw.notifications.on],

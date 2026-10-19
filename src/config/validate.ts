@@ -5,7 +5,6 @@
  * YAML key names.
  */
 import { statSync } from 'node:fs';
-import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { Cron } from 'croner';
 import {
@@ -204,37 +203,13 @@ function isHttpUrl(value: string): boolean {
 }
 
 /**
- * True if any local process (including workers) could send the identity
- * header itself: {@link isIdentityForgeableLocally} (WI-26: only loopback
- * proxies, no proxy secret) – and, stricter for UI actions, also when ANY
- * trusted proxy entry covers a loopback address and no proxy secret is set.
- */
-export function trustedHeaderForgeableLocally(global: GlobalConfig): boolean {
-  const auth = global.auth;
-  if (isIdentityForgeableLocally(auth)) return true;
-  if (auth.mode !== 'trusted_header' || auth.trustedHeader.proxySecretEnv !== null) return false;
-  return auth.trustedHeader.trustedProxies.some((entry) => coversLoopback(entry));
-}
-
-function coversLoopback(entry: string): boolean {
-  const [ip, prefix] = entry.split('/');
-  const family = isIP(ip ?? '');
-  if (family === 0) return false;
-  const list = new BlockList();
-  const type = family === 4 ? 'ipv4' : 'ipv6';
-  if (prefix === undefined) list.addAddress(ip as string, type);
-  else list.addSubnet(ip as string, Number(prefix), type);
-  return list.check('127.0.0.1', 'ipv4') || list.check('::1', 'ipv6') || (family === 6 && list.check('::ffff:127.0.0.1', 'ipv6'));
-}
-
-/**
  * `ui_actions: true` (WI-27) only works with a login: without one the UI
  * actions are disabled (warning). With a header login that local processes
  * can forge, a worker could act as the identity: error.
  */
 function validateUiActions(input: SemanticInput, issues: IssueCollector): void {
   const mode = input.global.auth.mode;
-  const forgeable = trustedHeaderForgeableLocally(input.global);
+  const forgeable = isIdentityForgeableLocally(input.global.auth);
   for (const identity of Object.values(input.identities)) {
     if (!identity.uiActions) continue;
     const at: IssuePath = ['identities', identity.id, 'ui_actions'];

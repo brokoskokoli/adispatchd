@@ -47,6 +47,7 @@ export const DEFAULTS = {
   blockedRuns: 'never',
   maxLogSizePerRun: '100MB',
   cleanupInterval: '24h',
+  uiActionsRetention: '365d',
   workflowPriority: 0,
   workflowMaxConcurrent: 1,
   maxTechnicalFailures: 3,
@@ -265,6 +266,8 @@ export const globalConfigSchema = z.strictObject({
       blocked_runs: durationOrNever.default(null),
       max_log_size_per_run: sizeSchema.default(parseSize(DEFAULTS.maxLogSizePerRun)),
       cleanup_interval: loopInterval.default(parseDuration(DEFAULTS.cleanupInterval)),
+      /** Audit entries of UI actions (WI-27), regardless of their result. */
+      ui_actions: durationOrNever.default(parseDuration(DEFAULTS.uiActionsRetention)),
     })
     .prefault({}),
   notifications: z

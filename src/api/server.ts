@@ -56,7 +56,7 @@ import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile 
 import { readLogPage } from './logs.js';
 import { runDetailFields, toBlockView, toRunSummary, toWorkflowView, type ActionView } from './serialize.js';
 import type { EventHub } from './sse.js';
-import { registerUiActionRoutes } from './ui-actions.js';
+import { registerUiActionRoutes, type UiActionLimits } from './ui-actions.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -122,6 +122,8 @@ export interface ApiDeps {
   uiDir?: string;
   /** Authentication (WI-26); absent = behaves like `auth.mode: none`. */
   auth?: AuthService;
+  /** Per-user limits of UI actions (WI-27); defaults: UI_ACTION_LIMITS. */
+  uiActionLimits?: Partial<UiActionLimits>;
   /** Source adapters by ID (UI actions, WI-27). */
   sources?: (sourceId: string) => SourceAdapter | undefined;
 }
@@ -957,6 +959,8 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     ...(deps.sources ? { sources: deps.sources } : {}),
     redact,
     logger,
+    clock,
+    ...(deps.uiActionLimits ? { limits: deps.uiActionLimits } : {}),
     authEnabled,
   });
 

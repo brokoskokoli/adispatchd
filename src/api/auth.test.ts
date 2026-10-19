@@ -315,14 +315,16 @@ describe('AuthService – trusted header', () => {
     expect(missing.resolve(local({ ...header, [PROXY_SECRET_HEADER]: '' }))).toMatchObject({ ok: false, code: 'invalid_proxy_secret' });
   });
 
-  it('reports locally forgeable identities (no proxy secret, only loopback proxies)', () => {
+  it('reports locally forgeable identities (no proxy secret, any loopback proxy entry)', () => {
     const cfg = (over: Partial<AuthConfig['trustedHeader']>, mode: AuthConfig['mode'] = 'trusted_header') =>
       baseConfig({ mode, trustedHeader: { ...baseConfig().trustedHeader, ...over } });
     expect(isIdentityForgeableLocally(cfg({}))).toBe(true);
     expect(isIdentityForgeableLocally(cfg({ trustedProxies: ['127.0.0.0/8', '::1', '::ffff:127.0.0.1'] }))).toBe(true);
     expect(isIdentityForgeableLocally(cfg({ proxySecretEnv: 'PROXY_SECRET' }))).toBe(false);
-    expect(isIdentityForgeableLocally(cfg({ trustedProxies: ['127.0.0.1', '10.0.0.5'] }))).toBe(false);
-    expect(isIdentityForgeableLocally(cfg({ trustedProxies: ['127.0.0.0/7'] }))).toBe(false);
+    // One loopback entry suffices: local processes can connect through it (WI-27 review).
+    expect(isIdentityForgeableLocally(cfg({ trustedProxies: ['127.0.0.1', '10.0.0.5'] }))).toBe(true);
+    expect(isIdentityForgeableLocally(cfg({ trustedProxies: ['127.0.0.0/7'] }))).toBe(true);
+    expect(isIdentityForgeableLocally(cfg({ trustedProxies: ['10.0.0.5', '100.64.0.0/10'] }))).toBe(false);
     expect(isIdentityForgeableLocally(cfg({}, 'password'))).toBe(false);
   });
 

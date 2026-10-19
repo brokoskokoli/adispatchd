@@ -62,5 +62,5 @@ export {
   type ParameterValidationResult,
 } from './parameters.js';
 export { redactExternalLinkUrl, toPublicConfig } from './public.js';
-export { isIdentityForgeableLocally, isLoopbackProxyEntry } from './auth.js';
+export { coversLoopback, isIdentityForgeableLocally, isLoopbackProxyEntry } from './auth.js';
 export { activeExternalLinks, externalLinkFrameOrigins, frameOrigin, isTokenLikeParam, type ExternalLinkInfo } from './external-links.js';

@@ -8,6 +8,7 @@
  */
 import type { AuthMe } from './auth.js';
 import type { Child, ElementLike, HFn, Listener } from './dom.js';
+import { describeFindings, scanSecrets } from './secret-scan.js';
 
 /** A project field of the item. */
 export interface PanelProjectField {
@@ -156,7 +157,7 @@ export function initialState(item: PanelItem, previous?: PanelState): PanelState
 export function addLabelInput(state: PanelState, item: PanelItem, input: string): void {
   const have = new Set([...item.labels, ...state.addLabels].map((l) => l.toLowerCase()));
   for (const raw of input.split(',')) {
-    const name = raw.trim().slice(0, 100);
+    const name = raw.trim().slice(0, 50);
     if (!name) continue;
     if (have.has(name.toLowerCase())) {
       state.removeLabels.delete(name.toLowerCase());
@@ -220,6 +221,32 @@ export function confirmLines(kind: 'comment' | 'labels' | 'project', item: Panel
   }
   const p = payload as { fields: Record<string, string | number | null> };
   return [`Project fields of ${where}:`, ...Object.entries(p.fields).map(([k, v]) => `${k}: ${v === null ? '(clear)' : String(v)}`)];
+}
+
+/**
+ * Warning text when a comment looks like it contains a secret (best effort,
+ * same patterns as the server, which refuses such comments), else `null`.
+ */
+export function commentSecretWarning(text: string): string | null {
+  const findings = scanSecrets(text);
+  return findings.length > 0 ? `This looks like it contains a secret (${describeFindings(findings)}). Remove it – such comments are not sent.` : null;
+}
+
+/** True if a comment may be sent (not empty, no recognised secret). */
+export function commentSendable(text: string): boolean {
+  return text.trim() !== '' && commentSecretWarning(text) === null;
+}
+
+/** Warning element below the comment field (always present, hidden without a finding). */
+export function secretWarning<E extends ElementLike>(h: HFn<E>, text: string): E {
+  const warning = commentSecretWarning(text);
+  return h('div', { class: 'alert alert-error secret-warning', role: 'alert', hidden: warning === null }, warning ?? '');
+}
+
+/** Labels of a request that do not exist in the repository yet (case-insensitive). */
+export function newLabels(add: readonly string[], item: PanelItem): string[] {
+  const known = new Set([...item.availableLabels, ...item.labels].map((l) => l.toLowerCase()));
+  return add.filter((l) => !known.has(l.toLowerCase()));
 }
 
 /** Display text of a current project field value. */
@@ -330,10 +357,11 @@ export function itemPanel<E extends ElementLike>(h: HFn<E>, item: PanelItem, sta
     'section',
     { class: 'card' },
     h('h2', null, 'Comment'),
-    h('textarea', { class: 'input comment-input', name: 'comment', rows: 6, maxlength: 65536, placeholder: 'Markdown; sent as is (secrets are redacted).', 'aria-label': 'Comment', on: { input: on.onCommentInput } }, state.comment),
+    h('textarea', { class: 'input comment-input', name: 'comment', rows: 6, maxlength: 65536, placeholder: 'Markdown. Texts that look like they contain a secret are refused; HTML comments are shown as text.', 'aria-label': 'Comment', on: { input: on.onCommentInput } }, state.comment),
+    secretWarning(h, state.comment),
     h('p', { class: 'hint' }, `${state.comment.length} / 65536 characters · preview (plain text):`),
     h('pre', { class: 'comment-preview' }, state.comment || '—'),
-    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn btn-primary', disabled: disabled || state.comment.trim() === '', on: { click: on.onSendComment } }, 'Send comment…')),
+    h('div', { class: 'actions' }, h('button', { type: 'button', class: 'btn btn-primary', disabled: disabled || !commentSendable(state.comment), on: { click: on.onSendComment } }, 'Send comment…')),
   );
 
   const chips = item.labels.map((l) => {

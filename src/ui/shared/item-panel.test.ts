@@ -4,6 +4,9 @@ import { createH, type DocLike, type ElementLike, type NodeLike } from './dom.js
 import {
   addLabelInput,
   auditTable,
+  commentSecretWarning,
+  commentSendable,
+  newLabels,
   confirmLines,
   confirmTitle,
   fieldValueText,
@@ -146,6 +149,27 @@ describe('pending edits → requests', () => {
     expect(confirmLines('labels', it, { add: ['x'], remove: [] })).toEqual(['Labels on example/a#7:', 'add: x']);
     expect(confirmLines('project', it, { fields: { Status: 'Review', Due: null } })).toEqual(['Project fields of example/a#7:', 'Status: Review', 'Due: (clear)']);
     expect(confirmLines('comment', it, 'y'.repeat(500))[1]).toHaveLength(401);
+  });
+});
+
+describe('secrets and new labels (before sending)', () => {
+  it('warns about secrets in the comment and blocks sending', () => {
+    expect(commentSecretWarning('all fine')).toBeNull();
+    expect(commentSecretWarning(`x ghp_${'a'.repeat(36)}`)).toMatch(/GitHub token ×1/);
+    expect(commentSendable('  ')).toBe(false);
+    expect(commentSendable('AKIAIOSFODNN7EXAMPLE')).toBe(false);
+    const it = item();
+    const panel = itemPanel(h, it, { ...initialState(it), comment: `-----BEGIN RSA PRIVATE KEY-----` }, handlers);
+    const warning = panel.find('div').find((d) => d.attrs.class?.includes('secret-warning'));
+    expect(warning?.attrs.hidden).toBeUndefined();
+    expect(warning?.textContent).toContain('private key');
+    expect(button(panel, 'Send comment…').attrs.disabled).toBe('');
+    const clean = itemPanel(h, it, { ...initialState(it), comment: 'ok' }, handlers);
+    expect(clean.find('div').find((d) => d.attrs.class?.includes('secret-warning'))?.attrs.hidden).toBe('');
+  });
+
+  it('finds labels that would be created', () => {
+    expect(newLabels(['wontfix', 'BUG', 'shiny'], item())).toEqual(['shiny']);
   });
 });
 

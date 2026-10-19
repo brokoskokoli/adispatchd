@@ -20,7 +20,7 @@ describe('RetentionService', () => {
   beforeEach(() => {
     ({ p, clock, dir, cleanup } = openTestPersistence());
     baseDir = path.join(dir, 'workspaces');
-    settings = { completedRunsMs: 30 * DAY, failedRunsMs: 90 * DAY, blockedRunsMs: null, maxLogSizePerRunBytes: 1024, cleanupIntervalMs: DAY };
+    settings = { completedRunsMs: 30 * DAY, failedRunsMs: 90 * DAY, blockedRunsMs: null, maxLogSizePerRunBytes: 1024, cleanupIntervalMs: DAY, uiActionsMs: 365 * DAY };
   });
   afterEach(() => cleanup());
 
@@ -42,6 +42,20 @@ describe('RetentionService', () => {
     const paths = dataPaths(dir).run(id);
     return { run: existsSync(paths.runDir), log: existsSync(paths.logDir) };
   };
+
+  it('deletes UI action audit entries after retention.ui_actions, whatever their result (WI-27)', async () => {
+    const entry = { actor: 'alice', actorVia: 'password', identity: 'maintainer', sourceId: 'a', itemId: '1', itemKey: 'a:1', kind: 'comment' } as const;
+    p.uiActions.record({ ...entry, result: 'succeeded' });
+    p.uiActions.record({ ...entry, result: 'failed' });
+    clock.advance(366 * DAY);
+    p.uiActions.record({ ...entry, result: 'unknown' });
+    const svc = new RetentionService({ repositories: p, dataDir: dir, settings: () => settings, clock, timers: clock });
+    expect((await svc.runOnce()).deletedUiActions).toBe(2);
+    expect(p.uiActions.list().actions.map((a) => a.result)).toEqual(['unknown']);
+    settings = { ...settings, uiActionsMs: null };
+    clock.advance(1000 * DAY);
+    expect((await svc.runOnce()).deletedUiActions).toBe(0);
+  });
 
   it('deletes old successful runs incl. files and workspace, keeps active runs, open blocks and failed chains', async () => {
     const oldSuccess = completeRun(p, withFiles('coder', 'a:1').id, SUCCESS);

@@ -37,16 +37,14 @@ describe('UiActionRepository (schema v4, WI-27)', () => {
     expect(() => p.uiActions.record({ ...base, kind: 'comment', result: 'maybe' as never })).toThrow();
   });
 
-  it('retention deletes succeeded and failed entries with separate cut-offs', () => {
+  it('retention deletes old entries of every result with one cut-off', () => {
     p.uiActions.record({ ...base, kind: 'comment', result: 'succeeded' });
     p.uiActions.record({ ...base, kind: 'comment', result: 'failed' });
     p.uiActions.record({ ...base, kind: 'comment', result: 'unknown' });
     clock.advance(10_000);
     p.uiActions.record({ ...base, kind: 'labels', result: 'succeeded' });
-    const cut = new Date(clock.now().getTime() - 5_000);
-    expect(p.uiActions.deleteOlderThan(cut, null)).toBe(1);
-    expect(p.uiActions.deleteOlderThan(null, null)).toBe(0);
-    expect(p.uiActions.deleteOlderThan(null, cut)).toBe(2);
+    expect(p.uiActions.deleteOlderThan(null)).toBe(0);
+    expect(p.uiActions.deleteOlderThan(new Date(clock.now().getTime() - 5_000))).toBe(3);
     expect(p.uiActions.list().actions.map((x) => x.kind)).toEqual(['labels']);
   });
 });

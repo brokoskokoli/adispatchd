@@ -115,6 +115,7 @@ describe('loadConfig – spec examples', () => {
       lifecycle: { actionRetry: { maxAttempts: 3, delayMs: 30_000 } },
       retention: {
         completedRunsMs: 30 * 86_400_000,
+        uiActionsMs: 365 * 86_400_000,
         failedRunsMs: 90 * 86_400_000,
         blockedRunsMs: null,
         maxLogSizePerRunBytes: 100 * 1024 * 1024,
