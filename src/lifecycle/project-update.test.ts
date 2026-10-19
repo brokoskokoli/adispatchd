@@ -5,6 +5,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AccessToken, CredentialProvider, SourceItem } from '../core/index.js';
 import { BASE_FILES } from '../config/testing/fixtures.js';
+import { eventSummary } from '../ui/shared/format.js';
 import type { FakeProject } from '../sources/github/testing/index.js';
 import { ISSUE, ITEM_KEY, REPO, createEnv, drive, loadSnapshot, type LifecycleTestEnv } from './testing/helpers.js';
 
@@ -139,7 +140,14 @@ describe('lifecycle: source.update with project fields', () => {
     expect(result.actions[0]?.lastError).toMatchObject({ retryable: false, kind: 'invalid' });
     expect(String((result.actions[0]?.lastError as { message?: unknown }).message)).toContain('option "Blocked" not found (available: "In Progress", "Review")');
     expect(env.notifications.map((n) => n.type)).toEqual(['lifecycle_action_failed']);
-    // Labels were applied before the project part failed.
+    // Labels were applied before the project part failed – and the journal says so (attempt, action, event).
     expect(s.env.github.labels(REPO, ISSUE)).toContain('ready-for-review');
+    const applied = { labelsAdded: ['ready-for-review'], labelsRemoved: ['coding'] };
+    expect(result.actions[0]?.lastError).toMatchObject({ details: { applied } });
+    const attempts = env.p.actions.listAttempts(result.actions[0]?.id as number);
+    expect(attempts[0]?.error).toMatchObject({ details: { applied } });
+    const event = env.p.events.listForRun(run.id).find((e) => e.type === 'lifecycle.action' && e.payload.status === 'failed');
+    expect(event?.payload.error).toMatchObject({ details: { applied } });
+    expect(eventSummary({ type: event?.type ?? '', payload: event?.payload })).toBe('on_success on_success.0 failed (+ready-for-review, -coding)');
   });
 });

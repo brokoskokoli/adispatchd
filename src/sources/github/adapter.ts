@@ -29,7 +29,7 @@ import {
 import { DEPENDENCY_FIELDS, GITHUB_FIELD_DEFINITIONS, projectFieldDefinitions, type ProjectFieldKind } from './fields.js';
 import { GitHubHttpClient, type GitHubHttpClientOptions } from './http.js';
 import { GitHubProjectReader, type ProjectLookupItem } from './project.js';
-import { GitHubProjectWriter } from './project-write.js';
+import { GitHubProjectWriter, withApplied } from './project-write.js';
 import { pushdownQuery } from './pushdown.js';
 import { ITEM_ID_PATTERN, parseGitHubItemRef } from './refs.js';
 
@@ -243,6 +243,8 @@ export class GitHubSourceAdapter implements SourceAdapter {
    * Labels first, then project fields (WI-16). Both re-read the current state
    * and change only what differs, so repeating the whole update is safe; a
    * failure in the project part fails the update after the labels were applied.
+   * A thrown {@link SourceError} carries what was applied before the failure
+   * in `details.applied` (for the action journal).
    */
   async applyUpdate(item: SourceItem, update: SourceUpdate, identity: IdentityRef): Promise<SourceUpdateResult> {
     this.assertOwnItem(item);
@@ -253,15 +255,19 @@ export class GitHubSourceAdapter implements SourceAdapter {
     const labels = await this.applyLabels(item, update, identity);
     const applied: SourceUpdateApplied = { ...labels.applied };
     if (project && this.projectWriter) {
-      // Node ID of the issue/PR: from the label re-read, otherwise read now.
-      const issue = labels.fresh ?? (await this.fetchIssue(item.itemId, identity));
-      if (!issue) throw new SourceError('not_found', `Item ${this.repository}#${item.itemId} not found`, { retryable: false });
-      if (typeof issue.node_id !== 'string' || issue.node_id === '') {
-        throw new SourceError('invalid', `Item ${item.key} has no GraphQL node ID`, { retryable: false });
+      try {
+        // Node ID of the issue/PR: from the label re-read, otherwise read now.
+        const issue = labels.fresh ?? (await this.fetchIssue(item.itemId, identity));
+        if (!issue) throw new SourceError('not_found', `Item ${this.repository}#${item.itemId} not found`, { retryable: false });
+        if (typeof issue.node_id !== 'string' || issue.node_id === '') {
+          throw new SourceError('invalid', `Item ${item.key} has no GraphQL node ID`, { retryable: false });
+        }
+        const result = await this.projectWriter.apply({ contentId: issue.node_id, key: item.key }, project, identity);
+        if (Object.keys(result.changed).length > 0) applied.projectFields = result.changed;
+        if (result.itemAdded) applied.projectItemAdded = true;
+      } catch (err) {
+        throw withApplied(err, applied);
       }
-      const result = await this.projectWriter.apply({ contentId: issue.node_id, key: item.key }, project, identity);
-      if (Object.keys(result.changed).length > 0) applied.projectFields = result.changed;
-      if (result.itemAdded) applied.projectItemAdded = true;
     }
     const changed = Object.keys(applied).length > 0;
     return { changed, ...(changed ? { applied } : {}) };
@@ -304,7 +310,7 @@ export class GitHubSourceAdapter implements SourceAdapter {
       } catch (err) {
         // Already removed concurrently: desired state reached.
         if (err instanceof SourceError && err.kind === 'not_found') continue;
-        throw err;
+        throw withApplied(err, { labelsAdded: toAdd, labelsRemoved: removed });
       }
     }
     const changed = toAdd.length > 0 || removed.length > 0;

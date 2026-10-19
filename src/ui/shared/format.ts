@@ -219,7 +219,9 @@ export function eventSummary(e: RunEventLike): string {
   }
   if (e.type === 'lifecycle.action' || e.type === 'lifecycle.chain') {
     const err = str(p.error);
-    const applied = e.type === 'lifecycle.action' ? appliedSummary(p.details) : '';
+    // Successful attempts carry `details.applied`, failed ones what was applied before the failure (`error.details.applied`).
+    const errorDetails = p.error && typeof p.error === 'object' ? (p.error as { details?: unknown }).details : undefined;
+    const applied = e.type === 'lifecycle.action' ? appliedSummary(p.details) || appliedSummary(errorDetails) : '';
     return (
       [str(p.hook), str(p.name) ?? str(p.type), str(p.status)].filter(Boolean).join(' ') +
       (applied ? ` (${applied})` : '') +
