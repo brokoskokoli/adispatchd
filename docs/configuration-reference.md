@@ -1443,6 +1443,8 @@ sections:
 hide_empty_sections: false
 ```
 
+![View mit Abschnitten, Wertereihenfolge und Gruppenzeilen](screenshots/view-sections.png)
+
 ### 3.6 filters/*.yaml
 
 Ein **benannter Filter** pro Datei: einmal zentral definiert, in Workflows und Views nur noch referenziert, damit
