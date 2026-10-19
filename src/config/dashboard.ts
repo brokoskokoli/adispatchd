@@ -11,6 +11,9 @@ import { resolveCommand } from './normalize.js';
 import type { RawDashboardFile } from './schemas.js';
 import { checkEnvNames, checkLiteralSecrets } from './validate.js';
 
+/** Upper bound of `info[].timeout` (a hanging script must not occupy a slot for long). */
+export const MAX_INFO_TIMEOUT_MS = 5 * 60_000;
+
 /** File name of the dashboard configuration in the config dir. */
 export const DASHBOARD_FILE = 'dashboard.yaml';
 
@@ -42,7 +45,8 @@ export function normalizeDashboard(raw: RawDashboardFile, configDir: string): Da
 
 /**
  * Semantic checks: unique IDs, thresholds only for number/percent and in a
- * sensible order, `unit` only for number tiles, env names, and that a script
+ * sensible order (percent: warning outside 0–100), `unit` only for number tiles,
+ * `timeout` ≤ 5m and ≤ `cache`, env names, and that a script
  * given as path (absolute or containing `/`) exists. Bare command names are
  * looked up in PATH at run time and not checked.
  */
@@ -73,6 +77,24 @@ export function validateDashboard(dashboard: DashboardConfig, issues: IssueColle
       if (t.warnBelow !== null && t.criticalBelow !== null && t.criticalBelow > t.warnBelow) {
         issues.error(file, [...at, 'critical_below'], `"critical_below" (${t.criticalBelow}) must not be higher than "warn_below" (${t.warnBelow})`);
       }
+    }
+    if (tile.type === 'percent') {
+      const keys: Array<[string, number | null]> = [
+        ['warn_above', t.warnAbove],
+        ['critical_above', t.criticalAbove],
+        ['warn_below', t.warnBelow],
+        ['critical_below', t.criticalBelow],
+      ];
+      for (const [key, value] of keys) {
+        if (value !== null && (value < 0 || value > 100)) {
+          issues.warning(file, [...at, key], `Threshold ${value} is outside 0–100 and never matches a percent value`);
+        }
+      }
+    }
+    if (tile.timeoutMs > MAX_INFO_TIMEOUT_MS) {
+      issues.error(file, [...at, 'timeout'], `"timeout" must not exceed ${MAX_INFO_TIMEOUT_MS / 60_000}m`);
+    } else if (tile.timeoutMs > tile.cacheMs) {
+      issues.error(file, [...at, 'timeout'], `"timeout" (${tile.timeoutMs / 1000}s) must not be longer than "cache" (${tile.cacheMs / 1000}s)`);
     }
     if (tile.unit !== null && tile.type !== 'number') {
       issues.error(file, [...at, 'unit'], `"unit" is only supported for "number" tiles${tile.type === 'percent' ? ' (percent tiles always show %)' : ''}`);

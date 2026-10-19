@@ -18,7 +18,7 @@ export {
 } from './loader.js';
 export { CONFIG_FILE, IDENTITIES_FILE, RESERVED_ENV_PREFIX, SOURCES_FILE, cronError, isValidTimeZone } from './validate.js';
 export { DEFAULT_WORKING_DIRECTORY, DEFAULTS, SECRET_DELIVERIES, DASHBOARD_INFO_TYPES, MAX_INFO_TILES, MIN_INFO_CACHE_MS } from './schemas.js';
-export { DASHBOARD_FILE } from './dashboard.js';
+export { DASHBOARD_FILE, MAX_INFO_TIMEOUT_MS } from './dashboard.js';
 export { MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH } from './named-filters.js';
 export {
   ConfigLoadError,

@@ -289,9 +289,9 @@ export interface CheckCountsView {
 
 /** `conditions` of a workflow view (WI-24). */
 export interface WorkflowConditions {
-  workflow: Array<{ index: number; name: string | null; label: string; command: string; args: string[]; timeoutMs: number; cacheMs: number | null; last: LastConditionCheck | null }>;
-  item: Array<{ index: number; name: string | null; label: string; command: string; args: string[]; timeoutMs: number; last: CheckCountsView | null }>;
-  shellFilter: { name: string | null; label: string; command: string; timeoutMs: number; last: CheckCountsView | null } | null;
+  workflow: Array<{ index: number; name: string | null; label: string; command: string; displayCommand?: string; args: string[]; timeoutMs: number; cacheMs: number | null; last: LastConditionCheck | null }>;
+  item: Array<{ index: number; name: string | null; label: string; command: string; displayCommand?: string; args: string[]; timeoutMs: number; last: CheckCountsView | null }>;
+  shellFilter: { name: string | null; label: string; command: string; displayCommand?: string; timeoutMs: number; last: CheckCountsView | null } | null;
 }
 
 /** Dashboard info tile (WI-24, `GET /api/v1/dashboard/info`). */
@@ -304,6 +304,8 @@ export interface InfoTile {
   status: 'ok' | 'warn' | 'critical' | 'error' | 'pending';
   updatedAt: string | null;
   expiresAt: string | null;
+  /** Next background fetch (also the retry time after an error); `null` while running/queued. */
+  nextAttemptAt?: string | null;
   error?: string;
   stale: boolean;
   refreshing: boolean;

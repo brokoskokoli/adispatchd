@@ -47,3 +47,27 @@ describe('infoValueStatus (WI-24)', () => {
     expect(infoValueStatus('text', above)).toBe('ok');
   });
 });
+
+describe('parseInfoOutput – sanitizing and redaction order (WI-24 review)', () => {
+  const redact = (s: string): string => s.replaceAll('SECRET-TOKEN-123', '[REDACTED]');
+
+  it('redacts a text value before shortening it (token right at the cut position)', () => {
+    const line = `${'x'.repeat(MAX_INFO_TEXT_LENGTH - 5)}SECRET-TOKEN-123 tail`;
+    const parsed = parseInfoOutput('text', line, null, redact);
+    expect(parsed.ok && parsed.value).not.toContain('SECRET');
+    expect(parsed.ok && String(parsed.value).length).toBeLessThanOrEqual(MAX_INFO_TEXT_LENGTH);
+  });
+
+  it('redacts quoted output in errors before shortening', () => {
+    const parsed = parseInfoOutput('number', `${'n'.repeat(30)}SECRET-TOKEN-123`, null, redact);
+    expect(parsed.ok).toBe(false);
+    expect(!parsed.ok && parsed.error).not.toContain('SECRET');
+  });
+
+  it('strips ANSI escapes, control and bidi characters from values', () => {
+    expect(parseInfoOutput('text', '\u001b[32mgreen\u001b[0m \u202ebuild')).toEqual({ ok: true, value: 'green build' });
+    expect(parseInfoOutput('percent', '\u001b[1m42%\u001b[0m')).toEqual({ ok: true, value: 42 });
+    // A line consisting only of escape sequences counts as empty.
+    expect(parseInfoOutput('text', '\u001b[0m\nreal')).toEqual({ ok: true, value: 'real' });
+  });
+});

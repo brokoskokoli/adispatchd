@@ -89,13 +89,15 @@ function timing(timeoutMs: number, cacheMs?: number | null): string {
   return `timeout ${formatDuration(timeoutMs)}${cacheMs ? ` · cache ${formatDuration(cacheMs)}` : ''}`;
 }
 
-function nameCell(c: { name: string | null; label: string; command: string; args?: string[] }): HTMLElement {
+function nameCell(c: { name: string | null; label: string; command: string; displayCommand?: string; args?: string[] }): HTMLElement {
+  // Command relative to the config dir when inside it; the absolute command in the tooltip.
+  const shown = [c.displayCommand ?? c.command, ...(c.args ?? [])].join(' ');
   return h(
     'span',
     null,
     c.name ? h('strong', null, c.name) : null,
     c.name ? h('br') : null,
-    h('code', { class: 'wrap', title: [c.command, ...(c.args ?? [])].join(' ') }, c.name ? [c.command, ...(c.args ?? [])].join(' ') : c.label),
+    h('code', { class: 'wrap', title: [c.command, ...(c.args ?? [])].join(' ') }, c.name ? shown : c.label),
   );
 }
 
@@ -164,7 +166,22 @@ export const workflowsPage = (ctx: PageContext): Page => {
 // ---------------------------------------------------------------------------
 // Dry-run rendering
 
-function checkRow(c: CheckDiagnosis): HTMLElement {
+/** Display command of a diagnosed check (relative to the config dir), looked up in the workflow's `conditions`. */
+export type CheckCommandLookup = (c: CheckDiagnosis) => string | undefined;
+
+/** Lookup from a workflow view (WI-24). */
+export function commandLookup(conds: WorkflowConditions | undefined): CheckCommandLookup {
+  return (c) => {
+    if (!conds) return undefined;
+    if (c.kind === 'shell_filter') return conds.shellFilter?.displayCommand;
+    const list = c.kind === 'item_condition' ? conds.item : conds.workflow;
+    const entry = list[c.index];
+    return entry && entry.command === c.command ? entry.displayCommand : undefined;
+  };
+}
+
+function checkRow(c: CheckDiagnosis, lookup: CheckCommandLookup): HTMLElement {
+  const shown = lookup(c) ?? c.command;
   const v = checkValueLabel(c.value);
   const what = c.kind === 'shell_filter' ? 'shell filter' : `${c.kind.replace('_', ' ')} #${c.index + 1}`;
   return h(
@@ -174,7 +191,7 @@ function checkRow(c: CheckDiagnosis): HTMLElement {
     ' ',
     what,
     ': ',
-    c.name ? h('span', { title: c.command }, checkTitle(c)) : h('code', null, c.command),
+    c.name ? h('span', { title: c.command }, checkTitle(c)) : h('code', { title: c.command }, shown),
     c.error ? h('span', { class: 'error-text' }, ` – ${c.error}`) : null,
   );
 }
@@ -211,7 +228,8 @@ function secretsTable(secrets: readonly SecretInfo[]): HTMLElement {
   );
 }
 
-export function renderDryRun(r: DryRunResult): HTMLElement {
+export function renderDryRun(r: DryRunResult, lookup: CheckCommandLookup = () => undefined): HTMLElement {
+  const row = (c: CheckDiagnosis): HTMLElement => checkRow(c, lookup);
   const parts: HTMLElement[] = [];
   parts.push(
     kv([
@@ -238,7 +256,7 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
       'Dry-run: no workers, no lifecycle actions, no shell filters/conditions. Checks that were not executed are shown as "unknown / not evaluated", never as pass.',
     ),
   );
-  if (r.conditions.length) parts.push(h('h3', null, 'Workflow conditions'), h('ul', { class: 'checks' }, r.conditions.map(checkRow)));
+  if (r.conditions.length) parts.push(h('h3', null, 'Workflow conditions'), h('ul', { class: 'checks' }, r.conditions.map(row)));
   if (r.secrets?.length) parts.push(h('h3', null, 'Secrets'), secretsTable(r.secrets));
   if (r.container) {
     parts.push(
@@ -289,7 +307,7 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
                     )
                   : null,
                 c.filter ? h('ul', { class: 'trace' }, traceNode(c.filter)) : null,
-                c.shellFilter || c.itemConditions.length ? h('ul', { class: 'checks' }, c.shellFilter ? checkRow(c.shellFilter) : null, c.itemConditions.map(checkRow)) : null,
+                c.shellFilter || c.itemConditions.length ? h('ul', { class: 'checks' }, c.shellFilter ? row(c.shellFilter) : null, c.itemConditions.map(row)) : null,
               )
             : text(null),
         ]),
@@ -339,11 +357,12 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
     h('div', { class: 'grid' }, info, overridesBox, startBox, conditionsBox, dryBox, runsBox, configBox),
   );
   let formsBuilt = false;
+  let lastConditions: WorkflowConditions | undefined;
 
   const dryRun = async (): Promise<void> => {
     replaceChildren(dryRunOut, loading());
     const res = await act(dryBtn, () => api.post<DryRunResult>(`/api/v1/workflows/${seg(id)}/dry-run`));
-    replaceChildren(dryRunOut, res ? renderDryRun(res) : h('p', { class: 'muted' }, 'Dry-run failed.'));
+    replaceChildren(dryRunOut, res ? renderDryRun(res, commandLookup(lastConditions)) : h('p', { class: 'muted' }, 'Dry-run failed.'));
   };
 
   const buildOverrides = (wf: Workflow): void => {
@@ -532,6 +551,7 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
         ),
       );
       const conds = wf.conditions;
+      lastConditions = conds;
       const hasChecks = conds.workflow.length > 0 || conds.item.length > 0 || conds.shellFilter !== null;
       conditionsBox.hidden = !hasChecks;
       if (hasChecks) {

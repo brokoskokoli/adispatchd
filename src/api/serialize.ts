@@ -7,7 +7,7 @@ import { ACTIVE_STATUSES, isTerminalStatus, type TechnicalStatus } from '../core
 import { workflowSecrets, type EffectiveWorkflow, type ParameterDefinition, type WorkflowConfig } from '../config/index.js';
 import { describeContainerExecute } from '../executors/index.js';
 import type { ActionAttemptRecord, BlockRecord, RunActionRecord, RunRecord } from '../persistence/index.js';
-import { checkDisplayName, type CronWorkflowStatus, type WorkflowConditionStatus, type WorkflowPlanningDiagnosis } from '../scheduler/index.js';
+import { checkDisplayName, displayCommand, type CronWorkflowStatus, type WorkflowConditionStatus, type WorkflowPlanningDiagnosis } from '../scheduler/index.js';
 
 /**
  * Unambiguous outcome of a run for the UI (Spec §21): business `failure` vs.
@@ -257,6 +257,7 @@ export function conditionsView(
         name: cond.name ?? null,
         label: checkDisplayName(cond, configDir),
         command: cond.command,
+        displayCommand: displayCommand(cond.command, configDir),
         args: cond.args,
         timeoutMs: cond.timeoutMs,
         cacheMs: cond.cacheMs,
@@ -270,6 +271,7 @@ export function conditionsView(
         name: cond.name ?? null,
         label: checkDisplayName(cond, configDir),
         command: cond.command,
+        displayCommand: displayCommand(cond.command, configDir),
         args: cond.args,
         timeoutMs: cond.timeoutMs,
         last: items && counts ? { at: items.at, items: items.items, ...counts } : null,
@@ -280,6 +282,7 @@ export function conditionsView(
           name: c.shellFilter.name ?? null,
           label: checkDisplayName(c.shellFilter, configDir),
           command: c.shellFilter.command,
+          displayCommand: displayCommand(c.shellFilter.command, configDir),
           timeoutMs: c.shellFilter.timeoutMs,
           last: items?.shellFilter ? { at: items.at, ...items.shellFilter } : null,
         }

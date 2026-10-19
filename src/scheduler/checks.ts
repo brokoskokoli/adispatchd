@@ -31,11 +31,7 @@ export const MAX_CHECK_LABEL_LENGTH = 80;
  */
 export function checkDisplayName(check: { command: string; name?: string; args?: readonly string[] }, configDir?: string): string {
   if (check.name !== undefined && check.name !== '') return check.name;
-  let command = check.command;
-  if (configDir) {
-    const prefix = configDir.endsWith('/') ? configDir : `${configDir}/`;
-    if (command.startsWith(prefix)) command = command.slice(prefix.length);
-  }
+  const command = displayCommand(check.command, configDir);
   let text = [command, ...(check.args ?? [])].join(' ');
   // Too long: keep the script name and the arguments rather than the directory.
   const slash = command.lastIndexOf('/');
@@ -43,10 +39,20 @@ export function checkDisplayName(check: { command: string; name?: string; args?:
   return text.length > MAX_CHECK_LABEL_LENGTH ? `${text.slice(0, MAX_CHECK_LABEL_LENGTH - 1)}…` : text;
 }
 
-/** Short reference to a check in reasons: `0 "Credits available" (/path/check.sh)` or `0 (/path/check.sh)`. */
-export function checkReason(c: { index: number; command: string; name?: string } | null | undefined): string {
+/** Command for display: relative to the config dir when inside it, else unchanged (absolute or bare name). */
+export function displayCommand(command: string, configDir?: string): string {
+  if (!configDir) return command;
+  const prefix = configDir.endsWith('/') ? configDir : `${configDir}/`;
+  return command.startsWith(prefix) ? command.slice(prefix.length) : command;
+}
+
+/**
+ * Short reference to a check in reasons: `0 "Credits available" (scripts/check.sh)` or
+ * `0 (/opt/check.sh)` – commands inside `configDir` relative to it.
+ */
+export function checkReason(c: { index: number; command: string; name?: string } | null | undefined, configDir?: string): string {
   if (!c) return '? ()';
-  return `${c.index}${c.name !== undefined ? ` "${c.name}"` : ''} (${c.command})`;
+  return `${c.index}${c.name !== undefined ? ` "${c.name}"` : ''} (${displayCommand(c.command, configDir)})`;
 }
 
 /** Diagnosis entry for a check that was not executed. */

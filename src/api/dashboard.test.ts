@@ -3,7 +3,7 @@
  * usual CSRF/Host/Origin rules, SSE `dashboard.info`) and the condition
  * status in the workflow views (SSE `workflow.conditions`).
  */
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CSRF_HEADER } from './server.js';
@@ -25,7 +25,8 @@ async function waitFor<T>(fn: () => Promise<T | undefined>, timeoutMs = 10_000):
 }
 
 beforeAll(async () => {
-  env = await startAppEnv({ start: false }, (e) => {
+  // Short manual-refresh throttle so the test does not wait 10 s of real time.
+  env = await startAppEnv({ start: false, app: { dashboardInfo: { manualMinIntervalMs: 3_000 } } }, (e) => {
     counterFile = path.join(e.marks, 'info-count');
     const disk = e.script('disk.sh', `echo x >> "${counterFile}"\necho "87%"`);
     const broken = e.script('broken.sh', `echo "failed with ${SECRET}" >&2\nexit 2`);
@@ -47,6 +48,8 @@ beforeAll(async () => {
         '',
       ].join('\n'),
     );
+    mkdirSync(path.join(e.configDir, 'scripts'), { recursive: true });
+    writeFileSync(path.join(e.configDir, 'scripts', 'inside.sh'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
     writeFileSync(
       path.join(e.configDir, 'workflows', 'gated.yaml'),
       [
@@ -57,6 +60,7 @@ beforeAll(async () => {
         '  workflow:',
         `    - { name: Credits available, type: shell, command: ${cond}, timeout: 5s, cache: 30s }`,
         `    - { type: shell, command: ${cond}, args: [second] }`,
+        '    - { type: shell, command: scripts/inside.sh }',
         '  item:',
         `    - { type: shell, command: ${cond}, args: ['{item.number}'] }`,
         'execute:',
@@ -89,7 +93,7 @@ describe('dashboard info API (WI-24)', () => {
     expect(tiles.file).toBe('dashboard.yaml');
     expect(tiles.info).toEqual([
       expect.objectContaining({ id: 'disk', title: 'Disk', type: 'percent', value: 87, unit: '%', status: 'warn', stale: false }),
-      expect.objectContaining({ id: 'broken', status: 'error', value: null, error: 'check error: exit code 2: failed with [REDACTED]' }),
+      expect.objectContaining({ id: 'broken', status: 'error', value: null, error: 'exit code 2: failed with [REDACTED]' }),
     ]);
     // Page views never run a script.
     const { readFileSync } = await import('node:fs');
@@ -107,25 +111,25 @@ describe('dashboard info API (WI-24)', () => {
     expect((await raw({ [CSRF_HEADER]: '1', 'sec-fetch-site': 'cross-site' })).statusCode).toBe(403);
     expect((await env.request('POST', '/api/v1/dashboard/info/nope/refresh', {})).status).toBe(404);
     expect((await env.request('POST', url, { extra: 1 })).status).toBe(400);
-
-    // The start-up fetch was < 10 s ago: throttled.
-    const limited = await env.request('POST', url, {});
-    expect(limited.status).toBe(429);
-    expect(limited.json.error.code).toBe('rate_limited');
-    expect(Number(limited.headers['retry-after'])).toBeGreaterThanOrEqual(1);
   });
 
   it('refresh POST starts a fetch and publishes dashboard.info over SSE', async () => {
     const sse = await connectSse(`${env.app.url}/api/v1/events`);
     try {
-      // Make the tile refreshable: pretend the last attempt was long ago by waiting out the throttle.
+      // Wait out the (shortened) throttle after the start-up fetch.
       const res = await waitFor(async () => {
         const r = await env.request('POST', '/api/v1/dashboard/info/disk/refresh', {});
         return r.status === 202 ? r : undefined;
-      }, 15_000);
+      }, 10_000);
       expect(res.json).toMatchObject({ accepted: true, tile: { id: 'disk' } });
       const msg = await sse.waitFor((m) => m.event === 'dashboard.info' && m.data.payload.id === 'disk' && m.data.payload.refreshing === false);
       expect(msg.data.payload).toMatchObject({ id: 'disk', value: 87, status: 'warn' });
+      expect(Date.parse(msg.data.payload.nextAttemptAt)).toBeGreaterThan(Date.now());
+      // Right after that fetch: throttled.
+      const limited = await env.request('POST', '/api/v1/dashboard/info/disk/refresh', {});
+      expect(limited.status).toBe(429);
+      expect(limited.json.error.code).toBe('rate_limited');
+      expect(Number(limited.headers['retry-after'])).toBeGreaterThanOrEqual(1);
     } finally {
       sse.close();
     }
@@ -153,6 +157,8 @@ describe('workflow conditions in the API (WI-24)', () => {
         last: expect.objectContaining({ status: 'not_now', exitCode: 1, cached: false, stderr: 'no credits for [REDACTED]' }),
       }),
       expect.objectContaining({ index: 1, name: null, label: expect.stringMatching(/cond\.sh second$/), last: expect.objectContaining({ status: 'skipped' }) }),
+      // Inside the config dir: shown relative to it; outside: absolute.
+      expect.objectContaining({ index: 2, label: 'scripts/inside.sh', displayCommand: 'scripts/inside.sh', command: path.join(env.configDir, 'scripts/inside.sh') }),
     ]);
     // Item conditions were not reached (the workflow conditions said "not now").
     expect(view.conditions.item).toEqual([expect.objectContaining({ index: 0, name: null, last: { at: expect.any(String), items: 0, ok: 0, notNow: 0, error: 0, notEvaluated: 0 } })]);

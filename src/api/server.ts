@@ -758,6 +758,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const res = deps.dashboard?.refresh(id) ?? ({ ok: false, reason: 'not_found' } as const);
     if (!res.ok) {
       if (res.reason === 'not_found') throw new ApiError(404, 'not_found', `Unknown info tile "${id}"`);
+      if (res.reason === 'stopped') throw new ApiError(503, 'shutting_down', 'Server is shutting down');
       const seconds = Math.max(1, Math.ceil(res.retryAfterMs / 1000));
       void reply.header('retry-after', String(seconds));
       throw new ApiError(429, 'rate_limited', `Refresh of "${id}" is throttled; try again in ${seconds}s`, { retryAfterMs: res.retryAfterMs });

@@ -44,7 +44,9 @@ function tileElement(t: InfoTile, onRefresh: (btn: HTMLButtonElement) => void): 
       { class: 'info-meta muted' },
       t.updatedAt ? h('span', null, 'updated ', time(t.updatedAt)) : h('span', null, t.status === 'pending' ? 'not fetched yet' : 'no valid value yet'),
       t.durationMs !== null ? ` · ${formatDuration(t.durationMs)}` : null,
-      t.expiresAt && !t.refreshing ? h('span', { title: t.expiresAt }, ` · next ${formatRelative(t.expiresAt, Date.now()).replace(' ago', '')}`) : null,
+      t.nextAttemptAt && !t.refreshing
+        ? h('span', { title: t.nextAttemptAt }, ` · ${t.status === 'error' ? 'retry' : 'next'} ${formatRelative(t.nextAttemptAt, Date.now()).replace(' ago', '')}`)
+        : null,
     ),
     t.error ? h('div', { class: 'error-text info-error' }, t.error) : null,
     h('div', { class: 'info-actions' }, refresh),

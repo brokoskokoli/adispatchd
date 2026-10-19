@@ -4,6 +4,7 @@
  */
 export * from './clock.js';
 export * from './container.js';
+export * from './display-text.js';
 export * from './duration.js';
 export * from './errors.js';
 export * from './glob.js';

@@ -7,6 +7,7 @@
  *   optionally followed by the configured unit (`42 GB`);
  * - `percent`: a number from 0 to 100, optionally followed by `%`.
  */
+import { sanitizeDisplayText, shortenText, type Redactor } from '../core/index.js';
 import type { DashboardInfoThresholds, DashboardInfoType } from '../config/index.js';
 
 /** Max. length of a `text` value. */
@@ -20,33 +21,37 @@ export type ParsedInfo = { ok: true; value: string | number } | { ok: false; err
 
 const NUMBER = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 
-/** First non-empty line of `text`, trimmed (`null` if there is none). */
+/**
+ * First non-empty line of `text` with ANSI escapes, control and bidi
+ * characters removed (`null` if there is none). Not shortened: callers redact
+ * first, then shorten.
+ */
 export function firstNonEmptyLine(text: string): string | null {
   for (const line of text.split(/\r?\n/)) {
-    const t = line.trim();
+    const t = sanitizeDisplayText(line);
     if (t !== '') return t;
   }
   return null;
 }
 
-function shorten(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-/** Parse the stdout of an info script. Never throws. */
-export function parseInfoOutput(type: DashboardInfoType, stdout: string, unit: string | null = null): ParsedInfo {
+/**
+ * Parse the stdout of an info script. Never throws. Text values and quoted
+ * output in errors are sanitized and redacted (`redact`) before they are shortened.
+ */
+export function parseInfoOutput(type: DashboardInfoType, stdout: string, unit: string | null = null, redact: Redactor = (s) => s): ParsedInfo {
   const line = firstNonEmptyLine(stdout);
   if (line === null) return { ok: false, error: 'no output (expected the value on the first non-empty stdout line)' };
-  if (type === 'text') return { ok: true, value: shorten(line, MAX_INFO_TEXT_LENGTH) };
+  if (type === 'text') return { ok: true, value: shortenText(redact(line), MAX_INFO_TEXT_LENGTH) };
+  const quoted = (): string => shortenText(redact(line), 40);
   let raw = line;
   if (type === 'percent' && raw.endsWith('%')) raw = raw.slice(0, -1).trimEnd();
   if (type === 'number' && unit !== null && raw.endsWith(unit)) raw = raw.slice(0, -unit.length).trimEnd();
   if (!NUMBER.test(raw)) {
     const what = type === 'percent' ? 'a number from 0 to 100 (optionally with %)' : `a number such as 42 or 1.5${unit !== null ? ` (optionally followed by "${unit}")` : ''}`;
-    return { ok: false, error: `unparsable output "${shorten(line, 40)}": expected ${what}` };
+    return { ok: false, error: `unparsable output "${quoted()}": expected ${what}` };
   }
   const value = Number(raw);
-  if (!Number.isFinite(value)) return { ok: false, error: `unparsable output "${shorten(line, 40)}": not a finite number` };
+  if (!Number.isFinite(value)) return { ok: false, error: `unparsable output "${quoted()}": not a finite number` };
   if (type === 'percent' && (value < 0 || value > 100)) return { ok: false, error: `percent value ${value} is outside 0–100` };
   return { ok: true, value };
 }

@@ -3,12 +3,13 @@
  *
  * - Workflow conditions: the last evaluation of every condition (planning
  *   step or cron slot), incl. time, duration, cache hit and the first stderr
- *   line (raw – the API redacts it).
+ *   line (sanitized and redacted before it is shortened).
  * - Item conditions and the shell filter: a summary of the last planning
  *   step (ok / not now / error / not evaluated, counted over the checked items).
  *
  * Entries of changed or removed workflows are dropped on reload ({@link forget}).
  */
+import { displayText, sanitizeDisplayText, type Redactor } from '../core/index.js';
 import type { ShellCheckResult } from '../filters/index.js';
 import type { CheckDiagnosis, CandidateDiagnosis } from './types.js';
 
@@ -30,7 +31,7 @@ export interface LastConditionCheck {
   exitCode: number | null;
   /** Error detail (`error` status), e.g. `timed out after 15000ms`. */
   error: string | null;
-  /** First non-empty stderr line, shortened (not redacted). */
+  /** First non-empty stderr line: control/bidi characters removed, redacted, shortened. */
   stderr: string | null;
 }
 
@@ -60,10 +61,10 @@ export interface WorkflowConditionStatus {
   items: ItemCheckSummary | null;
 }
 
-function firstLine(text: string): string | null {
+/** First non-empty stderr line: sanitized (ANSI/control/bidi), redacted, then shortened. */
+function firstLine(text: string, redact: Redactor): string | null {
   for (const line of text.split(/\r?\n/)) {
-    const t = line.trim();
-    if (t !== '') return t.length > MAX_STDERR_LINE ? `${t.slice(0, MAX_STDERR_LINE - 1)}…` : t;
+    if (sanitizeDisplayText(line) !== '') return displayText(line, MAX_STDERR_LINE, redact);
   }
   return null;
 }
@@ -128,6 +129,8 @@ export class ConditionStatusStore {
   constructor(
     private readonly now: () => Date,
     private readonly onChange?: (workflowId: string) => void,
+    /** Redaction of stderr lines and errors (applied before shortening). */
+    private readonly redact: Redactor = (s) => s,
   ) {}
 
   /** Record one workflow condition result (see `WorkflowConditionObserver`). */
@@ -147,8 +150,8 @@ export class ConditionStatusStore {
       durationMs: result ? result.durationMs : null,
       cached: result ? result.cached : false,
       exitCode: result ? result.exitCode : null,
-      error: status === 'error' ? (diag.error ?? 'check error') : null,
-      stderr: result ? firstLine(result.stderr) : null,
+      error: status === 'error' ? displayText(diag.error ?? 'check error', MAX_STDERR_LINE, this.redact) : null,
+      stderr: result ? firstLine(result.stderr, this.redact) : null,
     };
     list[diag.index] = entry;
     if (previous?.status !== status || previous.error !== entry.error) this.emit(workflowId);

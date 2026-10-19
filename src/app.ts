@@ -58,7 +58,7 @@ import {
   type ShutdownResult,
 } from './runs/index.js';
 import { Scheduler } from './scheduler/index.js';
-import { DashboardInfoService } from './dashboard/index.js';
+import { DashboardInfoService, type DashboardInfoServiceOptions } from './dashboard/index.js';
 import { createGitHubSourceFactory } from './sources/index.js';
 import { ViewService } from './views/index.js';
 import { createApiServer, EventHub, type ReadinessReport } from './api/index.js';
@@ -270,6 +270,8 @@ export interface AppOptions {
   allowedOrigins?: readonly string[];
   /** Static web UI directory (WI-11). */
   uiDir?: string;
+  /** Tuning of the dashboard info tiles (WI-24; tests). */
+  dashboardInfo?: Partial<Pick<DashboardInfoServiceOptions, 'maxParallel' | 'manualMinIntervalMs' | 'manualPerMinute'>>;
 }
 
 /** Options of {@link App.shutdown}. */
@@ -433,6 +435,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     logger,
     // WI-24: live update of the condition status in the workflow views (the UI reloads via REST).
     onConditionStatusChange: (workflowId) => events.publish('workflow.conditions', { workflowId }),
+    redact: redactor.asRedactor,
   });
   // WI-24: info tiles of dashboard.yaml (background scripts; started with the scheduler).
   const dashboard = new DashboardInfoService({
@@ -444,6 +447,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     logger,
     redact: redactor.asRedactor,
     onChange: (tile) => events.publish('dashboard.info', tile),
+    ...options.dashboardInfo,
   });
   const views = new ViewService({ config, sources: sourceLookup, runs: repos.runs, clock, logger, redact: redactor.asRedactor, ...(options.viewCacheTtlMs !== undefined ? { cacheTtlMs: options.viewCacheTtlMs } : {}) });
   const retention = new RetentionService({

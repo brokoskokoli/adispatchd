@@ -140,7 +140,9 @@ describe('DashboardInfoService (WI-24)', () => {
       status: 'error',
       stale: true,
       updatedAt: '2026-01-01T00:00:00.000Z',
-      error: 'check error: exit code 3: token [REDACTED] rejected',
+      error: 'exit code 3: token [REDACTED] rejected',
+      nextAttemptAt: '2026-01-01T00:11:00.000Z',
+      expiresAt: '2026-01-01T00:10:00.000Z',
     });
     clock.advance(59_999);
     expect(calls).toHaveLength(2);
@@ -228,6 +230,42 @@ describe('DashboardInfoService (WI-24)', () => {
     expect(service.list()).toEqual([]);
   });
 
+  it('a changed tile waits until the old (killed) execution settled – no overlapping processes', async () => {
+    const cfg: { current: DashboardConfig | null } = { current: { file: 'dashboard.yaml', info: [tile('a')] } };
+    // Executor that ignores the abort for a while (like a process in its kill grace period).
+    const calls: Array<{ id: string; resolve(r: ShellCheckResult): void; signal: AbortSignal }> = [];
+    const { service } = create(cfg, {
+      executor: (_spec, context, signal) => new Promise<ShellCheckResult>((resolve) => calls.push({ id: context.info.id, resolve, signal })),
+    });
+    service.start();
+    expect(calls).toHaveLength(1);
+    cfg.current = { file: 'dashboard.yaml', info: [tile('a', { cacheMs: 120_000 })] };
+    service.sync();
+    expect(calls[0]?.signal.aborted).toBe(true);
+    // Old process still finishing: the new definition is not started yet, but shown as refreshing.
+    expect(calls).toHaveLength(1);
+    expect(service.get('a')).toMatchObject({ refreshing: true, value: null });
+    expect(service.refresh('a')).toMatchObject({ ok: true, alreadyRunning: true });
+    expect(calls).toHaveLength(1);
+    calls[0]?.resolve(ok('', { value: 'unknown', exitCode: null, signal: 'SIGKILL', error: 'aborted' }));
+    await flush();
+    expect(calls).toHaveLength(2);
+    calls[1]?.resolve(ok('5'));
+    await flush();
+    expect(service.get('a')).toMatchObject({ value: 5, status: 'ok' });
+    expect(service.get('a')).not.toHaveProperty('error');
+  });
+
+  it('refuses manual refreshes after stop', async () => {
+    const cfg = { current: { file: 'dashboard.yaml', info: [tile('a')] } };
+    const { service, calls } = create(cfg);
+    service.start();
+    calls[0]?.resolve(ok('1'));
+    await flush();
+    await service.stop();
+    expect(service.refresh('a')).toEqual({ ok: false, reason: 'stopped' });
+  });
+
   it('reports changes (SSE) and stops cleanly', async () => {
     const cfg = { current: { file: 'dashboard.yaml', info: [tile('a')] } };
     const { service, calls, changes } = create(cfg);
@@ -236,9 +274,8 @@ describe('DashboardInfoService (WI-24)', () => {
     calls[0]?.resolve(ok('7'));
     await flush();
     expect(changes.at(-1)).toMatchObject({ id: 'a', value: 7, refreshing: false });
-    const stopped = service.stop();
-    await stopped;
-    expect(service.refresh('a')).toMatchObject({ ok: false });
+    await service.stop();
+    expect(service.refresh('a')).toMatchObject({ ok: false, reason: 'stopped' });
   });
 });
 

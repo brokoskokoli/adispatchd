@@ -17,6 +17,7 @@
  */
 import path from 'node:path';
 import {
+  displayText,
   errorMessage,
   noopLogger,
   systemClock,
@@ -67,8 +68,13 @@ export interface InfoTileView {
   status: InfoTileStatus;
   /** Time of the last valid value. */
   updatedAt: string | null;
-  /** When the value expires and is fetched again (background). */
+  /** When the last valid value expires (`null` = no valid value). */
   expiresAt: string | null;
+  /**
+   * Next background fetch (after a success = `expiresAt`, after an error the
+   * retry time); `null` while a fetch is running or queued.
+   */
+  nextAttemptAt: string | null;
   /** Error of the last attempt (redacted, short). */
   error?: string;
   /** True if `value` is older than the last (failed) attempt. */
@@ -116,6 +122,7 @@ export interface DashboardInfoServiceOptions {
 export type RefreshResult =
   | { ok: true; tile: InfoTileView; alreadyRunning: boolean }
   | { ok: false; reason: 'not_found' }
+  | { ok: false; reason: 'stopped' }
   | { ok: false; reason: 'rate_limited'; retryAfterMs: number };
 
 interface TileState {
@@ -136,9 +143,6 @@ interface TileState {
   abort: AbortController | null;
 }
 
-function shorten(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
 
 /** See module docs. */
 export class DashboardInfoService {
@@ -154,6 +158,12 @@ export class DashboardInfoService {
   private readonly queue: string[] = [];
   private readonly inflight = new Set<Promise<void>>();
   private readonly manualTimes: number[] = [];
+  /**
+   * Executions of replaced/removed tiles that are still finishing (e.g. in the
+   * kill grace period) by tile ID: a successor with the same ID starts only
+   * after they settled, so old and new process never overlap.
+   */
+  private readonly settling = new Map<string, TileState>();
   private running = 0;
   private timer: TimerHandle | undefined;
   private started = false;
@@ -224,8 +234,7 @@ export class DashboardInfoService {
     const wanted = new Map((dashboard?.info ?? []).map((c) => [c.id, c]));
     for (const [id, state] of [...this.tiles]) {
       if (!wanted.has(id)) {
-        state.generation = 0;
-        state.abort?.abort();
+        this.retire(state);
         this.tiles.delete(id);
       }
     }
@@ -238,10 +247,7 @@ export class DashboardInfoService {
         ordered.set(id, existing);
         continue;
       }
-      if (existing) {
-        existing.generation = 0;
-        existing.abort?.abort();
-      }
+      if (existing) this.retire(existing);
       ordered.set(id, {
         config,
         key,
@@ -264,6 +270,22 @@ export class DashboardInfoService {
     if (this.started && !this.stopped) this.enqueueDue();
   }
 
+  /** Invalidate a replaced/removed tile; a running execution is killed and tracked until it settled. */
+  private retire(state: TileState): void {
+    state.generation = 0;
+    state.queued = false;
+    if (state.running) {
+      this.settling.set(state.config.id, state);
+      state.abort?.abort();
+    }
+  }
+
+  /** True while an older execution of the same tile ID is still finishing. */
+  private blocked(t: TileState): boolean {
+    const old = this.settling.get(t.config.id);
+    return old !== undefined && old !== t;
+  }
+
   /** All tiles in configuration order. */
   list(): InfoTileView[] {
     return [...this.tiles.values()].map((t) => this.view(t));
@@ -283,7 +305,8 @@ export class DashboardInfoService {
   refresh(id: string): RefreshResult {
     const t = this.tiles.get(id);
     if (!t) return { ok: false, reason: 'not_found' };
-    if (t.running || t.queued) return { ok: true, tile: this.view(t), alreadyRunning: true };
+    if (this.stopped) return { ok: false, reason: 'stopped' };
+    if (t.running || t.queued || this.blocked(t)) return { ok: true, tile: this.view(t), alreadyRunning: true };
     const now = this.now();
     if (t.lastAttemptAt !== null && now - t.lastAttemptAt < this.manualMinIntervalMs) {
       return { ok: false, reason: 'rate_limited', retryAfterMs: this.manualMinIntervalMs - (now - t.lastAttemptAt) };
@@ -292,7 +315,6 @@ export class DashboardInfoService {
     if (this.manualTimes.length >= this.manualPerMinute) {
       return { ok: false, reason: 'rate_limited', retryAfterMs: 60_000 - (now - (this.manualTimes[0] as number)) };
     }
-    if (this.stopped) return { ok: false, reason: 'rate_limited', retryAfterMs: 60_000 };
     this.manualTimes.push(now);
     this.enqueue(t);
     this.pump();
@@ -321,9 +343,10 @@ export class DashboardInfoService {
       status,
       updatedAt: this.iso(t.updatedAt),
       expiresAt: this.iso(t.expiresAt),
+      nextAttemptAt: this.iso(t.dueAt),
       ...(t.error !== null ? { error: t.error } : {}),
       stale: t.error !== null && t.value !== null,
-      refreshing: t.running || t.queued,
+      refreshing: t.running || t.queued || this.blocked(t),
       lastAttemptAt: this.iso(t.lastAttemptAt),
       durationMs: t.durationMs,
       thresholds: c.thresholds,
@@ -340,7 +363,7 @@ export class DashboardInfoService {
   }
 
   private enqueue(t: TileState): void {
-    if (t.running || t.queued) return;
+    if (t.running || t.queued || this.blocked(t)) return;
     t.queued = true;
     t.dueAt = null;
     this.queue.push(t.config.id);
@@ -351,7 +374,7 @@ export class DashboardInfoService {
   private enqueueDue(): void {
     if (this.stopped) return;
     const now = this.now();
-    for (const t of this.tiles.values()) if (t.dueAt !== null && t.dueAt <= now) this.enqueue(t);
+    for (const t of this.tiles.values()) if (t.dueAt !== null && t.dueAt <= now && !this.blocked(t)) this.enqueue(t);
     this.pump();
     this.arm();
   }
@@ -361,7 +384,7 @@ export class DashboardInfoService {
     this.timer = undefined;
     if (this.stopped || !this.started) return;
     let next: number | null = null;
-    for (const t of this.tiles.values()) if (t.dueAt !== null && (next === null || t.dueAt < next)) next = t.dueAt;
+    for (const t of this.tiles.values()) if (t.dueAt !== null && !this.blocked(t) && (next === null || t.dueAt < next)) next = t.dueAt;
     if (next === null) return;
     const delay = Math.min(Math.max(0, next - this.now()), MAX_TIMER_DELAY_MS);
     this.timer = this.timers.setTimeout(() => {
@@ -412,6 +435,16 @@ export class DashboardInfoService {
     this.running--;
     t.running = false;
     t.abort = null;
+    if (this.settling.get(c.id) === t) {
+      // A successor waited for this (replaced) execution: it may start now.
+      this.settling.delete(c.id);
+      const successor = this.tiles.get(c.id);
+      if (successor && successor !== t) {
+        if (successor.dueAt === null || successor.dueAt > this.now()) successor.dueAt = this.now();
+        this.emit(successor);
+        if (this.started && !this.stopped) queueMicrotask(() => this.enqueueDue());
+      }
+    }
     try {
       if (t.generation !== generation || this.tiles.get(c.id) !== t) return; // replaced/removed meanwhile
       if (this.stopped && abort.signal.aborted) return; // killed by stop(): keep the last state
@@ -420,9 +453,9 @@ export class DashboardInfoService {
       let error = failure;
       if (result && error === null) {
         if (result.exitCode === 0 && result.value === true) {
-          const parsed = parseInfoOutput(c.type, result.stdout, c.unit);
+          const parsed = parseInfoOutput(c.type, result.stdout, c.unit, this.redact);
           if (parsed.ok) {
-            t.value = typeof parsed.value === 'string' ? this.redact(parsed.value) : parsed.value;
+            t.value = parsed.value;
             t.updatedAt = now;
             t.expiresAt = now + c.cacheMs;
             t.error = null;
@@ -431,12 +464,13 @@ export class DashboardInfoService {
           }
           error = parsed.error;
         } else {
-          const base = result.error ?? `exit code ${String(result.exitCode)}`;
+          // Exit codes are reported plainly ("exit code 2"); timeouts, signals and spawn errors with their detail.
+          const base = result.exitCode !== null && !result.timedOut && result.signal === null ? `exit code ${result.exitCode}` : (result.error ?? 'unknown error');
           const stderr = firstNonEmptyLine(result.stderr);
           error = stderr ? `${base}: ${stderr}` : base;
         }
       }
-      t.error = shorten(this.redact(error ?? 'unknown error'), MAX_ERROR_LENGTH);
+      t.error = displayText(error ?? 'unknown error', MAX_ERROR_LENGTH, this.redact);
       t.dueAt = this.stopped ? null : now + Math.min(c.cacheMs, INFO_ERROR_RETRY_MAX_MS);
       this.logger.warn('dashboard info script failed', { id: c.id, error: t.error });
     } finally {

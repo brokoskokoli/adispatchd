@@ -143,6 +143,26 @@ describe('dashboard.yaml (WI-24)', () => {
     expect(sem).toContain('dashboard.yaml: info[2].critical_below: "critical_below" (20) must not be higher than "warn_below" (10)');
   });
 
+  it('caps timeout (≤ 5m and ≤ cache) and warns about percent thresholds outside 0–100', async () => {
+    const r = await load({
+      'dashboard.yaml': [
+        'info:',
+        '  - { id: a, type: number, command: echo, timeout: 6m, cache: 1h }',
+        '  - { id: b, type: number, command: echo, timeout: 30s, cache: 20s }',
+        '  - { id: c, type: number, command: echo, timeout: 5m, cache: 5m }',
+        '',
+      ].join('\n'),
+    });
+    expect(messages(r)).toEqual([
+      'dashboard.yaml: info[0].timeout: "timeout" must not exceed 5m',
+      'dashboard.yaml: info[1].timeout: "timeout" (30s) must not be longer than "cache" (20s)',
+    ]);
+    const w = await load({ 'dashboard.yaml': 'info:\n  - { id: p, type: percent, command: echo, warn_above: 80, critical_above: 120, warn_below: -1 }\n' });
+    expect(w.ok).toBe(true);
+    expect(w.warnings.map(formatConfigIssue).join('\n')).toContain('info[0].critical_above: Threshold 120 is outside 0–100');
+    expect(w.warnings.map(formatConfigIssue).join('\n')).toContain('info[0].warn_below: Threshold -1 is outside 0–100');
+  });
+
   it('warns about literal secrets in env', async () => {
     const r = await load({ 'dashboard.yaml': 'info:\n  - { id: x, type: text, command: echo, env: { API_TOKEN: abc } }\n' });
     expect(r.ok).toBe(true);

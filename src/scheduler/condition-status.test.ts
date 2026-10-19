@@ -1,3 +1,5 @@
+import { existsSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ShellCheckResult } from '../filters/index.js';
 import { checkDisplayName, MAX_CHECK_LABEL_LENGTH } from './checks.js';
@@ -196,10 +198,60 @@ describe('Scheduler – condition status (WI-24)', () => {
     expect(b.scheduler.conditionStatus('a')?.workflow).toEqual([null]);
     expect(b.scheduler.conditionStatus('b')?.workflow[0]).toMatchObject({ status: 'not_now' });
   });
+
+  it('does not record results of a planning step that a reload overtook (changed workflow), but keeps unchanged ones', async () => {
+    s.env.github.createIssue(REPO, { number: 9, labels: ['ready-for-coding'] });
+    const gate = path.join(s.env.marks, 'gate-open');
+    const started = path.join(s.env.marks, 'cond-started');
+    // Blocks until the test opened the gate, then says "not now".
+    const slow = s.env.script('slow-cond.sh', `: > "${started}"\nwhile [ ! -f "${gate}" ]; do sleep 0.02; done\nexit 1`);
+    const ic = s.env.script('ic2.sh', 'exit 0');
+    const wf = (id: string, name: string, cond: string): string =>
+      sourceWorkflow(id, s.env.script('run2.sh', 'exit 0'), `${READY}\nconditions:\n  workflow:\n    - { name: ${name}, type: shell, command: ${cond} }\n  item:\n    - { type: shell, command: ${ic} }`);
+    s.workflow('a', wf('a', 'Gate A', slow));
+    s.workflow('b', wf('b', 'Gate B', slow));
+    const b = await s.build();
+    b.scheduler.start();
+    await waitForFile(started);
+    s.workflow('a', wf('a', 'Gate A v2', slow));
+    const res = await b.config.reload();
+    expect(res.ok && res.diff.changedWorkflows).toEqual(['a']);
+    writeFileSync(gate, '');
+    await b.scheduler.whenIdle();
+    // "a" was changed during the step: neither its condition result nor its item summary is recorded.
+    expect(b.scheduler.conditionStatus('a')).toEqual({ workflow: [null], items: null });
+    // "b" is unchanged: recorded although the step began before the reload.
+    expect(b.scheduler.conditionStatus('b')?.workflow[0]).toMatchObject({ status: 'not_now' });
+    expect(b.scheduler.conditionStatus('b')?.items).toMatchObject({ items: 0 });
+  });
 });
+
+async function waitForFile(file: string, timeoutMs = 10_000): Promise<void> {
+  const end = Date.now() + timeoutMs;
+  while (!existsSync(file)) {
+    if (Date.now() > end) throw new Error(`timeout waiting for ${file}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
 
 function candidate(b: { scheduler: { lastDiagnosis(id: string): { candidates: CandidateDiagnosis[] } | undefined } }, wf: string, key: string): CandidateDiagnosis {
   const c = b.scheduler.lastDiagnosis(wf)?.candidates.find((x) => x.itemKey === key);
   if (!c) throw new Error(`no candidate ${key}`);
   return c;
 }
+
+describe('ConditionStatusStore – sanitizing and redaction order (WI-24 review)', () => {
+  it('redacts the stderr line before shortening it and strips control/bidi characters', () => {
+    const redact = (s: string): string => s.replaceAll('SECRET-TOKEN-123', '[REDACTED]');
+    const store = new ConditionStatusStore(() => new Date(0), undefined, redact);
+    const stderr = `\u001b[31m${'e'.repeat(190)}SECRET-TOKEN-123\u001b[0m and more`;
+    store.recordWorkflowCondition('wf', 2, diag(0, false), result({ value: false, exitCode: 1, stderr }));
+    store.recordWorkflowCondition('wf', 2, diag(1, 'unknown', 'failed \u202eSECRET-TOKEN-123'), result({ value: 'unknown', exitCode: 2, stderr: '\u0007\n\u202ebell\u0000' }));
+    const [first, second] = store.get('wf', 2).workflow;
+    expect(first?.stderr).not.toContain('SECRET');
+    expect(first?.stderr).not.toContain('\u001b');
+    expect(first?.stderr?.length).toBeLessThanOrEqual(200);
+    expect(second?.stderr).toBe('bell');
+    expect(second?.error).toBe('failed [REDACTED]');
+  });
+});

@@ -307,6 +307,8 @@ export interface EligibilityContext {
   /** Workflow conditions of the current step (memoized by the caller); only called in live mode. */
   workflowConditions(workflow: WorkflowConfig): Promise<ChecksOutcome>;
   signal?: AbortSignal;
+  /** Config dir: commands in reasons are shown relative to it (WI-24). */
+  configDir?: string;
 }
 
 /**
@@ -342,8 +344,8 @@ export async function checkEligibility(candidate: PreparedCandidate, ctx: Eligib
       if (outcome.value !== true) {
         const f = outcome.failed;
         return outcome.value === false
-          ? reject('condition_failed', `workflow condition ${checkReason(f)} is false`)
-          : reject('condition_unknown', `workflow condition ${checkReason(f)} is unknown: ${f?.error ?? 'check error'}`);
+          ? reject('condition_failed', `workflow condition ${checkReason(f, ctx.configDir)} is false`)
+          : reject('condition_unknown', `workflow condition ${checkReason(f, ctx.configDir)} is unknown: ${f?.error ?? 'check error'}`);
       }
     } else {
       pending = true;
@@ -385,8 +387,8 @@ export async function checkEligibility(candidate: PreparedCandidate, ctx: Eligib
       if (outcome.value !== true) {
         const f = outcome.failed as CheckDiagnosis;
         return outcome.value === false
-          ? reject('condition_failed', `item condition ${checkReason(f)} is false`)
-          : reject('condition_unknown', `item condition ${checkReason(f)} is unknown: ${f.error ?? 'check error'}`);
+          ? reject('condition_failed', `item condition ${checkReason(f, ctx.configDir)} is false`)
+          : reject('condition_unknown', `item condition ${checkReason(f, ctx.configDir)} is unknown: ${f.error ?? 'check error'}`);
       }
     } else {
       diag.itemConditions = notEvaluatedConditions(workflow, 'item_condition');
