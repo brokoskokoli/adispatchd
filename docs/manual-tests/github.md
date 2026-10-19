@@ -1343,21 +1343,37 @@ Prüft `source.update` → `project` gegen das Org-Projekt aus T25 (per App) und
      - type: source.update
        project: { Status: Review, Notes: null }
    EOF
+   # Zweiter Workflow für den No-op-Fall: on_start ändert nur Labels, on_success setzt Werte, die nach T26a schon stehen.
+   cat > "$ADISPATCH_CFG/workflows/project-noop-test.yaml" <<'EOF'
+   id: project-noop-test
+   trigger: { type: source, source: test_a }
+   filter: { field: labels, operator: contains, value: project-noop }
+   execute: { type: shell, command: scripts/test-worker.sh }
+   on_start:
+     - type: source.update
+       labels: { remove: [project-noop] }
+   on_success:
+     - type: source.update
+       project: { Status: Review, Notes: null }
+   EOF
    orch config validate --config-dir "$ADISPATCH_CFG" && orch config reload --config-dir "$ADISPATCH_CFG"
    ```
 
 **T26a – Status setzen:** Issue `$P1` (im Projekt) mit Label `project-write` versehen. **Erwartet:** nach dem Start
 im Projekt *Status* `In Progress`, *Estimate* 5, *Due* 24.12., *Notes* `started`; nach Erfolg *Status* `Review`,
 *Notes* leer. Run → *Events*: `lifecycle.action … succeeded (-project-write, Status=In Progress, …)`; Payload
-`details.applied.projectFields`. Ein zweiter Durchlauf (Label erneut setzen, Status manuell auf `Review` lassen)
-ändert in `on_success` nichts (`changed: false`).
+`details.applied.projectFields`. **No-op:** danach `$P1` mit Label `project-noop` versehen (Status steht schon auf
+`Review`, *Notes* ist leer). **Erwartet:** die `on_success`-Action von `project-noop-test` ist `succeeded` mit
+`details: { changed: false }`, im Log kein „Applied project field update“, in der GitHub-Projekt-Historie des Items
+kein neuer Eintrag.
 
 **T26b – Item automatisch hinzufügen:** Issue `$P3` (nicht im Projekt) mit `project-write` versehen. **Erwartet:**
 das Issue erscheint im Projekt mit *Status* `In Progress`; Journal `projectItemAdded: true`. Rohantwort von
 `addProjectV2ItemById` für ein schon vorhandenes Item notieren (gleiche Item-ID?).
 
-**T26c – Feld leeren:** wie T26a; *Notes* ist nach `on_success` leer (`clearProjectV2ItemFieldValue`). Ein `null` auf
-ein schon leeres Feld erzeugt keinen Mutation-Request (Log: kein „Applied project field update“).
+**T26c – Feld leeren:** in T26a ist *Notes* nach `on_start` `started` und nach `on_success` leer
+(`clearProjectV2ItemFieldValue`, Journal `projectFields: { …, Notes: null }`). Ein `null` auf ein schon leeres Feld
+erzeugt keinen Mutation-Request: das prüft der No-op-Lauf aus T26a (`Notes: null` bei leerem *Notes*).
 
 **T26d – Unbekannte Option / fehlende Rechte:** `on_success` auf `Status: Blocked` ändern (Option existiert nicht).
 **Erwartet:** Action `failed` nach **einem** Versuch, Fehler „option "Blocked" not found (available: "Todo", "In
