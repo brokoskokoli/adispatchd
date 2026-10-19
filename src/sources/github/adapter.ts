@@ -1,6 +1,7 @@
 /**
  * Source adapter `github` (Spec §5.2, §6, §10): issues and pull requests of
- * one repository, native "blocked by" dependencies, labels and comments.
+ * one repository, native "blocked by" dependencies, labels and comments, and
+ * optionally the fields of one GitHub Projects (v2) project (`project.*`, WI-14).
  */
 import {
   SourceError,
@@ -23,8 +24,9 @@ import {
   type SourceUpdateResult,
   type Timers,
 } from '../../core/index.js';
-import { DEPENDENCY_FIELDS, GITHUB_FIELD_DEFINITIONS } from './fields.js';
+import { DEPENDENCY_FIELDS, GITHUB_FIELD_DEFINITIONS, projectFieldDefinitions, type ProjectFieldKind } from './fields.js';
 import { GitHubHttpClient, type GitHubHttpClientOptions } from './http.js';
+import { GitHubProjectReader, type ProjectLookupItem } from './project.js';
 import { pushdownQuery } from './pushdown.js';
 import { ITEM_ID_PATTERN, parseGitHubItemRef } from './refs.js';
 
@@ -41,11 +43,27 @@ export interface GitHubSourceConfig {
   apiBaseUrl?: string;
   /** Web base URL for parsing item references; default `https://github.com`. */
   webBaseUrl?: string;
+  /** GitHub Projects (v2) project whose fields are provided as `project.<name>`. */
+  project?: GitHubSourceProjectConfig;
+}
+
+/** Project settings of a GitHub source (`sources.yaml` → `project`). */
+export interface GitHubSourceProjectConfig {
+  /** User or organisation login of the project; default: the source owner. */
+  owner?: string;
+  /** Project number from the URL `…/projects/<number>`. */
+  number: number;
+  /** Identity for reading the project; default: the source identity. */
+  identity?: IdentityRef;
+  /** Declared fields: name (as used in `project.<name>`) → kind. */
+  fields: Readonly<Record<string, ProjectFieldKind>>;
 }
 
 /** Subset of the GitHub issue JSON used by the adapter. */
 export interface GitHubIssueJson {
   id?: number;
+  /** GraphQL node ID (used for the project lookup). */
+  node_id?: string;
   number: number;
   title?: string;
   state?: string;
@@ -59,6 +77,10 @@ export interface GitHubIssueJson {
   updated_at?: string;
   repository?: { full_name?: string } | null;
   issue_dependencies_summary?: { blocked_by?: number; total_blocked_by?: number } | null;
+  state_reason?: string | null;
+  milestone?: { title?: string | null } | null;
+  /** Issue type (organisations with issue types only). */
+  type?: { name?: string | null } | null;
 }
 
 interface GitHubCommentJson {
@@ -91,6 +113,10 @@ export class GitHubSourceAdapter implements SourceAdapter {
   private readonly credentials: CredentialProvider;
   private readonly logger: Logger;
   private readonly repoPath: string;
+  private readonly definitions: readonly FieldDefinition[];
+  private readonly project: GitHubProjectReader | undefined;
+  /** Login per `github_token` identity (from `GET /user`), for comment authorship checks. */
+  private readonly userLogins = new Map<IdentityRef, Promise<string>>();
 
   constructor(sourceId: string, config: GitHubSourceConfig, deps: SourceAdapterDeps, options: GitHubAdapterOptions = {}) {
     if (!config.owner || !config.repository) throw new SourceError('invalid', `Source "${sourceId}": owner and repository are required`);
@@ -110,10 +136,29 @@ export class GitHubSourceAdapter implements SourceAdapter {
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
         ...(config.apiBaseUrl ? { baseUrl: config.apiBaseUrl } : {}),
       });
+    const project = config.project;
+    this.definitions = Object.freeze(project ? [...GITHUB_FIELD_DEFINITIONS, ...projectFieldDefinitions(project.fields)] : GITHUB_FIELD_DEFINITIONS);
+    this.project = project
+      ? new GitHubProjectReader(
+          {
+            owner: project.owner ?? config.owner,
+            number: project.number,
+            identity: project.identity ?? config.identity,
+            fields: project.fields,
+          },
+          {
+            http: this.http,
+            clock: deps.clock,
+            logger: this.logger,
+            withToken: (identity, signal, fn) => this.withToken(identity, signal, fn),
+          },
+        )
+      : undefined;
   }
 
+  /** Static GitHub fields plus the declared `project.*` fields of this source. */
   fieldDefinitions(): readonly FieldDefinition[] {
-    return GITHUB_FIELD_DEFINITIONS;
+    return this.definitions;
   }
 
   async listCandidates(options: ListCandidatesOptions = {}): Promise<SourceItem[]> {
@@ -130,12 +175,17 @@ export class GitHubSourceAdapter implements SourceAdapter {
         ...(options.signal ? { signal: options.signal } : {}),
       }),
     );
-    return issues.map((issue) => this.toItem(issue));
+    const items = issues.map((issue) => this.toItem(issue));
+    await this.addProjectFields(items, issues, options.signal, true);
+    return items;
   }
 
   async getItem(itemId: string, options: { signal?: AbortSignal } = {}): Promise<SourceItem | null> {
     const issue = await this.fetchIssue(itemId, this.config.identity, options.signal);
-    return issue ? this.toItem(issue) : null;
+    if (!issue) return null;
+    const item = this.toItem(issue);
+    await this.addProjectFields([item], [issue], options.signal, false);
+    return item;
   }
 
   parseItemRef(ref: string): string | null {
@@ -155,6 +205,8 @@ export class GitHubSourceAdapter implements SourceAdapter {
         out[name] = dependencies[name] as FieldResolution;
       } else if (Object.hasOwn(item.fields, name)) {
         out[name] = { known: true, value: item.fields[name] as FieldValue };
+      } else if (item.unknownFields && Object.hasOwn(item.unknownFields, name)) {
+        out[name] = { known: false, reason: item.unknownFields[name] as string };
       } else {
         out[name] = { known: false, reason: `unknown field "${name}" for source type github` };
       }
@@ -233,24 +285,65 @@ export class GitHubSourceAdapter implements SourceAdapter {
     const comments = await this.withToken(identity, undefined, (token) =>
       this.http.paginate<GitHubCommentJson>(`${this.repoPath}/issues/${item.itemId}/comments`, { token }),
     );
-    const isOwn = this.authorPredicate(identity);
+    const isOwn = await this.authorPredicate(identity);
     const found = comments.find((c) => typeof c.body === 'string' && pattern.test(c.body) && isOwn(c));
     return found ? toCommentRef(found) : null;
   }
 
   /**
-   * Only comments written by the identity's own app count as carrying a
-   * marker; otherwise anybody could suppress an orchestrator comment by
-   * posting the marker. With a known app ID (CredentialProvider.describe) the
-   * comment must have `performed_via_github_app.id === appId`; without one,
-   * at least a bot author (`user.type === 'Bot'`) is required.
+   * Only comments written by the identity itself count as carrying a marker;
+   * otherwise anybody could suppress an orchestrator comment by posting the
+   * marker. With a known app ID (CredentialProvider.describe) the comment must
+   * have `performed_via_github_app.id === appId`. For `github_token`
+   * identities (personal access tokens) the comment author must be the
+   * token's user (`GET /user`, cached per identity). Otherwise at least a bot
+   * author (`user.type === 'Bot'`) is required.
    */
-  private authorPredicate(identity: IdentityRef): (c: GitHubCommentJson) => boolean {
-    const appId = this.credentials.describe?.(identity)?.appId;
+  private async authorPredicate(identity: IdentityRef): Promise<(c: GitHubCommentJson) => boolean> {
+    const description = this.credentials.describe?.(identity);
+    const appId = description?.appId;
     if (appId !== undefined) {
       return (c) => c.performed_via_github_app?.id !== undefined && String(c.performed_via_github_app.id) === appId;
     }
+    if (description?.kind === 'github_token') {
+      const login = (await this.userLogin(identity)).toLowerCase();
+      return (c) => typeof c.user?.login === 'string' && c.user.login.toLowerCase() === login;
+    }
     return (c) => c.user?.type === 'Bot';
+  }
+
+  /** Login of the user behind a token identity (first use: `GET /user`; failures are not cached). */
+  private userLogin(identity: IdentityRef): Promise<string> {
+    let login = this.userLogins.get(identity);
+    if (!login) {
+      login = this.withToken(identity, undefined, (token) => this.http.request<{ login?: unknown }>('GET', '/user', { token })).then((res) => {
+        if (typeof res.data?.login !== 'string' || res.data.login === '') {
+          throw new SourceError('invalid', `GET /user returned no login for identity "${identity}"`, { retryable: false });
+        }
+        return res.data.login;
+      });
+      const pending = login;
+      pending.catch(() => {
+        if (this.userLogins.get(identity) === pending) this.userLogins.delete(identity);
+      });
+      this.userLogins.set(identity, pending);
+    }
+    return login;
+  }
+
+  /** Add `project.*` values/unknown reasons to freshly built items (no-op without a project). */
+  private async addProjectFields(
+    items: SourceItem[],
+    issues: readonly GitHubIssueJson[],
+    signal: AbortSignal | undefined,
+    freshMetadata: boolean,
+  ): Promise<void> {
+    if (!this.project) return;
+    const lookup: ProjectLookupItem[] = items.map((item, i) => {
+      const nodeId = issues[i]?.node_id;
+      return { item, nodeId: typeof nodeId === 'string' && nodeId !== '' ? nodeId : undefined };
+    });
+    await this.project.annotate(lookup, { ...(signal ? { signal } : {}), freshMetadata });
   }
 
   // -------------------------------------------------------------------------
@@ -355,6 +448,9 @@ export class GitHubSourceAdapter implements SourceAdapter {
         updated_at: issue.updated_at ?? null,
         url,
         repository: this.repository,
+        state_reason: typeof issue.state_reason === 'string' ? issue.state_reason : null,
+        milestone: typeof issue.milestone?.title === 'string' ? issue.milestone.title : null,
+        issue_type: typeof issue.type?.name === 'string' ? issue.type.name : null,
       },
     };
   }

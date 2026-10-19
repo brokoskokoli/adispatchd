@@ -364,6 +364,13 @@ export interface SourceItem {
    * and callers never write resolved values back into this record.
    */
   fields: Record<string, FieldValue>;
+  /**
+   * Cheap fields the adapter could not determine for this item, with the
+   * reason (e.g. GitHub `project.*` fields when the project lookup failed).
+   * They are absent from {@link fields} and evaluate to `unknown` (fail
+   * closed), never to an empty value.
+   */
+  unknownFields?: Record<string, string>;
 }
 
 /** Identity ID as declared in `identities.yaml` (e.g. `coder`). */
@@ -400,6 +407,8 @@ export interface CredentialProvider {
 
 /** Public, non-secret description of an identity (see {@link CredentialProvider.describe}). */
 export interface IdentityDescription {
+  /** Kind of identity (`identities.yaml` `type`), e.g. `github_app` or `github_token`. */
+  kind?: string;
   /** GitHub App ID for `github_app` identities. */
   appId?: string;
 }

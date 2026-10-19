@@ -2,7 +2,8 @@
  * {@link FieldSource} for a {@link SourceItem}, implementing the batch contract
  * of `SourceAdapter.resolveFields` (see docs/handoff/WI-01.md):
  *
- * - cheap fields come from `item.fields`;
+ * - cheap fields come from `item.fields`; fields listed in `item.unknownFields`
+ *   are `known: false` with the adapter's reason;
  * - on the first expensive field that is actually needed, ALL wanted expensive
  *   fields of the item are requested in one `resolveFields` call;
  * - results live only as long as this field source (one planning step / view
@@ -106,6 +107,8 @@ export function createItemFieldSource(item: SourceItem, options: ItemFieldSource
       if (Object.hasOwn(item.fields, field)) {
         return { known: true, value: item.fields[field] as FieldValue };
       }
+      const unknownReason = item.unknownFields && Object.hasOwn(item.unknownFields, field) ? item.unknownFields[field] : undefined;
+      if (unknownReason !== undefined) return { known: false, reason: unknownReason };
       return { known: false, reason: def ? `field '${field}' not provided by source` : `unknown field '${field}'` };
     },
   };

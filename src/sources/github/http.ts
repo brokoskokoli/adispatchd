@@ -11,6 +11,9 @@
  *   flagged `outcomeUnknown` when the request may have taken effect.
  * - Follows `Link: <…>; rel="next"` pagination, but only within the API origin
  *   so the token is never sent to a foreign host.
+ * - Runs read-only GraphQL queries ({@link GitHubHttpClient.graphql}) with the
+ *   same retry/rate-limit handling; GraphQL reports some rate limits as HTTP
+ *   200 with `errors[].type == "RATE_LIMITED"`, which is mapped to `rate_limited`.
  */
 import {
   SourceError,
@@ -72,6 +75,35 @@ export interface GitHubRequestOptions {
    * the request was rejected before taking effect.
    */
   idempotent?: boolean;
+  /**
+   * Inspect a successful (2xx) parsed body inside the retry loop: a returned
+   * error is thrown as if the request had failed (e.g. GraphQL rate limits
+   * reported with HTTP 200), so retries and rate-limit waits apply.
+   */
+  checkBody?: (data: unknown, headers: Headers) => SourceError | undefined;
+}
+
+/** One entry of a GraphQL `errors` array (only the fields the orchestrator uses). */
+export interface GraphQLErrorJson {
+  type?: string;
+  message?: string;
+  path?: ReadonlyArray<string | number>;
+}
+
+/** GraphQL response envelope. `data` may be partial when `errors` is present. */
+export interface GraphQLResponse<T> {
+  data: T | null;
+  errors: GraphQLErrorJson[];
+}
+
+/**
+ * GraphQL endpoint for a REST base URL: `https://api.github.com` →
+ * `https://api.github.com/graphql`; GitHub Enterprise Server
+ * `https://host/api/v3` → `https://host/api/graphql`.
+ */
+export function graphqlUrlFor(baseUrl: string): string {
+  const base = baseUrl.replace(/\/+$/, '');
+  return /\/api\/v3$/.test(base) ? `${base.slice(0, -'/v3'.length)}/graphql` : `${base}/graphql`;
 }
 
 /** Successful response. */
@@ -118,6 +150,46 @@ export class GitHubHttpClient {
   async request<T = unknown>(method: HttpMethod, path: string, options: GitHubRequestOptions = {}): Promise<GitHubResponse<T>> {
     const url = this.buildUrl(path, options.query);
     return this.requestUrl<T>(method, url, options);
+  }
+
+  /**
+   * Run a read-only GraphQL query (`POST {graphql endpoint}` with
+   * `{ query, variables }`). Treated as idempotent: retried on transient
+   * errors and rate limits. Never interpolate user data into `query`; pass it
+   * as `variables`. Returns `data` (possibly partial) plus `errors`; throws
+   * `rate_limited` for GraphQL `RATE_LIMITED` errors and `invalid` when the
+   * body is not a GraphQL response.
+   */
+  async graphql<T = unknown>(
+    query: string,
+    variables: Record<string, unknown>,
+    options: Pick<GitHubRequestOptions, 'token' | 'signal'> = {},
+  ): Promise<GraphQLResponse<T>> {
+    const url = new URL(graphqlUrlFor(this.baseUrl));
+    const label = `POST ${describePath(url)}`;
+    const res = await this.requestUrl<{ data?: unknown; errors?: unknown }>('POST', url, {
+      ...options,
+      body: { query, variables },
+      idempotent: true,
+      checkBody: (data, headers) => {
+        if (data === null || typeof data !== 'object' || Array.isArray(data)) {
+          return new SourceError('invalid', `${label} returned no GraphQL response`, { retryable: false });
+        }
+        const errors = graphqlErrors((data as { errors?: unknown }).errors);
+        if (errors.some((e) => e.type === 'RATE_LIMITED')) {
+          return new SourceError('rate_limited', `${label} failed: GraphQL rate limit exceeded`, {
+            retryAfterMs: this.retryAfter(headers) ?? 60_000,
+            details: { path: describePath(url) },
+          });
+        }
+        return undefined;
+      },
+    });
+    const body = res.data;
+    return {
+      data: (body.data ?? null) as T | null,
+      errors: graphqlErrors(body.errors),
+    };
   }
 
   /**
@@ -244,6 +316,8 @@ export class GitHubHttpClient {
               });
         }
       }
+      const bodyError = options.checkBody?.(data, res.headers);
+      if (bodyError) throw bodyError;
       return { status: res.status, data: data as T, headers: res.headers };
     }
     throw this.toError(res, text, label, idempotent);
@@ -336,6 +410,18 @@ function extractMessage(text: string): string | undefined {
     // non-JSON error body: do not echo arbitrary content
   }
   return undefined;
+}
+
+/** Normalise a GraphQL `errors` value; messages are truncated (they may echo query details). */
+function graphqlErrors(value: unknown): GraphQLErrorJson[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((e): e is Record<string, unknown> => e !== null && typeof e === 'object')
+    .map((e) => ({
+      ...(typeof e.type === 'string' ? { type: e.type } : {}),
+      ...(typeof e.message === 'string' ? { message: truncate(e.message, 200) } : {}),
+      ...(Array.isArray(e.path) ? { path: e.path.filter((p): p is string | number => typeof p === 'string' || typeof p === 'number') } : {}),
+    }));
 }
 
 function truncate(text: string, max: number): string {

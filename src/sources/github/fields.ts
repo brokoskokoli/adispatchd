@@ -1,7 +1,8 @@
 /**
- * Field catalogue of the GitHub source adapter (Spec §6, §17).
+ * Field catalogue of the GitHub source adapter (Spec §6, §17), including the
+ * per-source GitHub Projects (v2) fields `project.<name>` (WI-14).
  */
-import { OPERATORS_BY_TYPE, type FieldDefinition } from '../../core/index.js';
+import { OPERATORS_BY_TYPE, type FieldDefinition, type FieldType } from '../../core/index.js';
 
 const STRING_OPS = OPERATORS_BY_TYPE.string;
 const NUMBER_OPS = OPERATORS_BY_TYPE.number;
@@ -44,6 +45,14 @@ export const GITHUB_FIELD_DEFINITIONS: readonly FieldDefinition[] = Object.freez
   { name: 'url', type: 'string', description: 'Web URL', operators: STRING_OPS },
   { name: 'repository', type: 'string', description: 'owner/name', operators: STRING_OPS },
   {
+    name: 'state_reason',
+    type: 'string',
+    description: 'Why the issue was closed/reopened (completed, not_planned, reopened, duplicate, …); null if not set',
+    operators: STRING_OPS,
+  },
+  { name: 'milestone', type: 'string', description: 'Milestone title; null without milestone', operators: STRING_OPS },
+  { name: 'issue_type', type: 'string', description: 'Issue type name (e.g. Bug, Feature, Task); null without type', operators: STRING_OPS },
+  {
     name: 'dependencies.blocked_by_total',
     type: 'number',
     description: 'Number of issues blocking this one (native "blocked by", incl. cross-repo)',
@@ -72,3 +81,46 @@ export const GITHUB_FIELD_DEFINITIONS: readonly FieldDefinition[] = Object.freez
     expensive: true,
   },
 ] satisfies FieldDefinition[]);
+
+/** Prefix of GitHub Projects (v2) fields: `project.<name>`. */
+export const PROJECT_FIELD_PREFIX = 'project.';
+
+/** Kinds of project fields that can be declared in `sources.yaml` (`project.fields`). */
+export const PROJECT_FIELD_KINDS = ['single_select', 'text', 'number', 'date', 'iteration'] as const;
+
+/** Kind of a declared project field. */
+export type ProjectFieldKind = (typeof PROJECT_FIELD_KINDS)[number];
+
+/** Field type per project field kind (single select: option name, iteration: iteration title). */
+export const PROJECT_FIELD_TYPES: Readonly<Record<ProjectFieldKind, FieldType>> = {
+  single_select: 'string',
+  text: 'string',
+  iteration: 'string',
+  number: 'number',
+  date: 'date',
+};
+
+/** GitHub `ProjectV2FieldType` (`dataType`) expected per kind. */
+export const PROJECT_FIELD_DATA_TYPES: Readonly<Record<ProjectFieldKind, string>> = {
+  single_select: 'SINGLE_SELECT',
+  text: 'TEXT',
+  iteration: 'ITERATION',
+  number: 'NUMBER',
+  date: 'DATE',
+};
+
+/** Field definition of the declared project field `name` (full field name `project.<name>`). */
+export function projectFieldDefinition(name: string, kind: ProjectFieldKind): FieldDefinition {
+  const type = PROJECT_FIELD_TYPES[kind];
+  return {
+    name: `${PROJECT_FIELD_PREFIX}${name}`,
+    type,
+    description: `GitHub Projects field "${name}" (${kind}); null if empty or the item is not in the project`,
+    operators: OPERATORS_BY_TYPE[type],
+  };
+}
+
+/** Field definitions of all declared project fields (in declaration order). */
+export function projectFieldDefinitions(fields: Readonly<Record<string, ProjectFieldKind>>): FieldDefinition[] {
+  return Object.entries(fields).map(([name, kind]) => projectFieldDefinition(name, kind));
+}

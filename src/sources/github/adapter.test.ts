@@ -53,6 +53,9 @@ describe('listCandidates / getItem', () => {
       updated_at: '2026-10-16T12:00:00.000Z',
       url: 'https://github.com/example/project-a/issues/1',
       repository: 'example/project-a',
+      state_reason: null,
+      milestone: null,
+      issue_type: null,
     });
     for (const f of DEPENDENCY_FIELDS) expect(issue.fields).not.toHaveProperty(f);
     expect(pr).toMatchObject({ type: 'pull_request', url: 'https://github.com/example/project-a/pull/2' });
@@ -80,6 +83,18 @@ describe('listCandidates / getItem', () => {
     expect(pushdownQuery({ any: [{ field: 'labels', operator: 'contains', value: 'a' }] })).toEqual({ state: 'open', labels: [] });
     expect(pushdownQuery({ not: { field: 'labels', operator: 'contains', value: 'a' } })).toEqual({ state: 'open', labels: [] });
     expect(pushdownQuery({ field: 'labels', operator: 'contains', value: 'a,b' }).labels).toEqual([]);
+  });
+
+  it('maps state_reason, milestone and issue type', async () => {
+    github.createIssue(REPO, { state: 'closed', stateReason: 'not_planned', milestone: 'v1.0', issueType: 'Bug' });
+    const it1 = await item(1);
+    expect(it1.fields).toMatchObject({ state_reason: 'not_planned', milestone: 'v1.0', issue_type: 'Bug' });
+    for (const name of ['state_reason', 'milestone', 'issue_type']) {
+      const def = adapter.fieldDefinitions().find((d) => d.name === name);
+      expect(def).toMatchObject({ type: 'string', operators: ['equals', 'not_equals', 'contains', 'in'] });
+      expect(def?.expensive).toBeUndefined();
+      expect(def?.pushdown).toBeUndefined();
+    }
   });
 
   it('getItem returns null for missing items and invalid ids', async () => {

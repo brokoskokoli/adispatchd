@@ -35,6 +35,7 @@ export function createFakeGitHubSource(github: FakeGitHub, options: FakeGitHubSo
       identity: options.identity ?? 'maintainer',
       apiBaseUrl: options.apiBaseUrl ?? github.baseUrl,
       webBaseUrl: options.webBaseUrl ?? github.webBaseUrl,
+      ...(options.project ? { project: options.project } : {}),
     },
     {
       credentials: options.credentials ?? staticCredentials(),

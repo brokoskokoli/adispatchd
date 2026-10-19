@@ -11,6 +11,11 @@
  * - `POST /repos/{o}/{r}/issues/{n}/labels`, `DELETE /repos/{o}/{r}/issues/{n}/labels/{name}`
  * - `GET|POST /repos/{o}/{r}/issues/{n}/comments` (pagination)
  * - `PATCH /repos/{o}/{r}/issues/{n}` (`state`, `title`)
+ * - `GET  /user` (user tokens from {@link FakeGitHub.createUserToken})
+ * - `POST /graphql` (GHES: `/api/graphql`): the two GitHub Projects (v2)
+ *   queries of the adapter – `repositoryOwner { projectV2 }` metadata and
+ *   `nodes(ids:) { projectItems { fieldValueByName } }` values. Field names
+ *   are taken from the variables `$f<i>` bound to the aliases `f<i>`.
  *
  * Fault injection: {@link FakeGitHub.failNext}; access control:
  * {@link FakeGitHub.restrictRepo}, {@link FakeGitHub.denyDependencies}.
@@ -29,6 +34,10 @@ export interface FakeIssueInit {
   author?: string;
   isPullRequest?: boolean;
   createdAt?: string | Date;
+  milestone?: string;
+  /** Issue type name (`type.name`). */
+  issueType?: string;
+  stateReason?: string;
 }
 
 /** Stored issue / pull request. Mutate via the helper methods. */
@@ -47,6 +56,29 @@ export interface FakeIssue {
   updatedAt: string;
   /** Blockers as `owner/repo#number` references (native "blocked by"). */
   blockedBy: Array<{ repo: string; number: number }>;
+  /** GraphQL node ID (`node_id`). */
+  nodeId: string;
+  milestone: string | null;
+  issueType: string | null;
+  stateReason: string | null;
+}
+
+/** Field of a fake GitHub project (`dataType` as in GitHub's `ProjectV2FieldType`). */
+export interface FakeProjectField {
+  name: string;
+  dataType: 'SINGLE_SELECT' | 'TEXT' | 'NUMBER' | 'DATE' | 'ITERATION' | 'TITLE' | 'ASSIGNEES' | 'LABELS';
+}
+
+/** Stored GitHub Projects (v2) project. */
+export interface FakeProject {
+  id: string;
+  owner: string;
+  ownerType: 'User' | 'Organization';
+  number: number;
+  title: string;
+  fields: FakeProjectField[];
+  /** Issue node ID → field name → value (`null`/absent = empty). */
+  items: Map<string, Record<string, string | number | null>>;
 }
 
 /** Stored conversation comment. */
@@ -77,6 +109,8 @@ export interface FakeRequestRecord {
   token: string | undefined;
   apiVersion: string | null;
   status: number | 'network_error';
+  /** Parsed body of GraphQL requests. */
+  graphql?: { query: string; variables: Record<string, unknown> };
 }
 
 /** Matcher for {@link FakeGitHub.failNext}. */
@@ -135,7 +169,10 @@ interface Fault {
 }
 
 interface IssuedToken {
-  app: FakeApp;
+  /** Installation token of this app … */
+  app?: FakeApp;
+  /** … or a user token (personal access token) of this login. */
+  userLogin?: string;
   expiresAt: number;
 }
 
@@ -159,6 +196,9 @@ export class FakeGitHub {
   private readonly tokens = new Map<string, IssuedToken>();
   private readonly restricted = new Set<string>();
   private readonly deniedDependencies = new Set<string>();
+  private readonly projects: FakeProject[] = [];
+  private readonly ownerTypes = new Map<string, 'User' | 'Organization'>();
+  private readonly deniedProjects = new Set<string>();
   private faults: Fault[] = [];
   private nextId = 1000;
   private nextCommentId = 5000;
@@ -195,7 +235,12 @@ export class FakeGitHub {
       createdAt: created,
       updatedAt: created,
       blockedBy: [],
+      nodeId: '',
+      milestone: init.milestone ?? null,
+      issueType: init.issueType ?? null,
+      stateReason: init.stateReason ?? null,
     };
+    issue.nodeId = `${issue.isPullRequest ? 'PR' : 'I'}_kw${issue.id}`;
     issues.set(number, issue);
     return issue;
   }
@@ -312,6 +357,56 @@ export class FakeGitHub {
     };
   }
 
+  /**
+   * Create a GitHub Projects (v2) project of `owner`. Projects of a `User`
+   * owner are not readable with app installation tokens (as on GitHub); use
+   * a user token ({@link createUserToken}) or {@link staticCredentials}.
+   */
+  createProject(
+    owner: string,
+    init: { number?: number; ownerType?: 'User' | 'Organization'; title?: string; fields: FakeProjectField[] },
+  ): FakeProject {
+    const login = owner.toLowerCase();
+    const ownerType = init.ownerType ?? this.ownerTypes.get(login) ?? 'Organization';
+    this.ownerTypes.set(login, ownerType);
+    const number = init.number ?? Math.max(0, ...this.projects.filter((p) => p.owner === login).map((p) => p.number)) + 1;
+    const project: FakeProject = {
+      id: `PVT_kw${this.nextId++}`,
+      owner: login,
+      ownerType,
+      number,
+      title: init.title ?? `Project ${number}`,
+      fields: init.fields.map((f) => ({ ...f })),
+      items: new Map(),
+    };
+    this.projects.push(project);
+    return project;
+  }
+
+  /** Add `repo#number` to `project` with field values (by exact project field name). */
+  addProjectItem(project: FakeProject, repo: string, number: number, values: Record<string, string | number | null> = {}): void {
+    project.items.set(this.issue(repo, number).nodeId, { ...values });
+  }
+
+  /** Change one field value of an item that is already in `project`. */
+  setProjectValue(project: FakeProject, repo: string, number: number, field: string, value: string | number | null): void {
+    const values = project.items.get(this.issue(repo, number).nodeId);
+    if (!values) throw new Error(`${repo}#${number} is not in project ${project.number}`);
+    values[field] = value;
+  }
+
+  /** Make a project unreadable for every token (GraphQL answers `projectV2: null` + FORBIDDEN error). */
+  denyProject(project: FakeProject): void {
+    this.deniedProjects.add(project.id);
+  }
+
+  /** Issue a user token (personal access token) for `login`; comments made with it are authored by `login`. */
+  createUserToken(login: string): string {
+    const token = `ghp_fake${randomBytes(12).toString('hex')}`;
+    this.tokens.set(token, { userLogin: login, expiresAt: Number.MAX_SAFE_INTEGER });
+    return token;
+  }
+
   /** Number of installation tokens issued so far. */
   tokenRequestCount(): number {
     return this.requests.filter((r) => r.method === 'POST' && /^\/app\/installations\/[^/]+\/access_tokens$/.test(r.path) && r.status === 201)
@@ -337,6 +432,13 @@ export class FakeGitHub {
       apiVersion: headers.get('x-github-api-version'),
       status: 0,
     };
+    if (method === 'POST' && isGraphqlPath(url.pathname, basePath)) {
+      const body = parseBody(rawBody);
+      record.graphql = {
+        query: typeof body.query === 'string' ? body.query : '',
+        variables: body.variables && typeof body.variables === 'object' ? (body.variables as Record<string, unknown>) : {},
+      };
+    }
     this.requests.push(record);
 
     if (url.origin !== new URL(this.baseUrl).origin) {
@@ -379,6 +481,19 @@ export class FakeGitHub {
     if (tokenMatch) {
       if (method !== 'POST') return json(404, { message: 'Not Found' });
       return this.issueToken(decodeURIComponent(tokenMatch[1] as string), headers);
+    }
+
+    if (method === 'POST' && isGraphqlPath(url.pathname, new URL(this.baseUrl).pathname.replace(/\/+$/, ''))) {
+      const auth = this.authenticate(headers);
+      if (auth instanceof Response) return auth;
+      return this.graphql(parseBody(rawBody), auth);
+    }
+    if (path === '/user' && method === 'GET') {
+      const auth = this.authenticate(headers);
+      if (auth instanceof Response) return auth;
+      if (auth?.userLogin) return json(200, { login: auth.userLogin, type: 'User' });
+      if (auth?.app) return json(403, { message: 'Resource not accessible by integration' });
+      return json(401, { message: 'Requires authentication' });
     }
 
     const m = /^\/repos\/([^/]+)\/([^/]+)\/issues(?:\/(\d+)(\/.*)?)?$/.exec(path);
@@ -447,9 +562,11 @@ export class FakeGitHub {
       if (method === 'POST') {
         const text = (body as { body?: unknown }).body;
         if (typeof text !== 'string' || text === '') return json(422, { message: 'Validation Failed' });
-        const comment = auth
+        const comment = auth?.app
           ? this.addComment(repo, number, text, auth.app.login, { type: 'Bot', viaAppId: auth.app.appId })
-          : this.addComment(repo, number, text, 'test-bot[bot]', { type: 'Bot' });
+          : auth?.userLogin
+            ? this.addComment(repo, number, text, auth.userLogin, { type: 'User' })
+            : this.addComment(repo, number, text, 'test-bot[bot]', { type: 'Bot' });
         return json(201, this.commentJson(repo, issue, comment));
       }
     }
@@ -467,6 +584,95 @@ export class FakeGitHub {
     if (issued && issued.expiresAt > this.clock.now().getTime()) return issued;
     if (!this.requireAuth()) return undefined;
     return json(401, { message: 'Bad credentials' });
+  }
+
+  // ------------------------------------------------------------- GraphQL
+
+  private graphql(body: Record<string, unknown>, auth: IssuedToken | undefined): Response {
+    const query = typeof body.query === 'string' ? body.query : '';
+    const variables = (body.variables && typeof body.variables === 'object' ? body.variables : {}) as Record<string, unknown>;
+    if (query.includes('repositoryOwner(')) return this.graphqlMetadata(variables, auth);
+    if (query.includes('nodes(ids:')) return this.graphqlNodes(query, variables, auth);
+    return json(200, { errors: [{ message: 'Unsupported query in FakeGitHub' }] });
+  }
+
+  private projectReadable(project: FakeProject, auth: IssuedToken | undefined): boolean {
+    if (this.deniedProjects.has(project.id)) return false;
+    // GitHub App installation tokens cannot read user-owned projects.
+    return !(project.ownerType === 'User' && auth?.app);
+  }
+
+  private graphqlMetadata(variables: Record<string, unknown>, auth: IssuedToken | undefined): Response {
+    const owner = String(variables.owner ?? '').toLowerCase();
+    const ownerType = this.ownerTypes.get(owner);
+    if (!ownerType) {
+      return json(200, {
+        data: { repositoryOwner: null },
+        errors: [{ type: 'NOT_FOUND', path: ['repositoryOwner'], message: `Could not resolve to a RepositoryOwner with the login of '${owner}'.` }],
+      });
+    }
+    const project = this.projects.find((p) => p.owner === owner && p.number === Number(variables.number));
+    if (!project || !this.projectReadable(project, auth)) {
+      return json(200, {
+        data: { repositoryOwner: { __typename: ownerType, projectV2: null } },
+        errors: project
+          ? [{ type: 'FORBIDDEN', path: ['repositoryOwner', 'projectV2'], message: 'Resource not accessible by integration' }]
+          : [{ type: 'NOT_FOUND', path: ['repositoryOwner', 'projectV2'], message: `Could not resolve to a ProjectV2 with the number ${String(variables.number)}.` }],
+      });
+    }
+    return json(200, {
+      data: {
+        repositoryOwner: {
+          __typename: ownerType,
+          projectV2: {
+            id: project.id,
+            title: project.title,
+            fields: { nodes: project.fields.map((f) => ({ name: f.name, dataType: f.dataType })) },
+          },
+        },
+      },
+    });
+  }
+
+  private graphqlNodes(query: string, variables: Record<string, unknown>, auth: IssuedToken | undefined): Response {
+    const ids = Array.isArray(variables.ids) ? variables.ids.map(String) : [];
+    if (ids.length > 100) return json(200, { errors: [{ type: 'EXCESSIVE_PAGINATION', message: 'Too many ids' }] });
+    // Aliases f<i> are bound to the variables $f<i> carrying the field names.
+    const aliases = [...query.matchAll(/\b(f\d+): fieldValueByName\(name: \$(f\d+)\)/g)].map((m) => ({
+      alias: m[1] as string,
+      name: String(variables[m[2] as string] ?? ''),
+    }));
+    const firstMatch = /projectItems\(first: (\d+)/.exec(query);
+    const first = firstMatch ? Number(firstMatch[1]) : 20;
+    const byNodeId = new Map<string, FakeIssue>();
+    for (const issues of this.repos.values()) for (const issue of issues.values()) byNodeId.set(issue.nodeId, issue);
+    const errors: unknown[] = [];
+    const nodes = ids.map((id, index) => {
+      const issue = byNodeId.get(id);
+      if (!issue || this.restricted.has(issue.repo)) {
+        errors.push({ type: 'NOT_FOUND', path: ['nodes', index], message: `Could not resolve to a node with the global id of '${id}'` });
+        return null;
+      }
+      const memberships = this.projects.filter((p) => p.items.has(id) && this.projectReadable(p, auth));
+      return {
+        __typename: issue.isPullRequest ? 'PullRequest' : 'Issue',
+        projectItems: {
+          totalCount: memberships.length,
+          nodes: memberships.slice(0, first).map((p) => {
+            const values = p.items.get(id) ?? {};
+            const entry: Record<string, unknown> = { project: { id: p.id } };
+            for (const { alias, name } of aliases) {
+              // fieldValueByName matches the exact field name here (GitHub's behaviour is not relied upon).
+              const field = p.fields.find((f) => f.name === name);
+              const value = values[name];
+              entry[alias] = field && value !== null && value !== undefined ? fieldValueJson(field, value) : null;
+            }
+            return entry;
+          }),
+        },
+      };
+    });
+    return json(200, { data: { nodes }, ...(errors.length > 0 ? { errors } : {}) });
   }
 
   private issueToken(installationId: string, headers: Headers): Response {
@@ -541,6 +747,10 @@ export class FakeGitHub {
       user: { login: issue.author },
       created_at: issue.createdAt,
       updated_at: issue.updatedAt,
+      node_id: issue.nodeId,
+      state_reason: issue.stateReason,
+      milestone: issue.milestone !== null ? { title: issue.milestone, number: 1 } : null,
+      type: issue.issueType !== null ? { name: issue.issueType } : null,
       ...(issue.isPullRequest ? { pull_request: { html_url: htmlUrl } } : {}),
       ...(this.includeDependencySummary
         ? {
@@ -621,6 +831,27 @@ export function verifyAppJwt(jwt: string, app: Pick<FakeApp, 'appId' | 'publicKe
     return true;
   } catch {
     return false;
+  }
+}
+
+function isGraphqlPath(pathname: string, basePath: string): boolean {
+  // github.com: `/graphql`; GHES: base `/api/v3` → `/api/graphql`.
+  const endpoint = basePath.endsWith('/api/v3') ? `${basePath.slice(0, -'/v3'.length)}/graphql` : `${basePath}/graphql`;
+  return pathname === endpoint;
+}
+
+function fieldValueJson(field: FakeProjectField, value: string | number): Record<string, unknown> {
+  switch (field.dataType) {
+    case 'SINGLE_SELECT':
+      return { __typename: 'ProjectV2ItemFieldSingleSelectValue', name: value };
+    case 'NUMBER':
+      return { __typename: 'ProjectV2ItemFieldNumberValue', number: value };
+    case 'DATE':
+      return { __typename: 'ProjectV2ItemFieldDateValue', date: value };
+    case 'ITERATION':
+      return { __typename: 'ProjectV2ItemFieldIterationValue', title: value };
+    default:
+      return { __typename: 'ProjectV2ItemFieldTextValue', text: value };
   }
 }
 

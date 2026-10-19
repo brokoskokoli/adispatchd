@@ -161,6 +161,54 @@ describe('GitHubHttpClient', () => {
     }
   });
 
+  it('posts GraphQL queries with variables to the GraphQL endpoint (github.com and GHES)', async () => {
+    const fetch = stubFetch(() => jsonRes(200, { data: { viewer: { login: 'x' } } }));
+    const client = new GitHubHttpClient({ clock: new FakeClock(), fetch });
+    const res = await client.graphql('query($a: String!) { viewer { login } }', { a: 'v' }, { token: 'tok' });
+    expect(res).toEqual({ data: { viewer: { login: 'x' } }, errors: [] });
+    const call = fetch.calls[0];
+    expect(call?.url.toString()).toBe('https://api.github.com/graphql');
+    expect(call?.init.method).toBe('POST');
+    expect(JSON.parse(String(call?.init.body))).toEqual({ query: 'query($a: String!) { viewer { login } }', variables: { a: 'v' } });
+    expect(new Headers(call?.init.headers).get('authorization')).toBe('Bearer tok');
+
+    const ghes = new GitHubHttpClient({ clock: new FakeClock(), fetch, baseUrl: 'https://ghe.example.com/api/v3' });
+    await ghes.graphql('{ viewer { login } }', {});
+    expect(fetch.calls[1]?.url.toString()).toBe('https://ghe.example.com/api/graphql');
+  });
+
+  it('returns partial data with errors and treats GraphQL RATE_LIMITED (HTTP 200) as rate limit with retry', async () => {
+    const clock = new FakeClock('2026-10-19T12:00:00Z');
+    let n = 0;
+    const fetch = stubFetch(() =>
+      ++n === 1
+        ? jsonRes(200, { data: null, errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }] }, { 'retry-after': '3' })
+        : jsonRes(200, { data: { a: null }, errors: [{ type: 'NOT_FOUND', path: ['a'], message: 'nope' }] }),
+    );
+    const client = new GitHubHttpClient({ clock, timers: clock, fetch, maxRetries: 1 });
+    const pending = client.graphql('{ a }', {});
+    await waitForTimer(clock);
+    await clock.advanceAsync(3_000);
+    expect(await pending).toEqual({ data: { a: null }, errors: [{ type: 'NOT_FOUND', path: ['a'], message: 'nope' }] });
+    expect(fetch.calls).toHaveLength(2);
+
+    const limited = stubFetch(() => jsonRes(200, { errors: [{ type: 'RATE_LIMITED', message: 'x' }] }));
+    const noRetry = new GitHubHttpClient({ clock, timers: clock, fetch: limited, maxRetries: 0 });
+    await expect(noRetry.graphql('{ a }', {})).rejects.toMatchObject({ kind: 'rate_limited', retryable: true });
+
+    // Transient HTTP errors are retried: the query is read-only (idempotent).
+    let m = 0;
+    const flaky = stubFetch(() => (++m === 1 ? jsonRes(502, { message: 'bad gateway' }) : jsonRes(200, { data: { ok: true } })));
+    const retrying = new GitHubHttpClient({ clock, timers: clock, fetch: flaky, maxRetries: 1, retryBaseDelayMs: 10 });
+    const p2 = retrying.graphql('{ ok }', {});
+    await waitForTimer(clock);
+    await clock.advanceAsync(10);
+    expect((await p2).data).toEqual({ ok: true });
+
+    const broken = stubFetch(() => jsonRes(200, [1, 2]));
+    await expect(new GitHubHttpClient({ clock, fetch: broken }).graphql('{ a }', {})).rejects.toMatchObject({ kind: 'invalid' });
+  });
+
   it('parses Link headers', () => {
     expect(
       parseLinkHeader('<https://api.github.com/x?page=2>; rel="next", <https://api.github.com/x?page=5>; rel="last"'),
