@@ -48,7 +48,7 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
   Container zu einer Sub-UID ohne Zugriff. Der Daemon erkennt rootless Docker nicht automatisch. Rootless Podman
   braucht das nicht (dort sorgt `--userns keep-id` für dieselbe UID).
 - **`network: host`** gibt dem Container den Netzwerk-Namensraum des Hosts – er erreicht damit die API des Daemons auf
-  `127.0.0.1` (ohne Anmeldung) und kann Runs starten/abbrechen. Nur für vertrauenswürdige Images; sonst `default`
+  `127.0.0.1` (mit `auth.mode: none` ohne Anmeldung) und kann Runs starten/abbrechen. Nur für vertrauenswürdige Images; sonst `default`
   oder `none`.
 - **Images** baut und aktualisiert der Betreiber; `pull: missing` (Default) zieht fehlende Images beim ersten Run,
   `never` verlangt ein lokales Image, `always` zieht jedes Mal.
@@ -202,7 +202,10 @@ aus `config.yaml` (Wildcard-Binds `0.0.0.0`/`::` werden über Loopback angesproc
 meldet das Kommando dann „not readable (permission denied)“ und fällt auf `http://127.0.0.1:8787` zurück. URLs mit
 Zugangsdaten (`user:pass@`) werden abgelehnt (Exit 2) – Proxy-Authentifizierung unterstützt die CLI nicht; auf dem Host
 selbst die lokale URL nutzen. Sie senden den CSRF-Header
-`X-Adispatch-Request: 1`. Exit-Codes: 0 ok, 1 API-Fehler (z. B. Reload abgelehnt), 2 Aufruffehler, 3 Instanz nicht
+`X-Adispatch-Request: 1`. Mit Anmeldung (`auth.mode` ≠ `none`, seit 0.3.1) senden sie zusätzlich den lokalen
+Steuer-Token aus `<data-dir>/control.token` (siehe [Anmeldung](#anmeldung-web-ui-und-api-seit-031)) – dafür als
+Dienstbenutzer oder root mit `--data-dir` aufrufen, z. B. `sudo adispatch status --config-dir /etc/adispatchd
+--data-dir /var/lib/adispatchd` (ohne `--data-dir` werden `./data` und `/var/lib/adispatchd` probiert). Exit-Codes: 0 ok, 1 API-Fehler (z. B. Reload abgelehnt), 2 Aufruffehler, 3 Instanz nicht
 erreichbar, 4 `--wait`-Timeout (der Shutdown läuft im Hintergrund weiter). `workflow dry-run` fällt ohne erreichbare Instanz
 auf die lokale Auswertung zurück (`--local` erzwingt sie; mit explizitem `--url` kein Fallback).
 
@@ -285,10 +288,14 @@ Beim Start erfasst die Recovery alle zuvor aktiven Runs, **bevor** der Scheduler
 
 ## Fernzugriff, Reverse Proxy (Spec §15, §20.1)
 
-V1 hat **keine Anmeldung**. Standard ist `server.host: 127.0.0.1`. Bei einem Nicht-Loopback-Bind warnt `start` deutlich.
+Ohne `auth` (Default `mode: none`) gibt es **keine Anmeldung**. Standard ist `server.host: 127.0.0.1`. Bei einem
+Nicht-Loopback-Bind ohne Anmeldung warnt `start` deutlich. Seit 0.3.1 kann adispatchd selbst anmelden
+(siehe [Anmeldung](#anmeldung-web-ui-und-api-seit-031)) – dann darf der Proxy die Identität liefern (`trusted_header`)
+oder nur TLS terminieren (`password`).
 
-- Zugriff von außen nur über einen **authentifizierenden** Reverse Proxy (z. B. nginx/Caddy mit OIDC über `oauth2-proxy`,
-  Basic-Auth über TLS), VPN oder Tailscale. Der Proxy muss **jede** Anfrage authentifizieren, auch `/api/v1/events` (SSE).
+- Mit `auth.mode: none`: Zugriff von außen nur über einen **authentifizierenden** Reverse Proxy (z. B. nginx/Caddy mit
+  OIDC über `oauth2-proxy`, Basic-Auth über TLS), VPN oder Tailscale. Der Proxy muss **jede** Anfrage authentifizieren,
+  auch `/api/v1/events` (SSE).
 - Den öffentlichen Namen des Proxys in `server.allowed_hosts` eintragen (DNS-Rebinding-Schutz: jede Anfrage braucht einen
   erlaubten `Host`, ein gesendeter `Origin` muss exakt passen); der Proxy muss den ursprünglichen `Host` weiterreichen.
 - Keine CORS-Header am Proxy hinzufügen; mutierende Requests brauchen `X-Adispatch-Request: 1` (die UI setzt ihn).
@@ -319,6 +326,119 @@ server {
 ```
 
 Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen in `allowed_hosts` eintragen.
+
+## Anmeldung (Web-UI und API, seit 0.3.1)
+
+`auth` in `config.yaml` (Referenz: [configuration-reference.md](configuration-reference.md) §3.1; Rollen je Endpunkt:
+[api.md](api.md#mindestrolle-je-endpunkt)). Rollen: `viewer` (lesen), `operator` (alle schreibenden Aktionen), `admin`.
+Änderungen an `auth` wirken mit `adispatch config reload` sofort; Passwort-Hashes sind Umgebungsvariablen (Neustart).
+
+**Tailscale Serve** (empfohlen im Tailnet): Tailscale terminiert TLS und setzt für Tailnet-Benutzer den Header
+`Tailscale-User-Login` (Login, z. B. `alice@example.com`). adispatchd bleibt an `127.0.0.1` gebunden:
+
+```bash
+tailscale serve --bg http://127.0.0.1:8787
+```
+```yaml
+# config.yaml
+server:
+  host: 127.0.0.1
+  allowed_hosts: [orchestrator.tailnet-name.ts.net]   # MagicDNS-Name
+auth:
+  mode: trusted_header
+  trusted_header:
+    header: Tailscale-User-Login       # Default
+    trusted_proxies: [127.0.0.1, ::1]  # tailscale serve verbindet sich lokal
+    users:
+      - { login: alice@example.com, role: admin }
+      - { login: bob@example.com, role: viewer }
+```
+Nicht gelistete Logins erhalten `403`, Anfragen ohne Header (z. B. über Tailscale Funnel) `401`. **Wichtig:** Der Header
+wird jedem geglaubt, der sich von einer Adresse in `trusted_proxies` verbindet – adispatchd also nie an eine
+Nicht-Loopback-Adresse binden (sonst Warnung beim Start) und `trusted_proxies` so eng wie möglich halten. Lokale Benutzer
+des Hosts erreichen `127.0.0.1` ebenfalls; wer ihnen nicht traut, nutzt `password`.
+
+**oauth2-proxy / Authelia / Authentik** vor nginx: der Proxy setzt nach der Anmeldung einen Header mit dem Benutzer –
+oauth2-proxy mit `--set-xauthrequest` z. B. `X-Auth-Request-Email`/`X-Auth-Request-User`, im Upstream-Modus mit
+`--pass-user-headers` `X-Forwarded-User`/`X-Forwarded-Email`; Authelia `Remote-User`/`Remote-Email`. Diesen Header als
+`auth.trusted_header.header` eintragen; nginx muss ihn **immer** selbst setzen (auch leer), damit ein Client ihn nicht
+durchreichen kann:
+
+```nginx
+location / {
+  auth_request /oauth2/auth;
+  auth_request_set $user $upstream_http_x_auth_request_email;
+  proxy_set_header X-Forwarded-User $user;      # überschreibt einen vom Client gesendeten Wert
+  proxy_set_header Host $host;                  # in server.allowed_hosts
+  proxy_pass http://127.0.0.1:8787;
+  proxy_http_version 1.1;
+  proxy_buffering off;                          # SSE
+  proxy_read_timeout 1h;
+}
+```
+```yaml
+auth:
+  mode: trusted_header
+  trusted_header:
+    header: X-Forwarded-User
+    trusted_proxies: [127.0.0.1]
+    users: [{ login: alice@example.com, role: admin }]
+```
+
+**Passwort-Modus mit HTTPS-Proxy** (ohne externen Identitätsdienst): Benutzer in `config.yaml`, Hashes in der Env-Datei
+des Dienstes. Das Passwort niemals ohne TLS über ein Netz senden – vor adispatchd einen TLS-Proxy (nginx/Caddy/Tailscale
+Serve) auf demselben Host betreiben, der `X-Forwarded-Proto: https` und `X-Forwarded-For` setzt; das Session-Cookie
+erhält dann `Secure`, das Login-Rate-Limit zählt je Client-IP.
+
+```bash
+adispatch auth hash-password            # fragt zweimal ohne Echo, gibt scrypt:32768:8:1:… aus
+# in /etc/default/adispatchd (0640, root:adispatchd) eintragen, z. B.:
+# ADISPATCH_PW_ALICE=scrypt:32768:8:1:…
+sudo systemctl restart adispatchd
+```
+```yaml
+auth:
+  mode: password
+  users:
+    - { name: alice, password_hash_env: ADISPATCH_PW_ALICE, role: admin }
+  trusted_proxies: [127.0.0.1, ::1]   # der TLS-Proxy auf demselben Host
+  session_ttl: 12h
+```
+```nginx
+location / {
+  proxy_pass http://127.0.0.1:8787;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Forwarded-For $remote_addr;   # genau eine Adresse; adispatchd nimmt den letzten Eintrag
+  proxy_http_version 1.1;
+  proxy_buffering off;
+  proxy_read_timeout 1h;
+}
+```
+Sessions liegen im Speicher: nach einem Neustart ist jeder abgemeldet. Login-Schutz: 1 s Verzögerung nach Fehlschlag,
+höchstens 20 Fehlversuche je Client-IP und 5 je Benutzername in 15 Minuten (`429`), keine Unterscheidung zwischen
+unbekanntem Benutzer und falschem Passwort. Mit `read_requires_login: false` dürfen alle, die die UI erreichen, lesen.
+
+**CLI und Steuer-Token:** Bei jedem Start schreibt der Daemon einen neuen zufälligen Token nach
+`<data-dir>/control.token` (`0600`, atomar ersetzt, beim Stop gelöscht). `adispatch status|pause|resume|drain|cancel-all|
+config reload|workflow dry-run` lesen ihn (`--data-dir`) und senden ihn nur an Loopback-URLs; der Daemon akzeptiert ihn
+nur von Loopback-Verbindungen und behandelt ihn als `admin`. Ohne lesbaren Token antworten die Befehle mit `401` und einem
+Hinweis. Grenze: Worker und Shell-Actions laufen als derselbe Dienstbenutzer und könnten die Datei lesen – das entspricht
+der bestehenden Vertrauensgrenze (Skripte sind vertrauenswürdiger Konfigurationscode, Spec §20.2); Container sehen das
+data-dir nicht (außer bei einem entsprechenden Mount).
+
+**Audit:** Jede schreibende Anfrage eines angemeldeten Benutzers steht im Dienstlog (`"msg":"api write"` mit `actor`,
+`role`, `via`, `route`, `status`; `journalctl -u adispatchd | grep 'api write'`); Start, Abbruch und Retries von Runs
+zusätzlich als Event `audit.user_action` in den Run-Details, entfernte Blocks mit dem Benutzer als `clearedBy`.
+
+| Meldung | Ursache / Lösung |
+|---|---|
+| `401 authentication_required` in der CLI | Token nicht lesbar: als Dienstbenutzer/root mit `--data-dir` aufrufen, Loopback-URL verwenden |
+| `401 invalid_control_token` | Token einer anderen/neu gestarteten Instanz → richtiges `--data-dir` |
+| `401 untrusted_proxy` | Identitäts-Header kam nicht von `trusted_header.trusted_proxies` (Proxy auf anderem Host? Adresse eintragen) |
+| `403 login_not_allowed` | Login fehlt in `auth.trusted_header.users` (Schreibweise wie vom Proxy gesendet, ohne Groß-/Kleinschreibung) |
+| Warnung „user cannot log in – password hash variable missing or malformed“ | Env-Variable fehlt oder Hash unvollständig → `adispatch auth hash-password`, Env-Datei, Neustart |
+| Login-Seite erscheint nach jedem Neustart | erwartet: Sessions liegen im Speicher |
 
 ## Externe Tools in der UI, z. B. claude-inspect (seit 0.3.1)
 

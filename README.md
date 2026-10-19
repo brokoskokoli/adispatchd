@@ -61,6 +61,9 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   repositories), streamed via Server-Sent Events; plus a JSON HTTP API. Optional toolbar links to other local tools
   (e.g. the [claude-inspect](https://github.com/brokoskokoli/claude_inspect) dashboard), opened in a new tab or embedded
   (`ui.external_links`).
+- **Optional login** – `auth.mode: password` (built-in users, scrypt hashes, session cookie) or `trusted_header`
+  (identity from Tailscale Serve, oauth2-proxy, …), roles `viewer` / `operator` / `admin` per endpoint, audit of every
+  write; the CLI keeps working through a local control token.
 - **Dry-run** – `adispatch workflow dry-run <id>` shows which items would start and why the others would not,
   without starting anything.
 - **Robust operations** – retry blocks, action retries, cancel/timeout per process group, drain, crash recovery,
@@ -219,6 +222,7 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 | `drain [--wait]`, `cancel-all [--wait]` | no new runs and finish active ones / cancel all runs, then stop |
 | `config validate`, `config reload` | offline validation with file:line / atomic reload of a running instance |
 | `workflow dry-run <id> [--json] [--local]` | candidate selection without starting anything |
+| `auth hash-password` | scrypt hash of a password for `auth.users[].password_hash_env` (prompt without echo or stdin) |
 | `service install\|status\|uninstall [--dry-run]` | systemd service (Linux) |
 
 ## Documentation
@@ -238,9 +242,12 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
 ## Security notes
 
-- **No authentication in V1.** The API binds to `127.0.0.1` by default. For remote access use an
-  **authenticating** reverse proxy, VPN or Tailscale and list its host names in `server.allowed_hosts` (DNS
-  rebinding protection). Mutating requests need the header `X-Adispatch-Request: 1`; there is no CORS.
+- **Login is optional (since 0.3.1).** Without `auth` (`mode: none`) there is no login: the API binds to
+  `127.0.0.1` by default; for remote access use an **authenticating** reverse proxy, VPN or Tailscale and list its host
+  names in `server.allowed_hosts` (DNS rebinding protection). With `auth.mode: password` or `trusted_header` every
+  endpoint requires a role (`viewer`, `operator`, `admin`); see [operations → login](docs/operations.md#anmeldung-web-ui-und-api-seit-031)
+  for Tailscale Serve, oauth2-proxy and the password mode behind an HTTPS proxy (`adispatch auth hash-password`).
+  Mutating requests need the header `X-Adispatch-Request: 1`; there is no CORS.
 - **Scripts and YAML are trusted code** running with the service's permissions – there is no sandbox. Write access
   to the config dir equals code execution.
 - Workers and shell actions only receive explicitly declared secrets; secrets never end up in YAML (private keys only

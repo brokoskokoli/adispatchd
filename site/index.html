@@ -553,13 +553,13 @@ on_error:                            # crashed, start_error, timed_out, cancelle
     <div class="wrap">
       <h2><span data-l="en">Security in brief</span><span data-l="de" lang="de">Sicherheit in Kürze</span></h2>
       <ul class="sec" data-l="en">
-        <li><strong>No authentication in V1.</strong> The API binds to <code>127.0.0.1</code> by default; for remote access use an authenticating reverse proxy, VPN or Tailscale and set <code>server.allowed_hosts</code>.</li>
+        <li><strong>Optional login.</strong> <code>auth.mode: password</code> (built-in users, scrypt hashes) or <code>trusted_header</code> (Tailscale Serve, oauth2-proxy) with the roles viewer, operator and admin; without it the API binds to <code>127.0.0.1</code> by default – for remote access use an authenticating reverse proxy, VPN or Tailscale and set <code>server.allowed_hosts</code>.</li>
         <li><strong>Scripts and YAML are trusted code</strong> running with the service's permissions – there is no sandbox.</li>
         <li><strong>No isolation between runs of the same service user.</strong> Separate high- and low-privilege workflows into separate instances, users or containers.</li>
         <li>Workers only receive explicitly declared secrets; private keys come from environment variables, never from YAML.</li>
       </ul>
       <ul class="sec" data-l="de" lang="de">
-        <li><strong>Keine Anmeldung in V1.</strong> Die API bindet standardmäßig an <code>127.0.0.1</code>; Fernzugriff nur über einen authentifizierenden Reverse Proxy, VPN oder Tailscale mit <code>server.allowed_hosts</code>.</li>
+        <li><strong>Anmeldung optional.</strong> <code>auth.mode: password</code> (eingebaute Benutzer, scrypt-Hashes) oder <code>trusted_header</code> (Tailscale Serve, oauth2-proxy) mit den Rollen viewer, operator und admin; ohne Anmeldung bindet die API standardmäßig an <code>127.0.0.1</code> – Fernzugriff dann nur über einen authentifizierenden Reverse Proxy, VPN oder Tailscale mit <code>server.allowed_hosts</code>.</li>
         <li><strong>Skripte und YAML sind vertrauenswürdiger Code</strong> mit den Rechten des Dienstes – keine Sandbox.</li>
         <li><strong>Keine Isolation zwischen Runs desselben Dienstbenutzers.</strong> Hoch- und niedrig-privilegierte Workflows in getrennten Instanzen, Benutzern oder Containern betreiben.</li>
         <li>Worker erhalten nur ausdrücklich deklarierte Secrets; Private Keys kommen aus Umgebungsvariablen, nie aus YAML.</li>

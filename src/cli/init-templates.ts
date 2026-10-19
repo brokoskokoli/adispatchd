@@ -68,6 +68,21 @@ notifications:
 #       label: Claude Inspect
 #       url: http://127.0.0.1:47717/
 #       embed: true
+
+# Login for web UI and API (optional, default mode: none = no login). Roles: viewer | operator | admin.
+# password: hashes from \`adispatch auth hash-password\`, stored in the service environment (never in YAML).
+# trusted_header: identity from an authenticating proxy, e.g. \`tailscale serve --bg http://127.0.0.1:8787\`.
+# CLI control commands keep working through <data-dir>/control.token (pass --data-dir).
+# auth:
+#   mode: password
+#   users:
+#     - { name: alice, password_hash_env: ADISPATCH_PW_ALICE, role: admin }
+#   # mode: trusted_header
+#   # trusted_header:
+#   #   header: Tailscale-User-Login
+#   #   trusted_proxies: [127.0.0.1, ::1]
+#   #   users:
+#   #     - { login: alice@example.com, role: admin }
 `;
 
 const SOURCES_YAML = `# sources.yaml – external task sources (Spec §5.2). V1: GitHub issues/PRs.

@@ -120,6 +120,7 @@ Konfigurationsänderungen wirken **nur** durch einen manuellen Reload (`adispatc
 |---|---|
 | `server.host`, `server.port` | erst nach Neustart |
 | `server.allowed_hosts` | sofort (nächster Request) |
+| `auth.*` | sofort (nächster Request): Modus, Benutzer, Rollen, Proxys, `read_requires_login`; eine geänderte Rolle gilt für bestehende Sessions sofort, ein entfernter Benutzer ist sofort abgemeldet; `session_ttl` gilt für neue Anmeldungen. Passwort-Hashes stehen in Umgebungsvariablen → Änderung erfordert **Neustart** |
 | `ui.external_links` | sofort: Toolbar der geöffneten UI, `GET /api/v1/config`, CSP `frame-src` für neu geladene Seiten (ein neu eingebettetes Tool braucht im bereits geöffneten Tab einen Browser-Reload; die UI weist darauf hin) |
 | `scheduler.polling_interval` | für den nächsten Timer (nach dem laufenden Planungsschritt) |
 | `scheduler.max_concurrent` | sofort |
@@ -246,7 +247,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 
 | Schlüssel | Typ | Default | Erlaubte Werte / Regeln | Bedeutung |
 |---|---|---|---|---|
-| `server.host` | String | `127.0.0.1` | nicht leer | Bind-Adresse von API/UI. Keine Authentifizierung – nur Loopback oder hinter authentifizierendem Proxy/VPN. |
+| `server.host` | String | `127.0.0.1` | nicht leer | Bind-Adresse von API/UI. Ohne `auth` (Default `mode: none`) keine Anmeldung – dann nur Loopback oder hinter authentifizierendem Proxy/VPN. |
 | `server.port` | Integer | `8787` | 1–65535 | TCP-Port. |
 | `server.allowed_hosts` | Liste String | `[]` | je `name` oder `name:port`; IPv6 in Klammern (`[::1]:8787`) | zusätzliche Namen, die im `Host`-Header akzeptiert werden (DNS-Rebinding-Schutz), z. B. der öffentliche Name des Reverse-Proxys. Vergleich ohne Groß-/Kleinschreibung; `name` = jeder Port, `name:port` = nur dieser Port. Ein `Host` **ohne** Port (Standardport des Schemas, z. B. hinter einem HTTPS-Proxy) passt auf `name`, `name:80` und `name:443`. Immer erlaubt: `localhost`, `127.0.0.1`, `[::1]` und – wenn nicht Loopback/Wildcard – `server.host` selbst. |
 | `scheduler.polling_interval` | Dauer | `30s` | ≥ 1 s | Pause zwischen zwei Planungsschritten (gemessen ab Ende des vorherigen). |
@@ -264,6 +265,14 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
 | `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
 | `ui.external_links` | Liste | `[]` | | externe Tools in der Toolbar der Web-UI (seit 0.3.1), siehe unten. `[]` = keine Einträge sichtbar. |
+| `auth.mode` | Enum | `none` | `none`, `password`, `trusted_header` | Anmeldung für Web-UI und API (seit 0.3.1), siehe unten. `none` = keine Anmeldung (Verhalten bis 0.3.0). |
+| `auth.users` | Liste | `[]` | | Benutzer für `mode: password`: `name`, `password_hash_env`, `role`. |
+| `auth.trusted_header.header` | String | `Tailscale-User-Login` | HTTP-Header-Name | Header mit dem Login für `mode: trusted_header` (z. B. `X-Forwarded-User` bei oauth2-proxy). |
+| `auth.trusted_header.trusted_proxies` | Liste IP/CIDR | `[127.0.0.1, ::1]` | | Nur von diesen TCP-Gegenstellen wird der Header geglaubt. |
+| `auth.trusted_header.users` | Liste | `[]` | | Login → Rolle (`login`, `role`); nicht gelistete Logins → `403`. |
+| `auth.trusted_proxies` | Liste IP/CIDR | `[127.0.0.1, ::1]` | | `mode: password`: Proxys, deren `X-Forwarded-Proto` (Cookie-Flag `Secure`) und `X-Forwarded-For` (Login-Rate-Limit je IP) geglaubt werden. |
+| `auth.session_ttl` | Dauer | `12h` | 1 m – 30 d | Gültigkeit einer Session ab Anmeldung (`mode: password`). |
+| `auth.read_requires_login` | Boolean | `true` | | `false`: Lesen (`GET`, inkl. Live-Updates) ohne Anmeldung als `viewer`, Schreiben nur angemeldet. |
 
 Retention löscht nie aktive Runs, Runs mit unfertiger oder gescheiterter Lifecycle-Kette und Runs eines **aktiven**
 Retry-Blocks. Gelöscht werden DB-Zeilen, `runs/<id>/`, `logs/<id>/` und der Workspace (nur unter `base_dir`).
@@ -352,6 +361,93 @@ ui:
     - { id: tool, label: Tool 2, url: "https://tools.example.com/" }
 ```
 
+**Anmeldung `auth`** (seit 0.3.1): Ohne den Abschnitt gilt `mode: none` – keine Anmeldung, alles wie bis 0.3.0.
+Mit `password` oder `trusted_header` verlangt jeder Endpunkt außer `/health`, `/ready`, den Auth-Endpunkten und der
+statischen UI-Hülle eine Anmeldung und eine **Mindestrolle** (Tabelle je Endpunkt: [api.md](api.md#mindestrolle-je-endpunkt)):
+
+| Rolle | Darf |
+|---|---|
+| `viewer` | alles lesen (Status, Runs, Logs, Views, Konfiguration, Live-Updates), Dry-Run und `config validate` (ändern nichts) |
+| `operator` | zusätzlich alle schreibenden Aktionen: Runs starten/abbrechen, Pause/Resume/Drain/Cancel-All, Retry/Skip von Actions, Recovery-Retry, Blocks entfernen, Runtime-Overrides, Config-Reload, Info-Refresh, Notification-Retry |
+| `admin` | zusätzlich künftige Admin-Funktionen (WI-27 „Als Identität handeln“, sofern dort je Identity erlaubt) |
+
+- **`mode: password`** – eingebaute Benutzer. Das Passwort steht **nie** in YAML, sondern als scrypt-Hash in einer
+  Umgebungsvariablen (`password_hash_env`, z. B. in `/etc/default/adispatchd`); erzeugen mit
+  `adispatch auth hash-password` (fragt ohne Echo, oder `printf '%s\n' "$PW" | adispatch auth hash-password`). Format
+  `scrypt:<N>:<r>:<p>:<salt>:<hash>` ohne `$` (unproblematisch in Env-Dateien). Login-Seite in der UI, Session-Cookie
+  `HttpOnly; SameSite=Strict`, `Secure` über HTTPS (eigene TLS-Verbindung oder `X-Forwarded-Proto: https` von einem
+  Eintrag in `auth.trusted_proxies`). Sessions liegen im Speicher – nach einem Neustart neu anmelden. Fehlt die Variable
+  oder ist der Hash ungültig, kann sich der Benutzer nicht anmelden (Warnung beim Start, ohne Wert). Benutzernamen:
+  Buchstaben, Ziffern, `.`, `_`, `@`, `-` (max. 64), eindeutig ohne Groß-/Kleinschreibung; beim Login zählt die
+  Groß-/Kleinschreibung nicht.
+- **`mode: trusted_header`** – die Identität kommt vom vorgeschalteten Proxy (Tailscale Serve setzt
+  `Tailscale-User-Login`, oauth2-proxy z. B. `X-Forwarded-User`, Authelia `Remote-User`). Der Header zählt **nur**, wenn
+  die TCP-Gegenstelle (nicht `X-Forwarded-For`) in `trusted_header.trusted_proxies` liegt, sonst `401`; ohne Header `401`;
+  Login nicht in `trusted_header.users` → `403`. Logins werden ohne Groß-/Kleinschreibung verglichen. adispatchd muss
+  dann an `127.0.0.1` gebunden und **nur** über den Proxy erreichbar sein (sonst kann jeder auf dem Host bzw. im Netz den
+  Header selbst setzen, wenn er von einer vertrauenswürdigen Adresse kommt; beim Start wird bei Nicht-Loopback-Bind gewarnt).
+  Reservierte Header (`Host`, `Cookie`, `Origin`, `X-Forwarded-For`, …) sind nicht erlaubt.
+- **CLI-Steuerbefehle** (`status`, `pause`, `drain`, `config reload`, …) funktionieren in allen Modi weiter: Der Daemon
+  schreibt bei jedem Start einen zufälligen Steuer-Token nach `<data-dir>/control.token` (`0600`), die CLI liest ihn
+  (`--data-dir`, sonst `./data` und `/var/lib/adispatchd`) und erhält damit `admin` – nur über Loopback. Worker laufen
+  als derselbe Dienstbenutzer und könnten die Datei lesen; das entspricht der bestehenden Vertrauensgrenze (Skripte sind
+  vertrauenswürdiger Konfigurationscode, Spec §20.2).
+- **Audit:** schreibende Aktionen protokollieren den Benutzer (Daemon-Log, Run-Event `audit.user_action`, `clearedBy` bei
+  Blocks), siehe [api.md](api.md#anmeldung-und-rollen-seit-031-wi-26).
+
+| Schlüssel (Eintrag in `auth.users`) | Typ | Pflicht | Bedeutung |
+|---|---|---|---|
+| `name` | String | ja | Anmeldename |
+| `password_hash_env` | Env-Name | ja | Umgebungsvariable mit dem Hash aus `adispatch auth hash-password` |
+| `role` | Enum | ja | `viewer`, `operator`, `admin` |
+
+```yaml
+# example: auth-password
+# extends: minimal
+# file: config.yaml
+auth:
+  mode: password
+  session_ttl: 8h
+  users:
+    - { name: alice, password_hash_env: ADISPATCH_PW_ALICE, role: admin }
+    - { name: ops, password_hash_env: ADISPATCH_PW_OPS, role: operator }
+    - { name: board, password_hash_env: ADISPATCH_PW_BOARD, role: viewer }
+  trusted_proxies: [127.0.0.1, ::1]      # HTTPS-Proxy auf demselben Host (Secure-Cookie, Rate-Limit je Client-IP)
+```
+
+```yaml
+# example: auth-tailscale
+# extends: minimal
+# file: config.yaml
+server:
+  host: 127.0.0.1                          # nur über den Proxy erreichbar
+  allowed_hosts: [orchestrator.tailnet-name.ts.net]
+auth:
+  mode: trusted_header
+  trusted_header:
+    header: Tailscale-User-Login           # Default
+    trusted_proxies: [127.0.0.1, ::1]      # tailscale serve --bg http://127.0.0.1:8787
+    users:
+      - { login: alice@example.com, role: admin }
+      - { login: bob@example.com, role: viewer }
+  read_requires_login: true
+```
+
+```yaml
+# example: auth-invalid
+# extends: minimal
+# file: config.yaml
+# invalid
+# expect: config.yaml: auth.users[0].role: Invalid option
+# expect: config.yaml: auth.trusted_header.trusted_proxies[0]: Invalid IP address or CIDR range
+auth:
+  mode: password
+  users:
+    - { name: alice, password_hash_env: PW_ALICE, role: root }       # Rolle unbekannt
+  trusted_header:
+    trusted_proxies: [localhost]                                     # Hostname statt IP/CIDR
+```
+
 Vollständige `config.yaml` mit allen Schlüsseln (Defaults, außer wo kommentiert):
 
 ```yaml
@@ -394,6 +490,18 @@ ui:
       url: http://127.0.0.1:47717/
       enabled: true
       embed: true                                    # Default: false (Link in neuem Tab)
+auth:
+  mode: none                                         # none | password | trusted_header
+  users:                                             # mode: password
+    - { name: alice, password_hash_env: ADISPATCH_PW_ALICE, role: admin }   # viewer | operator | admin
+  trusted_header:                                    # mode: trusted_header
+    header: Tailscale-User-Login
+    trusted_proxies: [127.0.0.1, ::1]
+    users:
+      - { login: alice@example.com, role: admin }
+  trusted_proxies: [127.0.0.1, ::1]                  # mode: password: X-Forwarded-Proto/-For
+  session_ttl: 12h
+  read_requires_login: true
 ```
 
 ### 3.2 sources.yaml
@@ -908,7 +1016,7 @@ den Container gemountet (Cleanup und `keep` arbeiten auf dem Host-Pfad). Zusätz
 | `resources.cpus` | Zahl | nein | Engine-Default | > 0, z. B. `3`, `1.5` | `--cpus` |
 | `resources.pids` | Integer | nein | Engine-Default | ≥ 1 | `--pids-limit` |
 | `user` | String | nein | `<uid>:<gid>` des Dienstbenutzers | `name`, `uid`, `name:group`, `uid:gid` | `--user`; bei `podman` zusätzlich `--userns keep-id` |
-| `network` | String | nein | `default` | `default` (Engine-Default, kein Flag), `none` oder ein Netzwerkname (`[A-Za-z0-9][A-Za-z0-9_.-]*`; `container:<x>` ist damit ausgeschlossen) | `--network`. **Vorsicht `host`:** Der Container erreicht dann alles auf `127.0.0.1` des Hosts – auch die API des Daemons (ohne Anmeldung, §3.1) und damit Start/Cancel beliebiger Runs. |
+| `network` | String | nein | `default` | `default` (Engine-Default, kein Flag), `none` oder ein Netzwerkname (`[A-Za-z0-9][A-Za-z0-9_.-]*`; `container:<x>` ist damit ausgeschlossen) | `--network`. **Vorsicht `host`:** Der Container erreicht dann alles auf `127.0.0.1` des Hosts – auch die API des Daemons (mit `auth.mode: none` ohne Anmeldung, §3.1) und damit Start/Cancel beliebiger Runs. |
 | `pull` | Enum | nein | `missing` | `never`, `missing`, `always` | `--pull` |
 
 Aufruf (immer): `--rm --init --name adispatch-<run-id>`, Labels `adispatch.run=<run-id>`,
@@ -3348,6 +3456,9 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Duration must be greater than 0` | `max_duration`/`idle_timeout: 0s` |
 | `Invalid host name (expected "name" or "name:port")` | Schema/Pfad in `allowed_hosts` (`https://…`) |
 | `Invalid environment variable name` | z. B. `private_key_env: my-key` |
+| `Invalid IP address or CIDR range …` (Pfad `auth.…trusted_proxies[n]`) | Hostname oder Tippfehler – IP (`127.0.0.1`, `::1`) oder CIDR (`100.64.0.0/10`) angeben |
+| `No users configured: nobody can log in …` (Warnung) | `auth.mode: password` ohne `auth.users` – Benutzer anlegen (CLI-Befehle gehen weiter) |
+| `This header cannot carry the user` | `auth.trusted_header.header` ist ein reservierter Header (`Cookie`, `Host`, …) |
 | `Must be an absolute http(s) URL` (Pfad `ui.external_links[n].url`) | relative URL oder anderes Schema – volle URL angeben, wie der Browser das Tool erreicht |
 | `Query parameter "t" looks like an access token …` (Warnung) | Token in `ui.external_links[n].url` – für jeden sichtbar, der UI/API erreicht; besser Tool ohne Token nur lokal betreiben bzw. hinter dem authentifizierenden Proxy |
 | `The host cannot be allowed in the Content-Security-Policy (frame-src) …` (Pfad `ui.external_links[n].embed`) | IPv6-Literal oder Host mit `_`, `*`, `;` … bei `embed: true` – Hostname/IPv4 verwenden oder `embed: false` |

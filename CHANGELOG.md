@@ -7,6 +7,18 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ### Hinzugefügt
 
+- **Anmeldung für Weboberfläche und API (`auth` in `config.yaml`):** `mode: none` (Default, Verhalten wie bisher),
+  `password` (eingebaute Benutzer; Passwort nur als scrypt-Hash in einer Umgebungsvariablen, erzeugt mit dem neuen
+  Befehl `adispatch auth hash-password`; Login-Seite, Session-Cookie `HttpOnly; SameSite=Strict`, `Secure` über HTTPS,
+  Sessions im Speicher mit `session_ttl`, Rate-Limit je IP und Benutzer, keine Benutzer-Enumeration) oder
+  `trusted_header` (Identität vom vorgeschalteten Proxy wie Tailscale Serve oder oauth2-proxy, nur von
+  `trusted_proxies`). Rollen `viewer`, `operator`, `admin` mit einer Mindestrolle je Endpunkt (Tabelle in
+  `docs/api.md`); `read_requires_login: false` erlaubt Lesen ohne Anmeldung. Neue Endpunkte `POST /api/v1/auth/login`,
+  `POST /api/v1/auth/logout`, `GET /api/v1/auth/me`. Die UI zeigt Benutzer, Rolle und „Log out“ und deaktiviert
+  Schaltflächen ohne passende Rolle. CLI-Steuerbefehle arbeiten über einen lokalen Steuer-Token
+  (`<data-dir>/control.token`, `0600`, nur über Loopback). Audit: schreibende Aktionen stehen mit Benutzer im Dienstlog,
+  Run-Aktionen zusätzlich als Run-Event `audit.user_action`. Einrichtung: `docs/operations.md`.
+
 - **Conditions sichtbar (WI-24):** Shell-Prüfungen in `conditions.workflow[]`, `conditions.item[]` und `shell_filter`
   haben ein optionales Feld `name` (1–80 Zeichen; abwärtskompatibel). Workflows → Workflow-Detail (Bereich
   „Conditions“) und kompakt die Workflow-Liste zeigen jede Prüfung mit Anzeigename (sonst `command` + `args`, gekürzt),

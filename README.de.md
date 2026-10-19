@@ -62,6 +62,9 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
   über mehrere Repositories; dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools in der Toolbar
   (z. B. das Dashboard [claude-inspect](https://github.com/brokoskokoli/claude_inspect)), im neuen Tab oder eingebettet
   (`ui.external_links`).
+- **Anmeldung optional:** `auth.mode: password` (eingebaute Benutzer, scrypt-Hashes, Session-Cookie) oder
+  `trusted_header` (Identität von Tailscale Serve, oauth2-proxy, …), Rollen `viewer` / `operator` / `admin` je
+  Endpunkt, Audit jeder schreibenden Aktion; die CLI arbeitet über einen lokalen Steuer-Token weiter.
 - **Dry-Run:** `adispatch workflow dry-run <id>` zeigt, welche Items starten würden und warum die anderen nicht – ohne
   etwas zu starten.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per
@@ -143,6 +146,7 @@ adispatch start --config-dir ./config --data-dir ./data     # Vordergrund, Ctrl-
 | `config validate --config-dir D` | Offline-Validierung (Syntax, Schema, Referenzen, Platzhalter) mit Datei:Zeile |
 | `config reload` | laufende Instanz lädt die Konfiguration atomar neu (ungültig → alte bleibt aktiv) |
 | `workflow dry-run <id> [--json] [--local]` | Kandidatenauswahl ohne Start/Actions/Shell-Prüfungen; gegen die laufende Instanz, sonst lokal |
+| `auth hash-password` | scrypt-Hash eines Passworts für `auth.users[].password_hash_env` (Abfrage ohne Echo oder stdin) |
 | `service install\|status\|uninstall [--dry-run]` | systemd-Dienst (Linux), siehe [Betrieb](docs/operations.md#installation-als-systemd-dienst-linux) |
 
 HTTP-Kommandos finden die Instanz über `--url` oder Host/Port aus `config.yaml` von `--config-dir` (Default
@@ -295,9 +299,13 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
 ## Sicherheit
 
-- **Keine Anmeldung in V1.** Die API bindet standardmäßig nur an `127.0.0.1`. Fernzugriff ausschließlich über einen
-  **authentifizierenden** Reverse Proxy, VPN oder Tailscale; dessen Hostnamen in `server.allowed_hosts` eintragen
-  (DNS-Rebinding-Schutz). Bei Nicht-Loopback-Bind warnt `start`. Anleitung: [Betrieb → Fernzugriff](docs/operations.md#fernzugriff-reverse-proxy-spec-15-201).
+- **Anmeldung optional (seit 0.3.1).** Ohne `auth` (`mode: none`) gibt es keine Anmeldung: Die API bindet
+  standardmäßig nur an `127.0.0.1`; Fernzugriff dann ausschließlich über einen **authentifizierenden** Reverse Proxy, VPN
+  oder Tailscale; dessen Hostnamen in `server.allowed_hosts` eintragen (DNS-Rebinding-Schutz). Bei Nicht-Loopback-Bind
+  ohne Anmeldung warnt `start`. Mit `auth.mode: password` oder `trusted_header` verlangt jeder Endpunkt eine Rolle
+  (`viewer`, `operator`, `admin`). Anleitung: [Betrieb → Anmeldung](docs/operations.md#anmeldung-web-ui-und-api-seit-031)
+  (Tailscale Serve, oauth2-proxy, Passwort-Modus hinter HTTPS-Proxy, `adispatch auth hash-password`) und
+  [Betrieb → Fernzugriff](docs/operations.md#fernzugriff-reverse-proxy-spec-15-201).
 - Mutierende Requests brauchen den Header `X-Adispatch-Request: 1`; es gibt keine CORS-Freigaben.
 - **Skripte und YAML sind vertrauenswürdiger Code** mit den Rechten des Dienstes – keine Sandbox. Schreibrecht auf das
   config-dir ist gleichbedeutend mit Codeausführung; `service install` legt es `root`-eigen an und lässt den Dienst unter einem
