@@ -70,7 +70,15 @@ export function executionTemplateValues(input: ExecutionInput, workspacePath?: s
     workspace: { baseDir: snapshot.workspace.baseDir, ...(workspacePath !== undefined ? { path: workspacePath } : {}) },
     run: { id: run.id, trigger: run.triggerType, startedAt: input.startedAt },
     ...(source
-      ? { source: { id: source.id, type: source.type, repository: input.repository ?? `${source.owner}/${source.repository}` } }
+      ? {
+          source: {
+            id: source.id,
+            type: source.type,
+            repository: input.repository ?? `${source.owner}/${source.repository}`,
+            // `vars` is missing in snapshots written before 0.3.0 (WI-20).
+            vars: source.vars ?? {},
+          },
+        }
       : {}),
     ...(source && item
       ? {

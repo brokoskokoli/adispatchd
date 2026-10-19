@@ -395,11 +395,16 @@ export class RunRepository {
   }
 
   /** Number of active runs (all triggers incl. manual), optionally per workflow (Spec §7 concurrency). */
-  countActive(workflowId?: string): number {
+  countActive(workflowId?: string, sourceId?: string): number {
     const row =
       workflowId === undefined
         ? get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL}`)
-        : get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND workflow_id = ?`, [workflowId]);
+        : sourceId === undefined
+          ? get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND workflow_id = ?`, [workflowId])
+          : get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND workflow_id = ? AND source_id = ?`, [
+              workflowId,
+              sourceId,
+            ]);
     return Number(row?.n ?? 0);
   }
 

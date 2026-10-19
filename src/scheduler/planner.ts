@@ -2,7 +2,7 @@
  * Candidate discovery and eligibility for source workflows (Spec §7 steps
  * 1–5), shared by the planning step and the dry-run.
  *
- * - Step 1: poll the source with the pushed-down part of the filter and
+ * - Step 1: poll the source(s) with the pushed-down part of the filter and
  *   evaluate the filter with CHEAP fields only. Strong Kleene logic is
  *   monotonic, so a cheap `false` is final (item dropped) and a cheap `true`
  *   is final; only a cheap `unknown` needs the expensive fields (step 5).
@@ -20,7 +20,7 @@ import {
   type SourceAdapter,
   type SourceItem,
 } from '../core/index.js';
-import type { WorkflowConfig } from '../config/index.js';
+import { triggerSourceIds, type WorkflowConfig } from '../config/index.js';
 import { PROJECT_FIELD_PREFIX } from '../sources/index.js';
 import {
   collectFields,
@@ -35,7 +35,7 @@ import {
 } from '../filters/index.js';
 import { notEvaluatedCheck, notEvaluatedConditions, type ChecksOutcome, type SchedulerChecks } from './checks.js';
 import type { SchedulingState } from './state.js';
-import type { CandidateDiagnosis, CheckDiagnosis, WorkflowPlanningDiagnosis } from './types.js';
+import type { CandidateDiagnosis, CheckDiagnosis, SourcePollDiagnosis, WorkflowPlanningDiagnosis } from './types.js';
 
 /** Resolves a configured source ID to its adapter. */
 export type SourceLookup = (sourceId: string) => SourceAdapter | undefined;
@@ -51,6 +51,8 @@ export interface PreparedCandidate extends PrioritizedCandidate {
   /** Cheap-only filter evaluation; `null` if the workflow has no filter. */
   cheap: FilterEvaluation | null;
   diagnosis: CandidateDiagnosis;
+  /** Variables of the item's source (`{source.vars.<name>}`, WI-20). */
+  vars?: Readonly<Record<string, string>>;
 }
 
 /** Result of {@link prepareSourceWorkflow}. */
@@ -78,15 +80,16 @@ export function cheapOnly(fields: FieldSource): FieldSource {
 /** Cache of `listCandidates` calls within one planning step: `(source, pushdown) → items`. */
 export type ListCache = Map<string, Promise<SourceItem[]>>;
 
-function emptyDiagnosis(workflow: WorkflowConfig, at: string, sourceId: string): WorkflowPlanningDiagnosis {
+function emptyDiagnosis(workflow: WorkflowConfig, at: string, sourceIds: readonly string[]): WorkflowPlanningDiagnosis {
   return {
     workflowId: workflow.id,
     at,
     status: 'ok',
     error: null,
-    sourceId,
+    sourceId: sourceIds[0] ?? '',
     polled: 0,
     pushdown: null,
+    sources: sourceIds.map((sourceId) => ({ sourceId, status: 'ok', error: null, polled: 0, pushdown: null })),
     conditions: notEvaluatedConditions(workflow, 'workflow_condition'),
     candidates: [],
     omittedCandidates: 0,
@@ -94,32 +97,35 @@ function emptyDiagnosis(workflow: WorkflowConfig, at: string, sourceId: string):
   };
 }
 
-/**
- * Steps 1–3 for one source workflow: poll, de-duplicate, cheap filter, item
- * priority. Never throws; source problems end up in the diagnosis
- * (`status: 'source_error'`) without affecting other workflows.
- */
-export async function prepareSourceWorkflow(
-  workflow: WorkflowConfig,
-  workflowPriority: number,
-  options: { sources: SourceLookup; at: string; listCache?: ListCache; signal?: AbortSignal },
-): Promise<PreparedWorkflow> {
-  if (workflow.trigger.type !== 'source') throw new TypeError(`Workflow ${workflow.id} is not source-triggered`);
-  const sourceId = workflow.trigger.source;
-  const diagnosis = emptyDiagnosis(workflow, options.at, sourceId);
+/** Options of {@link prepareSourceWorkflow}. */
+export interface PrepareOptions {
+  sources: SourceLookup;
+  at: string;
+  listCache?: ListCache;
+  signal?: AbortSignal;
+  /** Variables of a configured source (`{source.vars.<name>}` in item conditions, WI-20). */
+  sourceVars?: (sourceId: string) => Readonly<Record<string, string>> | undefined;
+}
+
+/** Result of polling one source of a workflow. */
+interface SourcePoll {
+  diagnosis: SourcePollDiagnosis;
+  adapter: SourceAdapter | undefined;
+  items: SourceItem[];
+}
+
+/** Poll one source with the pushed-down part of `filter` (shared per step via `listCache`). Never throws. */
+async function pollSource(sourceId: string, filter: FilterNode | null, options: PrepareOptions): Promise<SourcePoll> {
+  const diagnosis: SourcePollDiagnosis = { sourceId, status: 'ok', error: null, polled: 0, pushdown: null };
   const adapter = options.sources(sourceId);
   if (!adapter) {
     diagnosis.status = 'source_error';
     diagnosis.error = `source '${sourceId}' is not available`;
-    return { diagnosis, candidates: [], rejected: [] };
+    return { diagnosis, adapter, items: [] };
   }
-  const filter = workflow.filter;
-  const definitions = adapter.fieldDefinitions();
-  let pushdown: FilterNode | null = null;
-  if (filter) pushdown = splitForPushdown(filter, definitions).pushdown;
+  // Pushdown per source: the split depends on the adapter's field definitions.
+  const pushdown = filter ? splitForPushdown(filter, adapter.fieldDefinitions()).pushdown : null;
   diagnosis.pushdown = pushdown;
-
-  let items: SourceItem[];
   try {
     const key = `${sourceId}\u0000${JSON.stringify(pushdown)}`;
     let listing = options.listCache?.get(key);
@@ -130,75 +136,111 @@ export async function prepareSourceWorkflow(
       });
       options.listCache?.set(key, listing);
     }
-    items = await listing;
+    const items = await listing;
+    // Step 2: normalize (source-id, item-id, workflow-id).
+    const unique = new Map<string, SourceItem>();
+    for (const item of items) if (!unique.has(item.key)) unique.set(item.key, item);
+    diagnosis.polled = unique.size;
+    return { diagnosis, adapter, items: [...unique.values()] };
   } catch (err) {
     diagnosis.status = 'source_error';
     diagnosis.error = `polling source '${sourceId}' failed: ${errorMessage(err)}`;
-    return { diagnosis, candidates: [], rejected: [] };
+    return { diagnosis, adapter, items: [] };
   }
+}
 
-  // Step 2: normalize (source-id, item-id, workflow-id).
-  const unique = new Map<string, SourceItem>();
-  for (const item of items) if (!unique.has(item.key)) unique.set(item.key, item);
-  diagnosis.polled = unique.size;
+/**
+ * Steps 1–3 for one source workflow: poll every source of the trigger (in
+ * parallel, WI-20), de-duplicate, cheap filter, item priority. Never throws;
+ * source problems end up in the diagnosis (per source; `status:
+ * 'source_error'` if at least one source failed) without affecting other
+ * sources or workflows.
+ */
+export async function prepareSourceWorkflow(
+  workflow: WorkflowConfig,
+  workflowPriority: number,
+  options: PrepareOptions,
+): Promise<PreparedWorkflow> {
+  if (workflow.trigger.type !== 'source') throw new TypeError(`Workflow ${workflow.id} is not source-triggered`);
+  const sourceIds = triggerSourceIds(workflow.trigger);
+  const diagnosis = emptyDiagnosis(workflow, options.at, sourceIds);
+  const filter = workflow.filter;
+  const polls = await Promise.all(sourceIds.map((id) => pollSource(id, filter, options)));
+  diagnosis.sources = polls.map((p) => p.diagnosis);
+  diagnosis.polled = polls.reduce((n, p) => n + p.diagnosis.polled, 0);
+  diagnosis.pushdown = polls[0]?.diagnosis.pushdown ?? null;
+  const failed = polls.filter((p) => p.diagnosis.status === 'source_error');
+  if (failed.length > 0) {
+    diagnosis.status = 'source_error';
+    diagnosis.error = failed.map((p) => p.diagnosis.error).join('; ');
+  }
 
   const wanted = new Set<string>(filter ? collectFields(filter) : []);
   for (const rule of workflow.itemPriority?.rules ?? []) for (const f of collectFields(rule.when)) wanted.add(f);
   const wantedFields = [...wanted];
-  const projectFieldNames = definitions.filter((d) => d.name.startsWith(PROJECT_FIELD_PREFIX)).map((d) => d.name);
 
   const candidates: PreparedCandidate[] = [];
   const rejected: CandidateDiagnosis[] = [];
-  for (const item of unique.values()) {
-    const fields = createItemFieldSource(item, {
-      definitions,
-      resolveFields: (i, f) => adapter.resolveFields(i, f, options.signal ? { signal: options.signal } : {}),
-      wantedFields,
-    });
-    const cheap = filter ? await evaluateFilter(filter, cheapOnly(fields)) : null;
-    const title = item.fields.title;
-    const diag: CandidateDiagnosis = {
-      workflowId: workflow.id,
-      sourceId,
-      itemId: item.itemId,
-      itemKey: item.key,
-      url: item.url,
-      title: typeof title === 'string' ? title : null,
-      createdAt: item.createdAt ?? null,
-      workflowPriority,
-      itemPriority: 0,
-      matchedPriorityRule: null,
-      decision: 'filtered',
-      reason: null,
-      filter: cheap?.trace ?? null,
-      shellFilter: null,
-      itemConditions: [],
-      runId: null,
-      blockId: null,
-    };
-    if (projectFieldNames.length > 0) diag.projectFields = projectFieldValues(item, projectFieldNames);
-    if (cheap?.value === false) {
-      diag.reason = 'declarative filter does not match';
-      rejected.push(diag);
-      continue;
+  for (const [sourceRank, poll] of polls.entries()) {
+    const adapter = poll.adapter;
+    if (!adapter) continue;
+    const sourceId = poll.diagnosis.sourceId;
+    const definitions = adapter.fieldDefinitions();
+    const projectFieldNames = definitions.filter((d) => d.name.startsWith(PROJECT_FIELD_PREFIX)).map((d) => d.name);
+    const vars = options.sourceVars?.(sourceId);
+    for (const item of poll.items) {
+      const fields = createItemFieldSource(item, {
+        definitions,
+        resolveFields: (i, f) => adapter.resolveFields(i, f, options.signal ? { signal: options.signal } : {}),
+        wantedFields,
+      });
+      const cheap = filter ? await evaluateFilter(filter, cheapOnly(fields)) : null;
+      const title = item.fields.title;
+      const diag: CandidateDiagnosis = {
+        workflowId: workflow.id,
+        sourceId,
+        itemId: item.itemId,
+        itemKey: item.key,
+        url: item.url,
+        title: typeof title === 'string' ? title : null,
+        createdAt: item.createdAt ?? null,
+        workflowPriority,
+        itemPriority: 0,
+        matchedPriorityRule: null,
+        decision: 'filtered',
+        reason: null,
+        filter: cheap?.trace ?? null,
+        shellFilter: null,
+        itemConditions: [],
+        runId: null,
+        blockId: null,
+      };
+      if (projectFieldNames.length > 0) diag.projectFields = projectFieldValues(item, projectFieldNames);
+      if (cheap?.value === false) {
+        diag.reason = 'declarative filter does not match';
+        rejected.push(diag);
+        continue;
+      }
+      // Step 3: item priority (rules may need expensive fields: same memoized batch).
+      const priority = await resolveItemPriority(workflow.itemPriority, fields);
+      diag.itemPriority = priority.priority;
+      diag.matchedPriorityRule = priority.matchedRule;
+      candidates.push({
+        workflowId: workflow.id,
+        workflowPriority,
+        itemPriority: priority.priority,
+        createdAt: item.createdAt,
+        itemKey: item.key,
+        ...(sourceRank > 0 ? { sourceRank } : {}),
+        workflow,
+        adapter,
+        item,
+        ...(vars ? { vars } : {}),
+        fields,
+        cheap,
+        diagnosis: diag,
+      });
     }
-    // Step 3: item priority (rules may need expensive fields: same memoized batch).
-    const priority = await resolveItemPriority(workflow.itemPriority, fields);
-    diag.itemPriority = priority.priority;
-    diag.matchedPriorityRule = priority.matchedRule;
-    candidates.push({
-      workflowId: workflow.id,
-      workflowPriority,
-      itemPriority: priority.priority,
-      createdAt: item.createdAt,
-      itemKey: item.key,
-      workflow,
-      adapter,
-      item,
-      fields,
-      cheap,
-      diagnosis: diag,
-    });
   }
   return { diagnosis, candidates, rejected };
 }
@@ -283,6 +325,7 @@ export async function checkEligibility(candidate: PreparedCandidate, ctx: Eligib
     item: candidate.item,
     sourceType: candidate.adapter.type,
     ...(candidate.adapter.repository !== undefined ? { repository: candidate.adapter.repository } : {}),
+    ...(candidate.vars ? { vars: candidate.vars } : {}),
   };
   // Step 5c: shell filter.
   if (workflow.shellFilter) {

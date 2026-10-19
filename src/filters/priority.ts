@@ -62,6 +62,11 @@ export interface PrioritizedCandidate {
   createdAt?: string | undefined;
   /** `sourceItemKey(...)`; absent for item-less (cron/manual) candidates. */
   itemKey?: string | undefined;
+  /**
+   * Position of the item's source in the workflow's `sources` list (WI-20);
+   * lower wins among equal item priorities. Absent = 0 (single source).
+   */
+  sourceRank?: number | undefined;
 }
 
 function codeUnitCompare(a: string, b: string): number {
@@ -102,11 +107,15 @@ function createdAtMs(v: string | undefined): number | undefined {
 
 /**
  * Total order for candidates (Spec §7): workflow priority desc → item priority
- * desc → creation time asc (missing/non-ISO last) → item key asc (natural) → workflow ID asc.
+ * desc → source rank asc (position in `sources`, WI-20) → creation time asc
+ * (missing/non-ISO last) → item key asc (natural) → workflow ID asc.
  */
 export function compareCandidates(a: PrioritizedCandidate, b: PrioritizedCandidate): number {
   if (a.workflowPriority !== b.workflowPriority) return b.workflowPriority > a.workflowPriority ? 1 : -1;
   if (a.itemPriority !== b.itemPriority) return b.itemPriority > a.itemPriority ? 1 : -1;
+  const ra = a.sourceRank ?? 0;
+  const rb = b.sourceRank ?? 0;
+  if (ra !== rb) return ra - rb;
   const ca = createdAtMs(a.createdAt);
   const cb = createdAtMs(b.createdAt);
   if (ca !== cb) {

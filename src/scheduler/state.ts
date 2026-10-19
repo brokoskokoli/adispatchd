@@ -7,8 +7,11 @@ import type { CronFiringRecord, Repositories } from '../persistence/index.js';
 
 /** Read-only view on runs/locks/blocks used for planning and dry-runs. */
 export interface SchedulingState {
-  /** Active runs (all triggers incl. manual and `recovery_pending`), optionally per workflow. */
-  countActive(workflowId?: string): number;
+  /**
+   * Active runs (all triggers incl. manual and `recovery_pending`), optionally
+   * per workflow and (WI-20, `max_concurrent_per_source`) per source of the workflow.
+   */
+  countActive(workflowId?: string, sourceId?: string): number;
   /** Run holding the item lock of `workflowId`, or `null`. */
   activeRunForItem(workflowId: string, itemKey: string): { id: string } | null;
   /** Active retry block for workflow/item (`itemKey = null` → workflow scope), or `null`. */
@@ -20,7 +23,7 @@ export interface SchedulingState {
 /** {@link SchedulingState} over the repositories. */
 export function repositoryState(repos: Pick<Repositories, 'runs' | 'blocks' | 'cronFirings'>): SchedulingState {
   return {
-    countActive: (workflowId) => repos.runs.countActive(workflowId),
+    countActive: (workflowId, sourceId) => repos.runs.countActive(workflowId, sourceId),
     activeRunForItem: (workflowId, itemKey) => {
       const run = repos.runs.activeRunForItem(workflowId, itemKey);
       return run ? { id: run.id } : null;

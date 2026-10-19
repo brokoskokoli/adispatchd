@@ -118,7 +118,15 @@ export function buildHookTemplateValues(input: HookValueInput): TemplateValues {
       ...(run.startedAt ? { startedAt: new Date(run.startedAt) } : {}),
     },
     ...(source
-      ? { source: { id: source.id, type: source.type, repository: input.repository ?? `${source.owner}/${source.repository}` } }
+      ? {
+          source: {
+            id: source.id,
+            type: source.type,
+            repository: input.repository ?? `${source.owner}/${source.repository}`,
+            // `vars` is missing in snapshots written before 0.3.0 (WI-20).
+            vars: source.vars ?? {},
+          },
+        }
       : {}),
     ...(source && item
       ? {
