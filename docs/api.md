@@ -160,12 +160,19 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | `POST /api/v1/dashboard/info/:id/refresh` | operator |
 | `GET /api/v1/notifications` | viewer |
 | `POST /api/v1/notifications/:id/retry` | operator |
+| `GET /api/v1/items/resolve` | admin |
+| `GET /api/v1/items/:source/:item` | admin |
+| `POST /api/v1/items/:source/:item/comment` | admin |
+| `POST /api/v1/items/:source/:item/labels` | admin |
+| `POST /api/v1/items/:source/:item/project` | admin |
+| `GET /api/v1/ui-actions` | admin |
 | `GET /api/v1/system/metrics` | viewer |
 | `GET /api/v1/events` | viewer |
 | `GET /*` | public |
 
 `POST …/dry-run` und `POST /config/validate` ändern nichts und brauchen daher nur `viewer` (aber eine Anmeldung, auch mit
-`read_requires_login: false`). `admin` umfasst alles von `operator`; eigene `admin`-Endpunkte folgen mit WI-27.
+`read_requires_login: false`). `admin` umfasst alles von `operator`; die `admin`-Endpunkte sind die [UI-Aktionen](#ui-aktionen-als-identity-seit-040-wi-27)
+(`/items/…` zusätzlich nur mit echter Anmeldung, nie mit dem Steuer-Token).
 
 ## Fehlerform
 
@@ -177,7 +184,7 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 |---|---|
 | 400 | `invalid_request` (Schema-Validierung, `details.issues`), `invalid_json`, `manual_item_required`, `manual_item_not_supported`, `manual_item_invalid_ref`, `invalid_parameters` (`details.errors`), `lifecycle_not_skippable`, `validation_error` |
 | 401 | `authentication_required`, `invalid_credentials`, `untrusted_proxy`, `invalid_identity_header`, `control_token_not_local`, `invalid_control_token` (WI-26) |
-| 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed` (WI-26) |
+| 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed` (WI-26), `ui_actions_disabled`, `user_login_required`, `identity_not_allowed` (WI-27) |
 | 421 | `host_not_allowed` (Host-Allowlist) |
 | 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found` |
 | 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition` |
@@ -441,6 +448,46 @@ Erfolg = `expiresAt`, nach einem Fehler der Wiederholungszeitpunkt; `null`, sola
 `error?` (kurz; z. B. `exit code 2: <erste stderr-Zeile>`, `timed out after 15000ms`, `unparsable output "…"`;
 bereinigt, redigiert, dann gekürzt), `stale` (Wert älter als der fehlgeschlagene Versuch),
 `refreshing`, `lastAttemptAt`, `durationMs`, `thresholds {warnAbove, criticalAbove, warnBelow, criticalBelow}`.
+
+### UI-Aktionen als Identity (seit 0.4.0, WI-27)
+
+Ein angemeldeter Benutzer mit Rolle `admin` kommentiert ein Issue/PR, setzt/entfernt Labels oder ändert Projektfelder
+**als eine konfigurierte Identity** (z. B. eine GitHub App) – nicht als er selbst. Voraussetzungen, alle serverseitig
+geprüft (in dieser Reihenfolge nach Host/CSRF/Rolle):
+
+1. `auth.mode` ≠ `none`, sonst `403 ui_actions_disabled`.
+2. Echte Anmeldung (`via` `password` oder `trusted_header`). Der lokale **Steuer-Token** der CLI wird abgewiesen
+   (`403 user_login_required`): Worker laufen als derselbe Dienstbenutzer und könnten ihn lesen.
+3. Die Identity hat in `identities.yaml` `ui_actions: true`, sonst `403 identity_not_allowed`.
+4. Die Source existiert (`404 source_not_found`) und das Item gehört zu ihr: `:item` ist die Nummer (ohne führende Nullen),
+   das Item wird frisch gelesen; fremde/verschobene Items → `404 item_not_found`.
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/v1/items/resolve?ref=` | – | `{"source","item"}` für eine URL, `owner/repo#nr` oder `<source>:<nr>`; eine bloße Nummer passt bei mehreren Sources nicht (`400 ambiguous_item_ref`) |
+| GET | `/api/v1/items/:source/:item` | – | `{source, itemId, key, url, type, repository, title, state, labels, project: {owner, number, fields:[{name, kind, known, value, reason, choices, problem}], error} \| null, availableLabels \| null, labelsError, identities:[{id, type}], recentActions:[…]}` – `choices` = Optionen (single_select) bzw. Iterationen (iteration) aus den Projektmetadaten; `identities` = nur die freigeschalteten |
+| POST | `/api/v1/items/:source/:item/comment` | `{"identity","body"}` (Markdown, 1–65 536 Zeichen) | `{"comment":{"id","url"},"redacted":bool,"action":{…}}` |
+| POST | `/api/v1/items/:source/:item/labels` | `{"identity","add":[],"remove":[]}` (je ≤ 50) | `{"changed","applied":{labelsAdded, labelsRemoved},"action"}` |
+| POST | `/api/v1/items/:source/:item/project` | `{"identity","fields":{"Status":"Review","Notes":null}}` | `{"changed","applied":{projectFields, projectItemAdded?},"action"}` |
+| GET | `/api/v1/ui-actions?source=&item=<key>&limit=&offset=` | – | `{"enabled","identities","actions":[…],"total","limit","offset"}` (neueste zuerst) |
+
+- **Kommentare** werden vor dem Senden redigiert (dem Daemon bekannte Secrets, GitHub-Token-Formate `ghp_…`,
+  `github_pat_…` usw., PEM-Private-Keys; `redacted: true` meldet das), ohne Marker gesendet und **nie automatisch
+  wiederholt** – auch nicht nach Rate-Limit oder Timeout (Doppelpost vermeiden). Nach einem Fehler, bei dem der Kommentar
+  angekommen sein kann, antwortet die API `502 github_outcome_unknown`; vor einem erneuten Senden auf GitHub nachsehen.
+- **Labels** und **Projektfelder** nutzen den `source.update`-Pfad: erst lesen, dann nur Abweichendes schreiben
+  (wiederholbar, idempotent). Projektfelder werden gegen `project.fields` der Source geprüft (`400 project_not_configured`,
+  `400 invalid_project_fields` mit `details.problems`), Optionen/Iterationen wie bei `source.update` aufgelöst (unbekannte
+  Option → `422 github_rejected`), `null` leert ein Feld. Geschrieben wird **genau mit der gewählten Identity**, auch wenn
+  die Source ein `project.identity` hat.
+- **GitHub-Fehler:** `502 github_forbidden` (App-Rechte fehlen, Unterhaltung gesperrt), `502 github_auth_failed`,
+  `404 github_not_found`, `429 github_rate_limited` (mit `Retry-After`), `502 github_unavailable`, `422 github_rejected`.
+  GitHubs 401/403 werden bewusst nicht als 401/403 weitergereicht.
+- **Audit** (Tabelle `ui_actions`, Schema v4): jede Aktion ab Schritt 3, auch fehlgeschlagene – `id, createdAt, actor,
+  actorVia, identity, sourceId, itemId, itemKey, itemUrl, kind (comment|labels|project), result
+  (succeeded|failed|unknown), errorCode, errorMessage, commentId, commentUrl, details` (Labels bzw. Feldwerte; bei
+  Kommentaren nur Länge und `redacted`, **nie der Text**). Aufbewahrung wie Runs: erfolgreiche wie `retention.completed_runs`,
+  andere wie `retention.failed_runs`. Zusätzlich die Log-Zeilen `api write` und `ui action`.
 
 ### Notifications
 

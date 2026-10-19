@@ -624,6 +624,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     ...(options.allowedOrigins ? { allowedOrigins: options.allowedOrigins } : {}),
     ...(options.uiDir ? { uiDir: options.uiDir } : {}),
     auth,
+    sources: sourceLookup,
   });
 
   const actualPort = (): number | null => {

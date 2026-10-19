@@ -63,6 +63,13 @@ export const ROUTE_ROLES: Readonly<Record<string, RouteAccess>> = {
   // Notifications
   'GET /api/v1/notifications': 'viewer',
   'POST /api/v1/notifications/:id/retry': 'operator',
+  // UI actions as an identity (WI-27): admin with a real login (never the control token, checked in ui-actions.ts)
+  'GET /api/v1/items/resolve': 'admin',
+  'GET /api/v1/items/:source/:item': 'admin',
+  'POST /api/v1/items/:source/:item/comment': 'admin',
+  'POST /api/v1/items/:source/:item/labels': 'admin',
+  'POST /api/v1/items/:source/:item/project': 'admin',
+  'GET /api/v1/ui-actions': 'admin',
   // Server resources (WI-23)
   'GET /api/v1/system/metrics': 'viewer',
   // SSE

@@ -35,6 +35,7 @@ import {
   type Logger,
   type Redactor,
   type RunPaths,
+  type SourceAdapter,
   type TechnicalStatus,
 } from '../core/index.js';
 import { readFileNoFollow } from '../executors/index.js';
@@ -55,6 +56,7 @@ import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile 
 import { readLogPage } from './logs.js';
 import { runDetailFields, toBlockView, toRunSummary, toWorkflowView, type ActionView } from './serialize.js';
 import type { EventHub } from './sse.js';
+import { registerUiActionRoutes } from './ui-actions.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -120,6 +122,8 @@ export interface ApiDeps {
   uiDir?: string;
   /** Authentication (WI-26); absent = behaves like `auth.mode: none`. */
   auth?: AuthService;
+  /** Source adapters by ID (UI actions, WI-27). */
+  sources?: (sourceId: string) => SourceAdapter | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -938,6 +942,16 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const res = deps.notifications.retry(id);
     if (!res) throw new ApiError(404, 'not_found', `Notification ${id} not found`);
     return accepted(reply, res);
+  });
+
+  // --- UI actions as an identity (WI-27) ------------------------------------
+  registerUiActionRoutes(app, {
+    config: deps.config,
+    repositories: repos,
+    ...(deps.sources ? { sources: deps.sources } : {}),
+    redact,
+    logger,
+    authEnabled,
   });
 
   // --- System resources (WI-23) ---------------------------------------------

@@ -35,9 +35,12 @@ afterAll(async () => {
 function sample(url: string): string {
   return url
     .replace(/\/(blocks|actions|notifications)\/:id/, '/$1/1')
+    .replace(':source/:item', 'repo_a/1')
     .replace(/:id/g, 'x')
     .replace(/\*$/, 'file.txt');
 }
+
+const ADMIN_GETS = new Set(['GET /api/v1/items/resolve', 'GET /api/v1/items/:source/:item', 'GET /api/v1/ui-actions']);
 
 const entries = Object.entries(ROUTE_ROLES).map(([key, role]) => {
   const [method, url] = key.split(' ') as [string, string];
@@ -83,7 +86,8 @@ describe('route roles table', () => {
   it('every write route needs at least operator, except dry-run/validate/auth (no state change)', () => {
     const readOnlyPosts = new Set(['POST /api/v1/workflows/:id/dry-run', 'POST /api/v1/config/validate', 'POST /api/v1/auth/login', 'POST /api/v1/auth/logout']);
     for (const { key, method, role } of entries) {
-      if (method === 'GET') expect(['public', 'viewer'], key).toContain(role);
+      // GETs never need more than viewer, except the UI action panel/audit (WI-27, admin).
+      if (method === 'GET') expect(ADMIN_GETS.has(key) ? ['admin'] : ['public', 'viewer'], key).toContain(role);
       else if (!readOnlyPosts.has(key)) expect(roleAllows('viewer', role), key).toBe(false);
     }
   });
