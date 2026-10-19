@@ -31,6 +31,8 @@ Zerlegung der Spec v0.1 in umsetzbare Pakete. **Status: alle Work-Items umgesetz
 | [25](WI-25-external-links.md) | Externe Tools in der Toolbar (z. B. claude-inspect), optional eingebettet | §16 | 22 | 12 (0.3.1) |
 | [26](WI-26-authentication.md) | Anmeldung für UI und API (Passwort oder vertrauenswürdiger Proxy-Header, Rollen, Audit) | §15, §16, §20 | 25 | 13 |
 | [27](WI-27-act-as-identity.md) | In der UI als App-Identität handeln (Kommentar, Labels, Projektfelder) | §10, §16, §20 | 26 | 14 |
+| [28](WI-28-view-sort-sections.md) | Views: Wertereihenfolge, mehrere Sortierschlüssel, Abschnitte | §17 | 27 | 15 (0.5.0) |
+| [29](WI-29-dashboard-resources-tab.md) | Dashboard: kompakte Ressourcenleiste, Reiter „Resources“ | §16 | 27 | 15 (0.5.0) |
 
 Ablauf je Work-Item: Coder-Agent (eigener Branch/Worktree) → Reviewer-Agent (prüft gegen Acceptance Criteria + Spec) → ggf. Fix-Runde → Merge nach `main`.
 
