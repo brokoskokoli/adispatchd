@@ -10,6 +10,7 @@ import {
   extractPlaceholders,
   HOOK_NAMES,
   isSecretKey,
+  keepPatternError,
   validateTemplate,
   type HookName,
   type TemplateMode,
@@ -310,6 +311,10 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
       issues.error(file, ['execute', 'secrets', name], `"${name}" is defined both in "env" and "secrets"`);
     }
   }
+  exec.keep.forEach((pattern, i) => {
+    const error = keepPatternError(pattern);
+    if (error) issues.error(file, ['execute', 'keep', i], error);
+  });
   const { maxDurationMs, idleTimeoutMs } = exec.timeout;
   if (maxDurationMs !== null && idleTimeoutMs !== null && idleTimeoutMs > maxDurationMs) {
     issues.warning(file, ['execute', 'timeout', 'idle_timeout'], '"idle_timeout" is longer than "max_duration"');

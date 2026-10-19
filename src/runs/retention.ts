@@ -1,6 +1,6 @@
 /**
  * Periodic retention (Spec §5.1, §21): deletes old runs (DB rows incl.
- * events/actions, `runs/<id>/`, `logs/<id>/`, the workspace below
+ * events/actions, `runs/<id>/` incl. kept files, `logs/<id>/`, the workspace below
  * `workspace.base_dir`), cleared blocks, finished notifications and old cron
  * firings according to `retention.*`.
  *

@@ -3,7 +3,7 @@
  * normalized model (`model.ts`). Pure; semantic checks live in `validate.ts`.
  */
 import path from 'node:path';
-import { dataPaths, HOOK_NAMES, type FilterNode, type HookName } from '../core/index.js';
+import { dataPaths, HOOK_NAMES, parseSize, type FilterNode, type HookName } from '../core/index.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssuePath } from './issues.js';
 import type {
@@ -26,6 +26,7 @@ import type {
   RawView,
   RawWorkflow,
 } from './schemas.js';
+import { DEFAULTS } from './schemas.js';
 
 /**
  * Expands references to named filters in a filter tree used at `at` of the
@@ -256,6 +257,8 @@ export function normalizeWorkflow(
         idleTimeoutMs: exec.timeout.idle_timeout ?? null,
       },
       cancelGraceMs: exec.cancel_grace,
+      keep: [...exec.keep],
+      keepMaxSizeBytes: exec.keep_max_size ?? parseSize(DEFAULTS.keepMaxSize),
     },
     retry: { maxTechnicalFailures: raw.retry.max_technical_failures },
     hooks,

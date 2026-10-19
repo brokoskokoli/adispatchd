@@ -70,6 +70,11 @@ export class SecretRedactor {
     this.secrets.delete(secret.replace(/\n/g, '\\n'));
   }
 
+  /** Snapshot of the registered secret values (e.g. for byte-level stream redaction). */
+  values(): string[] {
+    return [...this.secrets];
+  }
+
   /** Number of registered secrets. */
   get size(): number {
     return this.secrets.size;

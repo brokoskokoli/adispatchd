@@ -517,6 +517,10 @@ execute:
     max_duration: 6h
     idle_timeout: 45m
   cancel_grace: 30s
+  keep:                            # vor dem Cleanup nach data-dir/runs/<run-id>/kept/ kopieren
+    - .agent/transcript.jsonl
+    - .agent/gate/*.log
+  keep_max_size: 50MB              # Summe pro Run; Default 100MB
 
 retry:
   max_technical_failures: 3
@@ -671,11 +675,36 @@ Regeln der Konfigurationsprüfung:
 | `timeout.max_duration` | Dauer | nein | unbegrenzt | > 0 | Gesamtlaufzeit → `timed_out` |
 | `timeout.idle_timeout` | Dauer | nein | unbegrenzt | > 0 | Zeit ohne Ausgabe auf stdout/stderr → `timed_out` (Warnung, wenn > `max_duration`) |
 | `cancel_grace` | Dauer | nein | `30s` | | Wartezeit zwischen `SIGTERM` und `SIGKILL` an die Prozessgruppe bei Cancel/Timeout |
+| `keep` | Liste String | nein | `[]` | relative Glob-Muster (`*`, `?`, `**`); nicht leer, nicht absolut, kein `..`, keine leeren Segmente, nicht auf `**` endend | Dateien, die nach dem Run nach `data-dir/runs/<run-id>/kept/` gesichert werden (s. u.) |
+| `keep_max_size` | Größe | nein | `100MB` | > 0 (§2.2) | Obergrenze für die Summe der gesicherten Dateien pro Run |
 
 Workspace-Regeln: Liegt der gerenderte Pfad strikt unter `workspace.base_dir`, wird er sicher angelegt
 (Symlink-geprüft) und gemäß `workspace.cleanup` gelöscht. Liegt er außerhalb, wird er wie konfiguriert angelegt,
 aber **nie** automatisch gelöscht. Der Pfad darf nicht `base_dir` selbst sein. Eine Warnung erscheint, wenn ein
 `env`-Schlüssel nach Secret aussieht (`…_TOKEN`, `…PASSWORD`, `API_KEY`, …) und einen nicht-leeren Literalwert hat.
+
+**Dateien sichern (`keep`):** Nach dem Abschluss-Hook und **vor** dem Workspace-Cleanup kopiert der Daemon alle
+regulären Dateien, die auf ein Muster passen, mit ihrer relativen Struktur nach `data-dir/runs/<run-id>/kept/` – bei
+**jedem** Endstatus (`completed`, `crashed`, `timed_out`, `cancelled`, `start_error` mit Workspace), auch wenn gar
+nicht aufgeräumt wird. Muster sind relativ zum Workspace: `*` = beliebige Zeichen außer `/`, `?` = ein Zeichen außer
+`/`, `**` als ganzes Segment = beliebig viele Verzeichnisebenen (auch keine); alles andere ist literal. Wildcards
+passen auch auf Namen mit führendem Punkt (`**/*.log` findet `.agent/gate/unit.log`). Ein Muster ohne Treffer ist kein
+Fehler. Ein Muster, das genau ein Verzeichnis benennt (`.agent/gate`), kopiert nichts und wird als übersprungen
+(`directory`, Hinweis `.agent/gate/**/*`) vermerkt; Verzeichnisse, die nur über Wildcards passen, werden ignoriert.
+Symlinks werden **nie** verfolgt (weder Datei- noch Verzeichnis-Links; passende Links werden als übersprungen
+vermerkt), nur reguläre Dateien werden kopiert, und jede Datei wird vor dem Kopieren zusätzlich über ihren
+aufgelösten Pfad geprüft. **Secrets werden beim Kopieren redigiert** – best effort, wie Logs: dieselbe
+byteweise Ersetzung wie für stdout/stderr (auch über Lesegrenzen hinweg) mit den Secrets des Runs
+(`execute.secrets`) und allen dem Daemon bekannten Tokens/Schlüsseln; umgewandelte Werte (base64, URL-kodiert …)
+werden nicht erkannt, nach einem Neustart sind bereits abgelaufene Tokens nicht mehr bekannt. Was die Summe
+`keep_max_size` überschreiten würde (gezählt werden die **geschriebenen** Bytes nach dem Redigieren), wird
+übersprungen (kleinere spätere Dateien passen ggf. noch). Ergebnis als Run-Event `run.kept_files` (Anzahl, Bytes,
+übersprungene Einträge mit Grund `size_limit`/`symlink`/`directory`/`not_regular_file`/…, Muster ohne Treffer,
+Muster, die wegen der Grenze nicht durchsucht wurden), sichtbar in der UI (Run → **Files**) und über
+`GET /api/v1/runs/:id/kept` ([api.md](api.md)). Die Dateien gehören zum Run und werden mit ihm von der Retention
+gelöscht. Grenzen: höchstens 10 000 Dateien und 100 000 untersuchte Verzeichniseinträge pro Run; Muster ohne
+Wildcards werden zuerst und ohne Verzeichnisauflistung geprüft und zählen nicht zur Grenze. Wildcard-Muster, die
+nach Erreichen der Grenze nichts gefunden haben, gelten als „nicht durchsucht“ (`notSearched`), nicht als ohne Treffer.
 
 #### 3.4.9 `retry`
 
@@ -1337,7 +1366,7 @@ vererbt. Details zu Kontextdatei, Ergebnisdatei, Events und Cancel: [worker-prot
 
 ### 6.12 Workspace-Cleanup
 
-Nach dem Abschluss-Hook: `always` = immer, `on_success` = nur `completed`+`success`, `never` = nie. Gelöscht wird nur
+Nach dem Abschluss-Hook werden zuerst die `execute.keep`-Dateien gesichert (§3.4.8), dann gilt: `always` = immer, `on_success` = nur `completed`+`success`, `never` = nie. Gelöscht wird nur
 ein Workspace strikt unter `workspace.base_dir` (auch nach Auflösen von Symlinks; ein Workspace, der selbst ein
 Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verbliebene Workspaces gelöschter Runs.
 
@@ -1347,7 +1376,7 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
 `project.*`-Felder (`projectFields`), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
-Textausgabe `filter:`). Reserviert nichts, startet keine Worker oder Actions
+Textausgabe `filter:`), bei `execute.keep` die Muster samt Größenlimit (unter `notes`). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 
@@ -2350,6 +2379,26 @@ id: spare
 filter: { field: labels, operator: contains, value: spare }
 ```
 
+**Sicherungsmuster außerhalb des Workspaces** – `execute.keep` darf nur Dateien im Workspace bezeichnen.
+
+```yaml
+# example: err-keep-outside
+# extends: minimal
+# invalid
+# expect: workflows/hello.yaml: execute.keep[1]: Pattern must not contain ".." (only files inside the workspace can be kept)
+# file: workflows/hello.yaml
+id: hello
+trigger: { type: manual }
+execute:
+  type: shell
+  command: scripts/hello.sh
+  keep:
+    - .agent/transcript.jsonl
+    - ../shared/report.log
+```
+
+Lösung: Die Datei im Worker in den Workspace schreiben (bzw. dorthin kopieren) und relativ angeben.
+
 Weitere häufige Meldungen (ohne eigenes Beispiel):
 
 | Meldung | Ursache / Lösung |
@@ -2367,6 +2416,9 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Invalid environment variable name` | z. B. `private_key_env: my-key` |
 | `Expected a size such as 100MB` | Größe als Zahl statt String (`max_log_size_per_run: 100`) |
 | `Invalid size "100" (expected e.g. 512KB, 100MB, 1GB)` | String ohne oder mit unbekannter Einheit (`'100'`, `'100MiBs'`) |
+| `Must be greater than 0` (Pfad `execute.keep_max_size`) | `keep_max_size: 0MB` |
+| `Pattern must be relative to the workspace (no absolute path)` | `keep: [/var/log/app.log]` – Pfade relativ zum Workspace angeben |
+| `Pattern must not end with "**" (use "dir/**/*" or "**/*.log")` | `keep: [logs/**]` → `logs/**/*` |
 | `config.yaml not found, using defaults` (Warnung) | `config.yaml` fehlt |
 
 Laufzeitfehler, die `config validate` **nicht** findet: fehlende Umgebungsvariablen (Keys, Tokens, Webhooks),
@@ -2390,7 +2442,8 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
    sollen, als benannten Filter in `filters/<id>.yaml` anlegen und mit `filter: <id>` bzw. `{ use: <id> }`
    verwenden (§3.6).
 5. **execute:** Skript ausführbar machen (`chmod +x`), Pfad relativ zum config-dir oder absolut; Argumente als
-   Liste; Timeouts setzen; Secrets nur über `secrets`.
+   Liste; Timeouts setzen; Secrets nur über `secrets`; Mitschnitte/Logs, die nach dem Cleanup erhalten bleiben
+   sollen, unter `keep` eintragen.
 6. **Hooks:** Label-Übergänge für jeden Ausgang (`on_start`, `on_success`, `on_failure`, `on_crash`,
    `on_start_error`, `on_timeout`, `on_cancel`) so wählen, dass das Item nicht hängen bleibt und nicht sofort wieder
    matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab). Wer per `project` einen Status setzt, der

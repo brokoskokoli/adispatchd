@@ -427,6 +427,8 @@ Der Orchestrator interpretiert dies als technischen Fehler (`crashed`), erhöht 
 
 Jeder Run bekommt einen **eindeutigen Workspace** (Standard mit `{workflow.id}/{run.id}`); `{run.id}` ist stabil und eindeutig. Zusätzliche Platzhalter: `{source.id}`, `{source.repository}`, `{item.number}`, `{timestamp}`. Alle interpolierten Pfadbestandteile werden sicher normalisiert/escaped. Das Verzeichnis wird vom Orchestrator erzeugt; Klonen, Git-Worktrees, Node-Installationen und gegebenenfalls Docker werden vom Skript selbst erledigt.
 
+**Nachtrag 0.3.0 (WI-22) – Dateien sichern (`execute.keep`):** Eine Liste relativer Glob-Muster (`*`, `?`, `**`) plus optional `keep_max_size` (Größe, Default `100MB`, Summe pro Run). Nach dem Abschluss-Hook und vor dem Workspace-Cleanup kopiert der Daemon bei **jedem** Endstatus die passenden regulären Dateien mit relativer Struktur nach `data-dir/runs/<run-id>/kept/` (erst nach `kept.tmp/`, dann Rename; ein vorhandenes `kept/` wird bei fortgesetzter Finalisierung nicht überschrieben). Symlinks werden nie verfolgt, jede Datei wird mit `O_NOFOLLOW` geöffnet und über Inode und aufgelösten Pfad gegen den Workspace geprüft; Muster mit `..` oder absolute Muster sind Validierungsfehler. Secrets werden beim Kopieren redigiert – best effort, wie Logs (§20, §24.8): dieselbe byteweise Ersetzung wie für stdout/stderr mit den Secrets des Runs und den dem Daemon bekannten Tokens/Schlüsseln. Das Größenlimit zählt die geschriebenen Bytes; was es überschreitet, wird übersprungen; Treffer, Übersprungenes (mit Grund) und Muster ohne Treffer stehen im Run-Event `run.kept_files`. Die Dateien unterliegen der Run-Retention (§21). API: `GET /api/v1/runs/:id/kept` (Liste) und `GET /api/v1/runs/:id/kept/<pfad>` (Download als Attachment, sichere Pfadauflösung); UI: Run → Files. Gilt für jeden Executor, dessen Workspace auf dem Host liegt (heute `shell`). Details: [configuration-reference.md](configuration-reference.md) §3.4.8, [api.md](api.md).
+
 ### 9.1 Input
 
 Umgebungsvariablen (Mindestmenge):
@@ -656,7 +658,7 @@ Konfigurationsänderungen werden **nur manuell** per GUI/CLI übernommen. Reload
 
 - Health: `/health`; Readiness: `/ready` (Recovery abgeschlossen, DB verfügbar, Konfiguration gültig). Optional später `/metrics`.
 - Logs: pro Run stdout/stderr als Dateien; Status-/Events in SQLite; interne Fehler separat im Dienstlog; SSE als Live-Transport.
-- Default-Retention-Vorschlag: erfolgreiche Runs 30 Tage, fehlgeschlagene/abgebrochene 90 Tage, offene Blocks und unvollständige Lifecycle-Ketten nicht löschen. `never` pro Kategorie möglich. Maximale Logs 100 MB/Run, Overflow klar markieren. Tägliche Cleanup-Prüfung.
+- Default-Retention-Vorschlag: erfolgreiche Runs 30 Tage, fehlgeschlagene/abgebrochene 90 Tage, offene Blocks und unvollständige Lifecycle-Ketten nicht löschen. `never` pro Kategorie möglich. Maximale Logs 100 MB/Run, Overflow klar markieren. Tägliche Cleanup-Prüfung. Gesicherte Dateien (`runs/<run-id>/kept/`, WI-22) werden mit dem Run gelöscht.
 - Unterscheidung `failed` als **fachliches Ergebnis** gegenüber **technischem** `crashed` und separat `lifecycle failed` in API und UI eindeutig darstellen.
 - Nur eine Instanz pro Data-Dir durch OS-weite exklusive Sperre; Stale-Lock-Erkennung darf nicht versehentlich zwei Instanzen erlauben. Mehrere getrennte Data-Dirs koordinieren sich **nicht** gegenseitig.
 

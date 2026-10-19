@@ -10,12 +10,12 @@ import { LogWindow } from '../../shared/logs.js';
 import { EventList, type EventListChange } from '../../shared/events.js';
 import { eventSummary, formatBytes, formatDuration, stateTone } from '../../shared/format.js';
 import { messageRunId, type Page, type PageContext } from '../page.js';
-import type { Action, LogPage, RunDetail, RunEvent } from '../types.js';
+import type { Action, KeptListing, LogPage, RunDetail, RunEvent } from '../types.js';
 import { act, badge, button, confirmDialog, errorBox, externalLink, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time } from '../ui.js';
 import { cancelRunButton } from './dashboard.js';
 
-type Tab = 'overview' | 'logs' | 'events' | 'actions';
-const TABS: Tab[] = ['overview', 'logs', 'events', 'actions'];
+type Tab = 'overview' | 'logs' | 'events' | 'actions' | 'files';
+const TABS: Tab[] = ['overview', 'logs', 'events', 'actions', 'files'];
 
 /** Lifecycle action table (shared with Failed Actions). */
 export function actionButtons(a: Action, after: () => void): HTMLElement | null {
@@ -161,6 +161,7 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
             ['PID', text(d.pid)],
             ['Lock', text(d.lockKey)],
             ['Config', d.configVersion !== null ? `v${d.configVersion}${d.configHash ? ` (${d.configHash.slice(0, 12)})` : ''}` : text(null)],
+            ['Kept files', d.kept ? routeLink(['runs', d.id], `${d.kept.files} file(s), ${formatBytes(d.kept.bytes)}${d.kept.skippedCount ? `, ${d.kept.skippedCount} skipped` : ''}`, { tab: 'files' }) : text(null)],
             ['Logs', `stdout ${formatBytes(d.logs.stdout.size)}${d.logs.stdout.truncated ? ' (truncated)' : ''}, stderr ${formatBytes(d.logs.stderr.size)}${d.logs.stderr.truncated ? ' (truncated)' : ''}`],
           ]),
         ),
@@ -395,6 +396,52 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
     );
   };
 
+  // ----------------------------------------------------------------- files
+  // Files kept from the workspace (`execute.keep`, WI-22); loaded once per tab visit and when the run ends.
+  let filesLoadedFor: string | null = null;
+  const renderFiles = async (d: RunDetail): Promise<void> => {
+    const key = `${d.status}:${d.kept?.files ?? -1}`;
+    if (filesLoadedFor === key) return;
+    filesLoadedFor = key;
+    if (body.childElementCount === 0) replaceChildren(body, loading());
+    try {
+      const k = await api.get<KeptListing>(`/api/v1/runs/${seg(runId)}/kept`);
+      const skipped = k.report?.skipped ?? [];
+      rerender(
+        body,
+        h(
+          'section',
+          { class: 'card' },
+          h('p', { class: 'hint' }, 'Files copied from the workspace after the run (execute.keep); known secrets are redacted (best effort, like logs). They are deleted together with the run (retention).'),
+          k.report?.error ? h('div', { class: 'alert alert-warn' }, `Keeping files failed: ${k.report.error}`) : null,
+          k.report?.unmatched?.length ? h('p', { class: 'muted' }, `No match: ${k.report.unmatched.join(', ')}`) : null,
+          k.report?.notSearched?.length ? h('div', { class: 'alert alert-warn' }, `Not searched (directory entry limit reached): ${k.report.notSearched.join(', ')}`) : null,
+          table(
+            ['File', 'Size', ''],
+            k.files.map((f) => [
+              h('code', { class: 'wrap' }, f.path),
+              formatBytes(f.size),
+              h('a', { href: `/api/v1/runs/${seg(runId)}/kept/${f.path.split('/').map(seg).join('/')}`, download: f.path.split('/').pop() ?? 'file' }, 'Download'),
+            ]),
+            { empty: d.active ? 'Files are kept when the run ends.' : 'No kept files.' },
+          ),
+          k.truncated ? h('p', { class: 'hint' }, 'Listing truncated.') : null,
+          skipped.length
+            ? h(
+                'div',
+                null,
+                h('h3', null, `Skipped (${k.report?.skippedCount ?? skipped.length})`),
+                table(['File', 'Reason', 'Size'], skipped.map((x) => [h('code', { class: 'wrap' }, x.path), x.message ? `${x.reason}: ${x.message}` : x.reason, x.size !== undefined ? formatBytes(x.size) : text(null)])),
+              )
+            : null,
+        ),
+      );
+    } catch (err) {
+      filesLoadedFor = null;
+      replaceChildren(body, errorBox(err));
+    }
+  };
+
   // ------------------------------------------------------------------ load
   let first = true;
   const load = async (): Promise<void> => {
@@ -405,6 +452,7 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
       renderHeader(d);
       if (tab === 'overview') renderOverview(d);
       else if (tab === 'actions') renderActions(d);
+      else if (tab === 'files') void renderFiles(d);
       else if (tab === 'events') {
         if (first) renderEvents(d);
       } else if (tab === 'logs') {

@@ -581,6 +581,33 @@ describe('loadConfig – review findings', () => {
     expectError(result, 'workflows/wf.yaml', 'execute.timeout.max_duration', /greater than 0/);
     expectError(result, 'workflows/wf.yaml', 'execute.timeout.idle_timeout', /greater than 0/);
   });
+
+  it('normalizes execute.keep and keep_max_size (default 100MB) and validates the patterns (WI-22)', async () => {
+    const ok = expectOk(
+      await load({
+        'workflows/a.yaml': MANUAL_WF().replace('id: wf', 'id: a') + "  keep: ['.agent/transcript.jsonl', '.agent/gate/*.log', '**/*.xml']\n  keep_max_size: 50MB\n",
+        'workflows/b.yaml': MANUAL_WF().replace('id: wf', 'id: b'),
+      }),
+    );
+    expect(ok.workflows.a?.execute).toMatchObject({ keep: ['.agent/transcript.jsonl', '.agent/gate/*.log', '**/*.xml'], keepMaxSizeBytes: 50 * 1024 * 1024 });
+    expect(ok.workflows.b?.execute).toMatchObject({ keep: [], keepMaxSizeBytes: 100 * 1024 * 1024 });
+
+    const bad = await load({
+      'workflows/wf.yaml': MANUAL_WF() + "  keep: ['../outside.log', '/etc/passwd', '', 'a//b', 'logs/**']\n",
+    });
+    const f = 'workflows/wf.yaml';
+    expectError(bad, f, 'execute.keep[0]', /must not contain "\.\."/);
+    expectError(bad, f, 'execute.keep[1]', /relative to the workspace/);
+    expectError(bad, f, 'execute.keep[2]', /must not be empty/);
+    expectError(bad, f, 'execute.keep[3]', /empty or "\." segments/);
+    expectError(bad, f, 'execute.keep[4]', /must not end with "\*\*"/);
+    const sizes = await load({ 'workflows/wf.yaml': MANUAL_WF() + '  keep: [a.log]\n  keep_max_size: 0MB\n' });
+    expectError(sizes, f, 'execute.keep_max_size', /greater than 0/);
+    const unit = await load({ 'workflows/wf.yaml': MANUAL_WF() + '  keep: [a.log]\n  keep_max_size: 50 bytes\n' });
+    expectError(unit, f, 'execute.keep_max_size', /Invalid size/);
+    const notList = await load({ 'workflows/wf.yaml': MANUAL_WF() + '  keep: a.log\n' });
+    expectError(notList, f, 'execute.keep', /array/i);
+  });
 });
 
 describe('loadConfig – secrets', () => {
