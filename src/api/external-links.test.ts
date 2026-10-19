@@ -66,6 +66,27 @@ describe('external links (WI-25)', () => {
       { id: 'claude-inspect', label: 'Claude Inspect', url: 'http://127.0.0.1:47717/', embed: true },
       { id: 'grafana', label: 'Grafana', url: 'https://grafana.example.com/d/x', embed: false },
     ]);
+    // The public config view leaves out disabled entries (their URLs may carry tokens).
+    expect(res.json.config.global.ui.externalLinks.map((l: { id: string }) => l.id)).toEqual(['claude-inspect', 'grafana']);
+    expect(JSON.stringify(res.json)).not.toContain('hidden.example.com');
+  });
+
+  it('UI-path 404s and HEAD requests carry the UI CSP as well', async () => {
+    const e = await start(LINKS);
+    const missing = await e.request('GET', '/missing/page.html');
+    expect(missing.status).toBe(404);
+    expect(directives(missing.headers['content-security-policy']).get('frame-src')).toBe('frame-src http://127.0.0.1:47717');
+    expect(missing.headers['x-frame-options']).toBe('DENY');
+    for (const url of ['/', '/index.html']) {
+      const head = await e.request('HEAD', url);
+      expect(head.status, url).toBe(200);
+      expect(directives(head.headers['content-security-policy']).get('default-src'), url).toBe("default-src 'none'");
+      expect(directives(head.headers['content-security-policy']).get('frame-src'), url).toBe('frame-src http://127.0.0.1:47717');
+    }
+    // API 404 stays without the UI policy
+    const api404 = await e.request('GET', '/api/v1/nope');
+    expect(api404.status).toBe(404);
+    expect(api404.headers['content-security-policy']).toBeUndefined();
   });
 
   it('without links: empty list and the unchanged strict CSP without frame-src', async () => {

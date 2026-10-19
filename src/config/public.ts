@@ -6,8 +6,24 @@ import { REDACTED } from '../core/index.js';
 import type { LoadedConfig } from './model.js';
 
 /**
+ * URL of an external link without its query string and fragment (they may
+ * carry a token); both are replaced by `[REDACTED]` when present.
+ */
+export function redactExternalLinkUrl(value: string): string {
+  try {
+    const url = new URL(value);
+    return `${url.origin}${url.pathname}${url.search ? `?${REDACTED}` : ''}${url.hash ? `#${REDACTED}` : ''}`;
+  } catch {
+    return REDACTED;
+  }
+}
+
+/**
  * Deep copy of `config` that is safe to expose: literal notification URLs are
  * replaced by `[REDACTED]`. Environment variable *names* stay visible.
+ * `ui.external_links` (WI-25): disabled entries are dropped, query strings
+ * and fragments of the remaining URLs are redacted (the UI gets the enabled
+ * links with their full URL separately as `externalLinks`).
  */
 export function toPublicConfig(config: LoadedConfig): LoadedConfig {
   const copy = JSON.parse(JSON.stringify(config)) as LoadedConfig;
@@ -15,5 +31,15 @@ export function toPublicConfig(config: LoadedConfig): LoadedConfig {
     ...channel,
     url: channel.url === null ? null : REDACTED,
   }));
-  return { ...copy, global: { ...copy.global, notifications: { ...copy.global.notifications, channels } } };
+  const externalLinks = copy.global.ui.externalLinks
+    .filter((link) => link.enabled)
+    .map((link) => ({ ...link, url: redactExternalLinkUrl(link.url) }));
+  return {
+    ...copy,
+    global: {
+      ...copy.global,
+      notifications: { ...copy.global.notifications, channels },
+      ui: { ...copy.global.ui, externalLinks },
+    },
+  };
 }

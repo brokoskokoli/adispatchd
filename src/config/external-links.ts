@@ -52,11 +52,15 @@ export function validateExternalLinks(links: readonly ExternalLinkConfig[], file
       issues.warning(
         file,
         [...at, 'url'],
-        `Query parameter ${tokenParams.map((p) => `"${p}"`).join(', ')} looks like an access token; it is visible in the config API and the web UI`,
+        `Query parameter ${tokenParams.map((p) => `"${p}"`).join(', ')} looks like an access token; while the link is enabled, its URL is visible to everyone who can reach the web UI/API (toolbar, GET /api/v1/config) – keep the UI behind authentication`,
       );
     }
-    if (link.embed && url.hostname.startsWith('[')) {
-      issues.warning(file, [...at, 'embed'], 'IPv6 literals cannot be allowed in the Content-Security-Policy (frame-src); use a host name to embed this tool');
+    if (link.embed && frameOrigin(url) === null) {
+      issues.error(
+        file,
+        [...at, 'embed'],
+        'The host cannot be allowed in the Content-Security-Policy (frame-src): use a plain host name or IPv4 address (letters, digits, ".", "-"), or set embed: false',
+      );
     }
   });
 }
@@ -68,23 +72,36 @@ export function activeExternalLinks(global: GlobalConfig): ExternalLinkInfo[] {
     .map((link) => ({ id: link.id, label: link.label, url: link.url, embed: link.embed }));
 }
 
+/** Normalized lower-case origin as accepted in a CSP source list (`scheme://host[:port]`). */
+const FRAME_ORIGIN = /^https?:\/\/[a-z0-9.-]+(:\d+)?$/;
+
+/**
+ * Origin of `url` if it can be put into `frame-src` without any risk of CSP
+ * injection: http(s) only, host made of `[a-z0-9.-]` (no IPv6 literal, no
+ * `_`, `*`, `;`, `,` …), else `null`.
+ */
+export function frameOrigin(url: URL | string): string | null {
+  let u: URL;
+  try {
+    u = typeof url === 'string' ? new URL(url) : url;
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  return FRAME_ORIGIN.test(u.origin) ? u.origin : null;
+}
+
 /**
  * Origins of the enabled `embed: true` links, deduplicated and safe to put
- * into a CSP source list (`scheme://host[:port]`; IPv6 literals are skipped,
- * CSP host sources cannot express them).
+ * into a CSP source list (see {@link frameOrigin}).
  */
 export function externalLinkFrameOrigins(global: GlobalConfig): string[] {
   const origins = new Set<string>();
   for (const link of activeExternalLinks(global)) {
     if (!link.embed) continue;
-    try {
-      const url = new URL(link.url);
-      if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.hostname.startsWith('[')) continue;
-      // URL.origin is normalized (lower-case host, default port omitted) and cannot contain ";", "," or spaces.
-      if (/^https?:\/\/[a-z0-9.-]+(:\d+)?$/.test(url.origin)) origins.add(url.origin);
-    } catch {
-      // invalid URLs never pass validation
-    }
+    // Defense in depth: validation already rejects embed entries without such an origin.
+    const origin = frameOrigin(link.url);
+    if (origin !== null) origins.add(origin);
   }
   return [...origins];
 }

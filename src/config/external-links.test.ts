@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { activeExternalLinks, externalLinkFrameOrigins, isTokenLikeParam, loadConfig, type LoadedConfig } from './index.js';
+import {
+  activeExternalLinks,
+  externalLinkFrameOrigins,
+  frameOrigin,
+  isTokenLikeParam,
+  loadConfig,
+  redactExternalLinkUrl,
+  toPublicConfig,
+  type LoadedConfig,
+} from './index.js';
 import { BASE_FILES, createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
 
 describe('ui.external_links (WI-25)', () => {
@@ -125,15 +134,51 @@ describe('ui.external_links (WI-25)', () => {
     expect(JSON.stringify(warnings)).not.toContain('abc123');
   });
 
-  it('warns that IPv6 literals cannot be embedded and leaves them out of frame-src', async () => {
+  it('rejects embed: true for hosts that cannot be expressed in frame-src (IPv6, "*", ";", ",", "_")', async () => {
     const res = await load(`ui:
   external_links:
     - { id: v6, label: V6, url: "http://[::1]:47717/", embed: true }
+    - { id: star, label: Star, url: "https://*.example.com/", embed: true }
+    - { id: semi, label: Semi, url: "https://a;script-src.example.com/", embed: true }
+    - { id: comma, label: Comma, url: "https://a,b.example.com/", embed: true }
+    - { id: under, label: Under, url: "https://a_b.example.com/", embed: true }
+    - { id: ok, label: Ok, url: "https://*.example.com/", embed: false }
 `);
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.warnings.map((w) => w.path)).toContain('ui.external_links[0].embed');
-    expect(externalLinkFrameOrigins(res.config.global)).toEqual([]);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.errors.map((e) => e.path)).toEqual([0, 1, 2, 3, 4].map((i) => `ui.external_links[${i}].embed`));
+    expect(res.errors[0]?.message).toContain('frame-src');
+  });
+
+  it('frame-src never contains CSP metacharacters, even if validation were bypassed', () => {
+    const links = ['https://*.example.com/', 'https://a;script-src.example.com/', "https://a'b.example.com/", 'https://a,b.example.com/', 'https://a_b.example.com/', 'http://[::1]:1/'].map(
+      (url, i) => ({ id: `l${i}`, label: 'L', url, enabled: true, embed: true }),
+    );
+    links.push({ id: 'good', label: 'G', url: 'https://Good.Example.com:8443/x', enabled: true, embed: true });
+    const global = { ui: { externalLinks: links } } as unknown as LoadedConfig['global'];
+    expect(externalLinkFrameOrigins(global)).toEqual(['https://good.example.com:8443']);
+    for (const l of links.slice(0, -1)) expect(frameOrigin(l.url), l.url).toBeNull();
+  });
+
+  it('public config drops disabled links and redacts query strings and fragments', async () => {
+    const config = await loadOk(`ui:
+  external_links:
+    - { id: inspect, label: Inspect, url: "http://127.0.0.1:7717/app/?t=secret-token#k=v", embed: true }
+    - { id: plain, label: Plain, url: "https://plain.example.com/d/x" }
+    - { id: off, label: Off, url: "https://off.example.com/?token=disabled-secret", enabled: false }
+`);
+    const pub = toPublicConfig(config);
+    expect(pub.global.ui.externalLinks).toEqual([
+      { id: 'inspect', label: 'Inspect', url: 'http://127.0.0.1:7717/app/?[REDACTED]#[REDACTED]', enabled: true, embed: true },
+      { id: 'plain', label: 'Plain', url: 'https://plain.example.com/d/x', enabled: true, embed: false },
+    ]);
+    const json = JSON.stringify(pub);
+    expect(json).not.toContain('secret-token');
+    expect(json).not.toContain('disabled-secret');
+    expect(json).not.toContain('off.example.com');
+    // the active configuration itself is untouched
+    expect(config.global.ui.externalLinks).toHaveLength(3);
+    expect(redactExternalLinkUrl('not a url')).toBe('[REDACTED]');
   });
 
   it('classifies token-like parameter names', () => {
