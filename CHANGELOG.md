@@ -3,7 +3,7 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
-## [0.4.0] – unveröffentlicht
+## [0.4.0] – 2026-10-19
 
 ### Hinzugefügt
 
@@ -89,6 +89,8 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ### Geändert
 
+- **Datenbank-Schema v4** (Migration beim ersten Start, vorher automatisches Backup unter `backups/`). Einbahnstraße:
+  0.3.x startet mit einer v4-DB nicht mehr; zurück nur über das Backup (siehe `docs/operations.md`, Rollback).
 - `GET /api/v1/workflows[/:id]`: `conditions` enthält jetzt die Definitionen samt letztem Status
   (`{workflow: [...], item: [...], shellFilter}`) statt nur der Anzahlen (`{workflow: <n>, item: <n>}`); die Anzahl
   ist die Länge der Listen.
@@ -301,7 +303,7 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
-[0.4.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.3.0...HEAD
+[0.4.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/brokoskokoli/adispatchd/releases/tag/v0.1.0

@@ -232,6 +232,8 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 - **0.3.0 hebt das Schema auf v3** (benannte Ergebnisse, gespeicherter Abschluss-Hook). Das ist eine Einbahnstraße:
   0.2.x startet mit einer v3-DB nicht mehr. Zurück auf 0.2.x nur über das vor der Migration geschriebene Backup
   (`backups/adispatchd-2-<zeitstempel>.sqlite`, siehe Rollback).
+- **0.4.0 hebt das Schema auf v4** (Tabelle `ui_actions` für das Audit der UI-Aktionen). Ebenfalls eine Einbahnstraße:
+  0.3.x startet mit einer v4-DB nicht mehr; zurück nur über das Backup `backups/adispatchd-3-<zeitstempel>.sqlite`.
 - **Rollback:** Dienst stoppen, alte Paketversion installieren, `adispatchd.sqlite`, `adispatchd.sqlite-wal` und
   `adispatchd.sqlite-shm` beiseitelegen, das passende Backup als `adispatchd.sqlite` zurückkopieren (Eigentümer
   `adispatchd`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).
