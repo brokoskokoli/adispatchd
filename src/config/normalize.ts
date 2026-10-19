@@ -18,6 +18,8 @@ import type {
   SecretRef,
   SourceConfig,
   ViewConfig,
+  ViewFieldConfig,
+  ViewSortKey,
   WorkflowConfig,
 } from './model.js';
 import type {
@@ -27,6 +29,7 @@ import type {
   RawParameter,
   RawSourcesFile,
   RawView,
+  RawViewSortKey,
   RawWorkflow,
 } from './schemas.js';
 import { DEFAULTS, MAX_DEFAULT_MONITORING_INTERVAL_MS, MIN_MONITORING_INTERVAL_MS } from './schemas.js';
@@ -364,7 +367,30 @@ export function normalizeView(raw: RawView, file: string, expand: FilterExpander
     file,
     sources: [...raw.sources],
     filter: raw.filter ? expand(raw.filter, ['filter']) : null,
-    fields: raw.fields.map((f) => ({ field: f.field, label: f.label ?? f.field, link: f.link ?? null })),
-    sort: raw.sort ? { field: raw.sort.field, direction: raw.sort.direction } : null,
+    fields: normalizeViewFields(raw.fields),
+    sort: normalizeViewSort(raw.sort),
+    groupByFirst: raw.group_by_first ?? false,
+    sections: raw.sections
+      ? raw.sections.map((sec, i) => ({
+          title: sec.title,
+          filter: sec.filter !== undefined ? expand(sec.filter, ['sections', i, 'filter']) : null,
+          rest: sec.rest ?? false,
+          sort: sec.sort !== undefined ? normalizeViewSort(sec.sort) : null,
+          fields: sec.fields ? normalizeViewFields(sec.fields) : null,
+        }))
+      : null,
+    exclusive: raw.exclusive ?? true,
+    hideEmptySections: raw.hide_empty_sections ?? false,
   };
+}
+
+function normalizeViewFields(fields: RawView['fields']): ViewFieldConfig[] {
+  return fields.map((f) => ({ field: f.field, label: f.label ?? f.field, link: f.link ?? null }));
+}
+
+/** `sort` as written (one key or a list) → list of keys (WI-28). */
+function normalizeViewSort(sort: RawViewSortKey | readonly RawViewSortKey[] | undefined): ViewSortKey[] {
+  if (sort === undefined) return [];
+  const keys: readonly RawViewSortKey[] = Array.isArray(sort) ? sort : [sort as RawViewSortKey];
+  return keys.map((k) => ({ field: k.field, direction: k.direction, order: k.order ? [...k.order] : null }));
 }

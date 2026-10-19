@@ -32,7 +32,11 @@ function view(filterValue: string): ViewConfig {
     sources: ['repo'],
     filter: { field: 'run.last_started_at', operator: 'greater_than', value: filterValue },
     fields: [{ field: 'number', label: 'number', link: null }],
-    sort: null,
+    sort: [],
+    groupByFirst: false,
+    sections: null,
+    exclusive: true,
+    hideEmptySections: false,
   };
 }
 

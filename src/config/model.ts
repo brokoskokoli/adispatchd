@@ -617,7 +617,37 @@ export interface ViewConfig {
   sources: readonly string[];
   filter: FilterNode | null;
   fields: readonly ViewFieldConfig[];
-  sort: { field: string; direction: 'asc' | 'desc' } | null;
+  /** Sort keys in priority order (WI-28: `[]` = no sort, ties by item key). */
+  sort: readonly ViewSortKey[];
+  /** Group rows by the first sort key's value (only where that key has an `order`, WI-28). */
+  groupByFirst: boolean;
+  /** Sections (WI-28); `null` = one plain table (behaviour before 0.5.0). */
+  sections: readonly ViewSectionConfig[] | null;
+  /** Sections: an item appears only in the first matching section (default `true`). */
+  exclusive: boolean;
+  /** Sections without rows are not shown in the UI. */
+  hideEmptySections: boolean;
+}
+
+/** One sort key of a view (WI-28). */
+export interface ViewSortKey {
+  field: string;
+  direction: 'asc' | 'desc';
+  /** Custom value order (string fields): listed values first, in this order; `null` = natural order. */
+  order: readonly string[] | null;
+}
+
+/** One section of a view (WI-28). */
+export interface ViewSectionConfig {
+  title: string;
+  /** Section filter (combined with the view filter by `all`); `null` for the rest section. */
+  filter: FilterNode | null;
+  /** Items of the view that are in no other section. */
+  rest: boolean;
+  /** Own sort keys; `null` = the view's sort. */
+  sort: readonly ViewSortKey[] | null;
+  /** Own columns; `null` = the view's fields. */
+  fields: readonly ViewFieldConfig[] | null;
 }
 
 // ---------------------------------------------------------------------------

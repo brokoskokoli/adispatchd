@@ -25,6 +25,7 @@ import { PROJECT_FIELD_PREFIX, valueProblem } from '../sources/index.js';
 import {
   checkFieldName,
   checkFilterFields,
+  checkSectionListing,
   fieldType,
   providesLinkedFields,
   suggestField,
@@ -47,6 +48,8 @@ import {
   type SecretRef,
   type SourceConfig,
   type ViewConfig,
+  type ViewFieldConfig,
+  type ViewSortKey,
   type WorkflowConfig,
 } from './model.js';
 import type { NamedFilters } from './named-filters.js';
@@ -75,6 +78,12 @@ export interface ViewEntry {
   hasShellFilter: boolean;
   /** Filter tree as written (with references to named filters). */
   rawFilter: RawFilterNode | null;
+  /** `sort` written as a list (issue paths `sort.<i>.…` instead of `sort.…`, WI-28). */
+  rawSortIsList?: boolean;
+  /** Per section: filter as written and whether `sort` is a list (WI-28). */
+  rawSections?: ReadonlyArray<{ filter: RawFilterNode | null; sortIsList: boolean }>;
+  /** Section-only keys present in the file (`exclusive`, `hide_empty_sections`). */
+  rawSectionOptions?: readonly string[];
 }
 
 /** Input of {@link validateSemantics}. */
@@ -805,18 +814,90 @@ function validateView(entry: ViewEntry, input: SemanticInput, issues: IssueColle
         named: input.namedFilters,
       });
     }
-    const checkName = (field: string, at: IssuePath): void => {
+    const checkName = (field: string, at: IssuePath): boolean => {
       const message = checkFieldName(field, ctx);
       if (message) issues.error(file, at, message);
+      return message === undefined;
     };
-    view.fields.forEach((f, i) => {
-      checkName(f.field, ['fields', i, 'field']);
-      if (f.link) checkName(f.link, ['fields', i, 'link']);
+    const checkFields = (fields: readonly ViewFieldConfig[], at: IssuePath): void =>
+      fields.forEach((f, i) => {
+        checkName(f.field, [...at, i, 'field']);
+        if (f.link) checkName(f.link, [...at, i, 'link']);
+      });
+    const checkSort = (keys: readonly ViewSortKey[], at: IssuePath, isList: boolean): void =>
+      keys.forEach((key, i) => {
+        const keyAt: IssuePath = isList ? [...at, i] : at;
+        if (!checkName(key.field, [...keyAt, 'field'])) return;
+        const type = fieldType(key.field, ctx);
+        if (type === 'object[]') issues.error(file, [...keyAt, 'field'], `Views cannot be sorted by "${key.field}" (type object[])`);
+        if (key.order) {
+          if (type !== undefined && type !== 'string') {
+            issues.error(
+              file,
+              [...keyAt, 'order'],
+              `"order" is only allowed for string fields (e.g. project.* single_select/text/iteration, state, run.last_status); "${key.field}" has type ${type}`,
+            );
+          }
+          const seen = new Set<string>();
+          key.order.forEach((value, j) => {
+            if (seen.has(value)) issues.error(file, [...keyAt, 'order', j], `Duplicate value "${value}" in "order"`);
+            seen.add(value);
+          });
+        }
+      });
+    checkFields(view.fields, ['fields']);
+    checkSort(view.sort, ['sort'], entry.rawSortIsList ?? false);
+    view.sections?.forEach((section, i) => {
+      const raw = entry.rawSections?.[i];
+      const at: IssuePath = ['sections', i];
+      if (section.filter) {
+        const target = { issues, file, at: [...at, 'filter'], raw: raw?.filter ?? null, named: input.namedFilters };
+        addFieldIssues(checkFilterFields(section.filter, ctx, { listing: false }), target);
+        addFieldIssues(checkSectionListing(section.filter, view.filter, ctx), target);
+      }
+      if (section.fields) checkFields(section.fields, [...at, 'fields']);
+      if (section.sort) checkSort(section.sort, [...at, 'sort'], raw?.sortIsList ?? false);
     });
-    if (view.sort) {
-      checkName(view.sort.field, ['sort', 'field']);
-      const type = fieldType(view.sort.field, ctx);
-      if (type === 'object[]') issues.error(file, ['sort', 'field'], `Views cannot be sorted by "${view.sort.field}" (type object[])`);
+  }
+  validateViewLayout(entry, issues);
+}
+
+/** Field-independent rules of sections and grouping (WI-28). */
+function validateViewLayout(entry: ViewEntry, issues: IssueCollector): void {
+  const { view } = entry;
+  const file = view.file;
+  const sections = view.sections;
+  if (!sections) {
+    for (const key of entry.rawSectionOptions ?? []) {
+      issues.warning(file, [key], `"${key}" has no effect without "sections"`);
+    }
+  } else {
+    const titles = new Map<string, number>();
+    let rest: number | null = null;
+    sections.forEach((section, i) => {
+      const at: IssuePath = ['sections', i];
+      const previous = titles.get(section.title);
+      if (previous !== undefined) issues.error(file, [...at, 'title'], `Duplicate section title "${section.title}" (also used by section ${previous + 1})`);
+      else titles.set(section.title, i);
+      if (section.rest && section.filter) {
+        issues.error(file, at, 'A section has either "filter" or "rest: true", not both');
+      } else if (!section.rest && !section.filter) {
+        issues.error(file, at, 'A section needs a "filter" or "rest: true"');
+      }
+      if (section.rest) {
+        if (rest !== null) issues.error(file, [...at, 'rest'], `Only one section can be "rest: true" (already section ${rest + 1})`);
+        else rest = i;
+      }
+    });
+  }
+  if (view.groupByFirst) {
+    const tables = sections ? sections.map((s) => s.sort ?? view.sort) : [view.sort];
+    if (!tables.some((keys) => keys[0]?.order)) {
+      issues.error(
+        file,
+        ['group_by_first'],
+        '"group_by_first" needs a first sort key with "order" (in the view "sort" or in a section "sort")',
+      );
     }
   }
 }

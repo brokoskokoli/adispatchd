@@ -175,7 +175,9 @@ describe('loadConfig – spec examples', () => {
       title: 'Needs Maintainer',
       sources: ['project_a', 'project_b'],
       fields: expect.arrayContaining([{ field: 'title', label: 'Titel', link: 'url' }]),
-      sort: { field: 'updated_at', direction: 'desc' },
+      sort: [{ field: 'updated_at', direction: 'desc', order: null }],
+      sections: null,
+      exclusive: true,
     });
   });
 

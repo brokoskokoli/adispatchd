@@ -40,10 +40,18 @@ interface ListingField {
   values: readonly string[];
   /** What the adapter lists without a top-level selector. */
   defaultDescription: string;
+  /** Values listed without a top-level selector. */
+  defaultValues: readonly string[];
 }
 
 const LISTING_FIELDS: Readonly<Record<string, ListingField>> = {
-  github: { field: 'state', operators: ['equals', 'in'], values: ['open', 'closed'], defaultDescription: 'only open issues/PRs' },
+  github: {
+    field: 'state',
+    operators: ['equals', 'in'],
+    values: ['open', 'closed'],
+    defaultDescription: 'only open issues/PRs',
+    defaultValues: ['open'],
+  },
 };
 
 /** Problem with a field reference; `path` is relative to the checked node. */
@@ -330,5 +338,78 @@ export function checkFilterFields(node: FilterNode, ctx: FieldContext, options: 
     checkValue(p, def, at, issues);
   };
   visit(node, [], true);
+  return issues;
+}
+
+/** Values of the listing selector the adapter lists for the view filter `filter` (top-level `state equals|in`). */
+function listedValues(filter: FilterNode | null, listing: ListingField): readonly string[] {
+  let listed: readonly string[] = listing.defaultValues;
+  const visit = (n: FilterNode): void => {
+    if (isFilterAll(n)) return n.all.forEach(visit);
+    if (isFilterAny(n) || isFilterNot(n)) return;
+    const p = n as FilterPredicate;
+    if (p.field !== listing.field || !listing.operators.includes(p.operator)) return;
+    const values = (Array.isArray(p.value) ? (p.value as readonly unknown[]) : [p.value]).filter(
+      (v): v is string => typeof v === 'string' && listing.values.includes(v),
+    );
+    if (values.length > 0) listed = values;
+  };
+  if (filter) visit(filter);
+  return listed;
+}
+
+/** Listing values a predicate on the selector field can match (`negated`: under an odd number of `not`). */
+function predicateValues(p: FilterPredicate, listing: ListingField, negated: boolean): string[] {
+  const values = Array.isArray(p.value) ? (p.value as readonly unknown[]) : [p.value];
+  let matched: string[];
+  switch (p.operator) {
+    case 'equals':
+    case 'in':
+      matched = listing.values.filter((v) => values.includes(v));
+      break;
+    case 'not_equals':
+      // `not_equals null` matches every item: no particular value is asked for.
+      if (p.value === null) return [];
+      matched = listing.values.filter((v) => !values.includes(v));
+      break;
+    case 'contains':
+      matched = listing.values.filter((v) => typeof p.value === 'string' && v.includes(p.value));
+      break;
+    default:
+      return [];
+  }
+  return negated ? listing.values.filter((v) => !matched.includes(v)) : matched;
+}
+
+/**
+ * Section filters of a view (WI-28) are evaluated locally on the items the
+ * view filter lists: a listing selector (GitHub `state`) in a section cannot
+ * widen the listing. Reports every selector predicate of `section` that asks
+ * for values the view never lists (e.g. `state equals closed` while the view
+ * lists only open items).
+ */
+export function checkSectionListing(section: FilterNode, viewFilter: FilterNode | null, ctx: FieldContext): FieldIssue[] {
+  const listing = LISTING_FIELDS[ctx.sourceType];
+  if (!listing) return [];
+  const listed = listedValues(viewFilter, listing);
+  const listedText = listed === listing.defaultValues ? listing.defaultDescription : `${listing.field} ${listed.join('|')}`;
+  const issues: FieldIssue[] = [];
+  const visit = (n: FilterNode, at: (string | number)[], negated: boolean): void => {
+    if (isFilterAll(n)) return n.all.forEach((c, i) => visit(c, [...at, 'all', i], negated));
+    if (isFilterAny(n)) return n.any.forEach((c, i) => visit(c, [...at, 'any', i], negated));
+    if (isFilterNot(n)) return visit(n.not, [...at, 'not'], !negated);
+    const p = n as FilterPredicate;
+    if (p.field !== listing.field) return;
+    const beyond = predicateValues(p, listing, negated).filter((v) => !listed.includes(v));
+    if (beyond.length === 0) return;
+    issues.push({
+      path: [...at, 'field'],
+      message:
+        `"${listing.field}" in a section only filters the items the view lists (${listedText}); this section asks for ` +
+        `${beyond.map((v) => `"${v}"`).join(', ')}, which the view never reads – select them in the view filter ` +
+        `(top level, e.g. ${listing.field} in [${listing.values.join(', ')}])`,
+    });
+  };
+  visit(section, [], false);
   return issues;
 }

@@ -681,6 +681,55 @@ export type RawWorkflow = z.output<typeof workflowSchema>;
 // views/*.yaml
 // ---------------------------------------------------------------------------
 
+/** Limits of view sorting and sections (WI-28). */
+export const MAX_VIEW_SORT_KEYS = 5;
+export const MAX_VIEW_SORT_ORDER_VALUES = 100;
+export const MAX_VIEW_SECTIONS = 20;
+export const MAX_VIEW_SECTION_TITLE_LENGTH = 80;
+
+/** One sort key of a view (WI-28: optional custom value order). */
+const viewSortKeySchema = z.strictObject({
+  field: nonEmpty,
+  direction: z.enum(['asc', 'desc']).default('asc'),
+  /** Custom value order (string fields only): listed values first, in this order. */
+  order: z
+    .array(z.string())
+    .min(1, '"order" must list at least one value')
+    .max(MAX_VIEW_SORT_ORDER_VALUES, `"order" may list at most ${MAX_VIEW_SORT_ORDER_VALUES} values`)
+    .optional(),
+});
+
+/** `sort`: one key (as before) or a list of 1–5 keys (WI-28). */
+const viewSortSchema = z.union(
+  [
+    viewSortKeySchema,
+    z
+      .array(viewSortKeySchema)
+      .min(1, 'A sort list needs at least one key')
+      .max(MAX_VIEW_SORT_KEYS, `A view can sort by at most ${MAX_VIEW_SORT_KEYS} keys`),
+  ],
+  { error: `Expected a sort key ({ field, direction?, order? }) or a list of 1–${MAX_VIEW_SORT_KEYS} sort keys` },
+);
+
+const viewFieldsSchema = z
+  .array(
+    z.strictObject({
+      field: nonEmpty,
+      label: z.string().optional(),
+      link: nonEmpty.optional(),
+    }),
+  )
+  .min(1, 'A view needs at least one field');
+
+/** One section of a view (WI-28). */
+const viewSectionSchema = z.strictObject({
+  title: nonEmpty.max(MAX_VIEW_SECTION_TITLE_LENGTH, `A section title may have at most ${MAX_VIEW_SECTION_TITLE_LENGTH} characters`),
+  filter: filterNodeSchema.optional(),
+  rest: z.boolean().optional(),
+  sort: viewSortSchema.optional(),
+  fields: viewFieldsSchema.optional(),
+});
+
 /** Schema of one `views/*.yaml` file. */
 export const viewSchema = z.strictObject({
   id: configId,
@@ -689,22 +738,23 @@ export const viewSchema = z.strictObject({
   filter: filterNodeSchema.optional(),
   /** Not allowed in views (Spec §6, §17); accepted here to report a precise error in validate.ts. */
   shell_filter: z.unknown().optional(),
-  fields: z
-    .array(
-      z.strictObject({
-        field: nonEmpty,
-        label: z.string().optional(),
-        link: nonEmpty.optional(),
-      }),
-    )
-    .min(1, 'A view needs at least one field'),
-  sort: z
-    .strictObject({
-      field: nonEmpty,
-      direction: z.enum(['asc', 'desc']).default('asc'),
-    })
+  fields: viewFieldsSchema,
+  sort: viewSortSchema.optional(),
+  /** Group rows by the value of the first sort key when it has an `order` (WI-28). */
+  group_by_first: z.boolean().optional(),
+  sections: z
+    .array(viewSectionSchema)
+    .min(1, 'A view with "sections" needs at least one section')
+    .max(MAX_VIEW_SECTIONS, `A view can have at most ${MAX_VIEW_SECTIONS} sections`)
     .optional(),
+  exclusive: z.boolean().optional(),
+  hide_empty_sections: z.boolean().optional(),
 });
+
+/** Parsed view sort key. */
+export type RawViewSortKey = z.output<typeof viewSortKeySchema>;
+/** Parsed view section. */
+export type RawViewSection = z.output<typeof viewSectionSchema>;
 
 /** Parsed view file. */
 export type RawView = z.output<typeof viewSchema>;

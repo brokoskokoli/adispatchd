@@ -158,6 +158,9 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
         view: normalizeView(raw, parsed.file, (node, at) => namedFilters.expandAt(node, parsed.file, at)),
         hasShellFilter: raw.shell_filter !== undefined,
         rawFilter: raw.filter ?? null,
+        rawSortIsList: Array.isArray(raw.sort),
+        rawSections: (raw.sections ?? []).map((s) => ({ filter: s.filter ?? null, sortIsList: Array.isArray(s.sort) })),
+        rawSectionOptions: (['exclusive', 'hide_empty_sections'] as const).filter((k) => raw[k] !== undefined),
       });
     } else allUsersParsed = false;
   }
@@ -314,7 +317,7 @@ function parseWith<S extends z.ZodType>(
   }
   const result = schema.safeParse(data);
   if (result.success) return result.data;
-  for (const issue of result.error.issues) {
+  for (const issue of result.error.issues.flatMap(unionIssues)) {
     const at = issue.path.filter((p): p is string | number => typeof p !== 'symbol');
     let message = issue.message;
     if (issue.code === 'unrecognized_keys') {
@@ -335,6 +338,19 @@ function parseWith<S extends z.ZodType>(
     issues.error(file, at, message);
   }
   return undefined;
+}
+
+/**
+ * A failed plain union (e.g. view `sort`: one key or a list, WI-28) reports the
+ * issues of the one variant whose shape fits the input (all others failed with a
+ * top-level type mismatch) instead of a bare "Invalid input".
+ */
+function unionIssues(issue: z.core.$ZodIssue): z.core.$ZodIssue[] {
+  if (issue.code !== 'invalid_union') return [issue];
+  const fitting = issue.errors.filter((branch) => !(branch.length === 1 && branch[0]?.code === 'invalid_type' && branch[0].path.length === 0));
+  const only = fitting.length === 1 ? fitting[0] : undefined;
+  if (!only) return [issue];
+  return only.flatMap((sub) => unionIssues({ ...sub, path: [...issue.path, ...sub.path] } as z.core.$ZodIssue));
 }
 
 /** Value at `at` inside parsed YAML data (`undefined` if absent). */
@@ -411,7 +427,13 @@ export function knownKeysAt(schema: unknown, data: unknown, at: IssuePath): stri
   if (def.type === 'union') {
     const selected = matchingVariants(def, data);
     if (selected) return [...new Set(selected.flatMap((v) => knownKeysAt(v, data, at)))];
-    const all = (def.options ?? []).map((v) => knownKeysAt(v, data, at));
+    // Plain unions of a mapping and a list (e.g. view `sort`, WI-28): only variants of the input's shape count.
+    const options = def.options ?? [];
+    const shaped = options.filter((v) => {
+      const type = unwrapDef(v)?.type;
+      return Array.isArray(data) ? type === 'array' : typeof data === 'object' && data !== null ? type === 'object' || type === 'record' : true;
+    });
+    const all = (shaped.length > 0 ? shaped : options).map((v) => knownKeysAt(v, data, at));
     if (all.length === 0) return [];
     return (all[0] ?? []).filter((k) => all.every((keys) => keys.includes(k)));
   }
