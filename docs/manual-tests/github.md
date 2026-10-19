@@ -32,6 +32,12 @@ Inhalt:
 | A8 | Primäres Rate-Limit: 403/429 mit `x-ratelimit-remaining: 0` + `x-ratelimit-reset`. Sekundäres: 403/429 mit `retry-after` bzw. Meldung „rate limit“. | `GitHubHttpClient.toError` | **bestätigt** ([R8](#r8)) | T22 |
 | A9 | Installation-Tokens laufen nach 1 h ab (`expires_at`). Ein JWT mit `iat = now-60 s`, `exp = now+9 min`, `iss = App-ID` wird akzeptiert. | `src/identities/` | **bestätigt**. Hinweis: GitHub *empfiehlt* inzwischen die Client-ID als `iss`, die App-ID bleibt zulässig ([R6](#r6)) | T1, T2 |
 | A10 | Transferierte Issues leiten per 301 auf das neue Repo um. `repository_url` passt dann nicht → `getItem` liefert `null`. | `fetchIssue` | **bestätigt** (301, gelöscht 410, kein Zugriff 404) ([R9](#r9)) | T23 |
+| A12 | GraphQL unter `POST https://api.github.com/graphql` akzeptiert Installation-Tokens und Tokens von `github_token`-Identities. `repositoryOwner(login:) { ... on User/Organization { projectV2(number:) { id fields(first: 100) { nodes { ... on ProjectV2FieldCommon { name dataType } } } } } }` liefert das Projekt bzw. `projectV2: null` + `errors[]` bei fehlendem Projekt/Zugriff. | `src/sources/github/project.ts` (`METADATA_QUERY`) | Schema laut GraphQL-Doku, Fehlerform **nicht** geprüft | T25a, T25c |
+| A13 | Org-eigene Projekte sind mit der App-Berechtigung *Organization → Projects: Read* lesbar; **user-eigene** Projekte sind für Installation-Tokens nicht lesbar, wohl aber mit einem Token des Users (klassisch `read:project`; fine-grained PAT mit *Projects: Read*, falls für User-Projekte verfügbar). | Doku (`configuration-reference.md` §3.2) | nicht geprüft | T25a, T25c |
+| A14 | `nodes(ids: [<REST node_id>])` liefert Issues/PRs; `projectItems(first: 20, includeArchived: false) { totalCount nodes { project { id } fN: fieldValueByName(name: $fN) { … } } }` liefert die Werte (`name`, `text`, `number`, `date`, `title`); leeres Feld → `null`. Nicht lesbare Knoten → `null` + Fehler mit `path: ["nodes", i]`. | `projectValuesQuery`, `readChunk` | nicht geprüft | T25a, T25b |
+| A15 | `fieldValueByName` erwartet den Feldnamen des Projekts; der Adapter übergibt den exakten Namen aus den Metadaten (Abgleich der Deklaration ohne Groß-/Kleinschreibung). | `parseMetadata` | Groß-/Kleinschreibung bei GitHub **nicht** geprüft | T25b |
+| A16 | GraphQL-Rate-Limits kommen als HTTP 200 mit `errors[].type = "RATE_LIMITED"` oder als 403/429 mit `x-ratelimit-*`. | `GitHubHttpClient.graphql` | nur teilweise dokumentiert | T25e |
+| A17 | Kommentare mit dem Token einer `github_token`-Identity tragen `user.login` = Token-User; `GET /user` liefert diesen Login. | `authorPredicate`, `userLogin` in `adapter.ts` | nicht geprüft | T25d |
 | A11 | Von einer App per Installation-Token erstellte Kommentare tragen `performed_via_github_app.id = <App-ID>` und `user.type = "Bot"`. Sonst findet `findCommentByMarker` eigene Kommentare nicht (Folge: Duplikat statt Unterdrückung). | `authorPredicate` in `adapter.ts` | Feld im Schema dokumentiert, `Bot`/`[bot]` **nicht** ([R7](#r7)) | T6, T7 |
 
 ### 0.2 Rechercheergebnisse (offizielle GitHub-Doku, abgerufen 2026-10-17)
@@ -1230,6 +1236,81 @@ api /config/files | grep -c 'PRIVATE KEY'
 
 **Ist:** ☐ OK ☐ Abweichung: ……
 
+### T25 – GitHub-Projects-Felder (WI-14, A12–A17)
+
+Prüft `project.*` gegen echte Projekte, **org-eigen** (per App) und **user-eigen** (per `github_token`). Für den
+Org-Teil muss `ADISPATCH_TEST_OWNER` eine Organisation sein; mit einem User-Account entfällt T25a.
+
+**Vorbereitung:**
+1. Der Maintainer-App (`orch-test-maintainer-…`) unter *Permissions → Organization permissions* **Projects: Read-only**
+   geben und die geänderten Rechte in der Installation bestätigen.
+2. `gh auth refresh -s project` (der Mensch legt Projekte an).
+3. Ein Org-Projekt und ein User-Projekt anlegen, Felder ergänzen und je zwei Issues hinzufügen:
+   ```bash
+   gh project create --owner "$ADISPATCH_TEST_OWNER" --title orch-test-org --format json | jq .number   # → ORG_PROJECT
+   gh project create --owner "@me" --title orch-test-user --format json | jq .number                  # → USER_PROJECT
+   USER_LOGIN=$(gh api user --jq .login)
+   for o in "$ADISPATCH_TEST_OWNER:$ORG_PROJECT" "$USER_LOGIN:$USER_PROJECT"; do
+     owner=${o%%:*}; n=${o##*:}
+     gh project field-create "$n" --owner "$owner" --name Priority --data-type SINGLE_SELECT --single-select-options "P0,P1,P2"
+     gh project field-create "$n" --owner "$owner" --name Estimate --data-type NUMBER
+     gh project field-create "$n" --owner "$owner" --name Due --data-type DATE
+   done
+   P1=$(mkissue orch-test-a "T25 ready"); P2=$(mkissue orch-test-a "T25 todo"); P3=$(mkissue orch-test-a "T25 not in project")
+   for n in $P1 $P2; do
+     gh project item-add "$ORG_PROJECT" --owner "$ADISPATCH_TEST_OWNER" --url "$(issue_url orch-test-a $n)"
+     gh project item-add "$USER_PROJECT" --owner "$USER_LOGIN" --url "$(issue_url orch-test-a $n)"
+   done
+   ```
+   Im Web-UI beider Projekte: `$P1` → *Status* `Ready`, *Priority* `P1`, *Estimate* `3`, *Due* ein Datum;
+   `$P2` → *Status* `Todo`, sonst leer. Eine Iteration (Feld *Sprint*) optional anlegen und `$P1` zuordnen.
+4. Für den User-Teil einen Token des Users anlegen (klassisch mit `read:project` **oder** fine-grained mit
+   *Projects: Read*, falls angeboten) und exportieren: `export ADISPATCH_TEST_PROJECT_TOKEN=…`.
+5. Im kopierten Fixture (`$ADISPATCH_CFG`) die auskommentierten Blöcke aktivieren: `project` bei `test_a` in
+   `sources.yaml` (Nummer/Owner eintragen) und `project_reader` in `identities.yaml`. Dazu
+   `workflows/project-test.yaml` anlegen:
+   ```bash
+   cat > "$ADISPATCH_CFG/workflows/project-test.yaml" <<'EOF'
+   id: project-test
+   enabled: false
+   trigger: { type: source, source: test_a }
+   filter: { field: project.Status, operator: in, value: [Ready] }
+   item_priority:
+     rules: [ { when: { field: project.Priority, operator: equals, value: P1 }, value: 10 } ]
+   execute: { type: shell, command: scripts/test-worker.sh }
+   EOF
+   orch config validate --config-dir "$ADISPATCH_CFG" && orch config reload --config-dir "$ADISPATCH_CFG"
+   ```
+
+**T25a – Org-Projekt per App:** `project: { number: $ORG_PROJECT, fields: { Status: single_select, Priority: single_select, Estimate: number, Due: date } }`
+(ohne `owner`/`identity`).
+```bash
+orch workflow dry-run project-test --config-dir "$ADISPATCH_CFG" --json | jq '.candidates[] | {itemKey, decision, itemPriority, projectFields}'
+```
+**Erwartet:** `$P1` `would_start`/`workflow_unavailable` (Workflow ist disabled) mit `projectFields`
+`Status: "Ready"`, `Priority: "P1"`, `Estimate: 3`, `Due: "YYYY-MM-DD"`, `itemPriority: 10`; `$P2` `filtered`
+(`Status: "Todo"`, Rest `null`); `$P3` `filtered` mit allen Werten `null`. Danach der App das Recht *Projects* wieder
+entziehen und erneut: alle `project.*` `known: false` mit Grund „GitHub project … unavailable: …“, Entscheidung
+`filter_unknown`, im Log **eine** Warnung „GitHub project field unavailable“ (beim nächsten Poll keine weitere).
+Rohantwort notieren: `ghraw maintainer /graphql -X POST -d '{"query":"query{repositoryOwner(login:\"'$ADISPATCH_TEST_OWNER'\"){... on Organization{projectV2(number:'$ORG_PROJECT'){id}}}}"}'`.
+
+**T25b – Feldnamen und Arten:** in `sources.yaml` `status: single_select` (klein) eintragen → Werte wie in T25a
+(A15). `Estimate: text` eintragen → nur `project.Estimate` unknown („has type NUMBER, but is declared as text“), die
+anderen bekannt. `Nope: text` → `project.Nope` unknown („not found in GitHub project“).
+
+**T25c – User-Projekt:** `project: { owner: <USER_LOGIN>, number: $USER_PROJECT, fields: {…} }` zuerst **ohne**
+`identity` (also per App) → alle `project.*` unknown (A13; Fehlermeldung notieren). Dann `identity: project_reader`
+→ Werte wie in T25a. Prüfen, dass nur die GraphQL-Requests den Token nutzen: im Log stehen keine Token-Werte.
+
+**T25d – Kommentar-Marker mit Token-Identity (A17, optional):** `commenter-test` vorübergehend mit
+`identity: project_reader` laufen lassen (Token braucht dann *Issues: write* im Test-Repo) und einen Retry wie in T7
+auslösen. **Erwartet:** kein Duplikat; der Kommentar trägt `user.login = <USER_LOGIN>`, `user.type = "User"`.
+
+**T25e – Rate-Limit/Abfragekosten (A16, beobachten):** `ghraw maintainer /rate_limit | jq .resources.graphql` vor und
+nach einem Poll; Kosten pro Poll notieren (erwartet: wenige Punkte für Metadaten + ein Werte-Request je 50 Items).
+
+**Ist:** ☐ OK ☐ Abweichung: ……
+
 ---
 
 ## 5 Auswertung und Aufräumen
@@ -1255,6 +1336,9 @@ Zusätzlich die offenen Fragen beantworten:
 | `user.type = Bot`, `performed_via_github_app.id = App-ID`? | T6 | |
 | POST `blocked_by` gibt welches Issue zurück? | T12 | |
 | Reduktion von App-Rechten sofort wirksam? | T19d | |
+| User-Projekt mit App-Token: Fehlertyp/Meldung? Fine-grained PAT für User-Projekte möglich? | T25c | |
+| `fieldValueByName` case-sensitiv? | T25b | |
+| GraphQL-Kosten je Poll? | T25e | |
 
 ### 5.2 Bei Abweichungen
 
@@ -1280,6 +1364,9 @@ Vorgehen nach `docs/conventions.md`:
 | A11 Autor-Felder anders | `authorPredicate` in `adapter.ts`, `FakeGitHub.addComment` (`viaAppId`, `type`). Ohne `performed_via_github_app` ggf. `user.login === '<slug>[bot]'` über `describe()` (`IdentityDescription`, `src/core/types.ts`) |
 | PR-Dependencies 404 (T10 b) | Doku: Dependency-Filter nicht für PR-Workflows (`reviewer-test`, README, Beispiel-Configs). Optional: `resolveDependencies` für `type: pull_request` → `ok/0` (Entscheidung nötig: fail-closed vs. „PRs haben keine Blocker“) |
 | Retry erzeugt Duplikat (T7/T8) | `performSourceComment` (`src/lifecycle/performers.ts`), `findCommentByMarker` / `markerPattern` (`adapter.ts`) |
+| A12–A16 GraphQL/Projects anders | `src/sources/github/project.ts` (Queries, Auswertung), `GitHubHttpClient.graphql`, `FakeGitHub` GraphQL (`src/sources/github/testing/fake-github.ts`), Doku §3.2/§4.7.1 der Konfigurationsreferenz |
+| A13 User-Projekte auch per App lesbar bzw. nicht per Token | Doku (`configuration-reference.md` §3.2, README, `init`-Vorlage) |
+| A17 Autor-Login anders | `authorPredicate` / `userLogin` in `adapter.ts` |
 | Sekundäres Rate-Limit bei vielen Hooks | Drosselung schreibender Requests (≥ 1 s Abstand laut [R8](#r8)) in `GitHubHttpClient` fehlt. Als Folge-Work-Item aufnehmen |
 
 ### 5.3 Aufräumen

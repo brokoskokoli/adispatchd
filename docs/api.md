@@ -78,7 +78,7 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 
 ```json
 {
-  "version": "0.1.0", "startedAt": "…", "time": "…",
+  "version": "0.2.0", "startedAt": "…", "time": "…",
   "readiness": { "ready": true, "checks": { … } },
   "scheduler": { "state": "running|paused|draining|stopping|recovering", "ready": true, "paused": false, "draining": false,
                  "stopping": false, "pollingIntervalMs": 30000,
@@ -111,7 +111,7 @@ Beispiel: `curl -X POST -H 'X-Adispatch-Request: 1' http://127.0.0.1:8787/api/v1
 | GET | `/api/v1/workflows/:id` | – | Workflow + `diagnosis` (letzte Planungsdiagnose), `filter`, `hooks` |
 | PATCH | `/api/v1/workflows/:id/runtime` | `{"enabled"?: bool\|null, "priority"?: number\|null, "maxConcurrent"?: int≥1\|null}` (`null` = Override entfernen) | `200` Workflow |
 | POST | `/api/v1/workflows/:id/start` | `{"item"?: "https://github.com/o/r/issues/7" \| "#7" \| "7", "parameters"?: {…}}` | `202 {"run": RunSummary}` |
-| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`) |
+| POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14) |
 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
 `overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?}}`,

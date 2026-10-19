@@ -8,7 +8,7 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
 | Pfad (Vorschlag) | Inhalt | Eigentümer / Modus |
 |---|---|---|
 | `/etc/adispatchd/` (config-dir) | `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/`, `views/`, `scripts/` | `root:adispatchd`, Verzeichnisse 0750, Dateien 0640, Skripte 0750 |
-| `/etc/default/adispatchd` | Secrets als Umgebungsvariablen (GitHub-App-Keys, Webhook-URLs) | `root:adispatchd`, 0640 |
+| `/etc/default/adispatchd` | Secrets als Umgebungsvariablen (GitHub-App-Keys, GitHub-Tokens, Webhook-URLs) | `root:adispatchd`, 0640 |
 | `/var/lib/adispatchd/` (data-dir) | `adispatchd.sqlite` (+ `-wal`/`-shm`), `adispatchd.lock`, `logs/`, `runs/`, `workspaces/`, `backups/` | `adispatchd`, 0750 |
 | Paket, z. B. `/usr/lib/node_modules/adispatchd/` | Code (`dist/`), wird bei Updates ersetzt | `root`, nur lesbar für den Dienst |
 
@@ -28,8 +28,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.1.0
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.1.0.tgz
+sudo npm install -g adispatchd@0.2.0
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.2.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -50,6 +50,21 @@ sudo systemctl start adispatchd
 adispatch status --config-dir /etc/adispatchd
 journalctl -u adispatchd -f
 ```
+
+In die Env-Datei gehören alle Variablen, die `identities.yaml` und `config.yaml` nennen: `private_key_env` der
+GitHub Apps, `token_env` von `github_token`-Identities (z. B. für user-eigene GitHub Projects) und `url_env`/`headers_env`
+der Webhooks. Beispiel:
+
+```bash
+# /etc/default/adispatchd (0640, root:adispatchd)
+GITHUB_MAINTAINER_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n…\n-----END RSA PRIVATE KEY-----"
+GITHUB_PROJECT_TOKEN=github_pat_…        # identities.yaml: project_reader: { type: github_token, token_env: GITHUB_PROJECT_TOKEN }
+```
+
+Tokens werden beim Start gelesen und in allen Logs redigiert; eine fehlende/leere Variable steht als Fehler im Journal
+(„GitHub token identity not usable“), Zugriffe mit dieser Identity scheitern dann. Änderungen an der Env-Datei wirken erst
+nach `systemctl restart adispatchd`. Für Projektfelder org-eigener Projekte braucht die lesende GitHub App zusätzlich
+die Berechtigung **Organization → Projects: Read** (nach dem Ändern der App-Rechte die Installation bestätigen).
 
 Optionen von `service install`: `--user`/`--group` (Default `adispatchd`), `--create-user`, `--name` (Unit-Name),
 `--node`/`--entry` (absolute Pfade, Default: das laufende Node und diese Installation), `--env-file <pfad|none>`,
@@ -259,6 +274,8 @@ Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen i
 | „Database schema version … is newer than this build supports“ | data-dir stammt von einer neueren Version → passende Version installieren oder Backup einspielen. |
 | `ExperimentalWarning: SQLite` | Node 22: `node:sqlite` ist experimentell; Node 24 verwenden. |
 | `GITHUB_…_PRIVATE_KEY is not set` | Env-Datei fehlt/unvollständig (`systemctl show adispatchd -p EnvironmentFiles`). |
+| `Token for identity "…" missing: environment variable … is not set or empty` | `token_env` einer `github_token`-Identity fehlt in der Env-Datei → eintragen, Neustart. |
+| Warnung „GitHub project field unavailable“, Dry-Run `project.* unknown – GitHub project … unavailable` | Projekt nicht gefunden oder kein Zugriff: Nummer/Owner prüfen; Org-Projekt → App-Recht *Projects: Read*; User-Projekt → `github_token`-Identity als `project.identity`. Feld fehlt / falsche Art → `project.fields` an das Projekt anpassen. |
 
 ## Bekannte Grenzen
 

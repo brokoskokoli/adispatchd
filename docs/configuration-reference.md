@@ -37,7 +37,7 @@
 config-dir/
   config.yaml          globale Einstellungen                      optional (fehlt → Warnung, Defaults)
   sources.yaml         externe Quellen (V1: GitHub-Repositories)  optional (fehlt → keine Sources)
-  identities.yaml      GitHub-App-Identitäten                     optional (fehlt → keine Identities)
+  identities.yaml      GitHub-Identitäten (Apps, Tokens)          optional (fehlt → keine Identities)
   workflows/*.yaml     ein Workflow pro Datei                     optional (fehlt → keine Workflows)
   views/*.yaml         eine View pro Datei                        optional
   scripts/…            frei; Skripte werden über Pfade referenziert (siehe §2.4)
@@ -93,8 +93,9 @@ Folgefehler sind möglich: Ist z. B. `identities.yaml` ungültig, meldet `source
 `Unknown identity "…"`. Den ersten Fehler zuerst beheben.
 
 Der Loader liest **keine** Umgebungsvariablen. `config validate` prüft also nicht, ob `private_key_env`,
-`url_env` oder `headers_env` gesetzt sind, und es prüft weder Skriptpfade auf Existenz noch App-Rechte oder die
-Erreichbarkeit von GitHub. Feldnamen werden offline gegen den statischen Feldkatalog geprüft (§4.3).
+`token_env`, `url_env` oder `headers_env` gesetzt sind, und es prüft weder Skriptpfade auf Existenz noch App-Rechte
+oder die Erreichbarkeit von GitHub. Feldnamen werden offline gegen den Feldkatalog geprüft (§4.3) – auch
+`project.*` nur gegen die Deklaration in `sources.yaml`, nicht gegen das echte Projekt (das zeigt erst der Dry-Run).
 Exit-Code: 0 = gültig (ggf. mit Warnungen), 1 = ungültig.
 
 ### 1.5 Wann Änderungen wirken
@@ -121,7 +122,7 @@ Konfigurationsänderungen wirken **nur** durch einen manuellen Reload (`adispatc
 | `sources.yaml`, `identities.yaml` | Adapter/Credentials werden neu aufgebaut, wenn sich etwas geändert hat; entfernte bleiben für laufende Runs verfügbar |
 | Workflows | sofort für Planung/Cron; geänderte Cron-Ausdrücke planen ab „jetzt“; Cache der Workflow-Conditions wird geleert |
 | Views | sofort; View-Cache wird verworfen |
-| Umgebungsvariablen (Keys, Webhook-URLs, Header) | gehören zum Prozess, nicht zur Konfiguration → Änderung erfordert **Neustart** |
+| Umgebungsvariablen (Keys, Tokens, Webhook-URLs, Header) | gehören zum Prozess, nicht zur Konfiguration → Änderung erfordert **Neustart** |
 
 **Runtime-Overrides** (UI bzw. `PATCH /api/v1/workflows/:id/runtime`, `PATCH /api/v1/scheduler/runtime`):
 pro Workflow `enabled`, `priority`, `maxConcurrent`, global `maxConcurrent`. Sie werden **nicht persistiert**
@@ -323,6 +324,17 @@ sources:
     owner: example
     repository: project-b
     identity: maintainer
+    project:                 # optional: Felder eines GitHub-Projects-(v2)-Boards als project.<Name>
+      owner: example         # User- oder Org-Login des Projekts (Default: owner der Source)
+      number: 3              # Projektnummer aus der URL …/projects/3
+      identity: maintainer   # liest das Projekt (Default: identity der Source)
+      fields:                # Name (wie im Projekt) → Art
+        Status: single_select
+        Priority: single_select
+        Estimate: number
+        Due: date
+        Sprint: iteration
+        Notes: text
 ```
 
 | Schlüssel | Typ | Pflicht | Regeln | Bedeutung |
@@ -332,9 +344,30 @@ sources:
 | `<id>.owner` | String | ja | nicht leer (Format nicht geprüft) | Owner/Organisation |
 | `<id>.repository` | String | ja | nicht leer | Repository-Name; `{source.repository}` und Feld `repository` = `owner/repository` in der hier geschriebenen Schreibweise |
 | `<id>.identity` | Identity-ID | ja | muss in `identities.yaml` existieren | liest Issues/PRs/Dependencies; Fallback für Schreibaktionen (§6.10) |
+| `<id>.project` | Objekt | nein | strikt | GitHub-Projects-(v2)-Projekt, dessen Felder als `project.<Name>` verfügbar sind (§4.7.1) |
+| `<id>.project.owner` | String | nein | nicht leer; Default = `<id>.owner` | User- **oder** Org-Login, dem das Projekt gehört |
+| `<id>.project.number` | Integer | ja | > 0 | Projektnummer aus `https://github.com/orgs/<org>/projects/<n>` bzw. `…/users/<user>/projects/<n>` |
+| `<id>.project.identity` | Identity-ID | nein | muss existieren; Default = `<id>.identity` | Identity für die Projekt-Abfragen (z. B. eine `github_token`-Identity für User-Projekte, §3.3) |
+| `<id>.project.fields` | Map Feldname → Art | ja | mind. ein Eintrag; Name nicht leer, ohne führende/abschließende Leerzeichen und ohne Steuerzeichen; Art `single_select`, `text`, `number`, `date`, `iteration` | Felder, auf die gefiltert/sortiert werden soll |
 
 Nur `github.com` wird unterstützt (keine Einstellung für GitHub Enterprise). Gelesen werden Issues **und** Pull
 Requests des Repositories über `GET /repos/{owner}/{repo}/issues`, standardmäßig **nur offene** (siehe §4.5).
+
+**Projektfelder (`project`).** Jeder Eintrag in `fields` wird zum Feld `project.<Name>` (Name genau wie unter
+`fields` geschrieben, z. B. `project.Status`), nutzbar in `filter`, `item_priority` und in Views (`fields`, `sort`,
+`link`). Feldtyp je Art: `single_select` (Name der Option), `text` und `iteration` (Titel der Iteration) → `string`;
+`number` → `number`; `date` → `date`. Der Abgleich mit dem Projekt vergleicht den Feldnamen **ohne** Beachtung der
+Groß-/Kleinschreibung (`status` findet `Status`); die **Werte** werden wie alle Strings außer `labels` mit
+Groß-/Kleinschreibung verglichen. Gelesen wird per GraphQL im selben Planungsschritt wie die Issue-Liste (zwei
+Abfragen: Projekt-Metadaten einmal pro Listing, Werte in Blöcken zu 50 Items) – die Felder sind daher **nicht
+teuer** und haben **keinen Pushdown**. Unbekannt-Regeln: §4.7.1.
+
+**Rechte.** Org-eigene Projekte lassen sich mit der GitHub App lesen, wenn sie die Berechtigung
+**Organization → Projects: Read** hat (in der App-Konfiguration hinzufügen und in der Installation bestätigen).
+**User-eigene** Projekte sind für GitHub-App-Installationstoken nicht zugänglich: dafür eine Identity vom Typ
+`github_token` (§3.3) mit einem Token des Users anlegen (fine-grained Personal Access Token mit
+**Projects: Read** bzw. klassischer Token mit `read:project`) und als `project.identity` eintragen. Die Source selbst
+kann weiter per App lesen.
 
 ### 3.3 identities.yaml
 
@@ -352,15 +385,19 @@ identities:
     app_id: 100002
     installation_id: 200002
     private_key_env: GITHUB_CODER_PRIVATE_KEY
+  project_reader:
+    type: github_token                 # z. B. fine-grained Personal Access Token
+    token_env: GITHUB_PROJECT_TOKEN    # Name der Env-Variable, nie der Token selbst
 ```
 
 | Schlüssel | Typ | Pflicht | Regeln | Bedeutung |
 |---|---|---|---|---|
 | `identities` | Map Identity-ID → Identity | nein (Default `{}`) | Schlüssel = Konfigurations-ID | |
-| `<id>.type` | `github_app` | ja | einziger Typ in V1 | |
-| `<id>.app_id` | Integer | ja | > 0 | GitHub-App-ID (auch zur Erkennung eigener Kommentare) |
-| `<id>.installation_id` | Integer | ja | > 0 | Installation der App im Ziel-Owner |
-| `<id>.private_key_env` | Env-Name | ja | `^[A-Za-z_][A-Za-z0-9_]*$` | Name der Umgebungsvariable mit dem privaten Schlüssel |
+| `<id>.type` | `github_app` \| `github_token` | ja | | Art der Identity |
+| `<id>.app_id` | Integer | ja (`github_app`) | > 0 | GitHub-App-ID (auch zur Erkennung eigener Kommentare) |
+| `<id>.installation_id` | Integer | ja (`github_app`) | > 0 | Installation der App im Ziel-Owner |
+| `<id>.private_key_env` | Env-Name | ja (`github_app`) | `^[A-Za-z_][A-Za-z0-9_]*$` | Name der Umgebungsvariable mit dem privaten Schlüssel |
+| `<id>.token_env` | Env-Name | ja (`github_token`) | `^[A-Za-z_][A-Za-z0-9_]*$` | Name der Umgebungsvariable mit dem Token |
 
 **Secrets über die Umgebung:** Der Schlüssel steht nie in YAML. Die Variable muss in der Umgebung des
 Orchestrator-Prozesses gesetzt sein (unter systemd: `EnvironmentFile`, Default `/etc/default/adispatchd`,
@@ -372,7 +409,18 @@ ungültig, scheitert der jeweilige Zugriff mit einem nicht wiederholbaren Authen
 in der Planungsdiagnose, `start_error` bei `execute.secrets`, endgültig gescheiterte Action). Aus dem Schlüssel
 werden kurzlebige Installation-Tokens erzeugt und im Speicher gecacht; Schlüssel, JWT und Tokens werden in Logs
 redigiert. Minimale App-Rechte: Issues lesen/schreiben, Pull Requests schreiben (Labels/Kommentare auf PRs),
-Metadata lesen.
+Metadata lesen; für Projektfelder org-eigener Projekte zusätzlich **Organization → Projects: Read** (§3.2).
+
+**`github_token`** (seit 0.2.0): ein langlebiger GitHub-Token, vor allem für **user-eigene Projekte**, die
+GitHub-App-Installationstoken nicht lesen können (§3.2). Der Token wird beim Start des Dienstes (bzw. beim Aufbau
+der Credentials nach einem Reload) aus `token_env` gelesen und sofort beim Redactor registriert; er erscheint nie in
+Logs, API-Antworten oder der Datenbank. Fehlt die Variable oder ist sie leer, wird das beim Start als Fehler
+geloggt, und jeder Zugriff mit dieser Identity scheitert mit einem nicht wiederholbaren Authentifizierungsfehler
+(wie beim fehlenden Private Key). Nach einem 401 wird die Variable einmal neu gelesen. Eine `github_token`-Identity
+kann überall verwendet werden, wo Identities erlaubt sind (Source, `project.identity`, `execute.secrets`,
+Schreib-Actions). **Kommentar-Marker** (`source.comment`-Idempotenz, §3.4.11) erkennt der Adapter bei
+`github_token` am **Autor-Login**: beim ersten Gebrauch fragt er `GET /user` ab und cacht den Login; ein Kommentar
+mit Marker zählt nur, wenn `user.login` gleich diesem Login ist (bei Apps: `performed_via_github_app.id`).
 
 ### 3.4 workflows/*.yaml
 
@@ -695,7 +743,7 @@ sort: { field: updated_at, direction: desc }
 | `filter` | Filter-AST | nein | alles | §4; inkl. `run.last_*` | nur Items mit Ergebnis `true` werden gezeigt |
 | `shell_filter` | – | – | | **verboten** (Fehler) | Views führen nie Skripte aus |
 | `fields` | Liste | ja | | ≥ 1 | Spalten in Reihenfolge |
-| `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen | Feldname (§4.7, §4.8) |
+| `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen; `project.*` nur, wenn **alle** Sources der View es mit gleicher Art deklarieren (§4.7.1) | Feldname (§4.7, §4.8) |
 | `fields[].label` | String | nein | Feldname | | Spaltenüberschrift |
 | `fields[].link` | String (Feldname, geprüft wie `field`) | nein | `link` der Felddefinition (`number`, `title` → `url`) | | Feld, dessen Wert (nur absolute `http(s)`-URL) als Link dient |
 | `sort.field` | String | ja (wenn `sort`) | | geprüft wie `fields[].field` | Sortierfeld |
@@ -714,7 +762,11 @@ ein Konfigurationsfehler (§4.3).
 - `shell`-Actions: Frist zwischen `SIGTERM` und `SIGKILL` fest **5 s**, Log-Limit fest **10 MiB** pro Versuch –
   nicht konfigurierbar (`execute.cancel_grace` und `retention.max_log_size_per_run` gelten nur für den Haupt-Worker).
 - Prüfskripte (Conditions, `shell_filter`): Ausgabe wird bis 16 KiB je Stream erfasst, SIGTERM→SIGKILL nach 2 s.
-- Nur Adapter `github` (github.com), nur Identity-Typ `github_app`, nur Kanaltyp `webhook`, nur Executor `shell`.
+- Nur Adapter `github` (github.com), Identity-Typen `github_app` und `github_token`, nur Kanaltyp `webhook`, nur
+  Executor `shell`.
+- Projektfelder: ein Projekt je Source; Metadaten lesen die ersten 100 Felder des Projekts; je Issue/PR werden die
+  ersten 20 (nicht archivierten) Projekt-Mitgliedschaften gelesen (mehr → unknown, §4.7.1). Kein Pushdown: die
+  Issue-Liste wird wie bisher nur über `state`/`labels` eingeschränkt.
 
 ---
 
@@ -782,9 +834,14 @@ und `source.update` (`Ready` passt auf `ready`). Alle anderen String-Vergleiche 
   `item_priority.rules[].when`; Views: `filter`, `fields[].field`, `fields[].link`, `sort.field`): unbekannte
   Feldnamen (mit Vorschlag „did you mean …“), nicht erlaubte Operatoren, falsche Werttypen, ungültige Datumswerte.
 - `run.last_*` ist nur in Views erlaubt; in Workflows ist es ein Fehler („only available in views“).
+- `project.<Name>` gibt es je Source genau für die in `sources.yaml` unter `project.fields` deklarierten Namen
+  (Workflow: die Trigger-Source; View: nur Felder, die alle Sources der View mit gleicher Art deklarieren). Sonst
+  Fehler `Unknown project field "…"` mit Grund (nicht deklariert / keine `project`-Einstellung / fehlt in Source X /
+  Art unterschiedlich) und ggf. „did you mean …“.
 - Kann ein bekanntes Feld zur Laufzeit nicht ermittelt werden (fehlender API-Zugriff, z. B. Cross-Repo-Blocker
-  ohne Rechte), ist es **unknown** – nie 0, leer oder `false` („fail closed“). `workflow dry-run` zeigt pro Regel
-  den Wert und den Grund.
+  ohne Rechte, kein Zugriff aufs Projekt), ist es **unknown** – nie 0, leer oder `false` („fail closed“).
+  `workflow dry-run` zeigt pro Regel den Wert und den Grund, zusätzlich je Kandidat alle `project.*`-Werte bzw.
+  deren Unknown-Grund.
 
 ### 4.4 Dreiwertige Logik (Kleene)
 
@@ -845,6 +902,10 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 | `updated_at` | date | equals, not_equals, greater_than, less_than | | | letzte Änderung |
 | `url` | string | equals, not_equals, contains, in | | | Web-URL |
 | `repository` | string | equals, not_equals, contains, in | | | `owner/repository` (wie in `sources.yaml`) |
+| `state_reason` | string | equals, not_equals, contains, in | | | Grund für Schließen/Wiedereröffnen wie von GitHub geliefert (`completed`, `not_planned`, `reopened`, `duplicate`, …); `null`, wenn nicht gesetzt |
+| `milestone` | string | equals, not_equals, contains, in | | | Titel des Milestones; `null` ohne Milestone |
+| `issue_type` | string | equals, not_equals, contains, in | | | Name des Issue-Typs (`type.name`, z. B. `Bug`, `Feature`, `Task`; nur bei Organisationen mit Issue-Typen); `null` ohne Typ |
+| `project.<Name>` | je Art (§4.7.1) | je Typ (§4.2) | | | Feld des in `sources.yaml` konfigurierten GitHub-Projekts; nur deklarierte Namen |
 | `dependencies.blocked_by_total` | number | equals, not_equals, in, greater_than, less_than | | ja | Anzahl blockierender Issues (native „blocked by“, inkl. Cross-Repo) |
 | `dependencies.blocked_by_open` | number | equals, not_equals, in, greater_than, less_than | | ja | davon offen; unknown ohne Zugriff |
 | `dependencies.blocked` | boolean | equals, not_equals | | ja | mindestens ein Blocker offen; unknown ohne Zugriff |
@@ -853,6 +914,39 @@ unknown falls ein Kind unknown, sonst `false`. Ergebnis für den Start: **nur `t
 Abhängigkeiten sind unknown, wenn die API-Zusammenfassung fehlt, ein Blocker einen unerwarteten Status hat oder die
 Identity weniger Blocker sieht, als GitHub meldet. „Offen ⇒ kein Start“ gilt nur, wenn der Filter das ausdrücklich
 verlangt (z. B. `dependencies.blocked_by_open equals 0`).
+
+#### 4.7.1 Projektfelder `project.<Name>`
+
+Verfügbar je Source, die `project` deklariert (§3.2). Typ je Art:
+
+| Art (`project.fields`) | Feldtyp | Wert | GitHub-`dataType` |
+|---|---|---|---|
+| `single_select` | string | Name der gewählten Option | `SINGLE_SELECT` |
+| `text` | string | Text | `TEXT` |
+| `iteration` | string | Titel der Iteration (z. B. `Sprint 7`) | `ITERATION` |
+| `number` | number | Zahl | `NUMBER` |
+| `date` | date | Datum `YYYY-MM-DD` | `DATE` |
+
+„A **oder** B“: `{ field: project.Status, operator: in, value: [Todo, Ready] }` oder ein `any`. Werte vergleichen
+mit Groß-/Kleinschreibung, so wie sie im Projekt heißen.
+
+Bekannt **leer** (`null`) ist ein Feld, wenn das Item im Projekt ist, das Feld aber keinen Wert hat, **oder** wenn
+das Item gar nicht im Projekt ist (und höchstens 20 Projekt-Mitgliedschaften hat). `equals null` trifft dann zu,
+`in [...]` ist `false`.
+
+**unknown** (fail closed, Grund in Dry-Run und Diagnose) sind:
+
+| Situation | betroffene Felder | Log |
+|---|---|---|
+| Projekt nicht gefunden, kein Zugriff (z. B. fehlende App-Berechtigung, User-Projekt mit App-Token), GraphQL-/HTTP-Fehler, Rate-Limit bei den Metadaten | alle `project.*` der Source | Warnung nur bei Änderung des Grundes |
+| deklariertes Feld fehlt im Projekt oder hat einen anderen `dataType` als die Art verlangt | genau dieses Feld | Warnung nur bei Änderung des Grundes |
+| Werte-Abfrage scheitert (HTTP, GraphQL ohne verwertbare Daten, Rate-Limit) | alle `project.*` der betroffenen Items | Warnung |
+| Item für die Projekt-Identity nicht lesbar | alle `project.*` dieses Items | – |
+| Item gehört zu mehr als 20 Projekten und das konfigurierte ist nicht unter den gelesenen | alle `project.*` dieses Items | – |
+
+Das Listing selbst scheitert wegen des Projekts **nie**; die übrigen Felder bleiben bekannt. Archivierte
+Projekt-Items zählen als „nicht im Projekt“. Vor `on_start` liest der Run-Controller das Item frisch (inkl.
+Projektwerten; Projekt-Metadaten dürfen dafür bis zu 5 Minuten alt sein) und prüft den billigen Filterteil erneut.
 
 ### 4.8 Run-Felder für Views
 
@@ -1069,9 +1163,10 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
 | Zugriff | Identity |
 |---|---|
 | Pollen, Item lesen, Dependencies auflösen, Item-Re-Read vor `on_start` | `sources.<id>.identity` |
+| Projektfelder lesen (`project.*`, GraphQL) | `sources.<id>.project.identity` → `sources.<id>.identity` |
 | `source.update` (inkl. Re-Read vor dem Schreiben) | Workflow-`identity` → Source-`identity` |
 | `source.comment` (inkl. Marker-Suche) | Action-`identity` → Workflow-`identity` → Source-`identity` |
-| `execute.secrets.<NAME>` | die angegebene Identity (Installation-Token, ca. 1 h gültig, beim Start geholt) |
+| `execute.secrets.<NAME>` | die angegebene Identity (Installation-Token, ca. 1 h gültig, beim Start geholt; bei `github_token` der Token selbst) |
 | `shell`-Actions, Conditions, `shell_filter` | keine (keine Secrets) |
 
 ### 6.11 Umgebung von Worker, Actions und Prüfskripten
@@ -1096,7 +1191,8 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 
 `adispatch workflow dry-run <id>` (gegen die laufende Instanz, sonst mit `--config-dir` lokal) bzw.
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
-Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert). Reserviert nichts, startet keine Worker oder Actions
+Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
+`project.*`-Felder (`projectFields`). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 
@@ -1370,6 +1466,96 @@ notifications:
 
 Umgebung (z. B. `/etc/default/adispatchd`): `SLACK_WEBHOOK_URL=https://hooks.slack.com/services/…`,
 `OPS_WEBHOOK_AUTH=Bearer …`. Danach **Neustart** (Env-Änderung) bzw. `config reload` (nur YAML-Änderung).
+
+### 7.7 Filter auf Projektstatus und Priorität
+
+`project_a` liest das Board der Organisation per App (Berechtigung **Organization → Projects: Read**),
+`project_b` ein **user-eigenes** Board über eine `github_token`-Identity, das Repository selbst weiter per App.
+Der Coder startet Items, deren Projektstatus `Todo` **oder** `Ready` ist; `P0`/`P1` kommen zuerst.
+
+```yaml
+# example: projects
+# extends: github
+# file: identities.yaml
+identities:
+  maintainer: { type: github_app, app_id: 100001, installation_id: 200001, private_key_env: GITHUB_MAINTAINER_PRIVATE_KEY }
+  coder:      { type: github_app, app_id: 100002, installation_id: 200002, private_key_env: GITHUB_CODER_PRIVATE_KEY }
+  reviewer:   { type: github_app, app_id: 100003, installation_id: 200003, private_key_env: GITHUB_REVIEWER_PRIVATE_KEY }
+  project_reader: { type: github_token, token_env: GITHUB_PROJECT_TOKEN }
+```
+
+```yaml
+# example: projects
+# file: sources.yaml
+sources:
+  project_a:
+    type: github
+    owner: example
+    repository: project-a
+    identity: maintainer
+    project:
+      number: 3                        # https://github.com/orgs/example/projects/3
+      fields: { Status: single_select, Priority: single_select, Estimate: number, Sprint: iteration }
+  project_b:
+    type: github
+    owner: example
+    repository: project-b
+    identity: maintainer
+    project:
+      owner: alice                     # https://github.com/users/alice/projects/1
+      number: 1
+      identity: project_reader         # App-Tokens können User-Projekte nicht lesen
+      fields: { Status: single_select, Priority: single_select }
+```
+
+```yaml
+# example: projects
+# file: workflows/board-coder.yaml
+id: board-coder
+name: Coder – Board
+identity: coder
+trigger: { type: source, source: project_a }
+filter:
+  all:
+    - { field: project.Status, operator: in, value: [Todo, Ready] }
+    - { field: issue_type, operator: not_equals, value: Epic }
+    - { field: dependencies.blocked_by_open, operator: equals, value: 0 }
+item_priority:
+  rules:
+    - when: { field: project.Priority, operator: in, value: [P0, P1] }
+      value: 100
+    - when: { field: project.Estimate, operator: less_than, value: 3 }
+      value: 10
+  default: 0
+execute:
+  type: shell
+  command: scripts/coder.sh
+  args: ['{item.url}']
+on_start:
+  - type: source.update
+    labels: { add: [coding] }
+```
+
+```yaml
+# example: projects
+# file: views/board.yaml
+id: board
+title: Board
+sources: [project_a, project_b]        # beide deklarieren Status und Priority als single_select
+filter: { field: project.Status, operator: not_equals, value: Done }
+fields:
+  - { field: title, link: url }
+  - { field: repository }
+  - { field: project.Status, label: Status }
+  - { field: project.Priority, label: Priorität }
+  - { field: milestone }
+sort: { field: project.Priority }
+```
+
+Umgebung: `GITHUB_PROJECT_TOKEN=github_pat_…` (fine-grained Token von `alice` mit **Projects: Read**, bzw.
+klassisch `read:project`) in der Env-Datei, danach Neustart. `project.Sprint` gibt es nur in Workflows auf
+`project_a`; in der View wäre es ein Fehler, weil `project_b` es nicht deklariert. Ohne Projektzugriff ist der
+Filter `unknown` (kein Start) und der Dry-Run nennt den Grund.
 
 ---
 
@@ -1671,6 +1857,63 @@ execute: { type: shell, command: scripts/coder.sh }
 Lösung: Feldnamen aus §4.7 (Views zusätzlich §4.8), Operatoren laut §4.2, Booleans unquotiert, Datumswerte ISO.
 In Views werden auch `fields[].field`, `fields[].link` und `sort.field` so geprüft.
 
+**Projektfelder** – nur deklarierte `project.*`-Felder, in Views nur die gemeinsamen.
+
+```yaml
+# example: err-project
+# extends: projects
+# invalid
+# expect: workflows/board-coder.yaml: filter.all[0].field: Unknown project field "project.Statsu": it is not declared in "project.fields" of source "project_a" (did you mean "project.Status"?)
+# expect: workflows/board-coder.yaml: filter.all[1].value: Value for field "project.Estimate" (type number) must be a number, got string "3"
+# expect: views/board.yaml: sort.field: Unknown project field "project.Sprint": views only offer project fields declared by all their sources (missing in "project_b")
+# expect: sources.yaml: sources.project_b.project.identity: Unknown identity "project-reader"
+# file: workflows/board-coder.yaml
+id: board-coder
+trigger: { type: source, source: project_a }
+filter:
+  all:
+    - { field: project.Statsu, operator: in, value: [Todo, Ready] }
+    - { field: project.Estimate, operator: less_than, value: '3' }
+execute: { type: shell, command: scripts/coder.sh }
+```
+
+```yaml
+# example: err-project
+# file: views/board.yaml
+id: board
+sources: [project_a, project_b]
+fields: [ { field: title } ]
+sort: { field: project.Sprint }
+```
+
+```yaml
+# example: err-project
+# file: sources.yaml
+sources:
+  project_a:
+    type: github
+    owner: example
+    repository: project-a
+    identity: maintainer
+    project:
+      number: 3
+      fields: { Status: single_select, Estimate: number, Sprint: iteration }
+  project_b:
+    type: github
+    owner: example
+    repository: project-b
+    identity: maintainer
+    project: { owner: alice, number: 1, identity: project-reader, fields: { Status: single_select } }
+```
+
+Lösung: Feldnamen genau wie unter `project.fields` (Tippfehler zeigt „did you mean“), Werttyp passend zur Art
+(`number` unquotiert), in Views nur Felder, die alle Sources mit gleicher Art deklarieren, `project.identity` muss
+existieren. Ohne `project` an der Source meldet jedes `project.*` `source "…" has no "project" configured in
+sources.yaml`. Weitere Meldungen in `sources.yaml`: `Expected one of: single_select, text, number, date, iteration`
+(unbekannte Art), `Declare at least one project field`, `Project field name must not start or end with
+whitespace`, `Project field name must not contain control characters`; in Views zusätzlich `its kind differs
+between the sources of the view`.
+
 **`state` an wirkungsloser Stelle** – die Source liest ohne `state`-Selektor auf oberster Ebene nur offene Items.
 
 ```yaml
@@ -1758,19 +2001,24 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Invalid size "100" (expected e.g. 512KB, 100MB, 1GB)` | String ohne oder mit unbekannter Einheit (`'100'`, `'100MiBs'`) |
 | `config.yaml not found, using defaults` (Warnung) | `config.yaml` fehlt |
 
-Laufzeitfehler, die `config validate` **nicht** findet: fehlende Umgebungsvariablen (Keys, Webhooks),
-nicht existierende/nicht ausführbare Skripte, fehlende App-Rechte (→ Felder unknown bzw. Actions scheitern). Dafür: `workflow dry-run` und die Run-Details.
+Laufzeitfehler, die `config validate` **nicht** findet: fehlende Umgebungsvariablen (Keys, Tokens, Webhooks),
+nicht existierende/nicht ausführbare Skripte, fehlende App-Rechte (→ Felder unknown bzw. Actions scheitern),
+Projekt nicht gefunden bzw. deklariertes Projektfeld fehlt im Projekt oder hat eine andere Art (→ `project.*`
+unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 
 ---
 
 ## 9. Checkliste „neuen Workflow anlegen“
 
 1. **Trigger wählen:** `source` (Items), `schedule` (Cron) oder `manual`.
-2. **Voraussetzungen:** Source in `sources.yaml`, Identities in `identities.yaml`, Private Keys als
-   Umgebungsvariablen des Dienstes (Env-Datei, danach Neustart), App-Rechte prüfen.
+2. **Voraussetzungen:** Source in `sources.yaml`, Identities in `identities.yaml`, Private Keys/Tokens als
+   Umgebungsvariablen des Dienstes (Env-Datei, danach Neustart), App-Rechte prüfen. Für Projektfelder: `project`
+   an der Source mit allen benötigten Feldern und passender Art; Org-Projekt → App-Recht **Projects: Read**,
+   User-Projekt → `github_token`-Identity als `project.identity`.
 3. **Datei** `workflows/<id>.yaml` anlegen (Dateiname = `id`), am besten mit `enabled: false` beginnen.
 4. **Filter** nur mit Feldern aus §4.7; Labels exakt schreiben; für geschlossene Items ein `state`-Prädikat auf
-   oberster Ebene; teure `dependencies.*` nur wenn nötig.
+   oberster Ebene; teure `dependencies.*` nur wenn nötig; Projektwerte (`project.Status in [...]`) genau so
+   schreiben, wie sie im Projekt heißen (Groß-/Kleinschreibung zählt).
 5. **execute:** Skript ausführbar machen (`chmod +x`), Pfad relativ zum config-dir oder absolut; Argumente als
    Liste; Timeouts setzen; Secrets nur über `secrets`.
 6. **Hooks:** Label-Übergänge für jeden Ausgang (`on_start`, `on_success`, `on_failure`, `on_crash`,
@@ -1778,7 +2026,8 @@ nicht existierende/nicht ausführbare Skripte, fehlende App-Rechte (→ Felder u
    matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab).
 7. **Validieren:** `adispatch config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
 8. **Trockenlauf:** `adispatch workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
-   (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität.
+   (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität; bei Projektfeldern die Zeilen
+   `project fields:` (Werte oder Unknown-Grund, z. B. fehlende Rechte).
 9. **Aktivieren:** `enabled: true` setzen und `adispatch config reload --config-dir <dir>` (bei Fehlern
    bleibt die alte Konfiguration aktiv). Alternativ zuerst ein manueller Start über die UI.
 10. **Beobachten:** erster Run in der UI (Status, Logs, Lifecycle-Journal), ggf. `max_concurrent` per Override

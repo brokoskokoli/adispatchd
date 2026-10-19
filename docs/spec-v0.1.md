@@ -182,6 +182,8 @@ identities:
 
 Die Secrets liegen nicht in YAML oder Run-Kontexten. Der Credential-Provider erzeugt kurzlebige Installation Tokens. GitHub Apps sind jeweils eigene Bot-Identitäten; alle parallelen Coder verwenden denselben Coder-Bot. Berechtigungen der Apps werden minimal gehalten. Kein Token wird standardmäßig an einen Worker durchgereicht.
 
+**Nachtrag 0.2.0 (WI-14):** Zweiter Identity-Typ `github_token` mit `token_env` (Name der Env-Variable mit einem langlebigen Token, z. B. fine-grained PAT), vor allem für user-eigene GitHub Projects, die Installation-Tokens nicht lesen können. Der Token wird beim Start gelesen und redigiert; ein Composite-Provider leitet je Identity an den Provider ihrer Art. Marker-Kommentare solcher Identities werden am Login des Token-Users erkannt (`GET /user`). Eine GitHub-Source kann zusätzlich `project: { owner, number, identity, fields }` deklarieren (Details: [configuration-reference.md](configuration-reference.md) §3.2, §3.3).
+
 ### 5.4 Source-Workflow
 
 ```yaml
@@ -316,6 +318,8 @@ Parametertypen: `string`, `number`, `boolean`, `enum`; dazu `required` und `defa
 Eine gemeinsame deklarative Filter-AST unterstützt `all`, `any`, `not` sowie mindestens `equals`, `not_equals`, `contains`, `in`, `greater_than`, `less_than` (vergleichbare Typen). Der Adapter kann Teile der Filter an die externe API pushen; verbleibende Prädikate werden lokal ausgewertet. Für eine unbekannte/fehlgeschlagene Bedingung gilt eine **dreiwertige Semantik**: `true`, `false`, `unknown`. `unknown` ist für automatische Ausführung nicht startfähig und wird diagnostizierbar angezeigt.
 
 **GitHub Dependencies:** Die native `blocked by`-Relation muss über die GitHub-API aufgelöst werden, einschließlich referenzierter Issues in anderen Repositories, sofern die verwendete App darauf Zugriff besitzt. Ableitbare Felder: `dependencies.blocked_by_total`, `dependencies.blocked_by_open`, `dependencies.blocked` (optional), `dependencies.status`. Eine offene Abhängigkeit verhindert einen Start **nur dann**, wenn der Workflow dies ausdrücklich filtert. Fehlender API-Zugriff ist nicht „0 offene Abhängigkeiten“. Die tatsächliche API-Verfügbarkeit, Berechtigungen und Cross-Repo-Eigenschaften sind per Integrationstest gegen GitHub zu prüfen.
+
+**Nachtrag 0.2.0 (WI-14) – Feldkatalog:** Billige Issue-Felder `state_reason`, `milestone` (Titel), `issue_type` (Name des Issue-Typs). Dazu je Source die deklarierten GitHub-Projects-Felder `project.<Name>` (Arten `single_select`/`text`/`iteration` → string, `number`, `date`), gelesen per GraphQL im selben Planungsschritt, nicht teuer, ohne Pushdown. Item nicht im Projekt → `null`; Projekt nicht erreichbar, Feld fehlt/falsche Art, Abfragefehler → nur die betroffenen `project.*` `unknown` (Grund über `SourceItem.unknownFields`), das Listing scheitert nicht. Die Offline-Validierung kennt `project.*` je Source (Views: nur gemeinsame Felder). Details: [configuration-reference.md](configuration-reference.md) §4.7.1.
 
 **Shell-Filter:** Nur für Workflows. Jeder Aufruf bekommt den einzelnen Item-Kontext; Exit `0` = passt, Exit `1` = passt nicht, Exit `>=2` = Prüffehler. Shell-Conditions verwenden dieselbe Konvention, sind aber eigenständige Startprüfungen. Die Exit-Code-Semantik gilt für diese Prüfskripte, **nicht automatisch für den Haupt-Worker**. Workflow-Conditions können gecacht werden; itembezogene nicht notwendigerweise. Timeouts sind konfigurierbar. Views führen keine Shell-Skripte aus.
 

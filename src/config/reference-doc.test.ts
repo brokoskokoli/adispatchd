@@ -7,15 +7,16 @@
  *   loader. Sets marked `# invalid` must fail with exactly the documented
  *   errors (`# expect: <file>: <path>: <message>` substrings); all other sets
  *   must load, with exactly the documented warnings (`# expect-warning:`).
- * - The placeholder whitelist, the GitHub field catalogue, the view run fields,
- *   hooks, operators and notification events must all be documented.
+ * - The placeholder whitelist, the GitHub field catalogue (incl. the project
+ *   field kinds), the view run fields, hooks, operators and notification
+ *   events must all be documented.
  */
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, it } from 'vitest';
 import { FILTER_OPERATORS, HOOK_NAMES, NOTIFICATION_EVENT_TYPES, OPERATORS_BY_TYPE, PLACEHOLDERS } from '../core/index.js';
-import { GITHUB_FIELD_DEFINITIONS } from '../sources/github/index.js';
+import { GITHUB_FIELD_DEFINITIONS, PROJECT_FIELD_DATA_TYPES, PROJECT_FIELD_KINDS, PROJECT_FIELD_TYPES } from '../sources/github/index.js';
 import { VIEW_RUN_FIELDS } from '../views/index.js';
 import { DEFAULT_WORKING_DIRECTORY, loadConfig, type ConfigIssue } from './index.js';
 import { createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
@@ -107,7 +108,7 @@ async function load(name: string): Promise<Awaited<ReturnType<typeof loadConfig>
 
 describe('docs/configuration-reference.md', () => {
   it('contains the documented example sets', () => {
-    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications']) {
+    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects']) {
       expect(sets.get(name)?.invalid, name).toBe(false);
     }
     expect([...sets.values()].filter((s) => s.invalid).length).toBeGreaterThanOrEqual(10);
@@ -155,6 +156,12 @@ describe('docs/configuration-reference.md', () => {
   it('documents the complete GitHub field catalogue and the view run fields with their types', () => {
     for (const f of [...GITHUB_FIELD_DEFINITIONS, ...VIEW_RUN_FIELDS]) {
       expect(markdown, f.name).toContain(`| \`${f.name}\` | ${f.type} |`);
+    }
+  });
+
+  it('documents every project field kind with its field type and GitHub data type (WI-14)', () => {
+    for (const kind of PROJECT_FIELD_KINDS) {
+      expect(markdown, kind).toMatch(new RegExp(`\\| \`${kind}\` \\| ${PROJECT_FIELD_TYPES[kind]} \\| [^|]+ \\| \`${PROJECT_FIELD_DATA_TYPES[kind]}\` \\|`));
     }
   });
 
