@@ -75,6 +75,109 @@ echo hello`,
     expect(busIds).toEqual(env.p.events.listForRun(run.id).map((e) => e.id));
   });
 
+  describe('execute.keep (WI-22)', () => {
+    const KEEP = "\n  keep: ['.agent/transcript.jsonl', '.agent/gate/*.log', 'missing/*.txt', '*.link']\n  keep_max_size: 1KB";
+    const keepScript = (extra = ''): string =>
+      env.script(
+        'keep.sh',
+        `mkdir -p .agent/gate
+echo '{"turn":1}' > .agent/transcript.jsonl
+echo unit > .agent/gate/unit.log
+head -c 2000 /dev/zero > .agent/gate/huge.log
+echo other > other.txt
+ln -s "${env.marks}/secret.txt" escape.link
+${extra}`,
+      );
+
+    it('copies matching files to runs/<id>/kept before the cleanup of a successful run', async () => {
+      writeFileSync(path.join(env.marks, 'secret.txt'), 'SECRET');
+      const snapshot = await env.snapshot(workflowYaml(keepScript()).replace('  cancel_grace: 300ms', `  cancel_grace: 300ms${KEEP}`));
+      expect(snapshot.workflow.execute.keep).toHaveLength(4);
+      expect(snapshot.workflow.execute.keepMaxSizeBytes).toBe(1024);
+      const h = await readyHarness();
+      const run = env.reserve(snapshot);
+      const final = await h.controller.startRun(run.id).done;
+      expect(final).toMatchObject({ status: 'completed', businessResult: 'success' });
+      // Workspace removed (cleanup: on_success), kept files survive.
+      expect(existsSync(final.workspacePath as string)).toBe(false);
+      const kept = path.join(env.dataDir, 'runs', run.id, 'kept');
+      expect(readFileSync(path.join(kept, '.agent/transcript.jsonl'), 'utf8')).toBe('{"turn":1}\n');
+      expect(readFileSync(path.join(kept, '.agent/gate/unit.log'), 'utf8')).toBe('unit\n');
+      expect(existsSync(path.join(kept, '.agent/gate/huge.log'))).toBe(false);
+      expect(existsSync(path.join(kept, 'other.txt'))).toBe(false);
+      expect(existsSync(path.join(kept, 'escape.link'))).toBe(false);
+      const events = env.p.events.listForRun(run.id);
+      const keptEvent = events.find((e) => e.type === RUN_EVENTS.keptFiles);
+      expect(keptEvent?.payload).toMatchObject({
+        files: 2,
+        unmatched: ['missing/*.txt'],
+        skippedCount: 2,
+        skipped: expect.arrayContaining([
+          { path: '.agent/gate/huge.log', reason: 'size_limit', size: 2000 },
+          { path: 'escape.link', reason: 'symlink' },
+        ]),
+      });
+      // Kept before the cleanup.
+      const types = events.map((e) => e.type);
+      expect(types.indexOf(RUN_EVENTS.keptFiles)).toBeLessThan(types.indexOf(RUN_EVENTS.workspaceCleanup));
+    });
+
+    it('keeps files for every terminal status, also without cleanup (crash)', async () => {
+      const snapshot = await env.snapshot(workflowYaml(keepScript('exit 3')).replace('  cancel_grace: 300ms', `  cancel_grace: 300ms${KEEP}`));
+      const h = await readyHarness();
+      const run = env.reserve(snapshot);
+      const final = await h.controller.startRun(run.id).done;
+      expect(final.status).toBe('crashed');
+      expect(existsSync(final.workspacePath as string)).toBe(true);
+      expect(existsSync(path.join(env.dataDir, 'runs', run.id, 'kept', '.agent/transcript.jsonl'))).toBe(true);
+    });
+
+    it('keeps files AFTER the completion hook (a file written by on_success is kept)', async () => {
+      const worker = env.script('w.sh', 'echo worker > worker.log');
+      const hook = env.script('hook.sh', 'echo hook > hook.log');
+      const snapshot = await env.snapshot(`
+id: wf
+trigger: { type: source, source: repo_a }
+execute:
+  type: shell
+  command: ${worker}
+  keep: ['*.log']
+on_success:
+  - type: shell
+    command: ${hook}
+`);
+      const h = await readyHarness();
+      const run = env.reserve(snapshot);
+      const final = await h.controller.startRun(run.id).done;
+      expect(final.status).toBe('completed');
+      const kept = path.join(env.dataDir, 'runs', run.id, 'kept');
+      expect(readFileSync(path.join(kept, 'worker.log'), 'utf8')).toBe('worker\n');
+      expect(readFileSync(path.join(kept, 'hook.log'), 'utf8')).toBe('hook\n');
+      expect(existsSync(final.workspacePath as string)).toBe(false);
+    });
+
+    it('keeps files of a timed-out run (workspace kept, cleanup on_success)', async () => {
+      const worker = env.script('slow.sh', 'echo partial > partial.log\nexec sleep 30');
+      const snapshot = await env.snapshot(
+        workflowYaml(worker).replace('  cancel_grace: 300ms', "  cancel_grace: 300ms\n  timeout: { max_duration: 400ms }\n  keep: ['partial.log']"),
+      );
+      const h = await readyHarness();
+      const run = env.reserve(snapshot);
+      const final = await h.controller.startRun(run.id).done;
+      expect(final.status).toBe('timed_out');
+      expect(readFileSync(path.join(env.dataDir, 'runs', run.id, 'kept', 'partial.log'), 'utf8')).toBe('partial\n');
+    });
+
+    it('does nothing without keep (no event, no kept dir)', async () => {
+      const snapshot = await env.snapshot(workflowYaml(keepScript()));
+      const h = await readyHarness();
+      const run = env.reserve(snapshot);
+      await h.controller.startRun(run.id).done;
+      expect(env.p.events.listForRun(run.id).some((e) => e.type === RUN_EVENTS.keptFiles)).toBe(false);
+      expect(existsSync(path.join(env.dataDir, 'runs', run.id, 'kept'))).toBe(false);
+    });
+  });
+
   it('scenario 4: business failure → on_failure, technical counter unchanged', async () => {
     const crash = env.script('crash.sh', 'exit 1');
     const fail = env.script('fail.sh', FAILURE_SCRIPT);

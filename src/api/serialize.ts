@@ -33,6 +33,13 @@ export interface RunSummary {
   finalReason: string | null;
   /** `result.message` of the worker result file, if any. */
   resultMessage: string | null;
+  /**
+   * Named outcome of the result file (`outcome`, WI-17), e.g. `approved`. Called
+   * `resultOutcome` because `outcome` is the UI classification above.
+   */
+  resultOutcome: string | null;
+  /** Completion hook selected at finalization (WI-17), e.g. `on_result.approved`, `on_error`. */
+  completionHook: RunRecord['completionHook'];
   statusMessage: string | null;
   exitCode: number | null;
   lifecycleStatus: RunRecord['lifecycleStatus'];
@@ -96,6 +103,8 @@ export function toRunSummary(run: RunRecord): RunSummary {
     businessResult: run.businessResult,
     finalReason: run.finalReason,
     resultMessage: result && typeof result === 'object' ? str(result.message) : null,
+    resultOutcome: run.outcome,
+    completionHook: run.completionHook,
     statusMessage: run.statusMessage,
     exitCode: run.exitCode,
     lifecycleStatus: run.lifecycleStatus,
@@ -171,6 +180,8 @@ export function toWorkflowView(
       secrets: Object.keys(c.execute.secrets),
       // WI-18: how each secret is delivered (`env` | `file`); no values, identity IDs only via the config view.
       secretDelivery: Object.fromEntries(Object.entries(c.execute.secrets).map(([name, ref]) => [name, ref.delivery ?? 'env'])),
+      keep: c.execute.keep,
+      keepMaxSizeBytes: c.execute.keepMaxSizeBytes,
     },
     // WI-18: every declared secret (execute + shell actions) with identity and delivery; never values.
     secrets: workflowSecrets(c),

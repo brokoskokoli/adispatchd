@@ -111,6 +111,10 @@ export interface RunOutcomeLike {
   finalStatus?: string | null;
   lifecycleStatus?: string | null;
   lifecycleFailed?: boolean;
+  /** Named outcome from the result file (WI-17). */
+  resultOutcome?: string | null;
+  /** Completion hook selected at finalization (WI-17). */
+  completionHook?: string | null;
 }
 
 /** Badge description. */
@@ -156,6 +160,13 @@ export function runBadges(run: RunOutcomeLike): BadgeInfo[] {
       break;
     default:
       badges.push({ label: String(run.outcome), tone: 'muted', title: '' });
+  }
+  if (run.resultOutcome) {
+    badges.push({
+      label: `outcome: ${run.resultOutcome}`,
+      tone: 'info',
+      title: `Named outcome reported by the worker${run.completionHook ? `; completion hook ${run.completionHook}` : ''}`,
+    });
   }
   if (run.lifecycleFailed || run.lifecycleStatus === 'failed') {
     badges.push({ label: 'lifecycle failed', tone: 'error', title: 'A lifecycle action failed; see Failed Actions' });
@@ -219,10 +230,36 @@ export function eventSummary(e: RunEventLike): string {
   }
   if (e.type === 'lifecycle.action' || e.type === 'lifecycle.chain') {
     const err = str(p.error);
-    return [str(p.hook), str(p.name) ?? str(p.type), str(p.status)].filter(Boolean).join(' ') + (err ? `: ${err}` : '');
+    // Successful attempts carry `details.applied`, failed ones what was applied before the failure (`error.details.applied`).
+    const errorDetails = p.error && typeof p.error === 'object' ? (p.error as { details?: unknown }).details : undefined;
+    const applied = e.type === 'lifecycle.action' ? appliedSummary(p.details) || appliedSummary(errorDetails) : '';
+    return (
+      [str(p.hook), str(p.name) ?? str(p.type), str(p.status)].filter(Boolean).join(' ') +
+      (applied ? ` (${applied})` : '') +
+      (err ? `: ${err}` : '')
+    );
   }
   const message = str(p.message) ?? str(p.reason) ?? str(p.error);
   if (message !== null) return message;
   const keys = Object.keys(p).filter((k) => k !== 'type');
   return keys.length === 0 ? '' : truncate(JSON.stringify(p), 200);
+}
+
+/**
+ * What a `source.update` changed (`details.applied` of a `lifecycle.action`
+ * event): `+label`, `-label`, `added to project`, `Field=value` / `Field cleared`.
+ */
+export function appliedSummary(details: unknown): string {
+  const applied = details && typeof details === 'object' ? (details as { applied?: unknown }).applied : undefined;
+  if (!applied || typeof applied !== 'object') return '';
+  const a = applied as Record<string, unknown>;
+  const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  const parts = [...strings(a.labelsAdded).map((l) => `+${l}`), ...strings(a.labelsRemoved).map((l) => `-${l}`)];
+  if (a.projectItemAdded === true) parts.push('added to project');
+  if (a.projectFields && typeof a.projectFields === 'object') {
+    for (const [name, value] of Object.entries(a.projectFields as Record<string, unknown>)) {
+      parts.push(value === null ? `${name} cleared` : `${name}=${typeof value === 'string' ? value : JSON.stringify(value)}`);
+    }
+  }
+  return truncate(parts.join(', '), 200);
 }

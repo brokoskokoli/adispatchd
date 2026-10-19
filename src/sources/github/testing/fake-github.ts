@@ -12,13 +12,18 @@
  * - `GET|POST /repos/{o}/{r}/issues/{n}/comments` (pagination)
  * - `PATCH /repos/{o}/{r}/issues/{n}` (`state`, `title`)
  * - `GET  /user` (user tokens from {@link FakeGitHub.createUserToken})
- * - `POST /graphql` (GHES: `/api/graphql`): the two GitHub Projects (v2)
- *   queries of the adapter – `repositoryOwner { projectV2 }` metadata and
- *   `nodes(ids:) { projectItems { fieldValueByName } }` values. Field names
- *   are taken from the variables `$f<i>` bound to the aliases `f<i>`.
+ * - `POST /graphql` (GHES: `/api/graphql`): the GitHub Projects (v2)
+ *   queries of the adapter – `repositoryOwner { projectV2 }` metadata (field
+ *   IDs, single-select options, iterations), `nodes(ids:) { projectItems {
+ *   fieldValueByName } }` values, `node(id:)` of one issue/PR or project item
+ *   (WI-16), and the mutations `addProjectV2ItemById`,
+ *   `updateProjectV2ItemFieldValue` and `clearProjectV2ItemFieldValue`. Field
+ *   names are taken from the variables `$f<i>` bound to the aliases `f<i>`;
+ *   mutation inputs only from variables.
  *
  * Fault injection: {@link FakeGitHub.failNext}; access control:
- * {@link FakeGitHub.restrictRepo}, {@link FakeGitHub.denyDependencies}.
+ * {@link FakeGitHub.restrictRepo}, {@link FakeGitHub.denyDependencies},
+ * {@link FakeGitHub.denyProject}, {@link FakeGitHub.denyProjectWrites}.
  */
 import { createPublicKey, generateKeyPairSync, randomBytes, verify, type KeyObject } from 'node:crypto';
 import { systemClock, type AccessToken, type Clock, type CredentialProvider, type FetchLike } from '../../../core/index.js';
@@ -63,10 +68,29 @@ export interface FakeIssue {
   stateReason: string | null;
 }
 
-/** Field of a fake GitHub project (`dataType` as in GitHub's `ProjectV2FieldType`). */
-export interface FakeProjectField {
+/** `dataType` of a fake project field (as in GitHub's `ProjectV2FieldType`). */
+export type FakeProjectFieldDataType = 'SINGLE_SELECT' | 'TEXT' | 'NUMBER' | 'DATE' | 'ITERATION' | 'TITLE' | 'ASSIGNEES' | 'LABELS';
+
+/** Field definition for {@link FakeGitHub.createProject}. */
+export interface FakeProjectFieldInit {
   name: string;
-  dataType: 'SINGLE_SELECT' | 'TEXT' | 'NUMBER' | 'DATE' | 'ITERATION' | 'TITLE' | 'ASSIGNEES' | 'LABELS';
+  dataType: FakeProjectFieldDataType;
+  /** Option names of a `SINGLE_SELECT` field. */
+  options?: string[];
+  /** Titles of the active/upcoming iterations of an `ITERATION` field. */
+  iterations?: string[];
+  /** Titles of completed iterations of an `ITERATION` field. */
+  completedIterations?: string[];
+}
+
+/** Field of a fake GitHub project. */
+export interface FakeProjectField {
+  id: string;
+  name: string;
+  dataType: FakeProjectFieldDataType;
+  options: Array<{ id: string; name: string }>;
+  iterations: Array<{ id: string; title: string }>;
+  completedIterations: Array<{ id: string; title: string }>;
 }
 
 /** Stored GitHub Projects (v2) project. */
@@ -77,8 +101,10 @@ export interface FakeProject {
   number: number;
   title: string;
   fields: FakeProjectField[];
-  /** Issue node ID → field name → value (`null`/absent = empty). */
+  /** Issue node ID → field name → value (option name / iteration title; `null`/absent = empty). */
   items: Map<string, Record<string, string | number | null>>;
+  /** Issue node ID → project item ID (`PVTI_…`). */
+  itemIds: Map<string, string>;
 }
 
 /** Stored conversation comment. */
@@ -199,6 +225,7 @@ export class FakeGitHub {
   private readonly projects: FakeProject[] = [];
   private readonly ownerTypes = new Map<string, 'User' | 'Organization'>();
   private readonly deniedProjects = new Set<string>();
+  private readonly deniedProjectWrites = new Set<string>();
   private faults: Fault[] = [];
   private nextId = 1000;
   private nextCommentId = 5000;
@@ -364,7 +391,7 @@ export class FakeGitHub {
    */
   createProject(
     owner: string,
-    init: { number?: number; ownerType?: 'User' | 'Organization'; title?: string; fields: FakeProjectField[] },
+    init: { number?: number; ownerType?: 'User' | 'Organization'; title?: string; fields: FakeProjectFieldInit[] },
   ): FakeProject {
     const login = owner.toLowerCase();
     const ownerType = init.ownerType ?? this.ownerTypes.get(login) ?? 'Organization';
@@ -376,16 +403,50 @@ export class FakeGitHub {
       ownerType,
       number,
       title: init.title ?? `Project ${number}`,
-      fields: init.fields.map((f) => ({ ...f })),
+      fields: init.fields.map((f) => this.newField(f)),
       items: new Map(),
+      itemIds: new Map(),
     };
     this.projects.push(project);
     return project;
   }
 
+  /** Add a field to an existing project (simulates a change of the board). */
+  addProjectField(project: FakeProject, init: FakeProjectFieldInit): FakeProjectField {
+    const field = this.newField(init);
+    project.fields.push(field);
+    return field;
+  }
+
+  /** Add an option to a single-select field of `project`. */
+  addProjectOption(project: FakeProject, fieldName: string, name: string): void {
+    const field = project.fields.find((f) => f.name === fieldName);
+    if (!field) throw new Error(`No field ${fieldName} in project ${project.number}`);
+    field.options.push({ id: `opt${this.nextId++}`, name });
+  }
+
+  private newField(f: FakeProjectFieldInit): FakeProjectField {
+    return {
+      id: `PVTF_kw${this.nextId++}`,
+      name: f.name,
+      dataType: f.dataType,
+      options: (f.options ?? []).map((name) => ({ id: `opt${this.nextId++}`, name })),
+      iterations: (f.iterations ?? []).map((title) => ({ id: `it${this.nextId++}`, title })),
+      completedIterations: (f.completedIterations ?? []).map((title) => ({ id: `it${this.nextId++}`, title })),
+    };
+  }
+
   /** Add `repo#number` to `project` with field values (by exact project field name). */
   addProjectItem(project: FakeProject, repo: string, number: number, values: Record<string, string | number | null> = {}): void {
-    project.items.set(this.issue(repo, number).nodeId, { ...values });
+    const nodeId = this.issue(repo, number).nodeId;
+    project.items.set(nodeId, { ...values });
+    if (!project.itemIds.has(nodeId)) project.itemIds.set(nodeId, `PVTI_kw${this.nextId++}`);
+  }
+
+  /** Field values of `repo#number` in `project` (by exact field name), or `undefined` if not in the project. */
+  projectValues(project: FakeProject, repo: string, number: number): Record<string, string | number | null> | undefined {
+    const values = project.items.get(this.issue(repo, number).nodeId);
+    return values ? { ...values } : undefined;
   }
 
   /** Change one field value of an item that is already in `project`. */
@@ -398,6 +459,24 @@ export class FakeGitHub {
   /** Make a project unreadable for every token (GraphQL answers `projectV2: null` + FORBIDDEN error). */
   denyProject(project: FakeProject): void {
     this.deniedProjects.add(project.id);
+  }
+
+  /** Make a project read-only for every token (mutations answer `FORBIDDEN` with HTTP 200). */
+  denyProjectWrites(project: FakeProject): void {
+    this.deniedProjectWrites.add(project.id);
+  }
+
+  /** Undo {@link denyProject} and {@link denyProjectWrites}. */
+  allowProject(project: FakeProject): void {
+    this.deniedProjects.delete(project.id);
+    this.deniedProjectWrites.delete(project.id);
+  }
+
+  /** Recorded GraphQL mutations (`addProjectV2ItemById`, `updateProjectV2ItemFieldValue`, `clearProjectV2ItemFieldValue`). */
+  projectMutations(): Array<{ name: string; variables: Record<string, unknown>; status: number | 'network_error' }> {
+    return this.requests
+      .filter((r) => r.graphql && /^\s*mutation\b/.test(r.graphql.query))
+      .map((r) => ({ name: mutationName(r.graphql?.query ?? ''), variables: r.graphql?.variables ?? {}, status: r.status }));
   }
 
   /** Issue a user token (personal access token) for `login`; comments made with it are authored by `login`. */
@@ -591,8 +670,10 @@ export class FakeGitHub {
   private graphql(body: Record<string, unknown>, auth: IssuedToken | undefined): Response {
     const query = typeof body.query === 'string' ? body.query : '';
     const variables = (body.variables && typeof body.variables === 'object' ? body.variables : {}) as Record<string, unknown>;
+    if (/^\s*mutation\b/.test(query)) return this.graphqlMutation(query, variables, auth);
     if (query.includes('repositoryOwner(')) return this.graphqlMetadata(variables, auth);
     if (query.includes('nodes(ids:')) return this.graphqlNodes(query, variables, auth);
+    if (query.includes('node(id:')) return this.graphqlNode(query, variables, auth);
     return json(200, { errors: [{ message: 'Unsupported query in FakeGitHub' }] });
   }
 
@@ -627,7 +708,7 @@ export class FakeGitHub {
           projectV2: {
             id: project.id,
             title: project.title,
-            fields: { nodes: project.fields.map((f) => ({ name: f.name, dataType: f.dataType })) },
+            fields: { nodes: project.fields.map((f) => fieldMetadataJson(f)) },
           },
         },
       },
@@ -637,11 +718,7 @@ export class FakeGitHub {
   private graphqlNodes(query: string, variables: Record<string, unknown>, auth: IssuedToken | undefined): Response {
     const ids = Array.isArray(variables.ids) ? variables.ids.map(String) : [];
     if (ids.length > 100) return json(200, { errors: [{ type: 'EXCESSIVE_PAGINATION', message: 'Too many ids' }] });
-    // Aliases f<i> are bound to the variables $f<i> carrying the field names.
-    const aliases = [...query.matchAll(/\b(f\d+): fieldValueByName\(name: \$(f\d+)\)/g)].map((m) => ({
-      alias: m[1] as string,
-      name: String(variables[m[2] as string] ?? ''),
-    }));
+    const aliases = fieldAliases(query, variables);
     const firstMatch = /projectItems\(first: (\d+)/.exec(query);
     const first = firstMatch ? Number(firstMatch[1]) : 20;
     const byNodeId = new Map<string, FakeIssue>();
@@ -664,20 +741,126 @@ export class FakeGitHub {
               errors.push({ type: 'FORBIDDEN', path: ['nodes', index, 'projectItems', 'nodes', k], message: 'Resource not accessible by integration' });
               return null;
             }
-            const values = p.items.get(id) ?? {};
-            const entry: Record<string, unknown> = { project: { id: p.id } };
-            for (const { alias, name } of aliases) {
-              // fieldValueByName matches the exact field name here (GitHub's behaviour is not relied upon).
-              const field = p.fields.find((f) => f.name === name);
-              const value = values[name];
-              entry[alias] = field && value !== null && value !== undefined ? fieldValueJson(field, value) : null;
-            }
-            return entry;
+            return this.projectItemJson(p, id, aliases);
           }),
         },
       };
     });
     return json(200, { data: { nodes }, ...(errors.length > 0 ? { errors } : {}) });
+  }
+
+  /** `{ id, project { id }, f<i>: fieldValueByName(…) }` of the item of issue `nodeId` in `project`. */
+  private projectItemJson(project: FakeProject, nodeId: string, aliases: ReadonlyArray<{ alias: string; name: string }>): Record<string, unknown> {
+    const values = project.items.get(nodeId) ?? {};
+    const entry: Record<string, unknown> = { id: project.itemIds.get(nodeId), project: { id: project.id } };
+    for (const { alias, name } of aliases) {
+      // fieldValueByName matches the exact field name here (GitHub's behaviour is not relied upon).
+      const field = project.fields.find((f) => f.name === name);
+      const value = values[name];
+      entry[alias] = field && value !== null && value !== undefined ? fieldValueJson(field, value) : null;
+    }
+    return entry;
+  }
+
+  /** `node(id:)` of one issue/PR (with `projectItems`) or of one project item (WI-16 write path). */
+  private graphqlNode(query: string, variables: Record<string, unknown>, auth: IssuedToken | undefined): Response {
+    const id = String(variables.id ?? '');
+    const aliases = fieldAliases(query, variables);
+    const firstMatch = /projectItems\(first: (\d+)/.exec(query);
+    const first = firstMatch ? Number(firstMatch[1]) : 20;
+    const notFound = (): Response =>
+      json(200, { data: { node: null }, errors: [{ type: 'NOT_FOUND', path: ['node'], message: `Could not resolve to a node with the global id of '${id}'` }] });
+    for (const p of this.projects) {
+      for (const [nodeId, itemId] of p.itemIds) {
+        if (itemId !== id || !p.items.has(nodeId)) continue;
+        if (!this.projectReadable(p, auth)) return notFound();
+        return json(200, { data: { node: { __typename: 'ProjectV2Item', ...this.projectItemJson(p, nodeId, aliases) } } });
+      }
+    }
+    const issue = this.issueByNodeId(id);
+    if (!issue || this.restricted.has(issue.repo)) return notFound();
+    const errors: unknown[] = [];
+    const memberships = this.projects.filter((p) => p.items.has(id));
+    const node = {
+      __typename: issue.isPullRequest ? 'PullRequest' : 'Issue',
+      id,
+      projectItems: {
+        totalCount: memberships.length,
+        nodes: memberships.slice(0, first).map((p, k) => {
+          if (!this.projectReadable(p, auth)) {
+            errors.push({ type: 'FORBIDDEN', path: ['node', 'projectItems', 'nodes', k], message: 'Resource not accessible by integration' });
+            return null;
+          }
+          return this.projectItemJson(p, id, aliases);
+        }),
+      },
+    };
+    return json(200, { data: { node }, ...(errors.length > 0 ? { errors } : {}) });
+  }
+
+  /** The three project mutations; inputs are read from the variables only. */
+  private graphqlMutation(query: string, variables: Record<string, unknown>, auth: IssuedToken | undefined): Response {
+    const name = mutationName(query);
+    const fail = (type: string | undefined, message: string): Response =>
+      json(200, { data: { [name]: null }, errors: [{ ...(type ? { type } : {}), path: [name], message }] });
+    const project = this.projects.find((p) => p.id === variables.projectId);
+    if (!project || this.deniedProjects.has(project.id)) {
+      return fail('NOT_FOUND', `Could not resolve to a node with the global id of '${String(variables.projectId)}'`);
+    }
+    if (!this.projectReadable(project, auth) || this.deniedProjectWrites.has(project.id)) {
+      return fail('FORBIDDEN', 'Resource not accessible by integration');
+    }
+    if (name === 'addProjectV2ItemById') {
+      const issue = this.issueByNodeId(String(variables.contentId ?? ''));
+      if (!issue || this.restricted.has(issue.repo)) {
+        return fail('NOT_FOUND', `Could not resolve to a node with the global id of '${String(variables.contentId)}'`);
+      }
+      // Idempotent like GitHub: an existing item is returned unchanged.
+      if (!project.items.has(issue.nodeId)) this.addProjectItem(project, issue.repo, issue.number);
+      return json(200, { data: { addProjectV2ItemById: { item: { id: project.itemIds.get(issue.nodeId) } } } });
+    }
+    if (name !== 'updateProjectV2ItemFieldValue' && name !== 'clearProjectV2ItemFieldValue') {
+      return json(200, { errors: [{ message: 'Unsupported mutation in FakeGitHub' }] });
+    }
+    const nodeId = [...project.itemIds].find(([, itemId]) => itemId === variables.itemId)?.[0];
+    const values = nodeId === undefined ? undefined : project.items.get(nodeId);
+    if (!values) return fail('NOT_FOUND', `Could not resolve to a node with the global id of '${String(variables.itemId)}'`);
+    const field = project.fields.find((f) => f.id === variables.fieldId);
+    if (!field) return fail('NOT_FOUND', `Could not resolve to a node with the global id of '${String(variables.fieldId)}'`);
+    if (name === 'clearProjectV2ItemFieldValue') {
+      values[field.name] = null;
+      return json(200, { data: { clearProjectV2ItemFieldValue: { projectV2Item: { id: variables.itemId } } } });
+    }
+    const value = (variables.value ?? {}) as Record<string, unknown>;
+    if (Object.keys(value).length !== 1) return fail(undefined, 'Exactly one value must be provided');
+    let stored: string | number | undefined;
+    switch (field.dataType) {
+      case 'SINGLE_SELECT':
+        stored = field.options.find((o) => o.id === value.singleSelectOptionId)?.name;
+        break;
+      case 'ITERATION':
+        stored = [...field.iterations, ...field.completedIterations].find((i) => i.id === value.iterationId)?.title;
+        break;
+      case 'NUMBER':
+        stored = typeof value.number === 'number' ? value.number : undefined;
+        break;
+      case 'DATE':
+        stored = typeof value.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value.date) ? value.date : undefined;
+        break;
+      case 'TEXT':
+        stored = typeof value.text === 'string' ? value.text : undefined;
+        break;
+      default:
+        stored = undefined;
+    }
+    if (stored === undefined) return fail(undefined, `Invalid value for field "${field.name}" (${field.dataType})`);
+    values[field.name] = stored;
+    return json(200, { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: variables.itemId } } } });
+  }
+
+  private issueByNodeId(nodeId: string): FakeIssue | undefined {
+    for (const issues of this.repos.values()) for (const issue of issues.values()) if (issue.nodeId === nodeId) return issue;
+    return undefined;
   }
 
   private issueToken(installationId: string, headers: Headers): Response {
@@ -845,16 +1028,44 @@ function isGraphqlPath(pathname: string, basePath: string): boolean {
   return pathname === endpoint;
 }
 
+/** Aliases `f<i>` bound to the variables `$f<i>` that carry the field names. */
+function fieldAliases(query: string, variables: Record<string, unknown>): Array<{ alias: string; name: string }> {
+  return [...query.matchAll(/\b(f\d+): fieldValueByName\(name: \$(f\d+)\)/g)].map((m) => ({
+    alias: m[1] as string,
+    name: String(variables[m[2] as string] ?? ''),
+  }));
+}
+
+/** Name of the (single) mutation field of a mutation document. */
+function mutationName(query: string): string {
+  return /\b(addProjectV2ItemById|updateProjectV2ItemFieldValue|clearProjectV2ItemFieldValue)\s*\(/.exec(query)?.[1] ?? 'unknown';
+}
+
+/** Metadata JSON of a field (superset of what the read and the write metadata queries select). */
+function fieldMetadataJson(field: FakeProjectField): Record<string, unknown> {
+  const out: Record<string, unknown> = { id: field.id, name: field.name, dataType: field.dataType };
+  if (field.dataType === 'SINGLE_SELECT') out.options = field.options.map((o) => ({ ...o }));
+  if (field.dataType === 'ITERATION') {
+    out.configuration = {
+      iterations: field.iterations.map((i) => ({ ...i })),
+      completedIterations: field.completedIterations.map((i) => ({ ...i })),
+    };
+  }
+  return out;
+}
+
 function fieldValueJson(field: FakeProjectField, value: string | number): Record<string, unknown> {
   switch (field.dataType) {
     case 'SINGLE_SELECT':
-      return { __typename: 'ProjectV2ItemFieldSingleSelectValue', name: value };
+      return { __typename: 'ProjectV2ItemFieldSingleSelectValue', name: value, optionId: field.options.find((o) => o.name === value)?.id ?? null };
     case 'NUMBER':
       return { __typename: 'ProjectV2ItemFieldNumberValue', number: value };
     case 'DATE':
       return { __typename: 'ProjectV2ItemFieldDateValue', date: value };
-    case 'ITERATION':
-      return { __typename: 'ProjectV2ItemFieldIterationValue', title: value };
+    case 'ITERATION': {
+      const iteration = [...field.iterations, ...field.completedIterations].find((i) => i.title === value);
+      return { __typename: 'ProjectV2ItemFieldIterationValue', title: value, iterationId: iteration?.id ?? null };
+    }
     default:
       return { __typename: 'ProjectV2ItemFieldTextValue', text: value };
   }

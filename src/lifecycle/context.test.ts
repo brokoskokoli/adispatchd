@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SourceError, TemplateError } from '../core/index.js';
 import type { LifecycleActionConfig, WorkflowSnapshot } from '../config/index.js';
 import type { RunActionRecord } from '../persistence/index.js';
-import { buildHookTemplateValues, hookTemplateScope, parseRunSnapshot, renderHookText, resolveActionIdentity } from './context.js';
+import {
+  buildHookTemplateValues,
+  buildShellActionContext,
+  hookTemplateScope,
+  parseRunSnapshot,
+  renderHookText,
+  resolveActionIdentity,
+} from './context.js';
 import { aggregateLifecycleStatus } from './engine.js';
 import { describeActionError } from './errors.js';
 import { createEnv, drive, loadSnapshot, markedComments, type LifecycleTestEnv } from './testing/helpers.js';
@@ -39,6 +46,29 @@ on_success:
     expect(markedComments(env.github)[0]).toContain(
       '{status} completed/success: OAuth provider missing – https://github.com/example/a/issues/7 repo_a:7 source',
     );
+  });
+
+  it('provides the named outcome as {result.outcome} and in the shell action context (WI-17)', async () => {
+    const snapshot = await loadSnapshot(`${BASE}
+on_result:
+  approved:
+    - type: source.comment
+      message: 'Outcome: {result.outcome}'
+`);
+    const run = env.finalizeSuccess(env.reserve(snapshot).id);
+    const withOutcome = env.p.runs.update(run.id, { outcome: 'approved' });
+    const values = buildHookTemplateValues({ run: withOutcome, snapshot, hook: 'on_result.approved', item: null, now: env.clock.now() });
+    expect(renderHookText('Outcome: {result.outcome}', values, hookTemplateScope(snapshot, 'on_result.approved'))).toBe('Outcome: approved');
+    const context = buildShellActionContext({ run: withOutcome, snapshot, hook: 'on_result.approved', item: null, action: { id: 1, name: null, ordinal: 0, attempt: 1 } });
+    expect(context.result).toMatchObject({ outcome: 'approved' });
+    // Without outcome the placeholder renders empty, the context value is null.
+    const plain = buildHookTemplateValues({ run, snapshot, hook: 'on_success', item: null, now: env.clock.now() });
+    expect(renderHookText('[{result.outcome}]', plain, hookTemplateScope(snapshot, 'on_success'))).toBe('[]');
+    expect(buildShellActionContext({ run, snapshot, hook: 'on_success', item: null, action: { id: 1, name: null, ordinal: 0, attempt: 1 } }).result?.outcome).toBeNull();
+    // on_result chains run through the engine like any other hook.
+    const result = await drive(env.engine().runHook(withOutcome, 'on_result.approved', snapshot), env.clock);
+    expect(result.status).toBe('succeeded');
+    expect(markedComments(env.github)[0]).toContain('Outcome: approved');
   });
 
   it('rejects unknown placeholders (config validation bypassed) without posting or retrying', async () => {

@@ -109,7 +109,8 @@ export function viewFieldContext(sources: readonly SourceConfig[]): FieldContext
   };
 }
 
-function distance(a: string, b: string): number {
+/** Levenshtein distance of two strings. */
+export function editDistance(a: string, b: string): number {
   const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
   for (let i = 1; i <= a.length; i++) {
     let diag = prev[0] as number;
@@ -128,7 +129,7 @@ export function suggestField(name: string, names: readonly string[]): string | u
   let best: string | undefined;
   let bestDistance = Infinity;
   for (const candidate of names) {
-    const d = distance(name.toLowerCase(), candidate.toLowerCase());
+    const d = editDistance(name.toLowerCase(), candidate.toLowerCase());
     if (d < bestDistance) {
       best = candidate;
       bestDistance = d;

@@ -207,8 +207,8 @@ Template; Platzhalter in `command` werden nicht ersetzt. Existenz/Ausführbarkei
   Syntaxfehler. Beispiel: `'{{"run":"{run.id}"}}'` → `{"run":"run-2026…"}`.
 - Templates sind nur folgende Felder: `execute.working_directory` (Modus `path`), `execute.args[]`,
   `execute.env.*`, `conditions.workflow[].args[]`, `conditions.item[].args[]`, `source.comment.message`,
-  `shell`-Action `args[]` und `env.*` (alle Modus `text`). **Keine** Templates: `command`, Labels in
-  `source.update`, Filterwerte, `secrets`, alle übrigen Felder.
+  `shell`-Action `args[]` und `env.*` (alle Modus `text`). **Keine** Templates: `command`, Labels und
+  Projektfeldwerte in `source.update`, Filterwerte, `secrets`, alle übrigen Felder.
 
 **Modus `text`:** Werte werden unverändert eingesetzt (Zahlen/Booleans als `5`, `true`). Ein erlaubter Platzhalter
 ohne Wert wird zu einem **leeren String**.
@@ -351,7 +351,7 @@ sources:
 | `<id>.project` | Objekt | nein | strikt | GitHub-Projects-(v2)-Projekt, dessen Felder als `project.<Name>` verfügbar sind (§4.7.1) |
 | `<id>.project.owner` | String | nein | nicht leer; Default = `<id>.owner` | User- **oder** Org-Login, dem das Projekt gehört |
 | `<id>.project.number` | Integer | ja | > 0 | Projektnummer aus `https://github.com/orgs/<org>/projects/<n>` bzw. `…/users/<user>/projects/<n>` |
-| `<id>.project.identity` | Identity-ID | nein | muss existieren; Default = `<id>.identity` | Identity für die Projekt-Abfragen (z. B. eine `github_token`-Identity für User-Projekte, §3.3) |
+| `<id>.project.identity` | Identity-ID | nein | muss existieren; Default = `<id>.identity` | Identity für die Projekt-Abfragen (z. B. eine `github_token`-Identity für User-Projekte, §3.3); **wenn gesetzt**, schreibt sie auch die Projektfelder von `source.update` (§3.4.11, §6.10) |
 | `<id>.project.fields` | Map Feldname → Art | ja | mind. ein Eintrag; Name nicht leer, ohne führende/abschließende Leerzeichen und ohne Steuerzeichen; Art `single_select`, `text`, `number`, `date`, `iteration` | Felder, auf die gefiltert/sortiert werden soll |
 
 Nur `github.com` wird unterstützt (keine Einstellung für GitHub Enterprise). Gelesen werden Issues **und** Pull
@@ -387,6 +387,14 @@ Items `unknown`.
   Account-Recht *Projects: Read*) ist für user-eigene Projekte **nicht verifiziert** (Live-Test T25c in
   [manual-tests/github.md](manual-tests/github.md)).
 - Die Source selbst kann weiter per App lesen.
+
+**Schreibrechte (seit 0.3.0, `source.update` → `project`, §3.4.11).** Geschrieben wird mit `project.identity`, wenn
+sie an der Source **ausdrücklich** gesetzt ist, sonst mit der Identity der Action (Workflow → Source, §6.10).
+- **Org-eigene** Projekte per GitHub App: **Organization → Projects: Read and write**.
+- **User-eigene** Projekte per `github_token`: klassischer Token mit **`project`** (statt `read:project`) plus
+  **`repo`** (private Repositories; zum Hinzufügen des Items muss der Token das Issue/den PR lesen können).
+  Fine-grained Tokens (*Projects: Read and write*) sind **nicht verifiziert**.
+- Fehlt das Schreibrecht, scheitert die Action mit `forbidden` (nicht wiederholbar).
 
 ### 3.3 identities.yaml
 
@@ -428,7 +436,8 @@ ungültig, scheitert der jeweilige Zugriff mit einem nicht wiederholbaren Authen
 in der Planungsdiagnose, `start_error` bei `execute.secrets`, endgültig gescheiterte Action). Aus dem Schlüssel
 werden kurzlebige Installation-Tokens erzeugt und im Speicher gecacht; Schlüssel, JWT und Tokens werden in Logs
 redigiert. Minimale App-Rechte: Issues lesen/schreiben, Pull Requests schreiben (Labels/Kommentare auf PRs),
-Metadata lesen; für Projektfelder org-eigener Projekte zusätzlich **Organization → Projects: Read** (§3.2).
+Metadata lesen; für Projektfelder org-eigener Projekte zusätzlich **Organization → Projects: Read**, zum Setzen
+von Projektfeldern **Read and write** (§3.2).
 
 **`github_token`** (seit 0.2.0): ein langlebiger GitHub-Token, vor allem für **user-eigene Projekte**, die
 GitHub-App-Installationstoken nicht lesen können (§3.2). Der Token wird beim Start des Dienstes (bzw. beim Aufbau
@@ -509,6 +518,10 @@ execute:
     max_duration: 6h
     idle_timeout: 45m
   cancel_grace: 30s
+  keep:                            # vor dem Cleanup nach data-dir/runs/<run-id>/kept/ kopieren
+    - .agent/transcript.jsonl
+    - .agent/gate/*.log
+  keep_max_size: 50MB              # Summe pro Run; Default 100MB
 
 retry:
   max_technical_failures: 3
@@ -547,7 +560,16 @@ on_cancel:
 on_timeout:
   - type: source.update
     labels: { add: [ready], remove: [in-progress] }
+on_result:                       # benannte Ergebnisse (Ergebnisdatei "outcome"), statt on_success/on_failure
+  needs_maintainer:
+    - type: source.update
+      labels: { add: [needs-maintainer], remove: [in-progress] }
+    - type: source.comment
+      message: 'Rückfrage ({result.outcome}): {result.message}'
+  wont_fix: []                   # definiert, aber ohne Actions: es läuft nichts
 ```
+
+`on_error` fehlt hier bewusst: alle vier technischen Hooks sind definiert, `on_error` liefe nie (Warnung, §3.4.10).
 
 #### 3.4.1 Oberste Ebene
 
@@ -567,7 +589,10 @@ on_timeout:
 | `parameters` | Map | nein | `{}` | §3.4.7 | Parameter für manuelle Starts |
 | `execute` | Objekt | ja | | §3.4.8 | Haupt-Worker |
 | `retry.max_technical_failures` | Integer | nein | `3` | ≥ 1 | aufeinanderfolgende technische Fehler bis zum Retry-Block (§6.4) |
-| `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` | Liste Actions | nein | `[]` | §3.4.10 | Lifecycle-Hooks |
+| `on_start`, `on_success`, `on_failure` | Liste Actions | nein | `[]` | §3.4.10 | Lifecycle-Hooks |
+| `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` | Liste Actions | nein | nicht definiert | §3.4.10 | technische Hooks; definiert (auch als `[]`) haben sie Vorrang vor `on_error` |
+| `on_error` | Liste Actions | nein | nicht definiert | §3.4.10 | Sammel-Hook für `crashed`, `start_error`, `timed_out`, `cancelled` ohne eigenen Hook |
+| `on_result` | Map Ergebnis-ID → Liste Actions | nein | `{}` | Schlüssel sind Konfigurations-IDs; nur mit Ergebnisdatei (`execute.type: shell`); leere Listen erlaubt | benannte Ergebnisse (`outcome` der Ergebnisdatei), §3.4.10 |
 
 #### 3.4.2 `trigger`
 
@@ -665,6 +690,8 @@ Regeln der Konfigurationsprüfung:
 | `timeout.max_duration` | Dauer | nein | unbegrenzt | > 0 | Gesamtlaufzeit → `timed_out` |
 | `timeout.idle_timeout` | Dauer | nein | unbegrenzt | > 0 | Zeit ohne Ausgabe auf stdout/stderr → `timed_out` (Warnung, wenn > `max_duration`) |
 | `cancel_grace` | Dauer | nein | `30s` | | Wartezeit zwischen `SIGTERM` und `SIGKILL` an die Prozessgruppe bei Cancel/Timeout |
+| `keep` | Liste String | nein | `[]` | relative Glob-Muster (`*`, `?`, `**`); nicht leer, nicht absolut, kein `..`, keine leeren Segmente, nicht auf `**` endend | Dateien, die nach dem Run nach `data-dir/runs/<run-id>/kept/` gesichert werden (s. u.) |
+| `keep_max_size` | Größe | nein | `100MB` | > 0 (§2.2) | Obergrenze für die Summe der gesicherten Dateien pro Run |
 
 Workspace-Regeln: Liegt der gerenderte Pfad strikt unter `workspace.base_dir`, wird er sicher angelegt
 (Symlink-geprüft) und gemäß `workspace.cleanup` gelöscht. Liegt er außerhalb, wird er wie konfiguriert angelegt,
@@ -698,6 +725,29 @@ Mit der GitHub CLI liest man das Token pro Aufruf aus der Datei:
 GH_TOKEN=$(cat "$GH_TOKEN_FILE") gh pr create --fill
 ```
 
+**Dateien sichern (`keep`):** Nach dem Abschluss-Hook und **vor** dem Workspace-Cleanup kopiert der Daemon alle
+regulären Dateien, die auf ein Muster passen, mit ihrer relativen Struktur nach `data-dir/runs/<run-id>/kept/` – bei
+**jedem** Endstatus (`completed`, `crashed`, `timed_out`, `cancelled`, `start_error` mit Workspace), auch wenn gar
+nicht aufgeräumt wird. Muster sind relativ zum Workspace: `*` = beliebige Zeichen außer `/`, `?` = ein Zeichen außer
+`/`, `**` als ganzes Segment = beliebig viele Verzeichnisebenen (auch keine); alles andere ist literal. Wildcards
+passen auch auf Namen mit führendem Punkt (`**/*.log` findet `.agent/gate/unit.log`). Ein Muster ohne Treffer ist kein
+Fehler. Ein Muster, das genau ein Verzeichnis benennt (`.agent/gate`), kopiert nichts und wird als übersprungen
+(`directory`, Hinweis `.agent/gate/**/*`) vermerkt; Verzeichnisse, die nur über Wildcards passen, werden ignoriert.
+Symlinks werden **nie** verfolgt (weder Datei- noch Verzeichnis-Links; passende Links werden als übersprungen
+vermerkt), nur reguläre Dateien werden kopiert, und jede Datei wird vor dem Kopieren zusätzlich über ihren
+aufgelösten Pfad geprüft. **Secrets werden beim Kopieren redigiert** – best effort, wie Logs: dieselbe
+byteweise Ersetzung wie für stdout/stderr (auch über Lesegrenzen hinweg) mit den Secrets des Runs
+(`execute.secrets`, bei `delivery: file` alle Tokens, die die Token-Datei je enthielt) und allen dem Daemon bekannten Tokens/Schlüsseln; umgewandelte Werte (base64, URL-kodiert …)
+werden nicht erkannt, nach einem Neustart sind bereits abgelaufene Tokens nicht mehr bekannt. Was die Summe
+`keep_max_size` überschreiten würde (gezählt werden die **geschriebenen** Bytes nach dem Redigieren), wird
+übersprungen (kleinere spätere Dateien passen ggf. noch). Ergebnis als Run-Event `run.kept_files` (Anzahl, Bytes,
+übersprungene Einträge mit Grund `size_limit`/`symlink`/`directory`/`not_regular_file`/…, Muster ohne Treffer,
+Muster, die wegen der Grenze nicht durchsucht wurden), sichtbar in der UI (Run → **Files**) und über
+`GET /api/v1/runs/:id/kept` ([api.md](api.md)). Die Dateien gehören zum Run und werden mit ihm von der Retention
+gelöscht. Grenzen: höchstens 10 000 Dateien und 100 000 untersuchte Verzeichniseinträge pro Run; Muster ohne
+Wildcards werden zuerst und ohne Verzeichnisauflistung geprüft und zählen nicht zur Grenze. Wildcard-Muster, die
+nach Erreichen der Grenze nichts gefunden haben, gelten als „nicht durchsucht“ (`notSearched`), nicht als ohne Treffer.
+
 #### 3.4.9 `retry`
 
 `retry.max_technical_failures` (Integer ≥ 1, Default 3): Nach so vielen **aufeinanderfolgenden** technischen
@@ -705,19 +755,38 @@ Fehlern (`crashed`, `start_error`, `timed_out`) derselben Workflow/Item-Kombinat
 
 #### 3.4.10 Hooks
 
-Sieben Hooks, jeder eine Liste von Actions, die **sequentiell** ausgeführt werden:
+Acht Hooks als Listen von Actions plus die Map `on_result`; die Actions eines Hooks laufen **sequentiell**:
 
 | Hook | läuft … |
 |---|---|
 | `on_start` | vor dem Start des Workers (nach Re-Read des Items). Scheitert die Kette, startet der Worker **nicht** (→ `start_error`). |
-| `on_success` | nach `completed` + `success` |
-| `on_failure` | nach `completed` + `failure` (fachlich, gültige Ergebnisdatei) |
+| `on_success` | nach `completed` + `success` (ohne passendes `on_result.<outcome>`) |
+| `on_failure` | nach `completed` + `failure` (fachlich, gültige Ergebnisdatei; ohne passendes `on_result.<outcome>`) |
+| `on_result.<outcome>` | nach `completed`, wenn die Ergebnisdatei `"outcome": "<outcome>"` enthält und der Eintrag existiert – **statt** `on_success`/`on_failure` |
 | `on_crash` | nach `crashed` |
 | `on_start_error` | nach `start_error` (sofern der Run `starting` erreicht hat) |
 | `on_cancel` | nach `cancelled` (sofern der Run `starting` erreicht hat) |
 | `on_timeout` | nach `timed_out` |
+| `on_error` | nach `crashed`, `start_error`, `timed_out` oder `cancelled`, wenn der jeweilige Hook oben **nicht definiert** ist |
 
 Genau ein Abschluss-Hook pro Run; Details in §6.8. `source.update`/`source.comment` nur in Source-Workflows.
+
+**Benannte Ergebnisse (`on_result`).** Für Workflows mit mehr als zwei fachlichen Ausgängen (z. B. `approved`,
+`changes_requested`, `needs_maintainer`). Der Worker schreibt zusätzlich zu `result` ein `outcome` in die
+Ergebnisdatei ([worker-protocol.md](worker-protocol.md)); `result` bleibt Pflicht und steuert weiter Statistik und
+Retry-Zähler (`success` setzt zurück, `failure` lässt unverändert). Ohne `outcome` oder ohne passenden Eintrag gilt
+das bisherige Verhalten (`on_success`/`on_failure`); ein `outcome` ohne Eintrag ist kein Fehler, der Run bekommt
+eine Warnung (Event `run.outcome_warning`). Ein `outcome` im falschen Format wird ignoriert (ebenfalls Warnung).
+Ein leerer Eintrag (`wont_fix: []`) ist definiert: dann läuft gar nichts. Das Journal nennt die Kette
+`on_result.<outcome>`, generierte Action-IDs lauten `on_result.<outcome>.<index>`.
+
+**Sammel-Hook (`on_error`).** Für einen technischen Ausgang läuft der spezifische Hook (`on_crash`, `on_start_error`,
+`on_timeout`, `on_cancel`), wenn er **definiert** ist – auch eine leere Liste zählt als definiert –, sonst
+`on_error`. Nie beides. Sind alle vier spezifischen Hooks definiert, warnt die Validierung, dass `on_error` nie
+läuft. Typisch: eine gemeinsame Aufräum-Kette in `on_error` und nur Abweichungen (z. B. `on_timeout`) separat.
+
+Der gewählte Abschluss-Hook wird beim Übergang nach `finalizing` am Run gespeichert (`completionHook` in API/UI);
+nach einem Neustart setzt die Recovery genau diese Kette fort.
 
 #### 3.4.11 Actions
 
@@ -726,20 +795,72 @@ Gemeinsame Schlüssel aller Actions:
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
 | `type` | Enum | ja | | `source.update`, `source.comment`, `shell` |
-| `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`) | stabiler Name im Journal; **workflowweit** eindeutig |
+| `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`, `on_result.approved.0`) | stabiler Name im Journal; **workflowweit** eindeutig |
 | `continue_on_error` | Boolean | nein | `false` | nach endgültigem Scheitern trotzdem mit der nächsten Action weitermachen |
 | `retry.max_attempts` | Integer ≥ 1 | nein | `lifecycle.action_retry.max_attempts` | Versuche insgesamt |
 | `retry.delay` | Dauer | nein | `lifecycle.action_retry.delay` | Pause zwischen Versuchen (`0s` erlaubt) |
 
-`source.update` – Labels des Items ändern (nur Source-Workflows):
+`source.update` – Labels und/oder Projektfelder des Items ändern (nur Source-Workflows):
 
 | Schlüssel | Typ | Pflicht | Regeln |
 |---|---|---|---|
-| `labels.add` | Liste String | nein (`[]`) | mindestens eines von `add`/`remove` nicht leer; kein Label in beiden |
+| `labels.add` | Liste String | nein (`[]`) | kein Label in `add` und `remove` |
 | `labels.remove` | Liste String | nein (`[]`) | |
+| `project` | Map Feldname → Wert | nein | seit 0.3.0; mind. ein Eintrag; Schlüssel = Name aus `project.fields` der Trigger-Source (ohne `project.`-Präfix); Wert je Art (Tabelle unten), `null` = Feld leeren |
 
-Kein Template. Vor dem Schreiben wird das Item neu gelesen; nur fehlende Labels werden hinzugefügt, nur vorhandene
-entfernt (Vergleich ohne Groß-/Kleinschreibung) → idempotent. Schreib-Identity: Workflow → Source (§6.10).
+Mindestens ein Label in `labels.add`/`labels.remove` **oder** ein `project`-Eintrag ist Pflicht. Kein Template:
+Labels und Projektwerte werden wörtlich übernommen. Vor dem Schreiben wird das Item neu gelesen; nur fehlende Labels
+werden hinzugefügt, nur vorhandene entfernt (Vergleich ohne Groß-/Kleinschreibung) → idempotent. Schreib-Identity:
+Workflow → Source (§6.10).
+
+```yaml
+on_start:
+  - type: source.update
+    labels: { add: [in-progress], remove: [ready-for-coding] }
+    project:
+      Status: In Progress     # single_select: Optionsname
+      Estimate: 3             # number
+      Due: 2026-11-01         # date (YYYY-MM-DD)
+      Sprint: Sprint 12       # iteration: Iterationstitel
+      Notes: null             # null = Feld leeren
+on_success:
+  - type: source.update
+    project: { Status: Review }
+```
+
+| Art (`project.fields`) | Wert in `project` | Abgleich beim Schreiben |
+|---|---|---|
+| `single_select` | String (Optionsname) | Option mit exakt diesem Namen, sonst ohne Groß-/Kleinschreibung, wenn eindeutig |
+| `iteration` | String (Iterationstitel) | wie `single_select`, über laufende/kommende **und** abgeschlossene Iterationen |
+| `text` | String (nicht leer) | wörtlich |
+| `number` | Zahl | |
+| `date` | Datum `YYYY-MM-DD` (unquotiert oder quotiert) | gültiges Kalenderdatum |
+| alle | `null` | Feld leeren |
+
+**Projektfelder setzen** (Source braucht `project` in `sources.yaml`, §3.2):
+- **Reihenfolge:** erst Labels, dann Projektfelder. Scheitern die Projektfelder, scheitert die Action (die Labels
+  sind dann schon gesetzt); ein Retry ist sicher, weil beide Teile idempotent sind.
+- **Erst lesen, dann schreiben:** Metadaten des Projekts (Feld-IDs, Optionen, Iterationen; bis zu 5 min gecacht)
+  und das Projekt-Item des Issues/PRs werden per GraphQL gelesen. Ist das Item nicht im Projekt, wird es mit
+  `addProjectV2ItemById` hinzugefügt (Journal `projectItemAdded: true`). Felder, deren Wert schon stimmt, werden
+  übersprungen; sonst je Feld `updateProjectV2ItemFieldValue` bzw. für `null` `clearProjectV2ItemFieldValue`.
+  Alle Werte gehen nur als GraphQL-Variablen an GitHub.
+- **Nicht wiederholbare Fehler** (Action sofort `failed`, §6.9): Feld fehlt im Projekt, Art passt nicht zum
+  `dataType`, Option/Iteration unbekannt oder mehrdeutig (Meldung listet die vorhandenen, z. B. `option "Blocked"
+  not found (available: "Todo", "In Progress", "Done")`), fehlendes Schreibrecht (`forbidden`). Vorher werden
+  gecachte Metadaten einmal frisch geladen (neu angelegte Optionen werden also gefunden).
+- **Wiederholbar:** Rate-Limits (auch HTTP 200 mit `RATE_LIMITED`, mit `Retry-After`), transiente Fehler und
+  GraphQL-Fehler ohne Typ (`lifecycle.action_retry`). Nach jeder gescheiterten Mutation werden die Metadaten beim
+  nächsten Versuch neu geladen; meldet GitHub `NOT_FOUND` für eine ID aus gecachten Metadaten (z. B. neu angelegte
+  Option), lädt der Adapter sofort einmal neu und wiederholt das Update im selben Versuch.
+- **Identity:** `project.identity` der Source, wenn dort ausdrücklich gesetzt, sonst dieselbe wie für die Labels
+  (§6.10). Rechte: §3.2.
+- **Journal:** `details.applied.projectFields` (geänderte Felder → neuer Wert, `null` = geleert), sichtbar im Run
+  unter *Events* (z. B. `on_start on_start.0 succeeded (+in-progress, Status=In Progress)`) und in
+  `GET /api/v1/runs/:id/events`. Scheitert die Action mittendrin, steht das bis dahin Geänderte (Labels,
+  Projektfelder, `projectItemAdded`) im Fehler des Versuchs unter `details.applied` (auch im Event und in der
+  Zusammenfassung, z. B. `on_success on_success.0 failed (+ready-for-review, -coding)`). `projectItemAdded` wird nur
+  gemeldet, wenn das Item nachweislich fehlte (alle Projekt-Mitgliedschaften gelesen).
 
 `source.comment` – Kommentar am Issue/PR (nur Source-Workflows; Konversationskommentar, kein Review):
 
@@ -762,7 +883,8 @@ Erfolg = Exit 0; alles andere (Exit ≠ 0, Signal, Timeout, Startfehler) = gesch
 Arbeitsverzeichnis: der Run-Workspace, falls er existiert, sonst ein eigenes Verzeichnis pro Versuch
 unter `data-dir/runs/<run>/actions/…`. SIGTERM→SIGKILL-Frist fest 5 s, Log-Limit fest 10 MiB pro Versuch.
 
-**Secrets für Shell-Actions** (seit 0.3.0): `secrets` wie bei `execute` (§3.4.8). Tokens werden **pro Versuch**
+**Secrets für Shell-Actions** (seit 0.3.0): `secrets` wie bei `execute` (§3.4.8), in allen Hooks einschließlich
+`on_result.<outcome>` und `on_error`. Tokens werden **pro Versuch**
 geholt. Bei `delivery: file` liegt die Datei in einem action-eigenen Verzeichnis
 `data-dir/runs/<run>/actions/<action>/attempt-<n>/secrets/<NAME>`, wird bei langen Actions ebenso erneuert und
 nach dem Versuch gelöscht. Werte werden im Action-Log redigiert. Scheitert das Holen des Tokens, scheitert der
@@ -1092,6 +1214,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `run.last_status` | string | technischer Status (`running`, `completed`, `crashed`, …) |
 | `run.last_result` | string | fachliches Ergebnis `success`/`failure` (sonst `null`) |
 | `run.last_result.message` | string | `message` der Ergebnisdatei |
+| `run.last_outcome` | string | benanntes Ergebnis (`outcome` der Ergebnisdatei, sonst `null`) |
 | `run.last_status_message` | string | letzte Status-Meldung des Workers (`@@ADISPATCH_EVENT` `status`) |
 | `run.last_started_at` | date | Start |
 | `run.last_finished_at` | date | Ende |
@@ -1123,6 +1246,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{result.status}` | technischer Endstatus (`completed`, `crashed`, `start_error`, `timed_out`, `cancelled`) | – |
 | `{result.result}` | `success` \| `failure` | bei technischem Fehler/Cancel |
 | `{result.message}` | `message` der Ergebnisdatei | keine/ungültige Ergebnisdatei oder ohne `message` |
+| `{result.outcome}` | benanntes Ergebnis (`outcome` der Ergebnisdatei, z. B. `approved`) | ohne/ungültiges `outcome`, bei technischem Fehler/Cancel |
 | `{parameters.<name>}` | Parameterwert (`true`, `5`, Text) | optionaler Parameter ohne Wert und ohne Default |
 
 Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_error`).
@@ -1142,7 +1266,7 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 | `parameters.<name>` | ✓ nur `required` oder mit `default` | ✓ | ✓ | ✓ | – | – |
 
 Nicht als Template ausgewertet (Platzhalter bleiben wörtlich stehen): alle `command`, `source.update.labels`,
-`shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
+`source.update.project`, `shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
 
 ---
 
@@ -1260,11 +1384,16 @@ UI oder `POST /api/v1/workflows/:id/start` `{"item"?: "…", "parameters"?: {…
 | Exit 0 + keine Ergebnisdatei | `completed` | `success` | `on_success` | nein (setzt Zähler zurück) |
 | Exit 0 + `"result": "success"` | `completed` | `success` | `on_success` | nein (setzt Zähler zurück) |
 | Exit 0 + `"result": "failure"` | `completed` | `failure` | `on_failure` | nein (Zähler unverändert) |
+| Exit 0 + gültiges `"outcome": "x"` und `on_result.x` definiert | `completed` | laut `result` | `on_result.x` (statt `on_success`/`on_failure`) | laut `result` |
 | Controller-Neustart, Worker nachweislich weg | `crashed` (bzw. `cancelled`, wenn Cancel lief) | – | `on_crash` / `on_cancel` | `crashed`: ja |
 | Controller-Neustart, Prozess nicht sicher zuordenbar | `recovery_pending` (hält Lock) | – | – | – |
 
 Eine fachliche `failure` gibt es nur über eine gültige Ergebnisdatei; ein Exit-Code allein ist nie „failure“.
 Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
+
+Die Spalte „Hook“ nennt den spezifischen Hook. Für `crashed`, `start_error`, `timed_out` und `cancelled` läuft
+stattdessen `on_error`, wenn der spezifische Hook nicht definiert ist (§3.4.10). Der gewählte Hook wird mit
+`→ finalizing` gespeichert; die Recovery nach einem Neustart setzt genau ihn fort.
 
 ### 6.9 Action-Ketten
 
@@ -1280,7 +1409,8 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
 - **Manuell:** `POST /api/v1/actions/:id/retry` (frische Versuchsrunde, danach läuft die Kette weiter; nicht für
   `on_start`, wenn der Run nicht mehr `starting` ist) und `POST /api/v1/actions/:id/skip` (failed/pending →
   `skipped`, Kette läuft weiter). Der Haupt-Worker wird nie neu gestartet; erfolgreiche Actions laufen nie erneut.
-- **Idempotenz:** `source.update` liest vor dem Schreiben neu und ändert nur, was fehlt. `source.comment` hängt als
+- **Idempotenz:** `source.update` liest vor dem Schreiben neu und ändert nur, was fehlt (Labels und
+  Projektfelder; ein fehlendes Projekt-Item wird hinzugefügt, GitHub liefert dabei ein vorhandenes zurück). `source.comment` hängt als
   letzte Zeile `<!-- adispatchd:<run-id>:<journal-action-id> -->` an; vor jeder Wiederholung (und nach Neustart) wird ein
   Kommentar mit diesem Marker gesucht, der von der eigenen App stammt → kein Duplikat. `<!--` im gerenderten Text
   wird zu `&lt;!--`.
@@ -1294,6 +1424,7 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
 | Pollen, Item lesen, Dependencies auflösen, Item-Re-Read vor `on_start` | `sources.<id>.identity` |
 | Projektfelder lesen (`project.*`, GraphQL) | `sources.<id>.project.identity` → `sources.<id>.identity` |
 | `source.update` (inkl. Re-Read vor dem Schreiben) | Workflow-`identity` → Source-`identity` |
+| `source.update` → `project` (Metadaten, Item lesen, Mutationen) | `sources.<id>.project.identity`, **wenn ausdrücklich gesetzt** → Workflow-`identity` → Source-`identity` |
 | `source.comment` (inkl. Marker-Suche) | Action-`identity` → Workflow-`identity` → Source-`identity` |
 | `execute.secrets.<NAME>` | die angegebene Identity (Installation-Token, ca. 1 h gültig, beim Start geholt; bei `delivery: file` bis zum Prozessende erneuert; bei `github_token` der Token selbst) |
 | `shell`-Action `secrets.<NAME>` | die angegebene Identity (pro Versuch geholt; bei `delivery: file` während der Action erneuert) |
@@ -1313,7 +1444,7 @@ vererbt. Details zu Kontextdatei, Ergebnisdatei, Events und Cancel: [worker-prot
 
 ### 6.12 Workspace-Cleanup
 
-Nach dem Abschluss-Hook: `always` = immer, `on_success` = nur `completed`+`success`, `never` = nie. Gelöscht wird nur
+Nach dem Abschluss-Hook werden zuerst die `execute.keep`-Dateien gesichert (§3.4.8), dann gilt: `always` = immer, `on_success` = nur `completed`+`success`, `never` = nie. Gelöscht wird nur
 ein Workspace strikt unter `workspace.base_dir` (auch nach Auflösen von Symlinks; ein Workspace, der selbst ein
 Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verbliebene Workspaces gelöschter Runs.
 
@@ -1323,9 +1454,11 @@ Symlink ist, wird nie gelöscht). Später entfernt die Retention auch verblieben
 `POST /api/v1/workflows/:id/dry-run`: Source-Abfrage, Filter-Trace pro Regel (inkl. Dependencies), Prioritäten,
 Locks/Blocks, Kapazität (in Prioritätsreihenfolge simuliert), je Kandidat die Werte bzw. Unknown-Gründe aller
 `project.*`-Felder (`projectFields`), den ausgewerteten Filter mit eingesetzten benannten Filtern (`source.filter`,
-Textausgabe `filter:`) sowie seit 0.3.0 alle deklarierten Secrets von `execute` und `shell`-Actions mit Ort,
-Identity, Übergabeart und Variable (`secrets`, Textausgabe `secret execute: GH_TOKEN ← identity coder, delivery file
-(GH_TOKEN_FILE)`; nie Werte, es wird kein Token geholt). Reserviert nichts, startet keine Worker oder Actions
+Textausgabe `filter:`), bei `execute.keep` die Muster samt Größenlimit (unter `notes`), das Hook-Routing
+(`hooks`: die `on_result`-Schlüssel und je technischem Ausgang der Hook, der liefe, z. B. `timed_out → on_error`) sowie
+seit 0.3.0 alle deklarierten Secrets von `execute` und `shell`-Actions mit Ort, Identity, Übergabeart und Variable
+(`secrets`, Textausgabe `secret execute: GH_TOKEN ← identity coder, delivery file (GH_TOKEN_FILE)`; nie Werte, es wird
+kein Token geholt). Reserviert nichts, startet keine Worker oder Actions
 und führt **nie** `shell_filter`/Conditions aus (`not_evaluated`, Entscheidung `pending_checks`). Cron-Workflows:
 nächste 5 Slots und Prognose; Manual-Workflows: nur Hinweise.
 
@@ -1479,11 +1612,20 @@ on_failure:                                  # Änderungen nötig → zurück an
     labels: { add: [ready-for-coding], remove: [reviewing] }
   - type: source.comment
     message: 'Review: {result.message}'
-on_crash:       [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
-on_start_error: [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
-on_timeout:     [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
-on_cancel:      [ { type: source.update, labels: { add: [ready-for-review], remove: [reviewing] } } ]
+on_result:                                   # dritter fachlicher Ausgang: {"result": "failure", "outcome": "needs_maintainer"}
+  needs_maintainer:
+    - type: source.update
+      labels: { add: [needs-maintainer], remove: [reviewing] }
+    - type: source.comment
+      message: 'Review braucht eine Entscheidung: {result.message}'
+on_error:                                    # crashed, start_error, timed_out, cancelled: zurück in die Warteschlange
+  - type: source.update
+    labels: { add: [ready-for-review], remove: [reviewing] }
 ```
+
+Der Reviewer kennt drei fachliche Ausgänge: ohne `outcome` gelten `on_success`/`on_failure`, mit
+`"outcome": "needs_maintainer"` läuft nur `on_result.needs_maintainer` (das Review-Skript braucht dafür keine
+eigenen Schreibrechte). Alle technischen Ausgänge teilen sich `on_error`, weil keiner einen eigenen Hook hat.
 
 ### 7.3 View über zwei Repositories
 
@@ -1607,9 +1749,11 @@ Umgebung (z. B. `/etc/default/adispatchd`): `SLACK_WEBHOOK_URL=https://hooks.sla
 
 ### 7.7 Filter auf Projektstatus und Priorität
 
-`project_a` liest das Board der Organisation per App (Berechtigung **Organization → Projects: Read**),
-`project_b` ein **user-eigenes** Board über eine `github_token`-Identity, das Repository selbst weiter per App.
-Der Coder startet Items, deren Projektstatus `Todo` **oder** `Ready` ist; `P0`/`P1` kommen zuerst.
+`project_a` liest das Board der Organisation per App (Berechtigung **Organization → Projects: Read and write**,
+weil der Coder den Status setzt), `project_b` ein **user-eigenes** Board über eine `github_token`-Identity, das
+Repository selbst weiter per App. Der Coder startet Items, deren Projektstatus `Todo` **oder** `Ready` ist;
+`P0`/`P1` kommen zuerst. Beim Start setzt er den Status auf `In Progress`, nach Erfolg auf `Review`, bei Abbruch
+oder Absturz zurück auf `Ready` (sonst passt das Item nicht mehr zum Filter und bliebe liegen).
 
 ```yaml
 # example: projects
@@ -1672,6 +1816,15 @@ execute:
 on_start:
   - type: source.update
     labels: { add: [coding] }
+    project: { Status: In Progress }
+on_success:
+  - type: source.update
+    labels: { remove: [coding] }
+    project: { Status: Review }
+on_crash:       [ { type: source.update, labels: { remove: [coding] }, project: { Status: Ready } } ]
+on_start_error: [ { type: source.update, labels: { remove: [coding] }, project: { Status: Ready } } ]
+on_timeout:     [ { type: source.update, labels: { remove: [coding] }, project: { Status: Ready } } ]
+on_cancel:      [ { type: source.update, labels: { remove: [coding] }, project: { Status: Ready } } ]
 ```
 
 ```yaml
@@ -1774,13 +1927,33 @@ ungültig und werden vom Test gegen die angegebene Meldung geprüft.
 # example: err-unknown-key
 # extends: minimal
 # invalid
-# expect: config.yaml: scheduler: Unknown key(s): "max_concurent"
+# expect: config.yaml: scheduler: Unknown key(s): "max_concurent" (did you mean "max_concurrent"?)
 # file: config.yaml
 scheduler:
   max_concurent: 2
 ```
 
-Lösung: Schreibweise laut §3 korrigieren.
+Lösung: Schreibweise laut §3 korrigieren (der Vorschlag nennt den nächstliegenden erlaubten Schlüssel).
+
+**Hooks `on_error`/`on_result`** – Tippfehler im Hook-Namen und Ergebnis-Schlüssel, die keine IDs sind.
+
+```yaml
+# example: err-result-hooks
+# extends: github
+# invalid
+# expect: workflows/reviewer.yaml: Unknown key(s): "on_errors" (did you mean "on_error"?)
+# expect: workflows/reviewer.yaml: on_result.needs maintainer: Invalid key "needs maintainer": Invalid ID (allowed: letters, digits, "_" and "-", must start with a letter or digit, max. 64)
+# file: workflows/reviewer.yaml
+id: reviewer
+trigger: { type: source, source: project_a }
+execute: { type: shell, command: scripts/reviewer.sh }
+on_errors: []
+on_result:
+  "needs maintainer": []
+```
+
+Lösung: `on_error` (Singular); Ergebnis-Schlüssel wie Konfigurations-IDs schreiben (`needs_maintainer`) – genauso
+muss der Worker sie als `outcome` liefern.
 
 **Falsches Dauerformat** – keine zusammengesetzten Dauern, keine Leerzeichen.
 
@@ -2032,7 +2205,7 @@ notifications:
 # extends: github
 # invalid
 # expect: workflows/coder.yaml: on_start[0].labels: Label "coding" is both added and removed
-# expect: workflows/coder.yaml: on_success[0].labels: "source.update" must add or remove at least one label
+# expect: workflows/coder.yaml: on_success[0].labels: "source.update" must add or remove at least one label or set a project field
 # expect: workflows/coder.yaml: on_success[1].id: Duplicate action ID "notify" (also used at on_start[1])
 # file: workflows/coder.yaml
 id: coder
@@ -2162,6 +2335,67 @@ sources.yaml`. Weitere Meldungen in `sources.yaml`: `Expected one of: single_sel
 (unbekannte Art), `Declare at least one project field`, `Project field name must not start or end with
 whitespace`, `Project field name must not contain control characters`; in Views zusätzlich `its kind differs
 between the sources of the view`.
+
+**Projektfelder setzen** – `source.update` → `project` nur mit deklarierten Feldern und passendem Werttyp.
+
+```yaml
+# example: err-project-update
+# extends: projects
+# invalid
+# expect: workflows/board-coder.yaml: on_start[0].project.Statsu: Unknown project field "Statsu": it is not declared in "project.fields" of source "project_a" (did you mean "Status"?)
+# expect: workflows/board-coder.yaml: on_start[0].project.Estimate: Invalid value for project field "Estimate" (number): expected a number or null
+# expect: workflows/board-coder.yaml: on_success[0].project: "project" must set at least one field
+# expect: workflows/review.yaml: on_success[0].project: Source "project_c" has no "project" in sources.yaml; project fields cannot be set
+# file: workflows/board-coder.yaml
+id: board-coder
+trigger: { type: source, source: project_a }
+execute: { type: shell, command: scripts/coder.sh }
+on_start:
+  - type: source.update
+    project: { Statsu: In Progress, Estimate: three }
+on_success:
+  - type: source.update
+    project: {}
+```
+
+```yaml
+# example: err-project-update
+# file: workflows/review.yaml
+id: review
+trigger: { type: source, source: project_c }
+execute: { type: shell, command: scripts/coder.sh }
+on_success:
+  - type: source.update
+    project: { Status: Done }
+```
+
+```yaml
+# example: err-project-update
+# file: sources.yaml
+sources:
+  project_a:
+    type: github
+    owner: example
+    repository: project-a
+    identity: maintainer
+    project:
+      number: 3
+      fields: { Status: single_select, Priority: single_select, Estimate: number }
+  project_b:
+    type: github
+    owner: example
+    repository: project-b
+    identity: maintainer
+    project: { owner: alice, number: 1, identity: project_reader, fields: { Status: single_select, Priority: single_select } }
+  project_c: { type: github, owner: example, repository: project-c, identity: maintainer }
+```
+
+Lösung: Schlüssel genau wie unter `project.fields` (ohne `project.`-Präfix), Wert passend zur Art (§3.4.11), `null`
+zum Leeren; die Trigger-Source braucht `project`. Weitere Meldungen: `expected a date YYYY-MM-DD or null`, `expected
+a string or null`, `empty value; use null to clear the field`, `Expected a string, a number, a date or null`
+(Boolean, Liste), `"source.update" must add or remove at least one label or set a project field`. Erst **zur
+Laufzeit** fallen auf (Action `failed`, nicht wiederholbar): unbekannte/mehrdeutige Option oder Iteration, Feld fehlt
+im Projekt oder hat eine andere Art, fehlendes Schreibrecht – siehe Fehlertext in der Run-Ansicht (*Actions*).
 
 **`state` an wirkungsloser Stelle** – die Source liest ohne `state`-Selektor auf oberster Ebene nur offene Items.
 
@@ -2294,12 +2528,47 @@ execute:
 
 ```yaml
 # example: warn-common
+# expect-warning: workflows/janitor.yaml: on_error: "on_error" never runs: "on_crash", "on_start_error", "on_timeout", "on_cancel" are all defined (a defined hook, even [], takes precedence)
+# file: workflows/janitor.yaml
+id: janitor
+trigger: { type: manual }
+execute: { type: shell, command: scripts/hello.sh }
+on_crash: []
+on_start_error: []
+on_timeout: []
+on_cancel: []
+on_error:
+  - { type: shell, command: scripts/cleanup.sh }
+```
+
+```yaml
+# example: warn-common
 # expect-warning: filters/old.yaml: id: Named filter "spare" is not used by any workflow or view
 # expect-warning: filters/old.yaml: id: Filter ID "spare" differs from file name "old.yaml"
 # file: filters/old.yaml
 id: spare
 filter: { field: labels, operator: contains, value: spare }
 ```
+
+**Sicherungsmuster außerhalb des Workspaces** – `execute.keep` darf nur Dateien im Workspace bezeichnen.
+
+```yaml
+# example: err-keep-outside
+# extends: minimal
+# invalid
+# expect: workflows/hello.yaml: execute.keep[1]: Pattern must not contain ".." (only files inside the workspace can be kept)
+# file: workflows/hello.yaml
+id: hello
+trigger: { type: manual }
+execute:
+  type: shell
+  command: scripts/hello.sh
+  keep:
+    - .agent/transcript.jsonl
+    - ../shared/report.log
+```
+
+Lösung: Die Datei im Worker in den Workspace schreiben (bzw. dorthin kopieren) und relativ angeben.
 
 Weitere häufige Meldungen (ohne eigenes Beispiel):
 
@@ -2318,6 +2587,9 @@ Weitere häufige Meldungen (ohne eigenes Beispiel):
 | `Invalid environment variable name` | z. B. `private_key_env: my-key` |
 | `Expected a size such as 100MB` | Größe als Zahl statt String (`max_log_size_per_run: 100`) |
 | `Invalid size "100" (expected e.g. 512KB, 100MB, 1GB)` | String ohne oder mit unbekannter Einheit (`'100'`, `'100MiBs'`) |
+| `Must be greater than 0` (Pfad `execute.keep_max_size`) | `keep_max_size: 0MB` |
+| `Pattern must be relative to the workspace (no absolute path)` | `keep: [/var/log/app.log]` – Pfade relativ zum Workspace angeben |
+| `Pattern must not end with "**" (use "dir/**/*" or "**/*.log")` | `keep: [logs/**]` → `logs/**/*` |
 | `config.yaml not found, using defaults` (Warnung) | `config.yaml` fehlt |
 
 Laufzeitfehler, die `config validate` **nicht** findet: fehlende Umgebungsvariablen (Keys, Tokens, Webhooks),
@@ -2343,9 +2615,13 @@ unknown, Warnung im Log). Dafür: `workflow dry-run` und die Run-Details.
 5. **execute:** Skript ausführbar machen (`chmod +x`), Pfad relativ zum config-dir oder absolut; Argumente als
    Liste; Timeouts setzen; Secrets nur über `secrets`. Läuft der Worker (oder eine Shell-Action) länger als ein
    Installation-Token gilt (ca. 1 h), `delivery: file` verwenden und das Token pro Aufruf aus `<NAME>_FILE` lesen.
+   Mitschnitte/Logs, die nach dem Cleanup erhalten bleiben sollen, unter `keep` eintragen.
 6. **Hooks:** Label-Übergänge für jeden Ausgang (`on_start`, `on_success`, `on_failure`, `on_crash`,
    `on_start_error`, `on_timeout`, `on_cancel`) so wählen, dass das Item nicht hängen bleibt und nicht sofort wieder
-   matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab).
+   matcht (Retry-Blocks fangen Endlosschleifen technischer Fehler ab). Gleiche Aufräum-Ketten der technischen
+   Ausgänge einmal in `on_error`; mehr als zwei fachliche Ausgänge über `on_result` (Worker schreibt `outcome`).
+   Wer per `project` einen Status setzt, der im Filter vorkommt, setzt ihn in den Fehler-Hooks (bzw. `on_error`)
+   auch zurück; Optionsnamen genau wie im Projekt, Schreibrecht der Identity (§3.2) vorher prüfen.
 7. **Validieren:** `adispatch config validate --config-dir <dir>` → Exit 0, Warnungen lesen.
 8. **Trockenlauf:** `adispatch workflow dry-run <id> --config-dir <dir>` – Kandidaten, Filter-Trace
    (kein `unknown` durch Tippfehler?), Prioritäten, Locks/Blocks, Kapazität; bei Projektfeldern die Zeilen

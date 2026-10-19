@@ -10,6 +10,10 @@ Implementierung: `src/core/worker-protocol.ts`, `src/executors/`.
 - Das Kommando wird **ohne Shell** mit Argumentliste gestartet (`command` + `args`); Platzhalter in `args`/`env` werden vorher
   ersetzt (feste Platzhalterliste, unbekannte sind Konfigurationsfehler). Wer Shell-Syntax braucht, schreibt ein Skript.
 - Eigene Prozessgruppe/Session (`setsid`), stdin = `/dev/null`, cwd = Workspace.
+- Dateien, die nach dem Run erhalten bleiben sollen (Mitschnitte, Gate-Logs), schreibt der Worker **in den Workspace**
+  und der Workflow nennt sie unter `execute.keep` (relative Glob-Muster). Der Daemon kopiert sie nach dem Abschluss-Hook
+  und vor dem Cleanup nach `data-dir/runs/<run-id>/kept/` – nur reguläre Dateien, keine Symlinks, bis `keep_max_size`
+  ([Konfigurationsreferenz](configuration-reference.md) §3.4.8).
 
 ## Input
 
@@ -86,6 +90,7 @@ Parameter manueller Starts (inkl. Defaults). Die Datei enthält **nie** Secrets.
 |---|---|---|
 | `0` | `"result": "success"` | `completed` / `success` → `on_success` |
 | `0` | `"result": "failure"` | `completed` / `failure` → `on_failure` (fachlich, **kein** technischer Fehler) |
+| `0` | zusätzlich `"outcome": "x"` und `on_result.x` konfiguriert | `completed` / laut `result` → `on_result.x` **statt** `on_success`/`on_failure` |
 | `0` | keine | `completed` / `success` (einfache Shell-Skripte) |
 | `0` | ungültig / zu groß / kein reguläres File | `crashed` (Protokollfehler) → `on_crash` |
 | `≠ 0` | beliebig (wird ignoriert) | `crashed` → `on_crash` |
@@ -93,6 +98,9 @@ Parameter manueller Starts (inkl. Defaults). Die Datei enthält **nie** Secrets.
 | Start unmöglich (ENOENT, kein Exec-Recht, `on_start` gescheitert) | – | `start_error` → `on_start_error` |
 | Timeout (`max_duration`, `idle_timeout`) | beliebig | `timed_out` → `on_timeout` |
 | kontrollierter Abbruch (UI/API/Cancel-All) | beliebig | `cancelled` → `on_cancel` |
+
+Ist der spezifische Hook eines technischen Ausgangs (`on_crash`, `on_start_error`, `on_timeout`, `on_cancel`) nicht
+definiert, läuft stattdessen `on_error` (falls vorhanden; ab 0.3.0).
 
 - **Ein fachliches `failure` gibt es nur mit gültiger Ergebnisdatei.** Ein Exit-Code allein ist nie „Needs Maintainer“ – ein
   versehentliches `exit 1` (z. B. `git clone` scheitert) ist ein technischer Fehler.
@@ -119,6 +127,16 @@ Ergebnisdatei (max. 1 MiB, **atomar schreiben**: temporäre Datei + `mv`):
 | `message` | nein | ≤ 10 000 Zeichen; als `{result.message}` in Hooks verfügbar |
 | `details` | nein | beliebiges Objekt |
 | `artifacts` | nein | ≤ 100 Einträge `{type, name?, url?}` |
+| `outcome` | nein | benanntes Ergebnis (ab 0.3.0): Konfigurations-ID (Buchstaben, Ziffern, `_`, `-`; beginnt mit Buchstabe/Ziffer; max. 64). Wählt `on_result.<outcome>`; als `{result.outcome}` in Hooks und `run.last_outcome` in Views. Falsches Format → ignoriert (Warnung am Run), Rest wird normal ausgewertet |
+
+**Benannte Ergebnisse:** Kennt ein Workflow mehr als zwei fachliche Ausgänge, meldet der Worker sie über `outcome`;
+`result` bleibt Pflicht und steuert Statistik und Retry-Zähler (`success` setzt zurück). Die Label-/Kommentar-Arbeit
+erledigt dann `on_result.<outcome>` – der Worker braucht dafür keine eigenen Tokens. Ohne passenden Eintrag laufen
+`on_success`/`on_failure` (Warnung am Run). Bei Exit ≠ 0 wird die Ergebnisdatei – und damit auch `outcome` – ignoriert.
+
+```json
+{ "schema_version": 1, "result": "failure", "outcome": "needs_maintainer", "message": "Scope unklar" }
+```
 
 ```sh
 tmp="${ADISPATCH_RESULT_FILE}.tmp"
@@ -168,7 +186,7 @@ Secrets sind nicht zwischen Runs/Actions desselben Dienstes isoliert: Die Rechte
 
 | Art | Erfolg | Kontext |
 |---|---|---|
-| `shell`-Action in Hooks | Exit 0 (Ergebnisdatei wird ignoriert); sonst Retry gemäß `lifecycle.action_retry` | `ADISPATCH_CONTEXT_FILE` mit `kind: lifecycle_action`, Run, Hook, Action, `result` (außer `on_start`), Minimal-Env + `env` + `ADISPATCH_*`; Secrets **nur**, wenn die Action `secrets` deklariert (seit 0.3.0, wie `execute.secrets`) |
+| `shell`-Action in Hooks | Exit 0 (Ergebnisdatei wird ignoriert); sonst Retry gemäß `lifecycle.action_retry` | `ADISPATCH_CONTEXT_FILE` mit `kind: lifecycle_action`, Run, Hook (z. B. `on_result.approved`, `on_error`), Action, `result` (außer `on_start`; inkl. `outcome`), Minimal-Env + `env` + `ADISPATCH_*`; Secrets **nur**, wenn die Action `secrets` deklariert (seit 0.3.0, wie `execute.secrets`; in allen Hooks inkl. `on_result.*` und `on_error`) |
 | `conditions.*`, `shell_filter` | Exit 0 = passt, 1 = passt nicht, ≥ 2/Timeout/Signal = Prüffehler (`unknown`, kein Start) | `ADISPATCH_CHECK_CONTEXT_FILE` (Workflow bzw. Item) |
 
 Die Exit-Code-Semantik 0/1/≥2 gilt **nur** für Prüfskripte, nicht für den Haupt-Worker. Dry-Runs führen Prüfskripte nie aus.

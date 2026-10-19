@@ -119,7 +119,10 @@ function requireIdentity(input: AttemptInput, config: SourceCommentActionConfig 
   return identity;
 }
 
-/** `source.update`: idempotent label change via the adapter (re-reads the item before writing). */
+/**
+ * `source.update`: idempotent label and project field change via the adapter
+ * (re-reads the item before writing; labels first, then project fields).
+ */
 export async function performSourceUpdate(
   deps: PerformerDeps,
   input: AttemptInput,
@@ -127,7 +130,11 @@ export async function performSourceUpdate(
 ): Promise<AttemptResult> {
   const identity = requireIdentity(input, config);
   const { adapter, item } = await resolveSourceTarget(deps, input.run, input.snapshot, input.item);
-  const result = await adapter.applyUpdate(item, { labels: { add: config.labels.add, remove: config.labels.remove } }, identity);
+  const result = await adapter.applyUpdate(
+    item,
+    { labels: { add: config.labels.add, remove: config.labels.remove }, ...(config.project ? { project: config.project } : {}) },
+    identity,
+  );
   return { externalKey: null, details: { changed: result.changed, ...(result.applied ? { applied: result.applied } : {}) } };
 }
 

@@ -48,6 +48,7 @@ export const DEFAULTS = {
   checkTimeout: '30s',
   shellActionTimeout: '5m',
   cancelGrace: '30s',
+  keepMaxSize: '100MB',
   scheduleTimezone: 'UTC',
 } as const;
 
@@ -95,6 +96,8 @@ const sizeSchema = z.string('Expected a size such as 100MB').transform((value, c
     return z.NEVER;
   }
 });
+
+const positiveSize = sizeSchema.refine((bytes) => bytes > 0, 'Must be greater than 0');
 
 const positiveInt = z.number().int('Must be an integer').positive('Must be greater than 0');
 const nonNegativeInt = z.number().int('Must be an integer').min(0, 'Must not be negative');
@@ -327,6 +330,9 @@ const executeSchema = z.discriminatedUnion('type', [
       })
       .default({}),
     cancel_grace: durationSchema.default(parseDuration(DEFAULTS.cancelGrace)),
+    // Patterns are checked in validate.ts (path + message per entry).
+    keep: z.array(z.string('Expected a pattern such as .agent/*.log')).default([]),
+    keep_max_size: positiveSize.optional(),
   }),
 ]);
 
@@ -341,11 +347,26 @@ const actionCommon = {
     .optional(),
 };
 
+/**
+ * Desired value of a project field in `source.update` (WI-16): string,
+ * number or `null` (= clear). A YAML timestamp parsed as Date (YAML 1.1
+ * documents) becomes `YYYY-MM-DD` at UTC midnight, otherwise its ISO string
+ * (which the date check then rejects). Checked per kind in validate.ts.
+ */
+const projectUpdateValue = z
+  .union([z.string(), z.number(), z.null(), z.date()], { error: 'Expected a string, a number, a date or null' })
+  .transform((value) => {
+    if (!(value instanceof Date)) return value;
+    const iso = value.toISOString();
+    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso;
+  });
+
 const actionSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('source.update'),
     ...actionCommon,
-    labels: z.strictObject({ add: stringList, remove: stringList }),
+    labels: z.strictObject({ add: stringList, remove: stringList }).optional(),
+    project: z.record(z.string(), projectUpdateValue).optional(),
   }),
   z.strictObject({
     type: z.literal('source.comment'),
@@ -368,11 +389,20 @@ const actionSchema = z.discriminatedUnion('type', [
 export type RawAction = z.output<typeof actionSchema>;
 
 const hookList = z.array(actionSchema).default([]);
+/**
+ * Hooks whose presence matters (WI-17): a technical hook that is configured –
+ * even as `[]` – takes precedence over `on_error`, so "not given" must stay
+ * distinguishable from an empty list.
+ */
+const optionalHookList = z.array(actionSchema).optional();
 
-const hookShape = Object.fromEntries(HOOK_NAMES.map((h) => [h, hookList])) as Record<
-  (typeof HOOK_NAMES)[number],
-  typeof hookList
->;
+/** Hooks that always resolve to a list (`[]` if not given). */
+const ALWAYS_LIST_HOOKS = ['on_start', 'on_success', 'on_failure'] as const satisfies readonly (typeof HOOK_NAMES)[number][];
+
+const hookShape = Object.fromEntries(
+  HOOK_NAMES.map((h) => [h, (ALWAYS_LIST_HOOKS as readonly string[]).includes(h) ? hookList : optionalHookList]),
+) as Record<(typeof ALWAYS_LIST_HOOKS)[number], typeof hookList> &
+  Record<Exclude<(typeof HOOK_NAMES)[number], (typeof ALWAYS_LIST_HOOKS)[number]>, typeof optionalHookList>;
 
 /** Schema of one `workflows/*.yaml` file. */
 export const workflowSchema = z.strictObject({
@@ -398,6 +428,8 @@ export const workflowSchema = z.strictObject({
     .strictObject({ max_technical_failures: positiveInt.default(DEFAULTS.maxTechnicalFailures) })
     .prefault({}),
   ...hookShape,
+  /** Named outcomes (WI-17): `on_result.<outcome>` replaces `on_success`/`on_failure`. */
+  on_result: z.record(configId, z.array(actionSchema)).optional(),
 });
 
 /** Parsed workflow file. */

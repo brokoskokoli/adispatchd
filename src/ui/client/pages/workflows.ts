@@ -7,7 +7,7 @@ import { ApiError, api, qs, seg } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { buildRuntimeBody, buildStartBody } from '../../shared/params.js';
-import { checkValueLabel, decisionTone, formatDuration } from '../../shared/format.js';
+import { checkValueLabel, decisionTone, formatBytes, formatDuration } from '../../shared/format.js';
 import { buildHash } from '../../shared/route.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
 import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, SecretInfo, Workflow } from '../types.js';
@@ -128,6 +128,12 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
       ['Workflow priority', String(r.workflowPriority)],
       ['Capacity', `workflow ${r.capacity.workflow.active}/${r.capacity.workflow.max} · global ${r.capacity.global.active}/${r.capacity.global.max}`],
       ['Automatic starts', r.gate ? (r.gate.canStartAutomatically ? badge('possible', 'ok') : badge(`not possible (${r.gate.reason ?? 'unknown'})`, 'warn')) : text(null)],
+      ...(r.hooks
+        ? ([
+            ['Named outcomes (on_result)', r.hooks.onResult.length ? h('span', null, r.hooks.onResult.map((o) => badge(o, 'info'))) : text(null)],
+            ['Technical outcomes', h('ul', { class: 'plain' }, Object.entries(r.hooks.technical).map(([status, hook]) => h('li', null, `${status} → `, h('code', null, hook))))],
+          ] as Array<[string, HTMLElement]>)
+        : []),
     ]),
   );
   parts.push(
@@ -365,6 +371,7 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
                   ? wf.execute.secrets.join(', ')
                   : text(null),
             ],
+            ['Kept files', wf.execute.keep?.length ? h('span', null, h('code', { class: 'wrap' }, wf.execute.keep.join(', ')), h('small', { class: 'muted' }, ` (max ${formatBytes(wf.execute.keepMaxSizeBytes ?? null)} per run)`)) : text(null)],
             ['Filter', `${wf.hasFilter ? 'declarative' : 'none'}${wf.hasShellFilter ? ' + shell filter' : ''}; conditions: ${wf.conditions.workflow} workflow, ${wf.conditions.item} item`],
             ['Max technical failures', String(wf.maxTechnicalFailures)],
             ['File', h('code', null, wf.file)],

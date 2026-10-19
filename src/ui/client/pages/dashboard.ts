@@ -30,7 +30,7 @@ export function cancelRunButton(run: { id: string; status: string; active: boole
       void (async () => {
         const r = await confirmDialog({
           title: 'Cancel run?',
-          message: h('p', null, 'The run ', h('code', null, run.id), ' will be cancelled (SIGTERM, then SIGKILL after the grace period). Its on_cancel hook runs afterwards.'),
+          message: h('p', null, 'The run ', h('code', null, run.id), ' will be cancelled (SIGTERM, then SIGKILL after the grace period). Its on_cancel hook (or on_error if on_cancel is not defined) runs afterwards.'),
           confirmLabel: 'Cancel run',
           danger: true,
           input: { label: 'Reason (optional)', placeholder: 'cancelled via UI' },
@@ -112,7 +112,7 @@ export const dashboardPage = (ctx: PageContext): Page => {
             message: h(
               'div',
               null,
-              h('p', null, 'All ', String(s.usage.activeRuns), ' active run(s) are cancelled (on_cancel hooks run), then the orchestrator process exits.'),
+              h('p', null, 'All ', String(s.usage.activeRuns), ' active run(s) are cancelled (on_cancel hooks run, or on_error where on_cancel is not defined), then the orchestrator process exits.'),
               h('p', null, 'This cannot be undone.'),
             ),
             confirmLabel: 'Cancel all and stop',

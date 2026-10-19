@@ -14,14 +14,14 @@
  * - Only the given workflow is considered; higher-priority workflows that
  *   would take global slots first are not simulated.
  */
-import { systemClock, type Clock } from '../core/index.js';
-import { UnknownWorkflowError, workflowSecrets, type ConfigManager } from '../config/index.js';
+import { selectCompletionHook, systemClock, TECHNICAL_OUTCOME_HOOKS, type Clock } from '../core/index.js';
+import { resultHookOutcomes, UnknownWorkflowError, workflowSecrets, type ConfigManager, type WorkflowConfig } from '../config/index.js';
 import { sortCandidates } from '../filters/index.js';
 import { notEvaluatedConditions } from './checks.js';
 import { nextSlots, parseCron } from './cron.js';
 import { checkEligibility, prepareSourceWorkflow, type SourceLookup } from './planner.js';
 import type { SchedulingState } from './state.js';
-import type { CandidateDiagnosis, CronSlotForecast, DryRunResult, GateInfo } from './types.js';
+import type { CandidateDiagnosis, CronSlotForecast, DryRunResult, GateInfo, HookRouting } from './types.js';
 
 /** Dependencies of {@link dryRunWorkflow}. */
 export interface DryRunDeps {
@@ -56,6 +56,10 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
   if (gate === null) notes.push('controller state unknown (no running instance): pause/drain/readiness not considered');
   else if (!gate.canStartAutomatically) notes.push(`automatic starts are currently not possible: ${gate.reason ?? 'unknown'}`);
   notes.push('shell filters and conditions are never executed in a dry-run (not_evaluated)');
+  if (workflow.execute.keep.length > 0) {
+    const mb = Math.round((workflow.execute.keepMaxSizeBytes / 1024 ** 2) * 100) / 100;
+    notes.push(`files kept after each run (execute.keep, max ${mb} MB per run): ${workflow.execute.keep.join(', ')}`);
+  }
 
   const globalActive = deps.state.countActive();
   const workflowActive = deps.state.countActive(workflowId);
@@ -79,6 +83,7 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
     secrets: workflowSecrets(workflow),
     notes,
     summary: { candidates: 0, wouldStart: 0, pendingChecks: 0, notStartable: 0 },
+    hooks: hookRouting(workflow),
   };
 
   const trigger = workflow.trigger;
@@ -168,4 +173,13 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
     notStartable: counted.filter((c) => c.decision !== 'would_start' && c.decision !== 'pending_checks').length,
   };
   return result;
+}
+
+/** Completion hook routing of a workflow (WI-17): named outcomes and the hook per technical outcome. */
+export function hookRouting(workflow: WorkflowConfig): HookRouting {
+  const technical = {} as HookRouting['technical'];
+  for (const status of Object.keys(TECHNICAL_OUTCOME_HOOKS) as Array<keyof typeof TECHNICAL_OUTCOME_HOOKS>) {
+    technical[status] = selectCompletionHook(workflow.hooks, status, null);
+  }
+  return { onResult: resultHookOutcomes(workflow.hooks), technical };
 }

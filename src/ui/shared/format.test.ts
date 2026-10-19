@@ -86,6 +86,11 @@ describe('run outcome badges (Spec §21)', () => {
   });
   it('active runs show their technical state', () => {
     expect(runBadges({ status: 'running', outcome: 'active', lifecycleStatus: null })[0]).toMatchObject({ label: 'running', tone: 'info' });
+    // WI-17: the named outcome is an extra badge next to the business result.
+    expect(runBadges({ ...base, outcome: 'failure', resultOutcome: 'needs_maintainer', completionHook: 'on_result.needs_maintainer' })).toEqual([
+      expect.objectContaining({ label: 'failure (business)' }),
+      { label: 'outcome: needs_maintainer', tone: 'info', title: 'Named outcome reported by the worker; completion hook on_result.needs_maintainer' },
+    ]);
     expect(runBadges({ status: 'recovery_pending', outcome: 'active' })[0]).toMatchObject({ label: 'recovery pending', tone: 'warn' });
   });
 });
@@ -106,6 +111,18 @@ describe('dry-run / events', () => {
     expect(eventSummary({ type: 'progress', payload: { value: 60 } })).toBe('60%');
     expect(eventSummary({ type: 'status', payload: { message: 'Tests laufen' } })).toBe('Tests laufen');
     expect(eventSummary({ type: 'lifecycle.action', payload: { hook: 'on_success', name: 'label', type: 'source.update', status: 'failed', error: 'x' } })).toBe('on_success label failed: x');
+    expect(
+      eventSummary({
+        type: 'lifecycle.action',
+        payload: {
+          hook: 'on_start',
+          name: 'on_start.0',
+          status: 'succeeded',
+          details: { changed: true, applied: { labelsAdded: ['in-progress'], labelsRemoved: ['ready'], projectItemAdded: true, projectFields: { Status: 'In Progress', Estimate: 3, Notes: null } } },
+        },
+      }),
+    ).toBe('on_start on_start.0 succeeded (+in-progress, -ready, added to project, Status=In Progress, Estimate=3, Notes cleared)');
+    expect(eventSummary({ type: 'lifecycle.action', payload: { hook: 'on_start', name: 'x', status: 'succeeded', details: { changed: false } } })).toBe('on_start x succeeded');
     expect(eventSummary({ type: 'custom', payload: {} })).toBe('');
     expect(eventSummary({ type: 'custom', payload: null })).toBe('');
   });

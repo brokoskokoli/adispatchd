@@ -551,7 +551,8 @@ class ShellProcess implements RunningProcess {
       if (!parsed.ok) return { state: 'invalid', error: this.secretRedactor.redact(parsed.error) };
       // Spec §9.2: redact sensitive values before the result is persisted anywhere.
       const result = redactValue(parsed.result, this.secretRedactor.asRedactor) as WorkerResult;
-      return { state: 'valid', result };
+      const warnings = parsed.warnings.map((w) => this.secretRedactor.redact(w));
+      return { state: 'valid', result, ...(warnings.length > 0 ? { warnings } : {}) };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'missing' };
       return { state: 'invalid', error: `result file could not be read: ${errorMessage(err)}` };

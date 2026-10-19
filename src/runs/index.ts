@@ -1,6 +1,6 @@
 /**
  * Component `runs` – public API (WI-08): run controller (start, cancel,
- * finalization, retry blocks, workspace cleanup), crash recovery,
+ * finalization, retry blocks, kept files, workspace cleanup), crash recovery,
  * pause/drain/cancel-all shutdown and the in-process event bus.
  * Other components import from this module only.
  */
@@ -27,3 +27,15 @@ export { RunControllerError } from './errors.js';
 export { buildExecutionSpec, executionTemplateValues, type ExecutionInput, type PreparedExecution } from './execution.js';
 export { removeWorkspace, shouldCleanupWorkspace, type WorkspaceRemoval } from './workspace.js';
 export { RetentionService, type RetentionReport, type RetentionServiceOptions } from './retention.js';
+export {
+  KEEP_MAX_ENTRIES,
+  KEEP_MAX_FILES,
+  KEEP_MAX_REPORTED_SKIPS,
+  keepWorkspaceFiles,
+  listKeptFiles,
+  type KeepOptions,
+  type KeepReport,
+  type KeepSkip,
+  type KeepSkipReason,
+  type KeptFile,
+} from './keep.js';

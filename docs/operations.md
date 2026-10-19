@@ -33,8 +33,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.2.0
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.2.0.tgz
+sudo npm install -g adispatchd@0.3.0
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.3.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -71,7 +71,9 @@ Tokens werden beim Start gelesen und in allen Logs redigiert; eine fehlende/leer
 nach `systemctl restart adispatchd`. Für Projektfelder org-eigener Projekte braucht die lesende GitHub App zusätzlich
 die Berechtigung **Organization → Projects: Read** (nach dem Ändern der App-Rechte die Installation bestätigen). Für
 user-eigene Projekte empfohlen: klassischer PAT des Owners mit `read:project`, bei privaten Repos zusätzlich `repo`
-(der Token liest auch die Issues/PRs); fine-grained Tokens sind dafür nicht verifiziert.
+(der Token liest auch die Issues/PRs); fine-grained Tokens sind dafür nicht verifiziert. Setzt ein Workflow
+Projektfelder (`source.update` → `project`, seit 0.3.0), braucht die schreibende Identity **Projects: Read and write**
+(App) bzw. den Scope **`project`** statt `read:project` (klassischer PAT).
 
 Optionen von `service install`: `--user`/`--group` (Default `adispatchd`), `--create-user`, `--name` (Unit-Name),
 `--node`/`--entry` (absolute Pfade, Default: das laufende Node und diese Installation), `--env-file <pfad|none>`,
@@ -116,14 +118,14 @@ das nächste `service install`.
 
 | Ereignis | Verhalten | Exit | systemd |
 |---|---|---|---|
-| `systemctl stop` / `restart` | SIGTERM an den **Hauptprozess** → Drain bis `--drain-timeout`, dann Cancel-All (`on_cancel`) bis `--cancel-timeout`, danach werden Hooks unterbrochen (Recovery setzt sie beim nächsten Start fort) | 0 | gestoppt |
+| `systemctl stop` / `restart` | SIGTERM an den **Hauptprozess** → Drain bis `--drain-timeout`, dann Cancel-All (`on_cancel` bzw. `on_error`) bis `--cancel-timeout`, danach werden Hooks unterbrochen (Recovery setzt sie beim nächsten Start fort) | 0 | gestoppt |
 | zweites SIGTERM (`systemctl kill --kill-whom=main --signal=SIGTERM adispatchd`) | sofort Cancel-All | 0 | gestoppt |
 | drittes Signal | sofortiger Exit (Recovery räumt beim nächsten Start auf) | 1 | – |
 | `adispatch drain` / UI „Drain“ | keine neuen Runs, aktive laufen zu Ende, dann Ende | 0 | inactive, **kein** Neustart |
-| `adispatch cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel`, dann Ende | 0 | inactive, **kein** Neustart |
+| `adispatch cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel` bzw. `on_error`, dann Ende | 0 | inactive, **kein** Neustart |
 | Konfigurations-/Startfehler (ungültige YAML, Instanz-Lock belegt, DB-Schema neuer als der Code) | Start abgebrochen | 78 (EX_CONFIG) | **kein** Neustart (`RestartPreventExitStatus=78`) – Fehler beheben, dann `systemctl start` |
 | Absturz / Exit ≠ 0 | – | ≠ 0 | Neustart nach 5 s → Recovery |
-| `TimeoutStopSec` abgelaufen | systemd SIGKILLt die ganze cgroup inkl. Worker | – | gestoppt; nächster Start: Runs `crashed` + `on_crash` |
+| `TimeoutStopSec` abgelaufen | systemd SIGKILLt die ganze cgroup inkl. Worker | – | gestoppt; nächster Start: Runs `crashed` + `on_crash` bzw. `on_error` |
 
 - **`KillMode=mixed`**: SIGTERM geht nur an den Orchestrator, Worker laufen während des Drains weiter. Mit dem Default
   `control-group` bekämen alle Worker sofort SIGTERM (gleiche cgroup trotz eigener Prozessgruppe) → kein Drain möglich.
@@ -138,9 +140,12 @@ das nächste `service install`.
   und erst danach `systemctl stop`/Update/Reboot.
 - **Absturz unter systemd:** Stirbt der Hauptprozess, beendet systemd (bei `KillMode=mixed`) auch alle Worker der cgroup per
   SIGKILL. Die Recovery findet beim Neustart die Prozessgruppen daher i. d. R. bereits beendet und finalisiert die Runs als
-  `crashed` mit `on_crash` (zählt als technischer Fehler, ggf. Retry-Block). Verwaiste, noch lebende Worker (Recovery tötet
+  `crashed` mit `on_crash` bzw. `on_error` (zählt als technischer Fehler, ggf. Retry-Block). Verwaiste, noch lebende Worker (Recovery tötet
   sie nur bei sicher verifizierter Identität) entstehen v. a. außerhalb von systemd (lokaler Start, `KillMode=process`).
-- **Reboot:** wie Absturz – alle Worker sind weg → `crashed` + `on_crash`. Geplante Reboots daher vorher drainen.
+- **Reboot:** wie Absturz – alle Worker sind weg → `crashed` + `on_crash` bzw. `on_error`. Geplante Reboots daher vorher drainen.
+
+Überall gilt: Ist der spezifische Hook (`on_cancel`, `on_crash`, …) im Workflow nicht definiert, läuft `on_error`
+(ab 0.3.0; Konfigurationsreferenz §3.4.10).
 
 ## Pause, Drain, Cancel-All
 
@@ -181,9 +186,12 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 ```
 
 - **DB-Migrationen** sind versioniert und laufen beim Start automatisch. Existiert die DB und stehen Migrationen aus, wird
-  **vorher** eine konsistente Kopie geschrieben: `data-dir/backups/orchestrator-<alte-version>-<zeitstempel>.sqlite`
+  **vorher** eine konsistente Kopie geschrieben: `data-dir/backups/adispatchd-<alte-schemaversion>-<zeitstempel>.sqlite`
   (`VACUUM INTO`, auch im WAL-Modus konsistent). Schlägt eine Migration fehl, wird sie zurückgerollt und der Start abgebrochen.
 - Eine DB mit **neuerer** Schemaversion als der Code kennt wird abgelehnt (kein stilles Downgrade).
+- **0.3.0 hebt das Schema auf v3** (benannte Ergebnisse, gespeicherter Abschluss-Hook). Das ist eine Einbahnstraße:
+  0.2.x startet mit einer v3-DB nicht mehr. Zurück auf 0.2.x nur über das vor der Migration geschriebene Backup
+  (`backups/adispatchd-2-<zeitstempel>.sqlite`, siehe Rollback).
 - **Rollback:** Dienst stoppen, alte Paketversion installieren, `adispatchd.sqlite`, `adispatchd.sqlite-wal` und
   `adispatchd.sqlite-shm` beiseitelegen, das passende Backup als `adispatchd.sqlite` zurückkopieren (Eigentümer
   `adispatchd`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).
@@ -196,7 +204,7 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 | config-dir | Versionsverwaltung (git) oder Dateikopie; enthält keine Secrets |
 | Env-Datei | sicher (verschlüsselt) aufbewahren – enthält Private Keys |
 | `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
-| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien; nur diese, nicht jedes `secrets/`-Verzeichnis, z. B. in Workspaces) |
+| `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal; `runs/<id>/kept/` enthält die per `execute.keep` gesicherten Dateien); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien; nur diese, nicht jedes `secrets/`-Verzeichnis, z. B. in Workspaces) |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
 **`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
@@ -222,7 +230,8 @@ Wiederherstellen nur bei gestopptem Dienst; die Lock-Dateien legt der Orchestrat
 Beim Start erfasst die Recovery alle zuvor aktiven Runs, **bevor** der Scheduler startet (`/ready` erst danach `200`):
 
 - noch lebende, sicher identifizierte Worker-Prozessgruppen (PID + Startzeit/Boot-ID) werden beendet; verschwundene Runs
-  werden `crashed` mit `on_crash` (zählt als technischer Fehler); halb abgearbeitete Lifecycle-Ketten werden fortgesetzt
+  werden `crashed` mit `on_crash` bzw. `on_error` (zählt als technischer Fehler); halb abgearbeitete Lifecycle-Ketten
+  werden fortgesetzt – ab 0.3.0 genau der beim Übergang nach `finalizing` gespeicherte Abschluss-Hook
   (bereits erfolgreiche Actions laufen nicht erneut; Kommentare werden über Marker abgeglichen).
 - Übrig gebliebene Token-Dateien (`delivery: file`) der zuvor aktiven Runs werden zuerst gelöscht – sie würden nicht
   mehr erneuert. Ein noch laufender, nicht beendbarer Worker (`recovery_pending`) verliert damit seine Token-Datei.
@@ -290,6 +299,8 @@ Tailscale: `tailscale serve --bg http://127.0.0.1:8787` und den MagicDNS-Namen i
 | `GITHUB_…_PRIVATE_KEY is not set` | Env-Datei fehlt/unvollständig (`systemctl show adispatchd -p EnvironmentFiles`). |
 | `Token for identity "…" missing: environment variable … is not set or empty` | `token_env` einer `github_token`-Identity fehlt in der Env-Datei → eintragen, Neustart. |
 | Warnung „GitHub project field unavailable“, Dry-Run `project.* unknown – GitHub project … unavailable` | Projekt nicht gefunden oder kein Zugriff: Nummer/Owner prüfen; Org-Projekt → App-Recht *Projects: Read*; User-Projekt → `github_token`-Identity als `project.identity`. Feld fehlt / falsche Art → `project.fields` an das Projekt anpassen. |
+| Action `source.update` `failed`: `option "…" not found (available: …)` / `is ambiguous` | Optionsname bzw. Iterationstitel im Workflow genau wie im Projekt schreiben (oder die Option im Projekt anlegen); danach Action in der UI wiederholen. |
+| Action `source.update` `failed` mit `forbidden` „… needs write access to the project“ | Schreibrecht fehlt: App-Recht *Projects: Read and write* (Installation bestätigen) bzw. PAT mit Scope `project`; schreibende Identity ist `project.identity` (wenn gesetzt), sonst die der Action. |
 
 ## Bekannte Grenzen
 

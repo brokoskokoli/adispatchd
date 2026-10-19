@@ -137,6 +137,7 @@ export function buildHookTemplateValues(input: HookValueInput): TemplateValues {
             ...(run.finalStatus ? { status: run.finalStatus } : {}),
             result: run.businessResult,
             ...(typeof result?.message === 'string' ? { message: result.message } : {}),
+            ...(run.outcome ? { outcome: run.outcome } : {}),
           },
         }
       : {}),
@@ -185,6 +186,8 @@ export type ShellActionContext = {
     result: string | null;
     reason: string | null;
     message: string | null;
+    /** Named outcome (WI-17), `null` if the worker reported none. */
+    outcome: string | null;
     details: unknown;
     artifacts: unknown;
   } | null;
@@ -236,6 +239,7 @@ export function buildShellActionContext(input: {
             result: run.businessResult,
             reason: run.finalReason,
             message: typeof result?.message === 'string' ? result.message : null,
+            outcome: run.outcome,
             details: result?.details ?? null,
             artifacts: result?.artifacts ?? null,
           },

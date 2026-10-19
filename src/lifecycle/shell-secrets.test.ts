@@ -162,6 +162,31 @@ ${extra}`;
     assertNoToken(run.id, [files.stdout, files.context]);
   });
 
+  it('shell actions in on_result.<outcome> and on_error chains get their secrets too (WI-17 hooks)', async () => {
+    const cmd = script('[ -z "${GH_TOKEN+x}" ] || exit 3\ncat "$GH_TOKEN_FILE" >> "$OUT/seen"\necho "t=$(cat "$GH_TOKEN_FILE")"');
+    const action = (id: string) =>
+      `  - id: ${id}\n    type: shell\n    command: ${cmd}\n    env:\n      OUT: ${out}\n    secrets:\n      GH_TOKEN: { identity: coder, delivery: file }\n`;
+    const snapshot = await loadSnapshot(`
+id: wf
+trigger: { type: source, source: repo_a }
+execute: { type: shell, command: /bin/true }
+on_result:
+  approved:
+${action('approved-notify').replace(/^/gm, '  ').replace(/^  $/gm, '')}
+on_error:
+${action('error-notify')}`);
+    const run = env.finalizeSuccess(env.reserve(snapshot).id);
+    for (const hook of ['on_result.approved', 'on_error'] as const) {
+      const result = await engine().runHook(run, hook, snapshot);
+      expect(result.status, hook).toBe('succeeded');
+      const files = attemptDirs(run.id, result.actions[0]!.id);
+      expect(readFileSync(files.stdout, 'utf8')).toBe('t=[REDACTED]\n');
+      expect(existsSync(files.secrets)).toBe(false);
+      assertNoToken(run.id, [files.stdout, files.context]);
+    }
+    expect(readFileSync(path.join(out, 'seen'), 'utf8')).toBe(creds.issued.map((t) => t.token).join(''));
+  });
+
   it('a failing token exchange fails the attempt (retryable) without starting the action', async () => {
     creds.failNext = 5;
     const cmd = script('echo started > "$OUT/started"');

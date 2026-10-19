@@ -3,15 +3,23 @@
 Konfigurationsgetriebener Orchestrator für Shell-Prozesse und KI-Agenten. Er findet Aufgaben in externen Quellen
 (V1: GitHub Issues/PRs), wählt sie über Filter und Prioritäten aus, prüft Startbedingungen, führt unabhängige
 Shell-Workflows in eigenen Workspaces aus, überwacht und protokolliert jeden Run, führt Lifecycle-Aktionen aus
-(Labels, Kommentare, Shell-Hooks) und zeigt alles in einer kleinen Weboberfläche mit Live-Updates.
+(Labels, GitHub-Projects-Felder, Kommentare, Shell-Hooks) und zeigt alles in einer kleinen Weboberfläche mit
+Live-Updates.
 
 - **GitHub bleibt Source of Truth** – kein eigener Ticketstore; SQLite hält nur Runs, Locks, Events, Blocks, Aktionsjournale.
 - **Unabhängige Workflows** mit Source-, Cron- oder manuellem Trigger, globalen und workflowbezogenen Limits.
 - **Deklarative Filter und Prioritäten** auf Labels, Zustand, Milestone, Issue-Typ, native Abhängigkeiten („blocked by“)
   und Felder aus **GitHub Projects** (Status, Priorität, eigene Felder; „A oder B“ per `in`) – fehlender Zugriff ergibt
   `unknown` statt eines falschen Starts.
+- **Lifecycle-Aktionen** setzen Labels und **Projektfelder** (z. B. `Status: In Progress` beim Start, `Review` nach
+  Erfolg; Items werden bei Bedarf dem Projekt hinzugefügt), schreiben Kommentare und rufen Shell-Hooks auf –
+  idempotent (erst lesen, dann schreiben) mit Journal und Retries.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per
   Prozessgruppe, Drain, Crash-Recovery, systemd-Integration.
+- **Mehr als zwei Ausgänge:** benannte Ergebnisse (`outcome` in der Ergebnisdatei → `on_result.<outcome>`) und ein
+  Sammel-Hook `on_error` für alle technischen Ausgänge.
+- **Dateien sichern:** `execute.keep` kopiert Mitschnitte und Logs (Glob-Muster) vor dem Workspace-Cleanup nach
+  `runs/<run-id>/kept/` – mit Größenlimit, ohne Symlinks zu folgen; Download in UI und API, gelöscht mit dem Run.
 - **Tokens für lange Runs:** Secrets per Umgebungsvariable oder als **Token-Datei** (`delivery: file` →
   `<NAME>_FILE`), die der Daemon vor Ablauf atomar erneuert und nach dem Run löscht – Worker brauchen keine
   App-Schlüssel. Shell-Actions in Hooks können ebenfalls Tokens anfordern.
@@ -29,13 +37,13 @@ Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 2
 Paket `adispatchd` auf npm, Befehl `adispatch`. Für Dienste immer eine **feste Version** global installieren (kein `npx`):
 
 ```bash
-npm install -g adispatchd@0.2.0                 # aus der npm-Registry
+npm install -g adispatchd@0.3.0                 # aus der npm-Registry
 
 # alternativ aus dem Repository-Checkout:
 git clone https://github.com/brokoskokoli/adispatchd.git && cd adispatchd
 npm install
-npm pack                                        # baut (prepack) und erzeugt adispatchd-0.2.0.tgz
-npm install -g ./adispatchd-0.2.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
+npm pack                                        # baut (prepack) und erzeugt adispatchd-0.3.0.tgz
+npm install -g ./adispatchd-0.3.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
 # lokal ohne globale Installation: npm run build && node dist/cli/main.js <kommando> …
 ```
 
@@ -58,8 +66,9 @@ adispatch start --config-dir ./config --data-dir ./data     # Vordergrund, Ctrl-
   `identities.yaml`, Repo in `sources.yaml`, Private Key als Umgebungsvariable (`export GITHUB_CODER_PRIVATE_KEY="$(cat key.pem)"`),
   dann in `workflows/coder.yaml` `enabled: true` setzen und `adispatch config reload --config-dir ./config`.
 - Projektfelder (`project.Status` …): `project`-Block an der Source in `sources.yaml` (siehe Kommentar nach `init`); Org-Projekte
-  brauchen das App-Recht *Organization → Projects: Read*, user-eigene Projekte eine `github_token`-Identity
-  ([Konfigurationsreferenz §3.2/§3.3](docs/configuration-reference.md#32-sourcesyaml)).
+  brauchen das App-Recht *Organization → Projects: Read* (zum Setzen per `source.update` → `project`: *Read and
+  write*), user-eigene Projekte eine `github_token`-Identity
+  ([Konfigurationsreferenz §3.2/§3.3/§3.4.11](docs/configuration-reference.md#32-sourcesyaml)).
 
 `init` überschreibt nie bestehende Dateien (vorhandene werden als „kept“ gemeldet) und validiert danach die Konfiguration.
 
@@ -123,8 +132,10 @@ on_failure: [ { type: source.update, labels: { add: [needs-maintainer], remove: 
 on_crash:   [ { type: source.update, labels: { add: [ready-for-coding], remove: [coding] } } ]
 ```
 
-- Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`, `on_cancel`; Actions
-  `source.update`, `source.comment`, `shell`; Retry 3 × 30 s (`lifecycle.action_retry`), `continue_on_error`.
+- Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`, `on_cancel`, `on_error`
+  (Sammel-Hook, wenn der spezifische technische Hook fehlt) und `on_result.<outcome>` (benannte Ergebnisse statt
+  `on_success`/`on_failure`); Actions `source.update`, `source.comment`, `shell`; Retry 3 × 30 s
+  (`lifecycle.action_retry`), `continue_on_error`.
 - Platzhalter (feste Liste): `{run.id}`, `{workflow.id}`, `{item.number}`, `{item.url}`, `{result.message}`,
   `{parameters.<name>}`, `{workspace.base_dir}` … – unbekannte Platzhalter sind Konfigurationsfehler.
 - Manuelle Starts (UI/API) umgehen Filter, Conditions, Limits und Retry-Blocks, nie aber den aktiven Lock pro Workflow+Item.
@@ -146,8 +157,11 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **Exit-Code = technischer Status:** `0` = ok, alles andere = `crashed` (technischer Fehler, zählt zum Retry-Block).
 - **Fachliches Ergebnis** nur über die Ergebnisdatei (atomar schreiben):
   `{"schema_version":1,"result":"failure","message":"Requirements unclear"}` + `exit 0` → `on_failure` („Needs Maintainer“),
-  kein technischer Fehler. Ohne Datei gilt Exit 0 als `success`.
+  kein technischer Fehler. Ohne Datei gilt Exit 0 als `success`. Optional `"outcome": "needs_maintainer"` wählt
+  `on_result.needs_maintainer`.
 - **Events:** Zeilen `@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}` auf stdout/stderr – nur informativ.
+- **Dateien behalten:** Was im Workspace unter `execute.keep` passt (z. B. `.agent/transcript.jsonl`, `.agent/gate/*.log`),
+  sichert der Daemon nach dem Run – auch wenn der Workspace danach gelöscht wird.
 - **Cancel/Timeout:** SIGTERM an die Prozessgruppe, nach `cancel_grace` (30 s) SIGKILL. Eigene Sessions/Container räumt das
   Skript selbst auf.
 

@@ -18,14 +18,14 @@
  */
 import path from 'node:path';
 import {
-  HOOK_NAMES,
   dataPaths,
   errorMessage,
-  hookForOutcome,
   isOrchestratorError,
   isTerminalStatus,
   noopLogger,
+  outcomeOfHook,
   parseSourceItemKey,
+  selectCompletionHook,
   systemClock,
   systemTimers,
   type BusinessResult,
@@ -71,6 +71,7 @@ import {
 import { RunControllerError } from './errors.js';
 import { PersistedEventPublisher, RunEventBus, type ControllerStatus } from './event-bus.js';
 import { buildExecutionSpec } from './execution.js';
+import { keepWorkspaceFiles } from './keep.js';
 import { removeWorkspace, shouldCleanupWorkspace } from './workspace.js';
 
 /** Orchestrator-side event types persisted by the controller (besides `run.status`). */
@@ -92,6 +93,13 @@ export const RUN_EVENTS = {
   recovered: 'recovery.recovered',
   /** Workspace cleanup result. */
   workspaceCleanup: 'workspace.cleanup',
+  /**
+   * Named outcome not used (WI-17): `{code: 'invalid_outcome', message}` (ignored, not an ID) or
+   * `{code: 'unmatched_outcome', outcome, hook, message}` (no `on_result.<outcome>`, fallback hook runs).
+   */
+  outcomeWarning: 'run.outcome_warning',
+  /** Files kept from the workspace (`execute.keep`, WI-22): a {@link KeepReport}. */
+  keptFiles: 'run.kept_files',
 } as const;
 
 /** Optional per-start settings. */
@@ -172,6 +180,11 @@ export interface RunControllerOptions {
   notifier?: Notifier;
   /** Executor per run; default `new ShellExecutor({clock, logger, workspaceBaseDir})`. */
   createExecutor?: (options: { workspaceBaseDir: string | undefined }) => Executor;
+  /**
+   * Currently registered secret values of the shared redactor (issued tokens,
+   * keys); redacted in kept files together with the run's own secrets (WI-22).
+   */
+  secretValues?: () => Iterable<string>;
   /** `retention.max_log_size_per_run` in bytes (value or getter for the live config). */
   maxLogBytesPerRun?: number | (() => number | undefined);
   clock?: Clock;
@@ -224,6 +237,8 @@ interface FinalizeOptions {
   hooks: boolean;
   item?: SourceItem | null;
   update?: RunUpdate;
+  /** Warnings from the result file (e.g. an ignored invalid `outcome`), persisted with `→ finalizing`. */
+  resultWarnings?: readonly string[];
 }
 
 const CANCELLABLE_TO_CANCELLING: readonly TechnicalStatus[] = ['reserved', 'starting', 'running'];
@@ -242,6 +257,8 @@ export class RunController {
   private readonly timers: Timers;
   private readonly logger: Logger;
   private readonly active = new Map<string, ActiveRun>();
+  /** Secret values injected into a run (`execute.secrets`), kept until the run is finished (WI-22 redaction). */
+  private readonly runSecrets = new Map<string, string[]>();
   private readonly idleWaiters = new Set<() => void>();
   /** Woken when a running shutdown is escalated (cancel mode / stricter timeouts). */
   private readonly shutdownWakeups = new Set<() => void>();
@@ -822,7 +839,9 @@ export class RunController {
   private async resumeTerminalRunActions(run: RunRecord): Promise<void> {
     if (!tryParseSnapshot(run)) return;
     await this.makeActionsSafe(run.id, { abandonOnStart: true });
-    await this.lifecycle.resumeIncomplete(run.id, { hooks: HOOK_NAMES.filter((h) => h !== 'on_start'), wait: true });
+    // Every journaled chain except `on_start` (incl. `on_result.<outcome>` and `on_error`, WI-17).
+    const hooks = [...new Set(this.repos.actions.listForRun(run.id).map((a) => a.hook))].filter((h) => h !== 'on_start');
+    await this.lifecycle.resumeIncomplete(run.id, { hooks, wait: true });
     this.publisher.flush();
   }
 
@@ -971,6 +990,9 @@ export class RunController {
     }
 
     // 4. Spawn. Persist the intent first: recovery must know a process may exist.
+    // Secret values of this run stay known until the run is finished (kept files are redacted with them);
+    // token-file tokens (WI-18) are added when the token files are closed (renewals).
+    this.runSecrets.set(runId, [...Object.values(spec.secrets), ...(spec.redactSecrets?.values() ?? [])]);
     this.repos.transaction(() => {
       this.repos.runs.update(runId, { workspacePath: spec.workingDirectory, command: { command: spec.command, args: spec.args } });
       this.repos.events.append(runId, RUN_EVENTS.spawn, {
@@ -1041,12 +1063,16 @@ export class RunController {
       classification.status === 'cancelled'
         ? cancelled(entry.cancelReason)
         : { status: classification.status, businessResult: classification.businessResult, reason: classification.reason };
+    const resultWarnings = classification.status === 'completed' && outcome.resultFile.state === 'valid' ? (outcome.resultFile.warnings ?? []) : [];
     return this.finalize(runId, snapshot, target, {
       hooks: true,
       ...ctx,
+      resultWarnings,
       update: {
         exitCode: outcome.exitCode,
         result: classification.result,
+        // Named outcome (WI-17): only a completed run's valid result file counts.
+        outcome: classification.status === 'completed' ? (classification.result?.outcome ?? null) : null,
         ...(classification.status !== 'completed' || outcome.logs.truncated ? { error: outcomeError(outcome, classification.reason) } : {}),
       },
     });
@@ -1081,7 +1107,12 @@ export class RunController {
   }
 
   private async closeTokenFiles(entry: ActiveRun): Promise<void> {
-    await entry.tokenFiles?.close();
+    const session = entry.tokenFiles;
+    if (!session) return;
+    await session.close();
+    // Kept files (WI-22) are redacted with every token the run's files ever held, incl. renewals.
+    const known = this.runSecrets.get(entry.runId);
+    if (known) for (const value of session.values()) if (!known.includes(value)) known.push(value);
   }
 
   private async cancelProcess(entry: ActiveRun): Promise<void> {
@@ -1116,12 +1147,33 @@ export class RunController {
     target: FinalizationTarget,
     options: FinalizeOptions,
   ): Promise<RunRecord> {
-    this.beginFinalization(runId, snapshot, target, options.update);
+    // WI-17: the completion hook is selected once and persisted with `→ finalizing`,
+    // so that recovery resumes exactly this hook.
+    const outcome = target.status === 'completed' ? (options.update?.outcome ?? null) : null;
+    const completionHook =
+      options.hooks && snapshot ? selectCompletionHook(snapshot.workflow.hooks, target.status, target.businessResult, outcome) : null;
+    const warnings: Array<Record<string, unknown>> = (options.resultWarnings ?? []).map((message) => ({ code: 'invalid_outcome', message }));
+    if (outcome !== null && completionHook !== null && outcomeOfHook(completionHook) !== outcome) {
+      warnings.push({
+        code: 'unmatched_outcome',
+        outcome,
+        hook: completionHook,
+        message: `no "on_result.${outcome}" configured; running "${completionHook}" instead`,
+      });
+    }
+    this.beginFinalization(runId, snapshot, target, { ...options.update, outcome, completionHook }, warnings);
     return this.completeFinalization(runId, snapshot, options);
   }
 
-  private beginFinalization(runId: string, snapshot: WorkflowSnapshot | null, target: FinalizationTarget, update?: RunUpdate): void {
+  private beginFinalization(
+    runId: string,
+    snapshot: WorkflowSnapshot | null,
+    target: FinalizationTarget,
+    update?: RunUpdate,
+    warnings: readonly Record<string, unknown>[] = [],
+  ): void {
     this.repos.transaction(() => {
+      for (const warning of warnings) this.repos.events.append(runId, RUN_EVENTS.outcomeWarning, warning);
       const res = this.repos.runs.beginFinalization(runId, target, {
         ...(update ? { update } : {}),
         ...(snapshot ? { blockPolicy: { maxTechnicalFailures: snapshot.workflow.retry.maxTechnicalFailures } } : {}),
@@ -1154,7 +1206,8 @@ export class RunController {
     const target = finalizationTarget(run);
     if (run.status !== 'finalizing' || !target) return run;
     if (options.hooks && snapshot) {
-      const hook = hookForOutcome(target.status, target.businessResult);
+      // Runs finalized before 0.3.0 have no persisted hook: same selection (their snapshots define every list hook).
+      const hook = run.completionHook ?? selectCompletionHook(snapshot.workflow.hooks, target.status, target.businessResult, run.outcome);
       if (hasActions(snapshot, hook)) {
         try {
           const result = await this.lifecycle.runHook(runId, hook, snapshot, {
@@ -1173,8 +1226,12 @@ export class RunController {
         }
       }
     }
-    if (snapshot) await this.cleanupWorkspace(runId, snapshot, target.status, target.businessResult);
+    if (snapshot) {
+      await this.keepFiles(runId, snapshot);
+      await this.cleanupWorkspace(runId, snapshot, target.status, target.businessResult);
+    }
     const finished = this.repos.runs.finish(runId);
+    this.runSecrets.delete(runId);
     this.publisher.flush();
     return finished;
   }
@@ -1186,6 +1243,40 @@ export class RunController {
       this.repos.runs.finish(runId);
     });
     this.publisher.flush();
+  }
+
+  /**
+   * Copy `execute.keep` files to `runs/<id>/kept/` (WI-22) – for every terminal
+   * status, before the cleanup. Runs once per run: a resumed finalization
+   * (recovery) skips it when the event already exists.
+   */
+  private async keepFiles(runId: string, snapshot: WorkflowSnapshot): Promise<void> {
+    // Snapshots of runs started before WI-22 have no `keep`.
+    const keep = (snapshot.workflow.execute.keep as readonly string[] | undefined) ?? [];
+    if (keep.length === 0) return;
+    const run = this.repos.runs.require(runId);
+    if (!run.workspacePath) return;
+    if (this.repos.events.listForRun(runId).some((e) => e.type === RUN_EVENTS.keptFiles)) return;
+    let keptDir: string;
+    try {
+      keptDir = dataPaths(this.options.dataDir).run(runId).keptDir;
+    } catch (err) {
+      this.logger.warn('kept files: invalid run directory', { runId, error: err });
+      return;
+    }
+    const report = await keepWorkspaceFiles({
+      workspace: run.workspacePath,
+      keptDir,
+      patterns: keep,
+      maxBytes: snapshot.workflow.execute.keepMaxSizeBytes,
+      // Best effort like the logs: the run's injected secrets plus everything the shared redactor knows.
+      // After a restart the run's own tokens are gone; still-valid ones remain registered in the shared redactor.
+      secrets: [...(this.runSecrets.get(runId) ?? []), ...(this.options.secretValues?.() ?? [])],
+    });
+    if (report.skippedCount > 0 || report.error) {
+      this.logger.warn('kept files incomplete', { runId, skipped: report.skippedCount, error: report.error });
+    }
+    this.appendEvent(runId, RUN_EVENTS.keptFiles, { ...report });
   }
 
   private async cleanupWorkspace(runId: string, snapshot: WorkflowSnapshot, status: TerminalStatus, result: BusinessResult): Promise<void> {

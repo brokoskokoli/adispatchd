@@ -15,7 +15,7 @@ describe('NotificationRepository – per-channel deliveries (schema v2)', () => 
   afterEach(() => cleanup());
 
   it('migrates to v2 with the notification_deliveries table', () => {
-    expect(schemaVersion(p.db)).toBe(2);
+    expect(schemaVersion(p.db)).toBeGreaterThanOrEqual(2);
     expect(p.db.prepare(`SELECT name FROM sqlite_master WHERE name = 'notification_deliveries'`).get()).toEqual({
       name: 'notification_deliveries',
     });

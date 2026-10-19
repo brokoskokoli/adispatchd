@@ -16,6 +16,7 @@ fields:
   - { field: run.last_workflow, label: Letzter Agent }
   - { field: run.last_result.message, label: Ergebnis }
   - { field: run.last_status, label: Status }
+  - { field: run.last_outcome, label: Ausgang }
 sort: { field: number, direction: desc }
 `;
 
@@ -33,7 +34,10 @@ beforeAll(async () => {
   p.runs.transition(run.id, 'starting');
   p.runs.transition(run.id, 'running');
   p.runs.beginFinalization(run.id, { status: 'completed', businessResult: 'failure', reason: 'result failure' }, {
-    update: { result: { schema_version: 1, result: 'failure', message: 'Question for maintainer' } },
+    update: {
+      result: { schema_version: 1, result: 'failure', message: 'Question for maintainer', outcome: 'needs_maintainer' },
+      outcome: 'needs_maintainer',
+    },
   });
   p.runs.finish(run.id);
 });
@@ -64,6 +68,8 @@ describe('views (scenario 10)', () => {
     expect(a1.cells[col('run.last_workflow')].value).toBe('coder');
     expect(a1.cells[col('run.last_result.message')].value).toBe('Question for maintainer');
     expect(a1.cells[col('run.last_status')].value).toBe('completed');
+    expect(a1.cells[col('run.last_outcome')].value).toBe('needs_maintainer');
+    expect(b3.cells[col('run.last_outcome')]).toEqual({ value: null, known: true, link: null });
     expect(a1.lastRunId).toBeTruthy();
     expect(b3.cells[col('run.last_workflow')]).toEqual({ value: null, known: true, link: null });
   });

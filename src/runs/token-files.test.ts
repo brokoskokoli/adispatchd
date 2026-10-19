@@ -301,4 +301,34 @@ ${extra}`;
     expect(existsSync(attemptSecrets)).toBe(false);
     expect(env.p.actions.listForHook(run.id, 'on_success').map((a) => a.status)).toEqual(['failed']);
   });
+
+  it('kept files (execute.keep) are redacted with every token the token file held, incl. renewals (WI-22)', async () => {
+    const script = env.script(
+      'worker.sh',
+      [
+        'cat "$GH_TOKEN_FILE" > "$ADISPATCH_WORKSPACE/first.txt"',
+        'echo \'@@ADISPATCH_EVENT {"type":"status","message":"ready"}\'',
+        'end=$(( $(date +%s) + 120 ))',
+        'while [ ! -f "$MARKS/go" ] && [ "$(date +%s)" -lt "$end" ]; do sleep 0.02; done',
+        'printf "token: %s\\n" "$(cat "$GH_TOKEN_FILE")" > "$ADISPATCH_WORKSPACE/last.txt"',
+      ].join('\n'),
+    );
+    const yaml = workflow(script).replace('  cancel_grace: 300ms', "  cancel_grace: 300ms\n  keep: ['*.txt']");
+    const snapshot = await env.snapshot(yaml);
+    const h = await harness();
+    const run = env.reserve(snapshot);
+    h.controller.startRun(run.id);
+    await waitForRun(h, env.p, run.id, (r) => r.statusMessage === 'ready');
+    const file = path.join(tokenDir(run.id), 'GH_TOKEN');
+    await clock.advanceAsync(5 * MIN); // renewal
+    const renewed = creds.last!;
+    await vi.waitFor(() => expect(readFileSync(file, 'utf8')).toBe(renewed.token), { timeout: 5_000, interval: 5 });
+    expect(creds.issued).toHaveLength(2);
+    writeFileSync(path.join(env.marks, 'go'), '');
+    await waitForRun(h, env.p, run.id, (r) => r.status === 'completed');
+    const kept = path.join(dataPaths(env.dataDir).run(run.id).runDir, 'kept');
+    expect(readFileSync(path.join(kept, 'first.txt'), 'utf8')).toBe('[REDACTED]');
+    expect(readFileSync(path.join(kept, 'last.txt'), 'utf8')).toBe('token: [REDACTED]\n');
+    assertNoTokenAnywhere(run.id);
+  });
 });

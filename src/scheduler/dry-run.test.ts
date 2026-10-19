@@ -118,7 +118,7 @@ item_priority:
     s.workflow('nightly', scheduleWorkflow('nightly', s.env.script('ok.sh', 'exit 0'), '0 3 * * *', 'max_concurrent: 1'));
     s.workflow(
       'deploy',
-      `id: deploy\nname: Deploy\ntrigger: { type: manual }\nexecute: { type: shell, command: ${s.env.script('d.sh', 'exit 0')} }\n`,
+      `id: deploy\nname: Deploy\ntrigger: { type: manual }\nexecute: { type: shell, command: ${s.env.script('d.sh', 'exit 0')}, keep: ['.agent/*.log'], keep_max_size: 50MB }\n`,
     );
     const config = await ConfigManager.create({ configDir: s.env.configDir, dataDir: s.env.dataDir });
     const deps = { config, sources: () => undefined, state: emptyState(), clock: s.clock };
@@ -129,6 +129,8 @@ item_priority:
       nextSlotForecast: 'would_start',
     });
     expect(nightly.notes.some((n) => n.includes('controller state unknown'))).toBe(true);
+    expect(nightly.notes.some((n) => n.includes('execute.keep'))).toBe(false);
+    expect((await dryRunWorkflow(deps, 'deploy')).notes).toContain('files kept after each run (execute.keep, max 50 MB per run): .agent/*.log');
 
     s.env.p.blocks.create({ workflowId: 'nightly', itemKey: null, reason: 'crashes' });
     const blocked = await dryRunWorkflow({ ...deps, state: repositoryState(s.env.p) }, 'nightly');
@@ -139,6 +141,26 @@ item_priority:
     expect(deploy.source).toBeNull();
     expect(formatDryRun(deploy)).toContain('manual workflow');
     await expect(dryRunWorkflow(deps, 'nope')).rejects.toMatchObject({ code: 'config_unknown_workflow' });
+  });
+
+  it('lists the on_result keys and the hook per technical outcome (WI-17)', async () => {
+    s.workflow(
+      'coder',
+      sourceWorkflow(
+        'coder',
+        s.env.script('ok.sh', 'exit 0'),
+        'on_error:\n  - type: source.update\n    labels: { add: [ready-for-coding] }\non_result:\n  approved: []\n  needs_maintainer: []',
+      ),
+    );
+    const config = await ConfigManager.create({ configDir: s.env.configDir, dataDir: s.env.dataDir });
+    const result = await dryRunWorkflow({ config, sources: () => undefined, state: emptyState() }, 'coder');
+    expect(result.hooks).toEqual({
+      onResult: ['approved', 'needs_maintainer'],
+      technical: { crashed: 'on_crash', start_error: 'on_error', timed_out: 'on_error', cancelled: 'on_cancel' },
+    });
+    const text = formatDryRun(result);
+    expect(text).toContain('  on_result: approved, needs_maintainer');
+    expect(text).toContain('  technical outcomes: crashed → on_crash, start_error → on_error, timed_out → on_error, cancelled → on_cancel');
   });
 
   it('reports a source error instead of throwing', async () => {

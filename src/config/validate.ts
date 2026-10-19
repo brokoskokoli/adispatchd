@@ -8,24 +8,29 @@ import path from 'node:path';
 import { Cron } from 'croner';
 import {
   extractPlaceholders,
-  HOOK_NAMES,
   isSecretKey,
+  keepPatternError,
+  outcomeOfHook,
+  TECHNICAL_OUTCOME_HOOKS,
   validateTemplate,
   type HookName,
   type TemplateMode,
   type TemplateScope,
 } from '../core/index.js';
+import { PROJECT_FIELD_PREFIX, valueProblem } from '../sources/index.js';
 import { checkFieldName, checkFilterFields, sourceFieldContext, suggestField, viewFieldContext, type FieldIssue } from './field-catalog.js';
 import type { RawFilterNode } from './filter-schema.js';
-import type { IssueCollector, IssuePath } from './issues.js';
-import type {
-  GlobalConfig,
-  IdentityConfig,
-  LifecycleActionConfig,
-  SecretRef,
-  SourceConfig,
-  ViewConfig,
-  WorkflowConfig,
+import { formatIssuePath, type IssueCollector, type IssuePath } from './issues.js';
+import {
+  configuredHooks,
+  resultHookOutcomes,
+  type GlobalConfig,
+  type IdentityConfig,
+  type LifecycleActionConfig,
+  type SecretRef,
+  type SourceConfig,
+  type ViewConfig,
+  type WorkflowConfig,
 } from './model.js';
 import type { NamedFilters } from './named-filters.js';
 import type { RawParameter } from './schemas.js';
@@ -337,25 +342,59 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   checkEnvNames(Object.keys(exec.env), issues, file, ['execute', 'env']);
   checkLiteralSecrets(exec.env, issues, file, ['execute', 'env']);
   checkSecrets(exec.secrets, exec.env, input, issues, file, ['execute', 'secrets']);
+  exec.keep.forEach((pattern, i) => {
+    const error = keepPatternError(pattern);
+    if (error) issues.error(file, ['execute', 'keep', i], error);
+  });
   const { maxDurationMs, idleTimeoutMs } = exec.timeout;
   if (maxDurationMs !== null && idleTimeoutMs !== null && idleTimeoutMs > maxDurationMs) {
     issues.warning(file, ['execute', 'timeout', 'idle_timeout'], '"idle_timeout" is longer than "max_duration"');
   }
 
   // Hooks
+  const triggerSource = wf.trigger.type === 'source' ? input.sources[wf.trigger.source] : undefined;
   const actionIds = new Map<string, string>();
-  for (const hook of HOOK_NAMES) {
-    wf.hooks[hook].forEach((action, i) => {
-      const at: IssuePath = [hook, i];
-      const where = `${hook}[${i}]`;
+  for (const [hook, actions] of configuredHooks(wf.hooks)) {
+    const outcome = outcomeOfHook(hook);
+    // YAML path: `on_result.<outcome>[i]` is the map entry `on_result: { <outcome>: [...] }`.
+    const base: IssuePath = outcome !== null ? ['on_result', outcome] : [hook];
+    actions.forEach((action, i) => {
+      const at: IssuePath = [...base, i];
+      const where = formatIssuePath(at);
       const previous = actionIds.get(action.id);
       if (previous !== undefined) {
         issues.error(file, [...at, 'id'], `Duplicate action ID "${action.id}" (also used at ${previous})`);
       }
       actionIds.set(action.id, where);
-      validateAction(action, hook, at, isSource, parameterNames, input, issues, file);
+      validateAction(action, hook, at, isSource, parameterNames, input, issues, file, triggerSource);
     });
   }
+  validateHookRouting(wf, issues, file);
+}
+
+/**
+ * WI-17 checks of `on_result`/`on_error`: named outcomes need a result file;
+ * an `on_error` shadowed by all four technical hooks never runs (warning).
+ */
+function validateHookRouting(wf: WorkflowConfig, issues: IssueCollector, file: string): void {
+  if (resultHookOutcomes(wf.hooks).length > 0 && !hasResultFile(wf.execute)) {
+    issues.error(file, ['on_result'], `"on_result" needs a worker result file; execute type "${wf.execute.type}" has none`);
+  }
+  if (wf.hooks.on_error !== undefined) {
+    const technical = Object.values(TECHNICAL_OUTCOME_HOOKS);
+    if (technical.every((hook) => wf.hooks[hook] !== undefined)) {
+      issues.warning(
+        file,
+        ['on_error'],
+        `"on_error" never runs: ${technical.map((h) => `"${h}"`).join(', ')} are all defined (a defined hook, even [], takes precedence)`,
+      );
+    }
+  }
+}
+
+/** True if the executor of `execute` reads a worker result file (WI-17: needed for `on_result`). */
+function hasResultFile(execute: WorkflowConfig['execute']): boolean {
+  return execute.type === 'shell';
 }
 
 function safePlaceholders(template: string): string[] {
@@ -375,6 +414,7 @@ function validateAction(
   input: SemanticInput,
   issues: IssueCollector,
   file: string,
+  source: SourceConfig | undefined,
 ): void {
   const scope: TemplateScope = {
     run: true,
@@ -388,8 +428,9 @@ function validateAction(
   }
   switch (action.type) {
     case 'source.update':
-      if (action.labels.add.length === 0 && action.labels.remove.length === 0) {
-        issues.error(file, [...at, 'labels'], '"source.update" must add or remove at least one label');
+      if (action.project !== undefined) checkProjectUpdate(action.project, source, issues, file, [...at, 'project']);
+      if (action.labels.add.length === 0 && action.labels.remove.length === 0 && action.project === undefined) {
+        issues.error(file, [...at, 'labels'], '"source.update" must add or remove at least one label or set a project field');
       }
       // Labels compare case-insensitively (GitHub, adapter): `Ready` and `ready` are the same label.
       for (const label of action.labels.add) {
@@ -411,6 +452,49 @@ function validateAction(
       checkLiteralSecrets(action.env, issues, file, [...at, 'env']);
       checkSecrets(action.secrets, action.env, input, issues, file, [...at, 'secrets']);
       break;
+  }
+}
+
+/**
+ * `source.update.project` (WI-16): at least one field, every key declared in
+ * `project.fields` of the trigger source, value type per kind. Values are no
+ * templates (like labels). Without a known trigger source other errors are
+ * reported already.
+ */
+function checkProjectUpdate(
+  project: Readonly<Record<string, unknown>>,
+  source: SourceConfig | undefined,
+  issues: IssueCollector,
+  file: string,
+  at: IssuePath,
+): void {
+  const names = Object.keys(project);
+  if (names.length === 0) {
+    issues.error(file, at, '"project" must set at least one field');
+    return;
+  }
+  if (!source) return;
+  if (!source.project) {
+    issues.error(file, at, `Source "${source.id}" has no "project" in sources.yaml; project fields cannot be set`);
+    return;
+  }
+  const declared = source.project.fields;
+  for (const name of names) {
+    const kind = Object.hasOwn(declared, name) ? declared[name] : undefined;
+    if (!kind) {
+      const bare = name.startsWith(PROJECT_FIELD_PREFIX) ? name.slice(PROJECT_FIELD_PREFIX.length) : undefined;
+      // `project.<Name>` written as key: suggest on the name without the prefix.
+      const suggestion = suggestField(bare ?? name, Object.keys(declared));
+      const hint = suggestion ? ` (did you mean "${suggestion}"?)` : '';
+      issues.error(
+        file,
+        [...at, name],
+        `Unknown project field "${name}": it is not declared in "project.fields" of source "${source.id}"${hint}`,
+      );
+      continue;
+    }
+    const problem = valueProblem(kind, project[name]);
+    if (problem) issues.error(file, [...at, name], `Invalid value for project field "${name}" (${kind}): ${problem}`);
   }
 }
 

@@ -7,6 +7,47 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ### Hinzugefügt
 
+- **Benannte Ergebnisse (`on_result`):** Die Ergebnisdatei kann zusätzlich zu `result` ein `outcome` liefern
+  (Format der Konfigurations-IDs, z. B. `"outcome": "needs_maintainer"`). Ist `on_result.<outcome>` im Workflow
+  konfiguriert, läuft genau diese Kette **statt** `on_success`/`on_failure`; sonst bleibt alles wie bisher (ein
+  `outcome` ohne Eintrag ergibt eine Warnung am Run, ein `outcome` im falschen Format wird mit Warnung ignoriert).
+  `result` steuert weiter Statistik und Retry-Zähler. Neu: Platzhalter `{result.outcome}`, View-Feld
+  `run.last_outcome`, `outcome` im Kontext von `shell`-Actions.
+- **Sammel-Hook `on_error`:** läuft für `crashed`, `start_error`, `timed_out` und `cancelled`, wenn der jeweilige
+  spezifische Hook nicht definiert ist (eine leere Liste zählt als definiert) – nie beides. Die Validierung warnt,
+  wenn alle vier spezifischen Hooks definiert sind und `on_error` daher nie läuft.
+- Der gewählte Abschluss-Hook und das `outcome` werden am Run gespeichert (Schema-Migration v3) und in API
+  (`resultOutcome`, `completionHook`), SSE (`run.status` mit `outcome`/`hook`, Event `run.outcome_warning`) und UI
+  (Badge „outcome: …“, Run-Detail) angezeigt; die Recovery setzt nach einem Neustart genau diesen Hook fort.
+- `workflow dry-run` (CLI, API, UI) zeigt die `on_result`-Schlüssel und je technischem Ausgang den Hook, der liefe.
+- Unbekannte Schlüssel in YAML-Dateien bekommen einen „did you mean …“-Vorschlag; ungültige Schlüssel von Maps
+  (z. B. `on_result`) werden mit Grund gemeldet.
+- **Projektfelder setzen:** `source.update` hat neben `labels` einen optionalen Block `project` (Feldname aus
+  `project.fields` der Trigger-Source → Wert), z. B. `project: { Status: In Progress }` in `on_start` und
+  `{ Status: Review }` in `on_success`. Werte je Art: Optionsname (`single_select`), Iterationstitel (`iteration`,
+  auch abgeschlossene), Text, Zahl, Datum `YYYY-MM-DD`; `null` leert das Feld. Die Werte werden beim Laden geprüft
+  (nicht deklarierte Felder mit „did you mean …“, falscher Werttyp, Source ohne `project`, leerer Block).
+- Ausführung im GitHub-Adapter: erst Labels, dann Projektfelder; Metadaten (Feld-IDs, Optionen, Iterationen) und das
+  Projekt-Item werden per GraphQL gelesen, gleiche Werte übersprungen, fehlende Items mit `addProjectV2ItemById`
+  hinzugefügt, sonst `updateProjectV2ItemFieldValue` bzw. `clearProjectV2ItemFieldValue` – Werte nur als
+  GraphQL-Variablen. Unbekannte/mehrdeutige Optionen, fehlende Felder oder falsche Arten sind nicht wiederholbare
+  Fehler (Meldung listet die vorhandenen Optionen); Rate-Limits und transiente Fehler laufen über
+  `lifecycle.action_retry`.
+- Das Action-Journal enthält `applied.projectFields` (und `projectItemAdded`); die Run-Events in der Weboberfläche
+  fassen geänderte Labels und Projektfelder zusammen.
+- Beispiele: `examples/config/workflows/reviewer-project-b.yaml` setzt den Status, Coder-Workflows in `init` und
+  `examples/config` enthalten ein auskommentiertes `project:`-Beispiel; Konfigurationsreferenz §3.4.11, §7.7, §8.
+- **Dateien vor dem Workspace-Cleanup sichern (`execute.keep`):** relative Glob-Muster (`*`, `?`, `**`) für Dateien,
+  die der Daemon nach dem Abschluss-Hook und vor dem Cleanup bei jedem Endstatus nach `data-dir/runs/<run-id>/kept/`
+  kopiert (mit relativer Struktur). `execute.keep_max_size` begrenzt die Summe pro Run (Default `100MB`); zu große
+  Dateien werden übersprungen. Symlinks werden nie verfolgt, nur reguläre Dateien kopiert, aufgelöste Pfade gegen den
+  Workspace geprüft; Muster mit `..` oder absolute Muster sind Validierungsfehler. Secrets werden beim Kopieren
+  redigiert (best effort, wie Logs); das Limit zählt die geschriebenen Bytes. Ergebnis (kopiert, übersprungen mit
+  Grund, Muster ohne Treffer bzw. wegen der Grenze nicht durchsucht) als Run-Event `run.kept_files`. Die Dateien werden mit dem Run von der Retention gelöscht.
+- API: `GET /api/v1/runs/:id/kept` (Liste mit Pfad und Größe) und `GET /api/v1/runs/:id/kept/<pfad>` (Download als
+  Attachment mit sicherer Pfadauflösung); Run-Detail mit Zusammenfassung `kept`, Workflows mit `execute.keep`/
+  `keepMaxSizeBytes`. UI: Reiter **Files** am Run mit Download-Links, Workflow-Detail zeigt die Muster; der Dry-Run
+  nennt sie unter `notes`.
 - **Token-Dateien für lange Runs** (`execute.secrets.<NAME>.delivery: file`): Der Daemon schreibt das Token nach
   `data-dir/runs/<run-id>/secrets/<NAME>` (Verzeichnis `0700`, Datei `0600`, außerhalb des Workspaces) und übergibt
   den Pfad als `<NAME>_FILE` (`<NAME>` selbst wird nicht gesetzt). Solange der Worker läuft, wird die Datei
@@ -27,6 +68,19 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ### Geändert
 
+- In der normalisierten Konfiguration (Snapshots, `GET /api/v1/workflows/:id` → `hooks`) fehlen nicht angegebene
+  technische Hooks (`on_crash`, `on_start_error`, `on_cancel`, `on_timeout`) und `on_error` jetzt, statt als `[]`
+  zu erscheinen; `on_result.<outcome>`-Ketten erscheinen dort als eigene Einträge. Bestehende Konfigurationen und
+  Runs verhalten sich unverändert.
+- Beispiel `examples/config/workflows/reviewer-project-b.yaml` zeigt `on_result` und `on_error`.
+- **Datenbank-Schema v3** (Migration beim ersten Start, vorher automatisches Backup unter `backups/`). Das Upgrade
+  ist nur in eine Richtung möglich: 0.2.x lehnt eine v3-Datenbank ab. Zurück auf 0.2.x nur durch Wiederherstellen
+  des Backups von vor der Migration (Runs danach fehlen dann in der Historie), siehe `docs/operations.md` „Update“.
+- `source.update.labels` ist optional, wenn `project` gesetzt ist; die Meldung ohne beides lautet jetzt
+  `"source.update" must add or remove at least one label or set a project field`.
+- Ein ausdrücklich gesetztes `project.identity` der Source schreibt auch die Projektfelder; ohne schreibt die
+  Identity der Action (Workflow → Source). Schreibrechte: App **Organization → Projects: Read and write**,
+  klassischer PAT mit Scope `project` (statt `read:project`) plus `repo`.
 - Worker-Protokoll: Die Regel „Shell-Actions bekommen keine Secrets“ gilt nur noch, solange die Action keine
   `secrets` deklariert.
 
@@ -93,5 +147,6 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
+[0.3.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/brokoskokoli/adispatchd/releases/tag/v0.1.0
