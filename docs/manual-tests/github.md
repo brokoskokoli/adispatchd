@@ -33,7 +33,7 @@ Inhalt:
 | A9 | Installation-Tokens laufen nach 1 h ab (`expires_at`). Ein JWT mit `iat = now-60 s`, `exp = now+9 min`, `iss = App-ID` wird akzeptiert. | `src/identities/` | **bestätigt**. Hinweis: GitHub *empfiehlt* inzwischen die Client-ID als `iss`, die App-ID bleibt zulässig ([R6](#r6)) | T1, T2 |
 | A10 | Transferierte Issues leiten per 301 auf das neue Repo um. `repository_url` passt dann nicht → `getItem` liefert `null`. | `fetchIssue` | **bestätigt** (301, gelöscht 410, kein Zugriff 404) ([R9](#r9)) | T23 |
 | A12 | GraphQL unter `POST https://api.github.com/graphql` akzeptiert Installation-Tokens und Tokens von `github_token`-Identities. `repositoryOwner(login:) { ... on User/Organization { projectV2(number:) { id fields(first: 100) { nodes { ... on ProjectV2FieldCommon { name dataType } } } } } }` liefert das Projekt bzw. `projectV2: null` + `errors[]` bei fehlendem Projekt/Zugriff. | `src/sources/github/project.ts` (`METADATA_QUERY`) | Schema laut GraphQL-Doku, Fehlerform **nicht** geprüft | T25a, T25c |
-| A13 | Org-eigene Projekte sind mit der App-Berechtigung *Organization → Projects: Read* lesbar; **user-eigene** Projekte sind für Installation-Tokens nicht lesbar, wohl aber mit einem Token des Users (klassisch `read:project`; fine-grained PAT mit *Projects: Read*, falls für User-Projekte verfügbar). | Doku (`configuration-reference.md` §3.2) | nicht geprüft | T25a, T25c |
+| A13 | Org-eigene Projekte sind mit der App-Berechtigung *Organization → Projects: Read* lesbar; **user-eigene** Projekte sind für Installation-Tokens nicht lesbar, wohl aber mit einem klassischen Token des Users (`read:project`, bei privaten Repos zusätzlich `repo`, da die Identity auch die Issues liest); fine-grained PAT (*Issues/Pull requests: Read*, *Projects: Read*) für User-Projekte unverifiziert. | Doku (`configuration-reference.md` §3.2) | nicht geprüft | T25a, T25c |
 | A14 | `nodes(ids: [<REST node_id>])` liefert Issues/PRs; `projectItems(first: 20, includeArchived: false) { totalCount nodes { project { id } fN: fieldValueByName(name: $fN) { … } } }` liefert die Werte (`name`, `text`, `number`, `date`, `title`); leeres Feld → `null`. Nicht lesbare Knoten → `null` + Fehler mit `path: ["nodes", i]`. | `projectValuesQuery`, `readChunk` | nicht geprüft | T25a, T25b |
 | A15 | `fieldValueByName` erwartet den Feldnamen des Projekts; der Adapter übergibt den exakten Namen aus den Metadaten (Abgleich der Deklaration ohne Groß-/Kleinschreibung). | `parseMetadata` | Groß-/Kleinschreibung bei GitHub **nicht** geprüft | T25b |
 | A16 | GraphQL-Rate-Limits kommen als HTTP 200 mit `errors[].type = "RATE_LIMITED"` oder als 403/429 mit `x-ratelimit-*`. | `GitHubHttpClient.graphql` | nur teilweise dokumentiert | T25e |
@@ -1264,8 +1264,9 @@ Org-Teil muss `ADISPATCH_TEST_OWNER` eine Organisation sein; mit einem User-Acco
    ```
    Im Web-UI beider Projekte: `$P1` → *Status* `Ready`, *Priority* `P1`, *Estimate* `3`, *Due* ein Datum;
    `$P2` → *Status* `Todo`, sonst leer. Eine Iteration (Feld *Sprint*) optional anlegen und `$P1` zuordnen.
-4. Für den User-Teil einen Token des Users anlegen (klassisch mit `read:project` **oder** fine-grained mit
-   *Projects: Read*, falls angeboten) und exportieren: `export ADISPATCH_TEST_PROJECT_TOKEN=…`.
+4. Für den User-Teil einen **klassischen** Token des Users mit `read:project` und `repo` (Test-Repos sind privat)
+   anlegen und exportieren: `export ADISPATCH_TEST_PROJECT_TOKEN=…`. Zusätzlich (T25c) einen fine-grained Token mit
+   *Issues: Read*, *Pull requests: Read* und – falls angeboten – *Projects: Read* probieren und das Ergebnis notieren.
 5. Im kopierten Fixture (`$ADISPATCH_CFG`) die auskommentierten Blöcke aktivieren: `project` bei `test_a` in
    `sources.yaml` (Nummer/Owner eintragen) und `project_reader` in `identities.yaml`. Dazu
    `workflows/project-test.yaml` anlegen:
