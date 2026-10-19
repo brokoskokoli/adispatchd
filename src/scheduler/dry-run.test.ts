@@ -148,4 +148,24 @@ item_priority:
     expect(result.source).toMatchObject({ sourceId: 'repo_a', error: "source 'repo_a' is not available" });
     expect(formatDryRun(result)).toContain('SOURCE ERROR');
   });
+
+  it('lists declared secrets of execute and shell actions with identity and delivery, never values (WI-18)', async () => {
+    const yaml = sourceWorkflow('coder', s.env.script('ok.sh', 'exit 0'), '')
+      .replace('  cancel_grace: 300ms', '  cancel_grace: 300ms\n  secrets:\n    GH_TOKEN: { identity: coder, delivery: file }\n    API_TOKEN: { identity: maintainer }')
+      .replace(
+        'on_success:\n',
+        `on_success:\n  - id: notify\n    type: shell\n    command: /bin/true\n    secrets:\n      NOTIFY_TOKEN: { identity: maintainer, delivery: file }\n`,
+      );
+    s.workflow('coder', yaml);
+    const config = await ConfigManager.create({ configDir: s.env.configDir, dataDir: s.env.dataDir });
+    const result = await dryRunWorkflow({ config, sources: () => undefined, state: emptyState() }, 'coder');
+    expect(result.secrets).toEqual([
+      { where: 'execute', name: 'GH_TOKEN', identity: 'coder', delivery: 'file', variable: 'GH_TOKEN_FILE' },
+      { where: 'execute', name: 'API_TOKEN', identity: 'maintainer', delivery: 'env', variable: 'API_TOKEN' },
+      { where: 'on_success.notify', name: 'NOTIFY_TOKEN', identity: 'maintainer', delivery: 'file', variable: 'NOTIFY_TOKEN_FILE' },
+    ]);
+    const text = formatDryRun(result);
+    expect(text).toContain('secret execute: GH_TOKEN ← identity coder, delivery file (GH_TOKEN_FILE)');
+    expect(text).toContain('secret on_success.notify: NOTIFY_TOKEN ← identity maintainer, delivery file (NOTIFY_TOKEN_FILE)');
+  });
 });

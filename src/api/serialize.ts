@@ -4,7 +4,7 @@
  * are redacted by the executor, error details pass `redactValue`.
  */
 import { ACTIVE_STATUSES, isTerminalStatus, type TechnicalStatus } from '../core/index.js';
-import type { EffectiveWorkflow, ParameterDefinition, WorkflowConfig } from '../config/index.js';
+import { workflowSecrets, type EffectiveWorkflow, type ParameterDefinition, type WorkflowConfig } from '../config/index.js';
 import type { ActionAttemptRecord, BlockRecord, RunActionRecord, RunRecord } from '../persistence/index.js';
 import type { CronWorkflowStatus, WorkflowPlanningDiagnosis } from '../scheduler/index.js';
 
@@ -172,6 +172,8 @@ export function toWorkflowView(
       // WI-18: how each secret is delivered (`env` | `file`); no values, identity IDs only via the config view.
       secretDelivery: Object.fromEntries(Object.entries(c.execute.secrets).map(([name, ref]) => [name, ref.delivery ?? 'env'])),
     },
+    // WI-18: every declared secret (execute + shell actions) with identity and delivery; never values.
+    secrets: workflowSecrets(c),
     hasFilter: c.filter !== null,
     hasShellFilter: c.shellFilter !== null,
     conditions: { workflow: c.conditions.workflow.length, item: c.conditions.item.length },

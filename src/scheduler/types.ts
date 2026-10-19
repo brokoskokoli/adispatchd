@@ -4,7 +4,7 @@
  * All types are plain JSON-serializable data.
  */
 import type { FieldResolution, FilterNode } from '../core/index.js';
-import type { TriggerConfig } from '../config/index.js';
+import type { TriggerConfig, WorkflowSecretInfo } from '../config/index.js';
 import type { CronFiringRecord } from '../persistence/index.js';
 import type { FilterTrace, TraceValue } from '../filters/index.js';
 
@@ -231,6 +231,11 @@ export interface DryRunResult {
     recentFirings: CronFiringRecord[];
     blockId: number | null;
   } | null;
+  /**
+   * Declared secrets of `execute` and `shell` actions (WI-18): names, identity, delivery – never values.
+   * Missing in results of older instances.
+   */
+  secrets?: WorkflowSecretInfo[];
   /** Notes about the limits of this dry-run (e.g. no database, no controller). */
   notes: string[];
   summary: { candidates: number; wouldStart: number; pendingChecks: number; notStartable: number };

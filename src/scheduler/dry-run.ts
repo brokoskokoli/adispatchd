@@ -15,7 +15,7 @@
  *   would take global slots first are not simulated.
  */
 import { systemClock, type Clock } from '../core/index.js';
-import { UnknownWorkflowError, type ConfigManager } from '../config/index.js';
+import { UnknownWorkflowError, workflowSecrets, type ConfigManager } from '../config/index.js';
 import { sortCandidates } from '../filters/index.js';
 import { notEvaluatedConditions } from './checks.js';
 import { nextSlots, parseCron } from './cron.js';
@@ -76,6 +76,7 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
     source: null,
     candidates: [],
     cron: null,
+    secrets: workflowSecrets(workflow),
     notes,
     summary: { candidates: 0, wouldStart: 0, pendingChecks: 0, notStartable: 0 },
   };

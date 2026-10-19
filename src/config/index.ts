@@ -37,6 +37,8 @@ export {
   UnknownWorkflowError,
   WORKFLOW_SNAPSHOT_VERSION,
   workflowIdentityRefs,
+  workflowSecrets,
+  type WorkflowSecretInfo,
   type WorkflowSnapshot,
 } from './snapshot.js';
 export {

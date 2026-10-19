@@ -9,7 +9,7 @@ describe('toWorkflowView', () => {
     while (temps.length) await temps.pop()?.cleanup();
   });
 
-  it('lists secret names with their delivery (WI-18), never values or identities', async () => {
+  it('lists secret names with their delivery (WI-18), never values', async () => {
     const t = await createTempConfigDir({
       ...BASE_FILES,
       'workflows/w.yaml': [
@@ -21,6 +21,11 @@ describe('toWorkflowView', () => {
         '  secrets:',
         '    GH_TOKEN: { identity: coder, delivery: file }',
         '    OTHER: { identity: coder }',
+        'on_success:',
+        '  - type: shell',
+        '    command: /bin/true',
+        '    secrets:',
+        '      HOOK_TOKEN: { identity: maintainer, delivery: file }',
         '',
       ].join('\n'),
     });
@@ -34,5 +39,11 @@ describe('toWorkflowView', () => {
     );
     expect(view.execute).toMatchObject({ secrets: ['GH_TOKEN', 'OTHER'], secretDelivery: { GH_TOKEN: 'file', OTHER: 'env' } });
     expect(JSON.stringify(view.execute)).not.toContain('coder');
+    // All declared secrets incl. shell actions, with identity and delivery (WI-18).
+    expect(view.secrets).toEqual([
+      { where: 'execute', name: 'GH_TOKEN', identity: 'coder', delivery: 'file', variable: 'GH_TOKEN_FILE' },
+      { where: 'execute', name: 'OTHER', identity: 'coder', delivery: 'env', variable: 'OTHER' },
+      { where: 'on_success.0', name: 'HOOK_TOKEN', identity: 'maintainer', delivery: 'file', variable: 'HOOK_TOKEN_FILE' },
+    ]);
   });
 });

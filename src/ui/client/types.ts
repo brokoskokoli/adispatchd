@@ -169,6 +169,8 @@ export interface Workflow {
   activeBlocks: number;
   parameters: Record<string, ParameterDef>;
   execute: { type: string; command: string; args: unknown[]; workingDirectory: string | null; timeout: unknown; secrets: string[]; secretDelivery?: Record<string, string> };
+  /** All declared secrets (execute + shell actions), WI-18; missing on older instances. */
+  secrets?: SecretInfo[];
   hasFilter: boolean;
   hasShellFilter: boolean;
   conditions: { workflow: number; item: number };
@@ -222,6 +224,15 @@ export interface CronFiring {
   reason: string | null;
 }
 
+/** Declared secret (WI-18): names and identity only, never a value. */
+export interface SecretInfo {
+  where: string;
+  name: string;
+  identity: string;
+  delivery: string;
+  variable: string;
+}
+
 export interface DryRunResult {
   workflowId: string;
   name: string;
@@ -234,6 +245,7 @@ export interface DryRunResult {
   source: { sourceId: string; polled: number; filter?: unknown; pushdown: unknown; error: string | null } | null;
   candidates: Candidate[];
   cron: { cron: string; timezone: string; nextSlots: string[]; nextSlotForecast: string; forecastReason: string | null; recentFirings: CronFiring[]; blockId: number | null } | null;
+  secrets?: SecretInfo[];
   notes: string[];
   summary: { candidates: number; wouldStart: number; pendingChecks: number; notStartable: number };
 }

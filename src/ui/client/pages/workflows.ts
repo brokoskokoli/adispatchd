@@ -10,7 +10,7 @@ import { buildRuntimeBody, buildStartBody } from '../../shared/params.js';
 import { checkValueLabel, decisionTone, formatDuration } from '../../shared/format.js';
 import { buildHash } from '../../shared/route.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
-import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, Workflow } from '../types.js';
+import type { CheckDiagnosis, DryRunResult, FilterTrace, RunSummary, SecretInfo, Workflow } from '../types.js';
 import { act, badge, button, errorBox, externalLink, isEditing, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, toast } from '../ui.js';
 
 function timeoutText(t: unknown): string {
@@ -110,6 +110,15 @@ export function traceNode(t: FilterTrace): HTMLElement {
   }
 }
 
+/** Table of declared secrets (WI-18): where, name, identity, delivery, variable – never values. */
+function secretsTable(secrets: readonly SecretInfo[]): HTMLElement {
+  return table(
+    ['Where', 'Secret', 'Identity', 'Delivery', 'Variable'],
+    secrets.map((x) => [h('code', null, x.where), h('code', null, x.name), x.identity, x.delivery, h('code', null, x.variable)]),
+    { empty: 'No secrets.' },
+  );
+}
+
 export function renderDryRun(r: DryRunResult): HTMLElement {
   const parts: HTMLElement[] = [];
   parts.push(
@@ -129,6 +138,7 @@ export function renderDryRun(r: DryRunResult): HTMLElement {
     ),
   );
   if (r.conditions.length) parts.push(h('h3', null, 'Workflow conditions'), h('ul', { class: 'checks' }, r.conditions.map(checkRow)));
+  if (r.secrets?.length) parts.push(h('h3', null, 'Secrets'), secretsTable(r.secrets));
   if (r.source) {
     parts.push(h('h3', null, `Source ${r.source.sourceId}: ${r.source.polled} item(s) polled`));
     if (r.source.error) parts.push(h('div', { class: 'alert alert-error' }, `Source error: ${r.source.error}`));
@@ -346,11 +356,14 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
             ['Timeout', timeoutText(wf.execute.timeout)],
             [
               'Secrets',
-              wf.execute.secrets.length
-                ? wf.execute.secrets
-                    .map((name) => (wf.execute.secretDelivery?.[name] === 'file' ? `${name} (file: ${name}_FILE)` : name))
-                    .join(', ')
-                : text(null),
+              // `secrets` (execute + shell actions, WI-18) is missing on older instances.
+              wf.secrets
+                ? wf.secrets.length
+                  ? secretsTable(wf.secrets)
+                  : text(null)
+                : wf.execute.secrets.length
+                  ? wf.execute.secrets.join(', ')
+                  : text(null),
             ],
             ['Filter', `${wf.hasFilter ? 'declarative' : 'none'}${wf.hasShellFilter ? ' + shell filter' : ''}; conditions: ${wf.conditions.workflow} workflow, ${wf.conditions.item} item`],
             ['Max technical failures', String(wf.maxTechnicalFailures)],

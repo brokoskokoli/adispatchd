@@ -32,6 +32,36 @@ export class UnknownWorkflowError extends OrchestratorError {
   }
 }
 
+/** One declared secret (names and identity only – never a value), see {@link workflowSecrets}. */
+export interface WorkflowSecretInfo {
+  /** `execute` or the action, e.g. `on_success.notify` / `on_success.1` (default ID). */
+  where: string;
+  name: string;
+  identity: string;
+  delivery: 'env' | 'file';
+  /** Variable the process sees: `<NAME>` (env) or `<NAME>_FILE` (file). */
+  variable: string;
+}
+
+/** All secrets a workflow declares (`execute.secrets` and `shell` action `secrets`, WI-18), in config order. */
+export function workflowSecrets(workflow: WorkflowConfig): WorkflowSecretInfo[] {
+  const out: WorkflowSecretInfo[] = [];
+  const add = (where: string, secrets: WorkflowConfig['execute']['secrets'] | undefined): void => {
+    for (const [name, ref] of Object.entries(secrets ?? {})) {
+      // Snapshots/configs from before WI-18 have no `delivery`.
+      const delivery = ref.delivery ?? 'env';
+      out.push({ where, name, identity: ref.identity, delivery, variable: delivery === 'file' ? `${name}_FILE` : name });
+    }
+  };
+  add('execute', workflow.execute.secrets);
+  for (const [hook, actions] of Object.entries(workflow.hooks)) {
+    for (const action of actions) {
+      if (action.type === 'shell') add(action.id.startsWith(`${hook}.`) ? action.id : `${hook}.${action.id}`, action.secrets);
+    }
+  }
+  return out;
+}
+
 /** Identities a workflow may use, sorted. */
 export function workflowIdentityRefs(workflow: WorkflowConfig, source: SourceConfig | null): string[] {
   const refs = new Set<string>();

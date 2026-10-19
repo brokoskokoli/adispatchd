@@ -60,6 +60,10 @@ export function formatDryRun(r: DryRunResult): string {
   ];
   if (r.gate) lines.push(`  automatic starts: ${r.gate.canStartAutomatically ? 'possible' : `not possible (${r.gate.reason ?? 'unknown'})`}`);
   for (const c of r.conditions) lines.push(`  ${checkLine(c)}`);
+  // `secrets` is missing in results of older instances (before 0.3.0); values are never part of a dry-run.
+  for (const x of r.secrets ?? []) {
+    lines.push(`  secret ${x.where}: ${x.name} ← identity ${x.identity}, delivery ${x.delivery} (${x.variable})`);
+  }
   if (r.source) {
     // `filter` is missing in results of older instances (before 0.2.0).
     if (r.source.filter !== undefined) lines.push(`  filter: ${r.source.filter ? JSON.stringify(r.source.filter) : '(none)'}`);
