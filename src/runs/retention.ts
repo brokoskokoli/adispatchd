@@ -10,12 +10,16 @@
  * Files are deleted only after their row was deleted; the instance lock files
  * (`adispatchd.lock*`) are never touched – only the `runs/`, `logs/`
  * sub-directories and workspaces strictly below the base directory are.
+ *
+ * Left-over token files (WI-18, e.g. after a failed delete on run end) of
+ * finished runs that are not busy are removed on every pass.
  */
 import { readdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   dataPaths,
   errorMessage,
+  isTerminalStatus,
   isValidRunId,
   noopLogger,
   resolveStrictlyWithin,
@@ -27,6 +31,7 @@ import {
   type Timers,
 } from '../core/index.js';
 import type { RetentionConfig } from '../config/index.js';
+import { removeTokenDirs } from '../executors/index.js';
 import { INSTANCE_LOCK_FILES, type Repositories, type RunRetentionCategory } from '../persistence/index.js';
 import { removeWorkspace } from './workspace.js';
 
@@ -45,6 +50,8 @@ export interface RetentionReport {
   deletedNotifications: number;
   deletedCronFirings: number;
   orphanDirsRemoved: number;
+  /** Left-over token directories (WI-18) removed. */
+  tokenDirsRemoved: number;
   /** File/workspace deletion problems (rows are already gone). */
   errors: Array<{ runId?: string; path?: string; message: string }>;
 }
@@ -64,6 +71,11 @@ export interface RetentionServiceOptions {
   orphanMinAgeMs?: number;
   /** Called after each pass (diagnostics/SSE). */
   onReport?: (report: RetentionReport) => void;
+  /**
+   * True while lifecycle actions of a (finished) run execute in this process,
+   * e.g. a manual retry: its token files are kept. Default: never busy.
+   */
+  isBusy?: (runId: string) => boolean;
 }
 
 /** See module docs. */
@@ -134,6 +146,7 @@ export class RetentionService {
       deletedNotifications: 0,
       deletedCronFirings: 0,
       orphanDirsRemoved: 0,
+      tokenDirsRemoved: 0,
       errors: [],
     };
     const cutoff = (ms: number | null): Date | null => (ms === null ? null : new Date(now.getTime() - ms));
@@ -154,6 +167,7 @@ export class RetentionService {
     const firingsBefore = cutoff(settings.completedRunsMs ?? CRON_FIRINGS_FALLBACK_MS);
     if (firingsBefore) report.deletedCronFirings = retention.deleteCronFirings(firingsBefore);
     if (!this.stopped) await this.removeOrphans(report);
+    if (!this.stopped) await this.removeTokenFiles(report);
     report.finishedAt = this.clock.now().toISOString();
     this.last = report;
     const total = report.deletedRuns.successful + report.deletedRuns.failed + report.deletedRuns.blocked;
@@ -163,6 +177,7 @@ export class RetentionService {
       deletedNotifications: report.deletedNotifications,
       deletedCronFirings: report.deletedCronFirings,
       orphanDirsRemoved: report.orphanDirsRemoved,
+      tokenDirsRemoved: report.tokenDirsRemoved,
       errors: report.errors.length,
       total,
     });
@@ -223,6 +238,28 @@ export class RetentionService {
     } catch (err) {
       report.errors.push({ ...(runId ? { runId } : {}), path: dir, message: errorMessage(err) });
       return false;
+    }
+  }
+
+  /** Remove left-over token directories of finished (or deleted) runs that are not busy (WI-18). */
+  private async removeTokenFiles(report: RetentionReport): Promise<void> {
+    const { runsDir } = dataPaths(this.options.dataDir);
+    let names: string[];
+    try {
+      names = await readdir(runsDir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      if (this.stopped) return;
+      if (!isValidRunId(name)) continue;
+      const run = this.options.repositories.runs.get(name);
+      if ((run && !isTerminalStatus(run.status)) || this.options.isBusy?.(name)) continue;
+      try {
+        report.tokenDirsRemoved += await removeTokenDirs(resolveStrictlyWithin(runsDir, name));
+      } catch (err) {
+        report.errors.push({ runId: name, message: `token files: ${errorMessage(err)}` });
+      }
     }
   }
 

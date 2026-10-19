@@ -132,4 +132,36 @@ describe('RetentionService', () => {
     await svc.stop();
     expect(clock.pendingTimers()).toBe(0);
   });
+
+  it('removes left-over token files of finished runs, keeps those of active or busy runs (WI-18)', async () => {
+    const finished = completeRun(p, withFiles('coder', 'a:1').id, SUCCESS);
+    const busy = completeRun(p, withFiles('coder', 'a:2').id, SUCCESS);
+    const active = withFiles('coder', 'a:3');
+    p.runs.transition(active.id, 'starting');
+    const tokenDirs = (id: string) => {
+      const runDir = dataPaths(dir).run(id).runDir;
+      return [path.join(runDir, 'secrets'), path.join(runDir, 'actions', '1', 'attempt-1', 'secrets')];
+    };
+    for (const id of [finished.id, busy.id, active.id]) {
+      for (const d of tokenDirs(id)) {
+        mkdirSync(d, { recursive: true });
+        writeFileSync(path.join(d, 'GH_TOKEN'), 'ghs_leftover');
+      }
+    }
+    const svc = new RetentionService({
+      repositories: p,
+      dataDir: dir,
+      settings: () => ({ ...settings, completedRunsMs: null }),
+      clock,
+      timers: clock,
+      isBusy: (id) => id === busy.id,
+    });
+    const report = await svc.runOnce();
+    expect(report.tokenDirsRemoved).toBe(2);
+    expect(report.deletedRunIds).toEqual([]);
+    for (const d of tokenDirs(finished.id)) expect(existsSync(d)).toBe(false);
+    for (const d of [...tokenDirs(busy.id), ...tokenDirs(active.id)]) expect(existsSync(d)).toBe(true);
+    // The rest of the run directory is untouched.
+    expect(existsSync(dataPaths(dir).run(finished.id).contextFile)).toBe(true);
+  });
 });

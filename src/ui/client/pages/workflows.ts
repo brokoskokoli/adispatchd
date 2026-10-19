@@ -344,7 +344,14 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
             ['Identity', text(wf.identity)],
             ['Command', h('code', { class: 'wrap' }, [wf.execute.command, ...wf.execute.args.map(String)].join(' '))],
             ['Timeout', timeoutText(wf.execute.timeout)],
-            ['Secrets', wf.execute.secrets.length ? wf.execute.secrets.join(', ') : text(null)],
+            [
+              'Secrets',
+              wf.execute.secrets.length
+                ? wf.execute.secrets
+                    .map((name) => (wf.execute.secretDelivery?.[name] === 'file' ? `${name} (file: ${name}_FILE)` : name))
+                    .join(', ')
+                : text(null),
+            ],
             ['Filter', `${wf.hasFilter ? 'declarative' : 'none'}${wf.hasShellFilter ? ' + shell filter' : ''}; conditions: ${wf.conditions.workflow} workflow, ${wf.conditions.item} item`],
             ['Max technical failures', String(wf.maxTechnicalFailures)],
             ['File', h('code', null, wf.file)],

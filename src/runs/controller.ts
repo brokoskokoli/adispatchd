@@ -16,12 +16,15 @@
  * - A process is only ever signalled after verifying its start identity
  *   (recovery); on doubt the run becomes `recovery_pending` and keeps its lock.
  */
+import path from 'node:path';
 import {
   HOOK_NAMES,
+  dataPaths,
   errorMessage,
   hookForOutcome,
   isOrchestratorError,
   isTerminalStatus,
+  isWithin,
   noopLogger,
   parseSourceItemKey,
   systemClock,
@@ -30,6 +33,7 @@ import {
   type Clock,
   type CredentialProvider,
   type ExecutionOutcome,
+  type ExecutionSpec,
   type Executor,
   type FinalizationTarget,
   type HookName,
@@ -45,11 +49,15 @@ import {
 import type { WorkflowSnapshot } from '../config/index.js';
 import {
   ShellExecutor,
+  TOKEN_DIR_NAME,
+  TokenFileSession,
   classifyOutcome,
   processGroupExists,
+  removeTokenDirs,
   terminateProcessGroupIfSame,
   type KillFn,
   type ProcessInspector,
+  type TokenFileRequest,
 } from '../executors/index.js';
 import { parseRunSnapshot, type HookResult, type LifecycleEngine, type SourceResolver } from '../lifecycle/index.js';
 import {
@@ -158,6 +166,8 @@ export interface RunControllerOptions {
   publisher?: PersistedEventPublisher;
   /** Needed for `execute.secrets`. */
   credentials?: CredentialProvider;
+  /** Tuning of token files (`delivery: file`, WI-18); defaults from `executors`. Tests only. */
+  tokenFiles?: { renewBeforeMs?: number; retryDelayMs?: number; maxRetryDelayMs?: number };
   /** Receives `retry_block_created` and `recovery_failed` after commit. Must not block/throw. */
   notifier?: Notifier;
   /** Executor per run; default `new ShellExecutor({clock, logger, workspaceBaseDir})`. */
@@ -192,6 +202,8 @@ interface ActiveRun {
   cancelRequested: boolean;
   cancelReason: string;
   proc: RunningProcess | undefined;
+  /** Token files of the main worker (WI-18); closed (= deleted) when the process ended. */
+  tokenFiles: TokenFileSession | undefined;
   done: Promise<RunRecord>;
 }
 
@@ -360,10 +372,16 @@ export class RunController {
       cancelRequested: false,
       cancelReason: 'cancelled',
       proc: undefined,
+      tokenFiles: undefined,
       done: Promise.resolve(current),
     };
     this.active.set(runId, entry);
-    entry.done = this.track(runId, this.execute(entry, options).catch((err: unknown) => this.onUnexpected(entry, err)));
+    entry.done = this.track(
+      runId,
+      this.execute(entry, options)
+        .catch((err: unknown) => this.onUnexpected(entry, err))
+        .finally(() => this.closeTokenFiles(entry)),
+    );
     this.publishStatus();
     return { runId, done: entry.done };
   }
@@ -608,6 +626,7 @@ export class RunController {
       cancelRequested: false,
       cancelReason: '',
       proc: undefined,
+      tokenFiles: undefined,
       done: Promise.resolve(run),
     };
     this.active.set(run.id, entry);
@@ -623,6 +642,8 @@ export class RunController {
     const report: RecoveryReport = { finalized: [], pending: [], resumedActions: [], errors: [] };
     const activeRuns = this.repos.runs.listActive();
     this.logger.info('recovery started', { activeRuns: activeRuns.length });
+    // Token files (WI-18) of the previous process are no longer renewed: delete them first.
+    await this.sweepTokenDirs([...activeRuns.map((r) => r.id), ...this.repos.actions.runIdsWithIncompleteActions()]);
     await Promise.all(
       activeRuns.map(async (run) => {
         try {
@@ -662,6 +683,18 @@ export class RunController {
     });
     this.publishStatus();
     return report;
+  }
+
+  /** Delete left-over token directories of the given runs (recovery; errors are logged). */
+  private async sweepTokenDirs(runIds: readonly string[]): Promise<void> {
+    for (const runId of new Set(runIds)) {
+      try {
+        const removed = await removeTokenDirs(dataPaths(this.options.dataDir).run(runId).runDir);
+        if (removed > 0) this.logger.info('removed left-over token files', { runId, directories: removed });
+      } catch (err) {
+        this.logger.error('left-over token files could not be removed', { runId, error: errorMessage(err) });
+      }
+    }
   }
 
   private async recoverRun(run: RunRecord): Promise<void> {
@@ -917,8 +950,27 @@ export class RunController {
     }
     if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: true, ...ctx });
 
+    // 3b. Token files (`delivery: file`, WI-18): written below the run directory, renewed while the worker runs.
+    let spec = prepared.spec;
+    if (prepared.tokenFiles.length > 0) {
+      try {
+        spec = await this.openTokenFiles(entry, spec, prepared.tokenFiles);
+      } catch (err) {
+        await this.closeTokenFiles(entry);
+        if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: true, ...ctx });
+        return this.finalize(runId, snapshot, startError(`token files could not be written: ${errorMessage(err)}`), {
+          hooks: true,
+          ...ctx,
+          update: { error: errorInfo(err) },
+        });
+      }
+      if (entry.cancelRequested) {
+        await this.closeTokenFiles(entry);
+        return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: true, ...ctx });
+      }
+    }
+
     // 4. Spawn. Persist the intent first: recovery must know a process may exist.
-    const { spec } = prepared;
     this.repos.transaction(() => {
       this.repos.runs.update(runId, { workspacePath: spec.workingDirectory, command: { command: spec.command, args: spec.args } });
       this.repos.events.append(runId, RUN_EVENTS.spawn, {
@@ -939,6 +991,7 @@ export class RunController {
     try {
       proc = await executor.start(spec);
     } catch (err) {
+      await this.closeTokenFiles(entry);
       return this.finalize(runId, snapshot, startError(`worker could not be started: ${errorMessage(err)}`), {
         hooks: true,
         ...ctx,
@@ -980,8 +1033,9 @@ export class RunController {
       });
     }
 
-    // 5. Outcome.
+    // 5. Outcome. Token files are deleted as soon as the process (group) is gone.
     const outcome = await proc.wait();
+    await this.closeTokenFiles(entry);
     const classification = classifyOutcome(outcome);
     const target: FinalizationTarget =
       classification.status === 'cancelled'
@@ -996,6 +1050,38 @@ export class RunController {
         ...(classification.status !== 'completed' || outcome.logs.truncated ? { error: outcomeError(outcome, classification.reason) } : {}),
       },
     });
+  }
+
+  /** Write the token files of the main worker and add `<NAME>_FILE` + redaction to the spec. */
+  private async openTokenFiles(
+    entry: ActiveRun,
+    spec: ExecutionSpec,
+    requests: readonly TokenFileRequest[],
+  ): Promise<ExecutionSpec> {
+    const credentials = this.options.credentials;
+    if (!credentials) {
+      throw new RunControllerError('run_no_credentials', 'Workflow declares secrets but no credential provider is configured');
+    }
+    const dir = path.join(dataPaths(this.options.dataDir).run(entry.runId).runDir, TOKEN_DIR_NAME);
+    if (isWithin(spec.workingDirectory, dir)) {
+      throw new RunControllerError('run_invalid_workspace', 'token files must lie outside the workspace; move the workspace out of the data directory');
+    }
+    const session = new TokenFileSession({
+      dir,
+      requests,
+      credentials,
+      clock: this.clock,
+      timers: this.timers,
+      logger: this.logger.child({ runId: entry.runId }),
+      ...(this.options.tokenFiles ?? {}),
+    });
+    entry.tokenFiles = session;
+    const fileEnv = await session.open(entry.cancel.signal);
+    return { ...spec, env: { ...spec.env, ...fileEnv }, redactSecrets: session };
+  }
+
+  private async closeTokenFiles(entry: ActiveRun): Promise<void> {
+    await entry.tokenFiles?.close();
   }
 
   private async cancelProcess(entry: ActiveRun): Promise<void> {

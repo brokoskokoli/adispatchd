@@ -29,6 +29,7 @@ import {
   type FetchLike,
   type IdentityDescription,
   type IdentityRef,
+  type TokenRequestOptions,
   type Logger,
   type LogLevel,
   type SourceAdapter,
@@ -160,7 +161,7 @@ export class SourceRegistry implements CredentialProvider {
     this.adapters = next;
   }
 
-  getToken(identity: IdentityRef, options?: { signal?: AbortSignal }): Promise<AccessToken> {
+  getToken(identity: IdentityRef, options?: TokenRequestOptions): Promise<AccessToken> {
     return this.provider.getToken(identity, options);
   }
 
@@ -370,6 +371,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     timers,
     logger,
     redact: redactor.asRedactor,
+    credentials: sources,
   });
   const controller = new RunController({
     clock,
@@ -394,6 +396,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     clock,
     timers,
     logger,
+    isBusy: (runId) => lifecycle.isBusy(runId) || controller.activeRunIds().includes(runId),
     onReport: (r) =>
       events.publish('retention.finished', { finishedAt: r.finishedAt, deletedRuns: r.deletedRuns, errors: r.errors.length }),
   });

@@ -19,6 +19,7 @@ import {
   type WorkerContext,
 } from '../core/index.js';
 import type { WorkflowSnapshot } from '../config/index.js';
+import type { TokenFileRequest } from '../executors/index.js';
 import type { RunRecord } from '../persistence/index.js';
 import { RunControllerError } from './errors.js';
 
@@ -50,6 +51,11 @@ export interface PreparedExecution {
    * (absolute workspace outside the base dir: created as configured, never cleaned up).
    */
   workspaceBaseDir: string | undefined;
+  /**
+   * Secrets with `delivery: file` (WI-18). Not resolved here: the controller
+   * writes them as token files and adds `<NAME>_FILE` to the environment.
+   */
+  tokenFiles: TokenFileRequest[];
 }
 
 function scalarParameters(run: RunRecord): Record<string, string | number | boolean> {
@@ -133,11 +139,17 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
   }
 
   const secrets: Record<string, string> = {};
+  const tokenFiles: TokenFileRequest[] = [];
   const secretEntries = Object.entries(execute.secrets);
   if (secretEntries.length > 0 && !input.credentials) {
     throw new RunControllerError('run_no_credentials', 'Workflow declares secrets but no credential provider is configured');
   }
   for (const [name, ref] of secretEntries) {
+    // Snapshots from before WI-18 have no `delivery`: env.
+    if (ref.delivery === 'file') {
+      tokenFiles.push({ name, identity: ref.identity });
+      continue;
+    }
     const token = await input.credentials!.getToken(ref.identity, input.signal ? { signal: input.signal } : {});
     secrets[name] = token.token;
   }
@@ -192,5 +204,5 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
     cancelGraceMs: execute.cancelGraceMs,
     ...(input.maxLogBytes !== undefined ? { maxLogBytes: input.maxLogBytes } : {}),
   };
-  return { spec, workspaceBaseDir };
+  return { spec, workspaceBaseDir, tokenFiles };
 }

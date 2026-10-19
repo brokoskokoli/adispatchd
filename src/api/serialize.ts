@@ -169,6 +169,8 @@ export function toWorkflowView(
       workingDirectory: c.execute.workingDirectory,
       timeout: c.execute.timeout,
       secrets: Object.keys(c.execute.secrets),
+      // WI-18: how each secret is delivered (`env` | `file`); no values, identity IDs only via the config view.
+      secretDelivery: Object.fromEntries(Object.entries(c.execute.secrets).map(([name, ref]) => [name, ref.delivery ?? 'env'])),
     },
     hasFilter: c.filter !== null,
     hasShellFilter: c.shellFilter !== null,

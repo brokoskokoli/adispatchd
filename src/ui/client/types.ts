@@ -168,7 +168,7 @@ export interface Workflow {
   activeRuns: number;
   activeBlocks: number;
   parameters: Record<string, ParameterDef>;
-  execute: { type: string; command: string; args: unknown[]; workingDirectory: string | null; timeout: unknown; secrets: string[] };
+  execute: { type: string; command: string; args: unknown[]; workingDirectory: string | null; timeout: unknown; secrets: string[]; secretDelivery?: Record<string, string> };
   hasFilter: boolean;
   hasShellFilter: boolean;
   conditions: { workflow: number; item: number };
