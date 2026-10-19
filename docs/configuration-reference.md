@@ -783,10 +783,7 @@ alle dieselben Items sehen.
 # file: filters/on-hold.yaml
 id: on-hold                        # Pflicht; Dateiname sollte <id>.yaml sein
 description: Zurückgestellte Items  # optional, nur zur Anzeige
-filter:
-  any:
-    - { field: labels, operator: contains, value: on-hold }
-    - { field: labels, operator: contains, value: blocked }
+filter: { field: labels, operator: contains, value: on-hold }
 ```
 
 | Schlüssel | Typ | Pflicht | Regeln | Bedeutung |
@@ -812,7 +809,7 @@ Dry-Run und Run-Snapshot sehen keine Referenzen. Ein `use` steht für seinen Inh
 
 - Jeder benannte Filter wird strukturell geprüft (wie jeder Filter) – auch wenn ihn niemand verwendet. Fehler in
   der Filterdatei selbst: unbekannte Filter-ID (mit „did you mean …“), Zyklus (`a → b → a`), Referenzkette tiefer
-  als 16 Ebenen, `use` mit weiteren Schlüsseln oder ohne gültige ID.
+  als 16 Ebenen, mehr als 10 000 Knoten nach dem Einsetzen (§3.7), `use` mit weiteren Schlüsseln oder ohne gültige ID.
 - Die **Feldprüfung** (Feldkatalog, Operatoren, Werttypen, `run.last_*` nur in Views, `project.*` je Source, §4.3)
   hängt vom Kontext ab und läuft daher **an jedem Verwendungsort** auf dem expandierten Baum. Die Meldung nennt den
   Verwendungsort und den Pfad im benannten Filter, z. B.
@@ -845,6 +842,9 @@ erscheinen in `GET /api/v1/config/files` (UI: Configuration).
   Issue-Liste wird wie bisher nur über `state`/`labels` eingeschränkt.
 - Benannte Filter haben keine Parameter (kein `{use: x, value: …}`); Referenzketten höchstens 16 Ebenen tief
   (gezählt ab jedem Workflow-, View- oder Filter-Wurzelknoten).
+- Ein expandierter Filterbaum hat höchstens **10 000 Knoten** je Wurzel (Workflow-`filter`, jede
+  `item_priority`-Regel, View-`filter`, jeder benannte Filter für sich). Benannte Filter werden an jedem
+  Verwendungsort kopiert; die Expansion bricht ab, bevor die Grenze überschritten würde (Fehler am Verwendungsort).
 
 ---
 
@@ -1327,6 +1327,11 @@ Label-Fluss auf dem Issue: `ready-for-coding` → `coding` → `ready-for-review
 (bzw. zurück zu `ready-for-coding` oder `needs-maintainer`). Der Reviewer hat die höhere Workflow-Priorität, damit
 fertige Arbeit zuerst geprüft wird.
 
+Der Coder aus `init` und `examples/config` schließt zusätzlich den benannten Filter `needs-maintainer` aus
+(`- not: { use: needs-maintainer }`, §3.6). Wer ein Item dort an den Coder zurückgibt, muss daher neben dem Setzen
+von `ready-for-coding` auch `needs-maintainer` entfernen – sonst startet es stillschweigend nie (der Dry-Run zeigt
+die Regel als `false`).
+
 ```yaml
 # example: github
 # file: config.yaml
@@ -1652,8 +1657,9 @@ Filter `unknown` (kein Start) und der Dry-Run nennt den Grund.
 
 ### 7.8 Benannte Filter teilen
 
-„Bereit fürs Coding“ wird einmal definiert. Der Backend-Coder nimmt davon nur Backend-Items, die View zeigt
-genau die Items, die ein Coder nehmen würde, und beide sortieren dringende nach vorn.
+„Bereit fürs Coding“ wird einmal definiert. Die View zeigt alle Items beider Sources, die bereit fürs Coding sind;
+der Backend-Coder nimmt davon nur Backend-Items aus `project_a` und zieht dringende (benannter Filter `urgent`)
+in der Item-Priorität vor.
 
 ```yaml
 # example: named-filters
@@ -2157,8 +2163,11 @@ filter: { use: closed, field: labels }
 ```
 
 Weitere Meldungen: `Named filter "x" is invalid (see filters/x.yaml)` (verwendeter Filter ist selbst fehlerhaft),
-`Named filters are nested more than 16 levels deep: a → b → …`, `"use" requires the ID of a named filter`
-(`use` ohne gültige ID), `Duplicate filter ID "x" (already defined in filters/a.yaml)`.
+`Named filters are nested more than 16 levels deep: a → b → …`, `Expanded filter would exceed 10000 nodes ("x"
+alone has …; named filters are copied at every place of use)` (zu viele Kopien, z. B. Auffächerung über mehrere
+Ebenen, §3.7), `"use" requires the ID of a named filter` (`use` ohne gültige ID), `Filter node must be a mapping …;
+to reference a named filter write { use: x }` (Kurzform `x` gibt es nur an der Wurzel),
+`Duplicate filter ID "x" (already defined in filters/a.yaml)`.
 
 **Null-Intervalle und -Timeouts**
 

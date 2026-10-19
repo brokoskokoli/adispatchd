@@ -29,7 +29,7 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   (auch in `item_priority` und in anderen benannten Filtern). Referenzen werden beim Laden eingesetzt; Pushdown und
   `state`-Regel gelten für die Position nach dem Einsetzen. Unbekannte IDs (mit „did you mean …“), Zyklen und
   Ketten tiefer als 16 Ebenen sind Fehler; Feldfehler werden am Verwendungsort mit dem Pfad im benannten Filter
-  gemeldet; unbenutzte Filter ergeben eine Warnung. Änderungen wirken nach `config reload` auf alle Verwender.
+  gemeldet; unbenutzte Filter ergeben eine Warnung. Ein expandierter Filter hat höchstens 10 000 Knoten. Änderungen wirken nach `config reload` auf alle Verwender.
 - `workflow dry-run` zeigt den ausgewerteten (expandierten) Filter (`source.filter`, Zeile `filter:`);
   `GET /api/v1/config` listet die benannten Filter, `GET /api/v1/config/files` und die UI zeigen `filters/`.
 - `init` und `examples/config` enthalten den benannten Filter `needs-maintainer`, den Coder-Workflow und View
@@ -37,6 +37,9 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ### Geändert
 
+- Beispiel-Coder (`init`: `workflows/coder.yaml`, `examples/config/workflows/coder-project-a.yaml`) startet keine
+  Items mit Label `needs-maintainer` mehr (`- not: { use: needs-maintainer }`): wer ein Item an den Coder
+  zurückgibt, muss `needs-maintainer` entfernen. Bestehende Konfigurationen ändert `init` nicht.
 - `SourceItem` hat ein optionales `unknownFields` (Feld → Grund) für billige Felder, die die Source nicht ermitteln
   konnte.
 - Die App-Berechtigung **Organization → Projects: Read** wird für Projektfelder org-eigener Projekte benötigt;

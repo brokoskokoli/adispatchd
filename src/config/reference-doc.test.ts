@@ -19,7 +19,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { FILTER_OPERATORS, HOOK_NAMES, NOTIFICATION_EVENT_TYPES, OPERATORS_BY_TYPE, PLACEHOLDERS } from '../core/index.js';
 import { GITHUB_FIELD_DEFINITIONS, PROJECT_FIELD_DATA_TYPES, PROJECT_FIELD_KINDS, PROJECT_FIELD_TYPES } from '../sources/github/index.js';
 import { VIEW_RUN_FIELDS } from '../views/index.js';
-import { DEFAULT_WORKING_DIRECTORY, loadConfig, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
+import { DEFAULT_WORKING_DIRECTORY, loadConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
 import { createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
 
 const DOC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../docs/configuration-reference.md');
@@ -172,10 +172,13 @@ describe('docs/configuration-reference.md', () => {
     }
   });
 
-  it('documents the grammar and the depth limit of named filters (WI-15)', () => {
+  it('documents the grammar, depth limit and size cap of named filters (WI-15)', () => {
     expect(markdown).toContain('Use        := { use: <Filter-ID> }');
     expect(markdown).toContain('Wurzel     := Knoten | <Filter-ID>');
     expect(markdown).toMatch(new RegExp(`tiefer\\s+als ${MAX_FILTER_USE_DEPTH} Ebenen`));
+    const cap = String(MAX_EXPANDED_FILTER_NODES).replace(/\B(?=(\d{3})+$)/g, ' ');
+    expect(markdown).toContain(`höchstens **${cap} Knoten** je Wurzel`);
+    expect(markdown).toContain(`Expanded filter would exceed ${MAX_EXPANDED_FILTER_NODES} nodes`);
   });
 
   it('documents all hooks, operators and notification events', () => {

@@ -72,7 +72,7 @@ config-dir/
   views/
     needs-maintainer.yaml
   filters/                  # Nachtrag 0.2.0 (WI-15): benannte Filter
-    ready-for-coding.yaml
+    needs-maintainer.yaml
   scripts/
     coder.sh
     check-credits.sh
