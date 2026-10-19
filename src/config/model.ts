@@ -173,6 +173,12 @@ export interface AuthConfig {
     header: string;
     /** IPs/CIDRs of the proxies whose header is believed (checked against the TCP peer). */
     trustedProxies: readonly string[];
+    /**
+     * Environment variable with a shared secret the proxy must send in
+     * `X-Adispatch-Proxy-Secret` (`null` = not required). Without it, any local
+     * process can forge the identity header when only loopback proxies are trusted.
+     */
+    proxySecretEnv: string | null;
     users: readonly TrustedHeaderUserConfig[];
   };
   /** Password mode: proxies whose `X-Forwarded-Proto`/`X-Forwarded-For` are believed (TCP peer). */

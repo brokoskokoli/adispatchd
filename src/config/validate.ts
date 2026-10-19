@@ -33,6 +33,7 @@ import {
   workflowFieldContext,
   type FieldIssue,
 } from './field-catalog.js';
+import { isIdentityForgeableLocally } from './auth.js';
 import { validateExternalLinks } from './external-links.js';
 import type { RawFilterNode } from './filter-schema.js';
 import { formatIssuePath, type IssueCollector, type IssuePath } from './issues.js';
@@ -184,6 +185,13 @@ function validateAuth(global: GlobalConfig, issues: IssueCollector): void {
   if (auth.mode === 'trusted_header' && auth.trustedHeader.trustedProxies.length === 0) {
     issues.warning(CONFIG_FILE, ['auth', 'trusted_header', 'trusted_proxies'], 'No trusted proxies: every request is rejected with 401');
   }
+  const anyAddress = (list: readonly string[], at: IssuePath): void => {
+    list.forEach((entry, i) => {
+      if (/\/0$/.test(entry)) issues.warning(CONFIG_FILE, [...at, i], `"${entry}" trusts every address: anyone who can connect can claim an identity or HTTPS`);
+    });
+  };
+  anyAddress(auth.trustedHeader.trustedProxies, ['auth', 'trusted_header', 'trusted_proxies']);
+  anyAddress(auth.trustedProxies, ['auth', 'trusted_proxies']);
 }
 
 function isHttpUrl(value: string): boolean {
@@ -196,14 +204,15 @@ function isHttpUrl(value: string): boolean {
 }
 
 /**
- * True if any local process (including workers) can send the identity
- * header itself: `trusted_header` mode with a trusted proxy entry that covers
- * a loopback address. (WI-26 review: to be reconciled with WI-26's
- * `isIdentityForgeableLocally`, which also honours `proxy_secret_env`.)
+ * True if any local process (including workers) could send the identity
+ * header itself: {@link isIdentityForgeableLocally} (WI-26: only loopback
+ * proxies, no proxy secret) – and, stricter for UI actions, also when ANY
+ * trusted proxy entry covers a loopback address and no proxy secret is set.
  */
 export function trustedHeaderForgeableLocally(global: GlobalConfig): boolean {
   const auth = global.auth;
-  if (auth.mode !== 'trusted_header') return false;
+  if (isIdentityForgeableLocally(auth)) return true;
+  if (auth.mode !== 'trusted_header' || auth.trustedHeader.proxySecretEnv !== null) return false;
   return auth.trustedHeader.trustedProxies.some((entry) => coversLoopback(entry));
 }
 
@@ -235,7 +244,7 @@ function validateUiActions(input: SemanticInput, issues: IssueCollector): void {
       issues.error(
         IDENTITIES_FILE,
         at,
-        'UI actions are not allowed with auth.mode trusted_header behind a local (loopback) proxy: any local process, including workers, could forge the login header. Use auth.mode password (also works over Tailscale) or a proxy secret',
+        'UI actions are not allowed with auth.mode trusted_header behind a local (loopback) proxy without auth.trusted_header.proxy_secret_env: any local process, including workers, could forge the login header. Use auth.mode password (also works over Tailscale) or set proxy_secret_env',
       );
     }
   }

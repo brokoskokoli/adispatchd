@@ -156,11 +156,17 @@ describe('auth.mode: password', () => {
     expect(res.json.block.clearedBy).toBe('olga');
   });
 
-  it('writes a fresh control token file (0600) at start; it grants admin from loopback only', async () => {
+  it('writes a fresh control token file (0600, port, pid) at start; it works from loopback on CLI routes only', async () => {
     const file = controlTokenPath(env.dataDir);
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    const token = readFileSync(file, 'utf8').trim();
-    expect(token).toBe(env.app.auth.controlToken);
+    const content = JSON.parse(readFileSync(file, 'utf8')) as { token: string; port: number; pid: number };
+    expect(content).toEqual({ token: env.app.auth.controlToken, port: Number(new URL(env.app.url!).port), pid: process.pid });
+    const token = content.token;
+    // Not an operator/admin everywhere: routes outside the CLI commands refuse it (review M1).
+    const blocked = await call(env, 'POST', '/api/v1/workflows/slow/start', { headers: { [CONTROL_TOKEN_HEADER]: token } });
+    expect(blocked.status).toBe(403);
+    expect(blocked.json.error.code).toBe('control_token_not_allowed');
+    expect((await call(env, 'GET', '/api/v1/runs', { headers: { [CONTROL_TOKEN_HEADER]: token } })).status).toBe(403);
     expect((await call(env, 'POST', '/api/v1/scheduler/pause', { headers: { [CONTROL_TOKEN_HEADER]: token } })).status).toBe(200);
     expect((await call(env, 'POST', '/api/v1/scheduler/resume', { headers: { [CONTROL_TOKEN_HEADER]: token } })).status).toBe(200);
     const remote = await call(env, 'GET', '/api/v1/status', { headers: { [CONTROL_TOKEN_HEADER]: token }, remoteAddress: '192.0.2.40' });
@@ -220,6 +226,11 @@ describe('auth.mode: trusted_header', () => {
     expect(spoofed.json.error.code).toBe('untrusted_proxy');
   });
 
+  it('does not warn about local forging when a non-loopback proxy range is trusted', () => {
+    // 100.64.0.0/10 is not loopback, so this configuration is not "only loopback" – no warning.
+    expect(env.logger.records.some((r) => r.msg.includes('trusted_header without proxy_secret_env'))).toBe(false);
+  });
+
   it('missing header → 401, unknown login → 403, viewer cannot write; logins are case-insensitive', async () => {
     expect((await call(env, 'GET', '/api/v1/status', as(null))).status).toBe(401);
     const unknown = await call(env, 'GET', '/api/v1/status', as('mallory@example.com'));
@@ -237,6 +248,48 @@ describe('auth.mode: trusted_header', () => {
     const sse = await connectSse(url, { 'tailscale-user-login': 'victor@example.com' });
     await sse.waitFor((m) => m.event === 'stream.open');
     sse.close();
+  });
+
+  it('a reload that removes a login closes its open SSE stream (review minor 4)', async () => {
+    const url = `${env.app.url}/api/v1/events`;
+    const alice = await connectSse(url, { 'tailscale-user-login': 'alice@example.com' });
+    const victor = await connectSse(url, { 'tailscale-user-login': 'victor@example.com' });
+    await victor.waitFor((m) => m.event === 'stream.open');
+    const file = path.join(env.configDir, 'config.yaml');
+    writeFileSync(file, readFileSync(file, 'utf8').replace("      - { login: Victor@Example.com, role: viewer }\n", ''));
+    const res = await env.app.reloadConfig();
+    expect(res.ok).toBe(true);
+    await victor.closed;
+    expect((await call(env, 'GET', '/api/v1/status', as('victor@example.com'))).status).toBe(403);
+    // Alice keeps her stream.
+    await alice.waitFor((m) => m.event === 'config.reloaded');
+    alice.close();
+  });
+});
+
+describe('auth.mode: trusted_header behind Tailscale Serve (loopback only)', () => {
+  it('warns that any local process can forge the identity; with proxy_secret_env the header needs the secret', async () => {
+    const base = ['auth:', '  mode: trusted_header', '  trusted_header:', '    users: [{ login: alice@example.com, role: operator }]'];
+    const forgeable = await startAppEnv({ configExtra: `${base.join('\n')}\n` });
+    try {
+      expect(forgeable.logger.records.some((r) => r.level === 'warn' && r.msg.includes('trusted_header without proxy_secret_env and only loopback proxies'))).toBe(true);
+    } finally {
+      await forgeable.cleanup();
+    }
+    const secured = await startAppEnv({ configExtra: `${base.join('\n')}\n    proxy_secret_env: TEST_PROXY_SECRET\n` }, (e) => {
+      e.env.TEST_PROXY_SECRET = 'proxy-secret-value';
+    });
+    try {
+      expect(secured.logger.records.some((r) => r.msg.includes('trusted_header without proxy_secret_env'))).toBe(false);
+      const id = { 'tailscale-user-login': 'alice@example.com' };
+      const forged = await call(secured, 'GET', '/api/v1/status', { headers: id });
+      expect(forged.status).toBe(401);
+      expect(forged.json.error.code).toBe('invalid_proxy_secret');
+      expect((await call(secured, 'GET', '/api/v1/status', { headers: { ...id, 'x-adispatch-proxy-secret': 'proxy-secret-value' } })).status).toBe(200);
+      expect(JSON.stringify(secured.logger.records)).not.toContain('proxy-secret-value');
+    } finally {
+      await secured.cleanup();
+    }
   });
 });
 

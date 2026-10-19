@@ -50,7 +50,7 @@ import { DEFAULT_MAX_POINTS, downsample, MAX_POINTS, type ResourceMonitor } from
 import type { ViewService } from '../views/index.js';
 import type { AuthRequest, AuthService, Principal } from './auth.js';
 import { uiContentSecurityPolicy } from './csp.js';
-import { roleAllows, routeAccess, routeKey, type RouteAccess } from './roles.js';
+import { acceptsControlToken, roleAllows, routeAccess, routeKey, type RouteAccess } from './roles.js';
 import { ApiError, toErrorResponse } from './errors.js';
 import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile } from './kept.js';
 import { readLogPage } from './logs.js';
@@ -372,9 +372,10 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
   });
   const accessOf = (req: FastifyRequest): RouteAccess => {
     const url = req.routeOptions.url;
-    if (url !== undefined) return routeAccess(req.method, url) ?? 'viewer';
-    // Unknown route (404): API paths need a login, anything else is the public UI shell.
-    return (req.url.split('?')[0] ?? '').startsWith('/api/') ? 'viewer' : 'public';
+    const isApiPath = (req.url.split('?')[0] ?? '').startsWith('/api/');
+    // Unknown API paths need a login – also when the static UI's catch-all route `/*` matched them.
+    if (url === undefined || (url === '/*' && isApiPath)) return isApiPath ? 'viewer' : 'public';
+    return routeAccess(req.method, url) ?? 'viewer';
   };
   const authEnabled = (): boolean => deps.auth?.enabled === true;
   app.addHook('onRequest', async (req) => {
@@ -393,6 +394,11 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     req.principal = principal;
     if (access === 'public') return;
     if (!principal) throw new ApiError(401, 'authentication_required', 'Login required');
+    // The control token (readable by workers of the service user) only works on the CLI routes.
+    const url = req.routeOptions.url;
+    if (principal.via === 'control_token' && (url === undefined || url === '/*' || !acceptsControlToken(req.method, url))) {
+      throw new ApiError(403, 'control_token_not_allowed', 'The control token is only accepted for the CLI control commands');
+    }
     if (!roleAllows(principal.role, access)) {
       throw new ApiError(403, 'forbidden', `This action requires the role "${access}" (your role: "${principal.role}")`, { requiredRole: access, role: principal.role });
     }
@@ -975,10 +981,9 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const fromHeader = typeof header === 'string' && /^\d+$/.test(header.trim()) ? Number(header.trim()) : null;
     const lastEventId = fromHeader ?? q.lastEventId ?? null;
     if (q.run) requireRun(q.run);
-    // A logout or the session's expiry closes the stream (WI-26); the reconnect then fails with 401.
-    const sessionKey = req.principal?.sessionKey;
-    if (sessionKey && deps.auth) {
-      const off = deps.auth.registerStream(sessionKey, () => reply.raw.end());
+    // Logout, session expiry or a reload that removes the user closes the stream (WI-26); the reconnect then fails.
+    if (req.principal && deps.auth) {
+      const off = deps.auth.registerStream(req.principal, () => reply.raw.end());
       reply.raw.on('close', off);
     }
     reply.hijack();

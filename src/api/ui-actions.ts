@@ -31,7 +31,7 @@ import {
 import type { ConfigManager } from '../config/index.js';
 import type { Repositories, UiActionKind, UiActionRecord, UiActionResult } from '../persistence/index.js';
 import { valueProblem } from '../sources/index.js';
-import type { Principal } from './auth.js';
+import { isInteractive, type Principal } from './auth.js';
 import { ApiError } from './errors.js';
 
 /** Max length of a comment (GitHub's limit). */
@@ -151,7 +151,7 @@ export function registerUiActionRoutes(app: FastifyInstance, deps: UiActionDeps)
     }
     const p = req.principal;
     if (!p || p.via === 'anonymous') throw new ApiError(401, 'authentication_required', 'Login required');
-    if (p.via !== 'password' && p.via !== 'trusted_header') {
+    if (!isInteractive(p)) {
       throw new ApiError(403, 'user_login_required', 'UI actions need a logged-in user; the local control token is not accepted');
     }
     if (p.role !== 'admin') throw new ApiError(403, 'forbidden', `This action requires the role "admin" (your role: "${p.role}")`, { requiredRole: 'admin', role: p.role });

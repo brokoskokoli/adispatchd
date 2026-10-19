@@ -11,6 +11,10 @@ const IDENTITIES = `identities:
 describe('identities.ui_actions (WI-27)', () => {
   let t: TempConfigDir | undefined;
   afterEach(async () => t?.cleanup());
+  const reset = async (): Promise<void> => {
+    await t?.cleanup();
+    t = undefined;
+  };
 
   async function load(config: string, identities = IDENTITIES) {
     t = await createTempConfigDir({ ...BASE_FILES, 'config.yaml': config, 'identities.yaml': identities });
@@ -43,13 +47,14 @@ describe('identities.ui_actions (WI-27)', () => {
       if (res.ok) continue;
       expect(res.errors.map((e) => `${e.file}: ${e.path}`)).toEqual(['identities.yaml: identities.maintainer.ui_actions', 'identities.yaml: identities.board.ui_actions']);
       expect(res.errors[0]?.message).toMatch(/forge the login header.*auth\.mode password/);
-      await t?.cleanup();
-      t = undefined;
+      await reset();
     }
+    // With a proxy secret: allowed.
+    expect((await load(th('127.0.0.1').replace('    users:', '    proxy_secret_env: PROXY_SECRET\n    users:'))).ok).toBe(true);
+    await reset();
     // A remote proxy only: allowed; without ui_actions: allowed.
     expect((await load(th('"100.64.0.10"'))).ok).toBe(true);
-    await t?.cleanup();
-    t = undefined;
+    await reset();
     expect((await load(th('127.0.0.1'), 'identities:\n  maintainer: { type: github_app, app_id: 1, installation_id: 2, private_key_env: K1 }\n  coder: { type: github_app, app_id: 3, installation_id: 4, private_key_env: K2 }\n')).ok).toBe(true);
   });
 

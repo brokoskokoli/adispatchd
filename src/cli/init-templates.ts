@@ -20,8 +20,8 @@ const CONFIG_YAML = (port: number): string => `# config.yaml – global settings
 # Apply changes to a running instance:          adispatch config reload --config-dir <dir>
 
 server:
-  # The HTTP API/UI has NO authentication (V1). Keep it on loopback. To expose it, put an
-  # AUTHENTICATING reverse proxy / VPN / Tailscale in front (see docs/operations.md).
+  # Without an auth: section (below) the HTTP API/UI has NO login. Keep it on loopback and expose it
+  # only through an AUTHENTICATING reverse proxy / VPN / Tailscale, or enable auth (docs/operations.md).
   host: 127.0.0.1
   port: ${port}
   # Extra host names accepted in the Host/Origin header (DNS-rebinding protection), e.g. the

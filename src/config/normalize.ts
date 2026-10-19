@@ -113,6 +113,7 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
       trustedHeader: {
         header: raw.auth.trusted_header.header.toLowerCase(),
         trustedProxies: raw.auth.trusted_header.trusted_proxies.map((p) => p.trim()),
+        proxySecretEnv: raw.auth.trusted_header.proxy_secret_env ?? null,
         users: raw.auth.trusted_header.users.map((u) => ({ login: u.login.toLowerCase(), role: u.role })),
       },
       trustedProxies: raw.auth.trusted_proxies.map((p) => p.trim()),

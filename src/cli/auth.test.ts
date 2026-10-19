@@ -97,6 +97,14 @@ describe('control commands with auth.mode: password', () => {
     expect(seen[1]).toHaveProperty('x-adispatch-control-token', 'secret');
   });
 
+  it('sends the token only to the port recorded in the token file (review minor 5)', async () => {
+    const port = Number(new URL(env.app.url!).port);
+    expect(resolveControlToken(`http://127.0.0.1:${port}`, { dataDir: env.dataDir })?.pid).toBe(process.pid);
+    expect(resolveControlToken(`http://localhost:${port}/`, { dataDir: env.dataDir })).not.toBeNull();
+    expect(resolveControlToken(`http://127.0.0.1:${port + 1}`, { dataDir: env.dataDir })).toBeNull();
+    expect(resolveControlToken('http://127.0.0.1', { dataDir: env.dataDir })).toBeNull();
+  });
+
   it('a stale token gives a clear hint', async () => {
     const original = env.app.auth.controlToken;
     const io = captureIo();
@@ -107,6 +115,25 @@ describe('control commands with auth.mode: password', () => {
     expect(io.err).toContain('invalid_control_token');
     expect(io.err).toMatch(/hint: the control token is outdated/);
   });
+});
+
+describe('drain and cancel-all with auth.mode: password (stop the instance)', () => {
+  for (const mode of ['drain', 'cancel-all'] as const) {
+    it(`${mode} works through the control token`, async () => {
+      const env = await startAppEnv({ configExtra: PASSWORD_AUTH_CONFIG, app: FAST_AUTH }, authEnvSetup);
+      try {
+        const io = await cli([mode, '--url', env.app.url!, '--data-dir', env.dataDir, '--wait', '--timeout', '20s'], (o) => ({
+          drain: createShutdownHandler('drain', o, { pollIntervalMs: 20 }),
+          cancelAll: createShutdownHandler('cancel-all', o, { pollIntervalMs: 20 }),
+        }));
+        expect(io.code, io.err).toBe(0);
+        expect(io.out).toContain('instance stopped');
+        expect((await env.app.stopped).exitCode).toBe(0);
+      } finally {
+        await env.cleanup();
+      }
+    });
+  }
 });
 
 /** Fake terminal: emits the keystrokes once raw mode is on. */

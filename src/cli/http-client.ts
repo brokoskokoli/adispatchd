@@ -123,18 +123,31 @@ export function isLoopbackUrl(baseUrl: string): boolean {
   }
 }
 
+/** Port of a URL (scheme default if none); `null` if unparsable. */
+function urlPort(baseUrl: string): number | null {
+  try {
+    const u = new URL(baseUrl);
+    return u.port ? Number(u.port) : u.protocol === 'https:' ? 443 : 80;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Control token for a loopback URL (WI-26): `<--data-dir>/control.token`, without
- * `--data-dir` `./data` and then {@link SERVICE_DATA_DIR}. `null` for remote URLs
- * or if no readable token exists (the instance may run with `auth.mode: none`).
+ * `--data-dir` `./data` and then {@link SERVICE_DATA_DIR}. Only a token whose
+ * recorded port equals the URL's port is used, so it never goes to another
+ * local service. `null` for remote URLs or if no matching token exists (the
+ * instance may run with `auth.mode: none`).
  */
-export function resolveControlToken(baseUrl: string, opts: { dataDir?: string }): { token: string; file: string } | null {
+export function resolveControlToken(baseUrl: string, opts: { dataDir?: string }): { token: string; file: string; pid: number } | null {
   if (!isLoopbackUrl(baseUrl)) return null;
+  const port = urlPort(baseUrl);
   const dirs = opts.dataDir ? [path.resolve(opts.dataDir)] : [path.resolve('data'), SERVICE_DATA_DIR];
   for (const dir of dirs) {
     const file = controlTokenPath(dir);
-    const token = readControlToken(file);
-    if (token) return { token, file };
+    const content = readControlToken(file);
+    if (content && content.port === port) return { token: content.token, file, pid: content.pid };
   }
   return null;
 }

@@ -165,7 +165,8 @@ describe('access control', () => {
     ] as const) {
       const res = await env.request(method, url, body, headers);
       expect(res.status, url).toBe(403);
-      expect(res.json.error.code).toBe('user_login_required');
+      // Refused by the route table (no controlToken flag); ui-actions.ts would refuse it again (isInteractive).
+      expect(res.json.error.code).toBe('control_token_not_allowed');
     }
     expect(env.github.requests).toHaveLength(0);
   });

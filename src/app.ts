@@ -36,7 +36,7 @@ import {
   type SourceAdapter,
   type Timers,
 } from './core/index.js';
-import { ConfigManager, type IdentityConfig, type LoadedConfig, type ReloadResult } from './config/index.js';
+import { ConfigManager, isIdentityForgeableLocally, type IdentityConfig, type LoadedConfig, type ReloadResult } from './config/index.js';
 import {
   CompositeCredentialProvider,
   GitHubAppCredentialProvider,
@@ -588,6 +588,17 @@ export async function createApp(options: AppOptions): Promise<App> {
     for (const name of auth.checkUsers()) {
       log.warn('auth: user cannot log in – password hash variable missing or malformed (adispatch auth hash-password)', { user: name });
     }
+    const cfg = config.current.global.auth;
+    if (auth.proxySecretMissing()) {
+      log.warn('auth: proxy_secret_env is set but the variable is missing or empty – every identity header is rejected', {
+        variable: cfg.trustedHeader.proxySecretEnv,
+      });
+    }
+    if (isIdentityForgeableLocally(cfg)) {
+      log.warn(
+        'auth: trusted_header without proxy_secret_env and only loopback proxies – any local process (including workers) can claim any configured login; set auth.trusted_header.proxy_secret_env where the proxy supports it',
+      );
+    }
   };
 
   const http = await createApiServer({
@@ -710,13 +721,19 @@ export async function createApp(options: AppOptions): Promise<App> {
     if (!isLoopback(host) && authMode === 'trusted_header') {
       log.warn('auth.mode trusted_header while bound to a non-loopback address: bind to 127.0.0.1 and reach adispatchd only through the proxy', { host });
     }
+    if (!isLoopback(host) && authMode === 'password') {
+      log.warn(
+        'auth.mode password while bound to a non-loopback address: adispatchd speaks plain HTTP – passwords and session cookies travel unencrypted unless a TLS proxy terminates in front (bind to 127.0.0.1 behind the proxy)',
+        { host },
+      );
+    }
     warnAuthUsers();
-    // Local control token for the CLI (WI-26): new random value per start, 0600, written atomically.
-    writeControlToken(dataDir, auth.controlToken);
     auth.start();
     await http.listen({ host, port });
     listening = true;
     const p = actualPort();
+    // Local control token for the CLI (WI-26): new random value per start, 0600, written atomically, with port and pid.
+    writeControlToken(dataDir, { token: auth.controlToken, port: p ?? port, pid: process.pid });
     url = `http://${host.includes(':') ? `[${host}]` : host}:${p ?? port}`;
     log.info('HTTP API listening', { url });
     notifications.start();
