@@ -202,6 +202,12 @@ export async function startAppEnv(options: AppEnvOptions = {}, before?: (env: Ap
   if (options.start !== false) {
     await env.app.start();
     await env.app.ready;
+    // `ready` resolves as soon as the scheduler has started, while its first planning step
+    // (an async poll of the sources) is still running. Without waiting, a test that creates
+    // items right away races that step: whether the step sees the new items depends on the
+    // timing of the event loop (on Node 22 it usually did, on Node 24 usually not), and the
+    // step then reads/starts concurrently with the test's own dry-run or `planOnce()`.
+    await env.app.scheduler.whenIdle();
   }
   return env;
 }
