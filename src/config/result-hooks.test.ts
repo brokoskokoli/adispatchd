@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { selectCompletionHook } from '../core/index.js';
 import { formatConfigIssue, loadConfig, resultHookOutcomes, snapshotWorkflow, type LoadConfigResult, type LoadedConfig } from './index.js';
+import { knownKeysAt, suggestKey } from './loader.js';
+import { workflowSchema } from './schemas.js';
 import { BASE_FILES, createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
 
 const temps: TempConfigDir[] = [];
@@ -111,5 +113,35 @@ on_result:
     const errors = issues(result, 'error');
     expect(errors).toContain(': Unknown key(s): "on_errors" (did you mean "on_error"?)');
     expect(errors).toContain('on_result.approved[0]: Unknown key(s): "lables" (did you mean "labels"?)');
+  });
+
+  it('suggests only keys of the action variant selected by "type" and none for short keys (review)', async () => {
+    const result = await load(
+      WF(`on_success:
+  - type: source.comment
+    message: done
+    comand: x
+  - type: shell
+    command: /bin/true
+    comand: x
+on: []
+`),
+    );
+    const errors = issues(result, 'error');
+    // `command` only exists for shell actions: no hint for the source.comment variant.
+    expect(errors).toContain('on_success[0]: Unknown key(s): "comand"');
+    expect(errors).toContain('on_success[1]: Unknown key(s): "comand" (did you mean "command"?)');
+    // Two letters away from `id` is too far for a two-letter key.
+    expect(errors).toContain(': Unknown key(s): "on"');
+  });
+
+  it('offers only keys shared by all variants if the discriminator matches none', () => {
+    const at = ['on_success', 0] as const;
+    expect(knownKeysAt(workflowSchema, { on_success: [{ type: 'shell' }] }, at).sort()).toEqual(
+      ['args', 'command', 'continue_on_error', 'env', 'id', 'retry', 'timeout', 'type'],
+    );
+    expect(knownKeysAt(workflowSchema, { on_success: [{ type: 'nope' }] }, at).sort()).toEqual(['continue_on_error', 'id', 'retry', 'type']);
+    expect(suggestKey('on', ['id', 'on_error'])).toBeUndefined();
+    expect(suggestKey('on_errors', ['on_error', 'on_result'])).toBe('on_error');
   });
 });
