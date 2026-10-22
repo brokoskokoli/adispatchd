@@ -5,6 +5,8 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+## [0.6.0] – 2026-10-22
+
 ### Hinzugefügt
 
 - **Hooks beim Entstehen und Aufheben eines Retry-Blocks (`on_retry_block`, `on_retry_unblock`).** Beide optional,
@@ -363,6 +365,7 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
+[0.6.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.2.0...v0.3.0
