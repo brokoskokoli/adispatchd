@@ -2,7 +2,7 @@
 
 > **Name:** Agent Dispatch Daemon – npm-Paket, Repository, systemd-Unit und Standardpfade `adispatchd`, CLI-Befehl `adispatch`. Ursprünglicher Arbeitsname: „Agent Orchestrator“ (`agent-orchestrator`); alle Bezeichner wurden entsprechend umbenannt (z. B. Umgebungsvariablen `ADISPATCH_*` statt `ORCH_*`, Kommentar-Marker `adispatchd:` statt `orch:`).
 
-**Status:** Umgesetzt bis Version 0.4.0 (npm `adispatchd`). Ursprünglich technischer Entwurf v0.1; spätere Erweiterungen stehen als „Nachtrag 0.2.0/0.3.0/0.4.0 (WI-NN)“ an der jeweiligen Stelle, verbindliche Dateiformate in [configuration-reference.md](configuration-reference.md)  
+**Status:** Umgesetzt bis Version 0.6.0 (npm `adispatchd`). Ursprünglich technischer Entwurf v0.1; spätere Erweiterungen stehen als „Nachtrag 0.2.0 … 0.6.0 (WI-NN)“ an der jeweiligen Stelle, verbindliche Dateiformate in [configuration-reference.md](configuration-reference.md)  
 **Ziel:** Eigenständig installierbarer, konfigurationsgetriebener Orchestrator für Shell-Prozesse und KI-Agenten  
 **Technologie:** TypeScript, Node.js (unterstützte LTS-Version), SQLite, YAML, HTTP/SSE  
 **Betrieb:** Linux (Produktion, systemd), macOS (lokal)  
@@ -511,7 +511,7 @@ Events werden separat mit Run-ID und Zeitstempel in SQLite gespeichert, zudem pe
 
 ## 10. Lifecycle-Aktionen
 
-Unterstützte Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_cancel`, `on_timeout`.
+Unterstützte Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` (ab 0.3.0 zusätzlich `on_error`, `on_result.<outcome>`; ab 0.6.0 `on_retry_block`, `on_retry_unblock`, §11).
 
 Aktionstypen V1:
 
@@ -545,17 +545,24 @@ Bei Erreichen des Limits entsteht ein Datensatz `blocks(workflow_id, item_key, r
 
 **Wichtige Reihenfolge:** Beim technischen Fehler den Abschlusszustand und den Block konsistent persistieren; `on_crash`/`on_timeout` können die Source wieder auf `ready-for-coding` setzen. Der Block verhindert dann automatisch weitere Starts, selbst wenn der externe Filter wieder passt.
 
+**Nachtrag 0.6.0 (WI-30) – Hooks beim Entstehen und Aufheben eines Retry-Blocks:**
+
+- `on_retry_block: [Actions]` läuft im Run, dessen Übergang nach `finalizing` den Block erzeugt hat, als eigene Kette **nach** dem Abschluss-Hook (`on_crash`/`on_start_error`/`on_timeout`/`on_error`) – auch wenn dieser endgültig gescheitert ist und auch bei `start_error` ohne Hooks. Die Entscheidung wird mit `→ finalizing` am Run gespeichert (`runs.retry_block_hook`); Recovery setzt die Kette fort.
+- `on_retry_unblock: [Actions]` läuft beim Aufheben (UI „Remove Block“, `POST /api/v1/blocks/:id/clear`) in einem **Lifecycle-Run**, den das Aufheben in derselben Transaktion anlegt: Trigger `unblock`, kein Worker, kein Workspace, Snapshot = beim Aufheben geladene Konfiguration. Er hält das Lock für `(Workflow, Item)` bis die Kette fertig ist (Workflow-Scope: keine automatischen Cron-Starts), zählt nicht als technischer Fehler, setzt den Zähler nicht zurück, zählt nicht zu `max_concurrent` und nicht als `run.last_*` in Views. Endstatus `completed` + `success` bzw. `failure` (dann `lifecycle_action_failed`); der Block bleibt aufgehoben. Mit laufendem Run des Scopes wird das Aufheben bei nicht leerem Hook mit `409 block_run_active` abgelehnt; ohne Hook wie bisher (kein Run). Nicht abbrechbar; Retry/Skip einzelner Actions und Recovery wie bei jedem Run.
+- Platzhalter `{block.id}`, `{block.failures}`, `{block.created_at}`, `{block.last_status}` in beiden Hooks, `{block.cleared_at}`, `{block.cleared_by}` nur in `on_retry_unblock` (sonst Konfigurationsfehler); `on_retry_unblock` hat kein `result.*`. Workflows ohne Item: nur `shell`.
+- Neue, nicht standardmäßig aktivierte Benachrichtigung `retry_block_cleared`. Schema v5: `runs.trigger_type` erlaubt `unblock`, `runs.retry_block_hook`, `run_actions.hook` erlaubt die beiden Hooks, `blocks.last_status`, `blocks.cleared_run_id` (Migration mit Backup, kein Downgrade). Details: [configuration-reference.md](configuration-reference.md) §3.4.10, §5, §6.4.
+
 ## 12. SQLite-Datenmodell (logisches Schema)
 
 Die Tabellen unten sind konzeptionell; DDL, Indizes, Fremdschlüssel und Migrationen sind vor Implementierung auszuarbeiten.
 
 | Tabelle | Relevante Spalten | Zweck |
 |---|---|---|
-| `runs` | `id`, `workflow_id`, `trigger_type`, `source_id`, `source_item_key`, `source_url`, `config_snapshot`, `parameters_json`, `status`, `business_result`, `exit_code`, `pid`, `process_start_identity`, `workspace_path`, `started_at`, `finished_at`, `lifecycle_status`; ab 0.3.0 `outcome`, `completion_hook` (WI-17) | Versuche und Ausführungshistorie |
+| `runs` | `id`, `workflow_id`, `trigger_type`, `source_id`, `source_item_key`, `source_url`, `config_snapshot`, `parameters_json`, `status`, `business_result`, `exit_code`, `pid`, `process_start_identity`, `workspace_path`, `started_at`, `finished_at`, `lifecycle_status`; ab 0.3.0 `outcome`, `completion_hook` (WI-17); ab 0.6.0 `retry_block_hook`, Trigger `unblock` (WI-30) | Versuche und Ausführungshistorie |
 | `run_events` | `id`, `run_id`, `sequence`, `timestamp`, `type`, `payload_json` | Strukturierte Events |
 | `run_actions` | `id`, `run_id`, `hook`, `ordinal`, `action_config_json`, `status`, `external_key` | Action-Journal |
 | `action_attempts` | `id`, `run_action_id`, `attempt`, `started_at`, `finished_at`, `error_json` | Retry-/Fehlerdiagnose |
-| `blocks` | `id`, `workflow_id`, `source_item_key_nullable`, `reason`, `created_at`, `cleared_at_nullable`, `generation` | Persistente technische Blocks |
+| `blocks` | `id`, `workflow_id`, `source_item_key_nullable`, `reason`, `created_at`, `cleared_at_nullable`, `generation`; ab 0.6.0 `last_status`, `cleared_run_id` (WI-30) | Persistente technische Blocks |
 | `locks` | `workflow_id`, `source_item_key`, `run_id`, `acquired_at` | Aktive Reservierungen |
 | `notifications` | `id`, `event_type`, `payload_json`, `delivery_state`, `attempts`, `created_at` | Systemmeldungen |
 | `cron_firings` | `workflow_id`, `scheduled_for`, `run_id_nullable`, `decision` | Cron-Idempotenz und Diagnose |
@@ -662,7 +669,7 @@ Filter nur deklarativ, keine Shell-Filter, keine zusätzlichen UI-Filter/Textsuc
 
 ## 18. Benachrichtigungen
 
-**Workflow-Benachrichtigungen** über `source.comment` oder `shell`-Hook (z. B. Slack-Skript). **Kritische Orchestrator-Ereignisse** erhalten ein zentrales, konfigurierbares Benachrichtigungssystem, z. B. HTTP-Webhook/Slack-Webhook als erster Kanal: Retry-Block erstellt, Lifecycle endgültig gescheitert, Recovery fehlgeschlagen. Zustellung und Versuche werden gespeichert, Fehlzustellungen in GUI gezeigt. Die Orchestrierung darf bei Benachrichtigungsfehler nicht hängen. Secrets in Notification-URLs/-Headers schützen und redigieren.
+**Workflow-Benachrichtigungen** über `source.comment` oder `shell`-Hook (z. B. Slack-Skript). **Kritische Orchestrator-Ereignisse** erhalten ein zentrales, konfigurierbares Benachrichtigungssystem, z. B. HTTP-Webhook/Slack-Webhook als erster Kanal: Retry-Block erstellt, Lifecycle endgültig gescheitert, Recovery fehlgeschlagen; ab 0.6.0 optional Retry-Block aufgehoben (`retry_block_cleared`, nicht im Default). Zustellung und Versuche werden gespeichert, Fehlzustellungen in GUI gezeigt. Die Orchestrierung darf bei Benachrichtigungsfehler nicht hängen. Secrets in Notification-URLs/-Headers schützen und redigieren.
 
 ## 19. Konfiguration, Reload, Dry-Run
 

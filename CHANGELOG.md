@@ -3,6 +3,34 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
+
+### Hinzugefügt
+
+- **Hooks beim Entstehen und Aufheben eines Retry-Blocks (`on_retry_block`, `on_retry_unblock`).** Beide optional,
+  mit denselben Actions wie die übrigen Hooks (Labels/Projektfelder, Kommentar, Skript). `on_retry_block` läuft im
+  Run, der den Block gerade erzeugt hat, **nach** dessen Abschluss-Hook (`on_crash` & Co.) – auch wenn dieser
+  gescheitert ist und auch bei `start_error` ohne Hooks; Recovery setzt die Kette fort. `on_retry_unblock` läuft
+  beim Aufheben („Remove Block“, `POST /api/v1/blocks/:id/clear`) in einem neuen **Lifecycle-Run** mit Trigger
+  `unblock` (kein Worker, kein Workspace): Er hält das Lock für Workflow + Item, bis die Kette fertig ist, zählt nicht
+  als technischer Fehler und nicht zu den Limits, endet als `completed` + `success`/`failure` und erscheint in UI/API
+  wie jeder Run (Retry/Skip, Recovery). Läuft für Workflow + Item gerade ein Run, wird das Aufheben mit nicht leerem
+  `on_retry_unblock` mit `409 block_run_active` abgelehnt. Neue Platzhalter `{block.id}`, `{block.failures}`,
+  `{block.created_at}`, `{block.last_status}`, in `on_retry_unblock` zusätzlich `{block.cleared_at}`,
+  `{block.cleared_by}`. Workflows ohne Item: nur `shell`. Referenz §3.4.10, §5, §6.4; Beispiel
+  `examples/config/workflows/coder-project-a.yaml`.
+- **Benachrichtigung `retry_block_cleared`** (optional, nicht im Default von `notifications.on`).
+- **API/UI:** `clear` antwortet mit `runId` des Lifecycle-Runs (oder `null`); Blocks enthalten `lastStatus` und
+  `clearedRunId`, Runs `retryBlockHook`, das Run-Detail `retryBlock`; `GET /api/v1/runs?trigger=unblock`. Die UI
+  zeigt Lifecycle-Runs mit Badge „unblock“ und nach „Remove Block“ einen Link auf den Run.
+
+### Geändert
+
+- **DB-Schema v5** (automatische Migration mit Backup unter `data-dir/backups/`): `runs.trigger_type` erlaubt
+  `unblock`, neue Spalten `runs.retry_block_hook`, `blocks.last_status`, `blocks.cleared_run_id`; `run_actions.hook`
+  erlaubt die beiden neuen Hooks. Bestehende Blocks bleiben gültig. Ein Downgrade auf 0.5.x ist nicht vorgesehen
+  (0.5.x lehnt v5 ab; zurück nur über das Backup vor der Migration).
+
 ## [0.5.0] – 2026-10-20
 
 ### Hinzugefügt

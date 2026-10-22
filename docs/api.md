@@ -206,7 +206,7 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed`, `control_token_not_allowed` (WI-26), `ui_actions_disabled`, `user_login_required`, `identity_not_allowed` (WI-27) |
 | 421 | `host_not_allowed` (Host-Allowlist) |
 | 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found`, `source_not_found`, `item_not_found`, `github_not_found` (WI-27) |
-| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27) |
+| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27), `block_run_active` (WI-30) |
 | 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt), `github_rejected` (WI-27) |
 | 429 | `too_many_attempts` (Login, WI-26), `rate_limited` (Info-Refresh), `ui_actions_throttled`, `github_rate_limited` (WI-27) |
 | 502 | `source_unavailable`, `github_forbidden`, `github_auth_failed`, `github_unavailable`, `github_outcome_unknown` (WI-27) |
@@ -314,13 +314,13 @@ Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven 
 
 | Methode | Pfad | Antwort |
 |---|---|---|
-| GET | `/api/v1/runs?workflow=&status=running,completed&trigger=source\|schedule\|manual&item=<itemKey>&result=success\|failure&active=true\|false&before=<ISO>&limit=50&offset=0` | `{"runs":[RunSummary],"total","limit","offset"}` (neueste zuerst, `limit ≤ 500`) |
+| GET | `/api/v1/runs?workflow=&status=running,completed&trigger=source\|schedule\|manual\|unblock&item=<itemKey>&result=success\|failure&active=true\|false&before=<ISO>&limit=50&offset=0` | `{"runs":[RunSummary],"total","limit","offset"}` (neueste zuerst, `limit ≤ 500`) |
 | GET | `/api/v1/runs/:id` | RunDetail |
 | GET | `/api/v1/runs/:id/events?after=<sequence>&limit=1000` | `{"events":[RunEvent],"hasMore","nextAfter"}` |
 | GET | `/api/v1/runs/:id/logs?stream=stdout\|stderr&offset=<byte>&limit=<bytes>` bzw. `&tail=<bytes>` | LogPage |
 | GET | `/api/v1/runs/:id/kept` | KeptListing – gesicherte Dateien (`execute.keep`, WI-22) |
 | GET | `/api/v1/runs/:id/kept/<pfad>` | Download einer gesicherten Datei (`<pfad>` relativ zu `kept/`, Segmente URL-kodiert); `400 invalid_path`, `404 not_found` |
-| POST | `/api/v1/runs/:id/cancel` `{"reason"?}` | `202 {"runId","status":"cancelling","run"}`; `409` wenn beendet/nicht abbrechbar |
+| POST | `/api/v1/runs/:id/cancel` `{"reason"?}` | `202 {"runId","status":"cancelling","run"}`; `409` wenn beendet/nicht abbrechbar (auch Lifecycle-Runs mit Trigger `unblock`) |
 | POST | `/api/v1/runs/:id/recovery/retry` `{"assumeGone"?: bool}` | `202` – Recovery eines `recovery_pending`-Runs erneut versuchen (`assumeGone: true` = Operator bestätigt, Prozess ist weg); `409 run_not_recovery_pending` |
 
 `RunSummary`:
@@ -330,7 +330,7 @@ Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven 
   "scheduledFor": null, "identity": "coder", "status": "completed", "active": false,
   "outcome": "success|failure|technical_error|cancelled|active", "finalStatus": "completed",
   "businessResult": "success", "finalReason": "exit code 0", "resultMessage": "PR opened", "statusMessage": "phase 2",
-  "resultOutcome": "approved", "completionHook": "on_result.approved",
+  "resultOutcome": "approved", "completionHook": "on_result.approved", "retryBlockHook": false,
   "exitCode": 0, "lifecycleStatus": "succeeded", "lifecycleFailed": false,
   "createdAt": "…", "startedAt": "…", "finishedAt": "…", "durationMs": 12345 }
 ```
@@ -339,11 +339,16 @@ und `cancelled`; `lifecycleFailed` zeigt separat „Lifecycle failed“ (Spec §
 Ergebnis aus der Ergebnisdatei (`outcome`, ab 0.3.0; `null` ohne bzw. bei technischem Fehler) – eigener Name, weil
 `outcome` die UI-Klassifikation ist. `completionHook` ist der beim Übergang nach `finalizing` gewählte Abschluss-Hook
 (z. B. `on_success`, `on_result.approved`, `on_error`; `null`, wenn kein Hook läuft oder bei Runs vor 0.3.0).
+`retryBlockHook` (ab 0.6.0): der Run hat einen Retry-Block erzeugt, und `on_retry_block` läuft nach dem Abschluss-Hook.
+`triggerType` ist `source`, `schedule`, `manual` oder (ab 0.6.0) `unblock` – Lifecycle-Run, der beim Aufheben eines
+Retry-Blocks nur `on_retry_unblock` ausführt (kein Worker, kein Workspace; `completed` + `success`/`failure` je nach
+Kette; nicht abbrechbar).
 
 `RunDetail` = RunSummary + `lockKey, parameters, command {command, args}, workingDirectory, workspacePath, pid,
 result` (geparste Ergebnisdatei), `error` (technische Diagnose), `input` (`context.json`, Worker-Input; max. 1 MiB) /
 `inputError`, `resultFile` / `resultFileError` (Rohdatei), `actions` (Journal inkl. `attemptsDetail`), `events` (max. 500,
-`eventsTruncated`), `logs {stdout:{size, truncated}, stderr:{…}}`, `block` (aktiver Block des Scopes),
+`eventsTruncated`), `logs {stdout:{size, truncated}, stderr:{…}}`, `block` (aktiver Block des Scopes), `retryBlock`
+(ab 0.6.0: bei Trigger `unblock` der aufgehobene Block, sonst der von diesem Run erzeugte Block oder `null`),
 `kept` (`{files, bytes, skippedCount, message, error}` aus dem Event `run.kept_files`, sonst `null`), `supervised`,
 `blockGeneration, countedTechnicalFailure, configVersion, configHash, finalizingAt, updatedAt`.
 
@@ -386,13 +391,22 @@ sonst `400 invalid_path` bzw. `404 not_found`. Antwort immer mit `Content-Dispos
 | Methode | Pfad | Antwort |
 |---|---|---|
 | GET | `/api/v1/blocks?workflow=` | `{"blocks":[Block]}` – nur aktive interne Retry-Blocks (nicht GitHub-„blocked by“) |
-| POST | `/api/v1/blocks/:id/clear` `{"clearedBy"?}` | `200 {"block"}` – neue Zählperiode, Historie bleibt |
+| POST | `/api/v1/blocks/:id/clear` `{"clearedBy"?}` | `200 {"block","runId"}` – neue Zählperiode, Historie bleibt; `runId` = Lifecycle-Run von `on_retry_unblock` (ab 0.6.0) oder `null`; `409 block_run_active` |
 | GET | `/api/v1/actions/failed` | `{"actions":[Action + attemptsDetail, run: RunSummary, busy]}` |
 | POST | `/api/v1/actions/:id/retry` | `202 {"accepted":true,"action"}` – frische Versuchsrunde, Kette läuft weiter (Hintergrund); `409 lifecycle_busy` / `lifecycle_not_retryable` |
 | POST | `/api/v1/actions/:id/skip` | `202` – Action überspringen, Kette läuft weiter; `400 lifecycle_not_skippable` |
 
 `Block`: `id, workflowId, workflowName, itemKey (null = Workflow-Scope), reason, runId, failureCount, generation, createdAt,
-clearedAt, clearedBy, active, affectedRunIds, sourceUrl`.
+clearedAt, clearedBy, lastStatus, clearedRunId, active, affectedRunIds, sourceUrl`. `lastStatus` (ab 0.6.0) = technischer
+Endstatus des erzeugenden Runs; `clearedRunId` = Lifecycle-Run (Trigger `unblock`) des Aufhebens oder `null`.
+
+Aufheben (ab 0.6.0): Definiert der Workflow (aktuell geladene Konfiguration) ein nicht leeres `on_retry_unblock`,
+legt `clear` in derselben Transaktion einen Lifecycle-Run an (Trigger `unblock`), der nur diese Kette ausführt und
+bis zu ihrem Ende das Lock für `(Workflow, Item)` hält – erst danach plant der Scheduler das Item wieder.
+`clearedBy` ist mit Anmeldung immer der angemeldete Benutzer, sonst der mitgeschickte Name (UI: `ui`, Default `api`);
+er erscheint als `{block.cleared_by}`. Läuft für `(Workflow, Item)` gerade ein Run, antwortet `clear` dann mit
+`409 block_run_active` und ändert nichts; ohne Hook bleibt `clear` wie bisher auch bei laufendem Run möglich.
+Bereits aufgehobene Blocks: `200` mit `runId: null` (idempotent). Während Recovery/Drain: `503`.
 
 ### Views
 
@@ -547,7 +561,9 @@ geprüft (in dieser Reihenfolge nach Host/CSRF/Rolle):
 
 Webhook-Body (JSON-POST, Timeout 10 s, bis zu 6 Versuche mit Backoff 5 s/30 s/2 min/10 min/30 min, 4xx außer 408/429 nicht wiederholt):
 `{"source":"adispatchd","id":1,"event":"retry_block_created","createdAt":"…","text":"[adispatchd] …","payload":{…}}`
-(`text` macht ihn Slack-kompatibel).
+(`text` macht ihn Slack-kompatibel). Ereignisse: `retry_block_created`, `lifecycle_action_failed`, `recovery_failed`
+und ab 0.6.0 optional `retry_block_cleared` (Payload `blockId, workflowId, itemKey, failureCount, clearedAt, clearedBy,
+runId`; nur, wenn in `notifications.on` eingetragen).
 
 ## SSE: `GET /api/v1/events[?run=<runId>][&lastEventId=<id>]`
 
