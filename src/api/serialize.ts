@@ -41,6 +41,8 @@ export interface RunSummary {
   resultOutcome: string | null;
   /** Completion hook selected at finalization (WI-17), e.g. `on_result.approved`, `on_error`. */
   completionHook: RunRecord['completionHook'];
+  /** WI-30: this run created a retry block and runs `on_retry_block` after its completion hook. */
+  retryBlockHook: boolean;
   statusMessage: string | null;
   exitCode: number | null;
   lifecycleStatus: RunRecord['lifecycleStatus'];
@@ -106,6 +108,7 @@ export function toRunSummary(run: RunRecord): RunSummary {
     resultMessage: result && typeof result === 'object' ? str(result.message) : null,
     resultOutcome: run.outcome,
     completionHook: run.completionHook,
+    retryBlockHook: run.retryBlockHook,
     statusMessage: run.statusMessage,
     exitCode: run.exitCode,
     lifecycleStatus: run.lifecycleStatus,

@@ -132,8 +132,24 @@ on_success:
       const run = env.p.runs.require(env.finalizeSuccess(env.reserve(snapshot).id).id);
       const withParams = { ...run, parameters: { mode: 'fast' } };
       const scope = hookTemplateScope(snapshot, 'on_success');
-      expect(scope).toEqual({ run: true, workspace: true, source: true, result: true, linked: true, parameters: ['mode'] });
+      expect(scope).toEqual({ run: true, workspace: true, source: true, result: true, linked: true, parameters: ['mode'], block: false, blockCleared: false });
       expect(hookTemplateScope(snapshot, 'on_start').result).toBe(false);
+      // WI-30: block.* only in the retry-block hooks, block.cleared_* and no result in on_retry_unblock.
+      expect(hookTemplateScope(snapshot, 'on_retry_block')).toMatchObject({ result: true, block: true, blockCleared: false });
+      expect(hookTemplateScope(snapshot, 'on_retry_unblock')).toMatchObject({ result: false, block: true, blockCleared: true });
+      const block = { id: 4, failureCount: 3, createdAt: '2026-10-22T10:00:00.000Z', lastStatus: 'crashed', clearedAt: '2026-10-22T11:00:00.000Z', clearedBy: null };
+      const blockText = '{block.id}/{block.failures}/{block.created_at}/{block.last_status}';
+      const onBlock = buildHookTemplateValues({ run, snapshot, hook: 'on_retry_block', item: null, now: env.clock.now(), block });
+      expect(renderHookText(blockText, onBlock, hookTemplateScope(snapshot, 'on_retry_block'))).toBe('4/3/2026-10-22T10:00:00.000Z/crashed');
+      expect(() => renderHookText('{block.cleared_by}', onBlock, hookTemplateScope(snapshot, 'on_retry_block'))).toThrow(/only available in "on_retry_unblock"/);
+      expect(() => renderHookText('{block.id}', onBlock, scope)).toThrow(/only available in "on_retry_block" and "on_retry_unblock"/);
+      const onUnblock = buildHookTemplateValues({ run, snapshot, hook: 'on_retry_unblock', item: null, now: env.clock.now(), block });
+      expect(renderHookText('{block.cleared_at} by {block.cleared_by}', onUnblock, hookTemplateScope(snapshot, 'on_retry_unblock'))).toBe(
+        '2026-10-22T11:00:00.000Z by anonymous',
+      );
+      const byUser = buildHookTemplateValues({ run, snapshot, hook: 'on_retry_unblock', item: null, now: env.clock.now(), block: { ...block, clearedBy: 'olga' } });
+      expect(byUser['block.cleared_by']).toBe('olga');
+      expect(onUnblock['result.status']).toBeUndefined();
       const values = buildHookTemplateValues({ run: withParams, snapshot, hook: 'on_success', item: null, now: env.clock.now() });
       expect(renderHookText('{parameters.mode} {workspace.base_dir}', values, scope)).toMatch(/^fast \//);
       const startValues = buildHookTemplateValues({ run, snapshot, hook: 'on_start', item: null, now: env.clock.now() });

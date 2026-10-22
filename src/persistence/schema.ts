@@ -253,6 +253,103 @@ CREATE INDEX ui_actions_created ON ui_actions (created_at);
 CREATE INDEX ui_actions_item ON ui_actions (item_key, created_at);
 `;
 
+/**
+ * v5 (WI-30): retry-block hooks. `runs.trigger_type` additionally accepts
+ * `unblock` (lifecycle run of a removed block) and `runs.retry_block_hook`
+ * marks runs whose finalization appends `on_retry_block` (both need a rebuild
+ * of `runs`: SQLite cannot alter CHECK constraints); `run_actions.hook`
+ * accepts `on_retry_block`/`on_retry_unblock`; blocks remember the final
+ * status of the run that created them and the lifecycle run of their removal.
+ */
+const V5_DDL = `
+CREATE TABLE runs_v5 (
+  id                      TEXT PRIMARY KEY,
+  workflow_id             TEXT NOT NULL,
+  trigger_type            TEXT NOT NULL CHECK (trigger_type IN ('source','schedule','manual','unblock')),
+  source_id               TEXT,
+  source_item_key         TEXT,
+  source_url              TEXT,
+  lock_key                TEXT NOT NULL,
+  scheduled_for           TEXT,
+  config_snapshot         TEXT NOT NULL,
+  parameters_json         TEXT,
+  identity                TEXT,
+  command                 TEXT,
+  status                  TEXT NOT NULL CHECK (status IN ('reserved','starting','running','cancelling','finalizing',
+                            'completed','crashed','start_error','timed_out','cancelled','recovery_pending')),
+  final_status            TEXT CHECK (final_status IN ('completed','crashed','start_error','timed_out','cancelled')),
+  business_result         TEXT CHECK (business_result IN ('success','failure')),
+  final_reason            TEXT,
+  exit_code               INTEGER,
+  pid                     INTEGER,
+  process_start_identity  TEXT,
+  workspace_path          TEXT,
+  status_message          TEXT,
+  result_json             TEXT,
+  error_json              TEXT,
+  lifecycle_status        TEXT CHECK (lifecycle_status IN ('pending','running','succeeded','failed')),
+  block_generation        INTEGER,
+  counted_technical_failure INTEGER NOT NULL DEFAULT 0 CHECK (counted_technical_failure IN (0,1)),
+  created_at              TEXT NOT NULL,
+  started_at              TEXT,
+  finalizing_at           TEXT,
+  finished_at             TEXT,
+  updated_at              TEXT NOT NULL,
+  outcome                 TEXT,
+  completion_hook         TEXT,
+  retry_block_hook        INTEGER NOT NULL DEFAULT 0 CHECK (retry_block_hook IN (0,1))
+);
+INSERT INTO runs_v5 (id, workflow_id, trigger_type, source_id, source_item_key, source_url, lock_key, scheduled_for,
+                     config_snapshot, parameters_json, identity, command, status, final_status, business_result,
+                     final_reason, exit_code, pid, process_start_identity, workspace_path, status_message, result_json,
+                     error_json, lifecycle_status, block_generation, counted_technical_failure, created_at, started_at,
+                     finalizing_at, finished_at, updated_at, outcome, completion_hook)
+  SELECT id, workflow_id, trigger_type, source_id, source_item_key, source_url, lock_key, scheduled_for,
+         config_snapshot, parameters_json, identity, command, status, final_status, business_result,
+         final_reason, exit_code, pid, process_start_identity, workspace_path, status_message, result_json,
+         error_json, lifecycle_status, block_generation, counted_technical_failure, created_at, started_at,
+         finalizing_at, finished_at, updated_at, outcome, completion_hook FROM runs;
+DROP TABLE runs;
+ALTER TABLE runs_v5 RENAME TO runs;
+CREATE INDEX runs_workflow_created ON runs (workflow_id, created_at DESC);
+CREATE INDEX runs_item_created ON runs (source_item_key, created_at DESC);
+CREATE INDEX runs_status ON runs (status);
+CREATE INDEX runs_finished ON runs (finished_at);
+CREATE INDEX runs_created ON runs (created_at DESC);
+CREATE UNIQUE INDEX runs_active_lock ON runs (workflow_id, lock_key) WHERE status IN ${ACTIVE_STATUS_SQL};
+
+CREATE TABLE run_actions_v5 (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id              TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+  hook                TEXT NOT NULL CHECK (
+                        hook IN ('on_start','on_success','on_failure','on_crash','on_start_error','on_cancel','on_timeout','on_error',
+                                 'on_retry_block','on_retry_unblock')
+                        OR hook GLOB 'on_result.?*'),
+  ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
+  action_type         TEXT NOT NULL,
+  action_name         TEXT,
+  action_config_json  TEXT NOT NULL,
+  status              TEXT NOT NULL CHECK (status IN ('pending','running','succeeded','failed','skipped')),
+  external_key        TEXT,
+  attempts            INTEGER NOT NULL DEFAULT 0,
+  last_error_json     TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  UNIQUE (run_id, hook, ordinal)
+);
+INSERT INTO run_actions_v5 (id, run_id, hook, ordinal, action_type, action_name, action_config_json, status, external_key,
+                            attempts, last_error_json, created_at, updated_at)
+  SELECT id, run_id, hook, ordinal, action_type, action_name, action_config_json, status, external_key,
+         attempts, last_error_json, created_at, updated_at FROM run_actions;
+DROP TABLE run_actions;
+ALTER TABLE run_actions_v5 RENAME TO run_actions;
+CREATE INDEX run_actions_status ON run_actions (status);
+
+ALTER TABLE blocks ADD COLUMN last_status TEXT;
+ALTER TABLE blocks ADD COLUMN cleared_run_id TEXT REFERENCES runs (id) ON DELETE SET NULL;
+UPDATE blocks SET last_status = (SELECT final_status FROM runs WHERE runs.id = blocks.run_id) WHERE run_id IS NOT NULL;
+`;
+
 /** All built-in migrations, in order. */
 export const MIGRATIONS: readonly Migration[] = [
   {
@@ -282,6 +379,14 @@ export const MIGRATIONS: readonly Migration[] = [
     name: 'ui_actions',
     up(db) {
       db.exec(V4_DDL);
+    },
+  },
+  {
+    version: 5,
+    name: 'retry_block_hooks',
+    disableForeignKeys: true,
+    up(db) {
+      db.exec(V5_DDL);
     },
   },
 ];

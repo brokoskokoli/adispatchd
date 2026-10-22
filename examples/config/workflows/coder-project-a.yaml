@@ -96,3 +96,18 @@ on_cancel:
 on_timeout:
   - type: source.update
     labels: { add: [ready-for-coding], remove: [coding] }
+
+# Retry block (0.6.0): after max_technical_failures technical failures in a row the item is blocked.
+# on_retry_block runs in that run after on_crash/on_start_error/on_timeout and marks the item;
+# on_retry_unblock runs in its own lifecycle run (trigger "unblock") when the block is removed.
+on_retry_block:
+  - type: source.update
+    labels: { add: [agent-blocked], remove: [ready-for-coding] }
+  - type: source.comment
+    message: 'Blocked after {block.failures} technical failures (last {block.last_status}, run {run.id}).'
+
+on_retry_unblock:
+  - type: source.update
+    labels: { add: [ready-for-coding], remove: [agent-blocked] }
+  - type: source.comment
+    message: 'Retry block {block.id} removed by {block.cleared_by}.'

@@ -12,6 +12,7 @@
  */
 import {
   commentMarker,
+  isRetryBlockHook,
   noopLogger,
   sleep,
   systemClock,
@@ -30,7 +31,7 @@ import {
 import type { LifecycleActionConfig, RetryPolicy, WorkflowSnapshot } from '../config/index.js';
 import { ShellExecutor } from '../executors/index.js';
 import type { Repositories, RunActionRecord, RunRecord } from '../persistence/index.js';
-import { parseRunSnapshot, resolveActionIdentity } from './context.js';
+import { parseRunSnapshot, resolveActionIdentity, type HookBlockInfo } from './context.js';
 import { LifecycleBusyError, LifecycleError, describeActionError, type ActionErrorInfo } from './errors.js';
 import {
   performShell,
@@ -102,7 +103,8 @@ export interface LifecycleActionFailedPayload extends Record<string, unknown> {
 /** Dependencies of {@link LifecycleEngine}. */
 export interface LifecycleEngineOptions {
   /** Persistence (WI-03). */
-  repositories: Pick<Repositories, 'runs' | 'actions' | 'events' | 'transaction' | 'afterCommit'>;
+  repositories: Pick<Repositories, 'runs' | 'actions' | 'events' | 'transaction' | 'afterCommit'> &
+    Partial<Pick<Repositories, 'blocks'>>;
   /** Source adapters by configured source ID. */
   sources: SourceResolver;
   /** Data directory (context/log files of `shell` actions below `runs/<id>/actions`, `logs/<id>/actions`). */
@@ -428,6 +430,7 @@ export class LifecycleEngine {
         item: opts.item,
         signal: opts.signal,
         now: this.clock.now(),
+        block: this.blockOf(run.id, current.hook),
       };
       let result: AttemptResult;
       try {
@@ -622,6 +625,16 @@ export class LifecycleEngine {
   private refreshLifecycleStatus(runId: string): void {
     const status = aggregateLifecycleStatus(this.repos.actions.listForRun(runId));
     if (status !== null) this.repos.runs.update(runId, { lifecycleStatus: status });
+  }
+
+  /**
+   * Retry block of a retry-block hook (WI-30): the block created by the run
+   * (`on_retry_block`) or whose removal started it (`on_retry_unblock`).
+   */
+  private blockOf(runId: string, hook: HookName): HookBlockInfo | null {
+    const blocks = this.repos.blocks;
+    if (!blocks || !isRetryBlockHook(hook)) return null;
+    return hook === 'on_retry_block' ? blocks.createdByRun(runId) : blocks.clearedByRun(runId);
   }
 
   /** Hooks of a run in journal order. */

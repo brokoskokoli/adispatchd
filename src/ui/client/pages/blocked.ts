@@ -12,6 +12,7 @@ import { act, button, confirmDialog, errorBox, externalLink, loading, routeLink,
 export const blockedPage = (ctx: PageContext): Page => {
   ctx.setTitle('Blocked');
   const body = h('div', null, loading());
+  const notice = h('div', null);
   const el = h(
     'div',
     { class: 'page' },
@@ -23,6 +24,7 @@ export const blockedPage = (ctx: PageContext): Page => {
       'A block is created by the orchestrator after too many consecutive technical failures (crashed, start error, timeout) of a workflow/item. ',
       'This is unrelated to GitHub "blocked by" dependencies or GitHub labels. Removing a block starts a new counting period; history is kept.',
     ),
+    notice,
     body,
   );
 
@@ -34,12 +36,19 @@ export const blockedPage = (ctx: PageContext): Page => {
         null,
         h('p', null, `Block #${b.id} for workflow ${b.workflowId}${b.itemKey ? `, item ${b.itemKey}` : ' (whole workflow)'} is removed.`),
         h('p', null, 'The scheduler may start the item again in the next planning step. The failure counter starts a new period.'),
+        h('p', null, 'If the workflow defines on_retry_unblock, a lifecycle run (trigger "unblock") runs those actions first and holds the item until it is done.'),
       ),
       confirmLabel: 'Remove block',
       danger: true,
     });
     if (!r.ok) return;
-    await act(btn, () => api.post(`/api/v1/blocks/${b.id}/clear`, { clearedBy: 'ui' }), 'Block removed');
+    const res = await act(btn, () => api.post<{ runId: string | null }>(`/api/v1/blocks/${b.id}/clear`, { clearedBy: 'ui' }), 'Block removed');
+    if (res?.runId) {
+      replaceChildren(
+        notice,
+        h('div', { class: 'alert alert-info' }, `Block #${b.id} removed. on_retry_unblock runs in lifecycle run `, runLink(res.runId), '.'),
+      );
+    }
     ctx.refreshNav();
     await refresher.now();
   };

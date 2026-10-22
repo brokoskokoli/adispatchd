@@ -262,7 +262,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `retention.max_log_size_per_run` | Größe | `100MB` | | Log-Limit des Haupt-Workers pro Run (stdout+stderr); Überlauf wird markiert. |
 | `retention.cleanup_interval` | Dauer | `24h` | ≥ 1 s | Abstand der Retention-Durchläufe (erster Lauf 60 s nach Bereitschaft). |
 | `retention.ui_actions` | Dauer \| `never` | `365d` | | seit 0.4.0: Audit-Einträge der UI-Aktionen (§3.3 `ui_actions`), unabhängig vom Ergebnis. |
-| `notifications.on` | Liste Enum | alle drei | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. |
+| `notifications.on` | Liste Enum | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | dazu (seit 0.6.0) `retry_block_cleared` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. `retry_block_cleared` ist nicht im Default (bestehende Konfigurationen bekommen nicht mehr Meldungen) und muss ausdrücklich eingetragen werden. |
 | `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
 | `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
 | `auth.mode` | Enum | `none` | `none`, `password`, `trusted_header` | Anmeldung für Web-UI und API (seit 0.4.0), siehe unten. `none` = keine Anmeldung (Verhalten bis 0.3.0). |
@@ -300,7 +300,9 @@ Zustellung: `POST` mit `content-type: application/json`, Body
 (Slack-kompatibles `text`), Timeout 10 s, keine Redirects. 2xx = Erfolg; 408/429/5xx/Netzfehler werden bis zu
 6-mal versucht (Pausen 5 s, 30 s, 2 min, 10 min, 30 min); andere Status sind endgültig. Ereignisse:
 `retry_block_created` (Retry-Block entstanden), `lifecycle_action_failed` (Action endgültig gescheitert und
-**ohne** `continue_on_error`), `recovery_failed` (Run nach Neustart nicht sicher zuordenbar → `recovery_pending`).
+**ohne** `continue_on_error`), `recovery_failed` (Run nach Neustart nicht sicher zuordenbar → `recovery_pending`),
+seit 0.6.0 optional `retry_block_cleared` (Retry-Block aufgehoben; Payload mit `blockId`, `clearedBy`, `clearedAt` und
+`runId` des Lifecycle-Runs oder `null`, §6.4).
 
 **Externe Tools `ui.external_links`** (seit 0.4.0): beliebige lokale Werkzeuge, z. B. das Agenten-Dashboard
 [claude-inspect](https://github.com/brokoskokoli/claude_inspect), als Eintrag in der Navigation – als Link in neuem Tab
@@ -867,6 +869,14 @@ on_result:                       # benannte Ergebnisse (Ergebnisdatei "outcome")
     - type: source.comment
       message: 'Rückfrage ({result.outcome}): {result.message}'
   wont_fix: []                   # definiert, aber ohne Actions: es läuft nichts
+on_retry_block:                  # seit 0.6.0: der Run hat gerade einen Retry-Block erzeugt (nach on_crash & Co.)
+  - type: source.update
+    labels: { add: [agent-blocked], remove: [ready] }
+  - type: source.comment
+    message: 'Nach {block.failures} technischen Fehlern blockiert (zuletzt {block.last_status}, Run {run.id}).'
+on_retry_unblock:                # seit 0.6.0: Block wurde aufgehoben (eigener Lifecycle-Run, Trigger unblock)
+  - type: source.update
+    labels: { add: [ready], remove: [agent-blocked] }
 ```
 
 `on_error` fehlt hier bewusst: alle vier technischen Hooks sind definiert, `on_error` liefe nie (Warnung, §3.4.10).
@@ -894,6 +904,7 @@ on_result:                       # benannte Ergebnisse (Ergebnisdatei "outcome")
 | `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` | Liste Actions | nein | nicht definiert | §3.4.10 | technische Hooks; definiert (auch als `[]`) haben sie Vorrang vor `on_error` |
 | `on_error` | Liste Actions | nein | nicht definiert | §3.4.10 | Sammel-Hook für `crashed`, `start_error`, `timed_out`, `cancelled` ohne eigenen Hook |
 | `on_result` | Map Ergebnis-ID → Liste Actions | nein | `{}` | Schlüssel sind Konfigurations-IDs; nur mit Ergebnisdatei (`execute.type: shell` oder `container`); leere Listen erlaubt | benannte Ergebnisse (`outcome` der Ergebnisdatei), §3.4.10 |
+| `on_retry_block`, `on_retry_unblock` | Liste Actions | nein | nicht definiert (`[]`) | §3.4.10 | seit 0.6.0: beim Entstehen bzw. Aufheben eines Retry-Blocks (§6.4) |
 
 #### 3.4.2 `trigger`
 
@@ -1177,7 +1188,7 @@ Fehlern (`crashed`, `start_error`, `timed_out`) derselben Workflow/Item-Kombinat
 
 #### 3.4.10 Hooks
 
-Acht Hooks als Listen von Actions plus die Map `on_result`; die Actions eines Hooks laufen **sequentiell**:
+Zehn Hooks als Listen von Actions plus die Map `on_result`; die Actions eines Hooks laufen **sequentiell**:
 
 | Hook | läuft … |
 |---|---|
@@ -1190,8 +1201,11 @@ Acht Hooks als Listen von Actions plus die Map `on_result`; die Actions eines Ho
 | `on_cancel` | nach `cancelled` (sofern der Run `starting` erreicht hat) |
 | `on_timeout` | nach `timed_out` |
 | `on_error` | nach `crashed`, `start_error`, `timed_out` oder `cancelled`, wenn der jeweilige Hook oben **nicht definiert** ist |
+| `on_retry_block` | seit 0.6.0: im Run, dessen technischer Fehler gerade einen Retry-Block erzeugt hat – **nach** dessen Abschluss-Hook |
+| `on_retry_unblock` | seit 0.6.0: nach dem Aufheben eines Retry-Blocks, in einem eigenen Lifecycle-Run (Trigger `unblock`) |
 
 Genau ein Abschluss-Hook pro Run; Details in §6.8. `source.update`/`source.comment` nur in Source-Workflows.
+`on_retry_block`/`on_retry_unblock` sind keine Abschluss-Hooks; sie kommen zusätzlich hinzu (unten).
 
 **Benannte Ergebnisse (`on_result`).** Für Workflows mit mehr als zwei fachlichen Ausgängen (z. B. `approved`,
 `changes_requested`, `needs_maintainer`). Der Worker schreibt zusätzlich zu `result` ein `outcome` in die
@@ -1210,6 +1224,62 @@ läuft. Typisch: eine gemeinsame Aufräum-Kette in `on_error` und nur Abweichung
 Der gewählte Abschluss-Hook wird beim Übergang nach `finalizing` am Run gespeichert (`completionHook` in API/UI);
 nach einem Neustart setzt die Recovery genau diese Kette fort.
 
+**Retry-Block-Hooks (`on_retry_block`, `on_retry_unblock`, seit 0.6.0).** Nach `retry.max_technical_failures`
+technischen Fehlern in Folge entsteht ein Retry-Block (§6.4). Beide Hooks sind optional (fehlt der Schlüssel, läuft
+nichts) und nehmen dieselben Actions wie die übrigen Hooks (§3.4.11, inkl. `id`, `continue_on_error`, `retry`,
+`secrets`); Action-IDs `on_retry_block.<index>` bzw. `on_retry_unblock.<index>`, workflowweit eindeutig. In
+`{block.*}` (§5.1) stehen ID, Fehlerzahl, Zeitpunkt und letzter Status des Blocks, in `on_retry_unblock` zusätzlich
+`{block.cleared_at}`/`{block.cleared_by}`. Der Name ist bewusst nicht `on_block`: „blocked“ meint im Filter
+GitHub-Abhängigkeiten (`dependencies.blocked`).
+
+- **`on_retry_block`** läuft im Run, dessen Übergang nach `finalizing` den Block erzeugt hat, als **eigene Kette
+  nach** dem Abschluss-Hook (`on_crash`/`on_start_error`/`on_timeout`/`on_error`): So kann der Fehler-Hook z. B. ein
+  Label zurücksetzen, und `on_retry_block` setzt danach den Block-Zustand, ohne überschrieben zu werden. Er läuft auch,
+  wenn der Abschluss-Hook endgültig gescheitert ist, und auch bei `start_error` **ohne** Hooks (§6.5, z. B. Source
+  nicht erreichbar). Er läuft nicht, wenn kein Block entsteht (Grenze nicht erreicht oder Block schon aktiv, z. B. bei
+  einem manuellen Start trotz Block). Die Entscheidung wird mit `→ finalizing` am Run gespeichert
+  (`retryBlockHook` in API/UI); die Recovery setzt eine unterbrochene Kette fort.
+- **`on_retry_unblock`** läuft, wenn der Block aufgehoben wird (UI „Remove Block“, `POST /api/v1/blocks/:id/clear`).
+  Dabei gibt es keinen Run; deshalb legt das Aufheben in **derselben Transaktion** einen **Lifecycle-Run** an: Trigger
+  `unblock`, kein Worker, kein Workspace, nur diese Kette, Konfiguration = beim Aufheben geladene Workflow-Datei.
+  Er hält das Lock für `(Workflow, Item)` bis die Kette fertig ist (bei Blocks ohne Item: kein Cron-Start, solange
+  er läuft), zählt nicht als technischer Fehler, setzt den Zähler nicht zurück, zählt nicht zu den Limits
+  (`max_concurrent`) und nicht als „letzter Run“ in Views (`run.last_*`). Endstatus `completed` + `success`, wenn
+  alle Actions gelangen, sonst `completed` + `failure` (endgültiges Scheitern → `lifecycle_action_failed`); der Block
+  bleibt in jedem Fall aufgehoben. In UI/API erscheint er wie jeder Run (Journal, Retry/Skip einzelner Actions,
+  Recovery nach Neustart), lässt sich aber nicht abbrechen. Läuft für `(Workflow, Item)` gerade ein Run (z. B. ein
+  manueller Start trotz Block), wird das Aufheben mit nicht leerem `on_retry_unblock` mit `409 block_run_active`
+  abgelehnt; mit leerem oder fehlendem Hook verhält sich das Aufheben wie bisher (kein Run, auch bei laufendem Run).
+  Ist der Workflow nicht mehr konfiguriert, wird ohne Hook aufgehoben.
+- **Workflows ohne Item** (Blocks im Workflow-Scope, z. B. Cron): nur `shell`-Actions; `source.*` ist wie in den
+  übrigen Hooks ein Konfigurationsfehler.
+
+```yaml
+# example: retry-block-hooks
+# extends: github
+# file: workflows/retry-block-hooks.yaml
+id: retry-block-hooks
+trigger: { type: source, source: project_a }
+execute: { type: shell, command: /bin/true }
+retry: { max_technical_failures: 3 }
+on_crash:
+  - type: source.update
+    labels: { add: [ready], remove: [in-progress] }
+on_retry_block:                 # Block ist gerade entstanden – läuft nach on_crash
+  - type: source.update
+    labels: { add: [agent-blocked], remove: [ready] }
+  - type: source.comment
+    message: 'Nach {block.failures} technischen Fehlern blockiert (zuletzt {block.last_status}, Run {run.id}).'
+  - type: shell
+    command: /bin/echo
+    args: ['{item.key}', '{block.failures}']
+on_retry_unblock:               # Block wurde aufgehoben – eigener Lifecycle-Run (Trigger unblock)
+  - type: source.update
+    labels: { add: [ready], remove: [agent-blocked] }
+  - type: source.comment
+    message: 'Block {block.id} aufgehoben von {block.cleared_by}.'
+```
+
 #### 3.4.11 Actions
 
 Gemeinsame Schlüssel aller Actions:
@@ -1217,7 +1287,7 @@ Gemeinsame Schlüssel aller Actions:
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
 | `type` | Enum | ja | | `source.update`, `source.comment`, `shell` |
-| `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`, `on_result.approved.0`) | stabiler Name im Journal; **workflowweit** eindeutig |
+| `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`, `on_result.approved.0`, `on_retry_block.0`) | stabiler Name im Journal; **workflowweit** eindeutig |
 | `continue_on_error` | Boolean | nein | `false` | nach endgültigem Scheitern trotzdem mit der nächsten Action weitermachen |
 | `retry.max_attempts` | Integer ≥ 1 | nein | `lifecycle.action_retry.max_attempts` | Versuche insgesamt |
 | `retry.delay` | Dauer | nein | `lifecycle.action_retry.delay` | Pause zwischen Versuchen (`0s` erlaubt) |
@@ -1306,7 +1376,7 @@ Arbeitsverzeichnis: der Run-Workspace, falls er existiert, sonst ein eigenes Ver
 unter `data-dir/runs/<run>/actions/…`. SIGTERM→SIGKILL-Frist fest 5 s, Log-Limit fest 10 MiB pro Versuch.
 
 **Secrets für Shell-Actions** (seit 0.3.0): `secrets` wie bei `execute` (§3.4.8), in allen Hooks einschließlich
-`on_result.<outcome>` und `on_error`. Tokens werden **pro Versuch**
+`on_result.<outcome>`, `on_error`, `on_retry_block` und `on_retry_unblock`. Tokens werden **pro Versuch**
 geholt. Bei `delivery: file` liegt die Datei in einem action-eigenen Verzeichnis
 `data-dir/runs/<run>/actions/<action>/attempt-<n>/secrets/<NAME>`, wird bei langen Actions ebenso erneuert und
 nach dem Versuch gelöscht. Werte werden im Action-Log redigiert. Scheitert das Holen des Tokens, scheitert der
@@ -1887,7 +1957,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{workspace.base_dir}` | absoluter, normalisierter `workspace.base_dir` | nie |
 | `{timestamp}` | aktuelle UTC-Zeit beim Rendern, `YYYYMMDDTHHMMSSZ` | nie |
 | `{run.id}` | Run-ID `run-YYYYMMDDTHHMMSSmmmZ-xxxxxxxx` | – |
-| `{run.trigger}` | `source` \| `schedule` \| `manual` | – |
+| `{run.trigger}` | `source` \| `schedule` \| `manual` \| `unblock` (Lifecycle-Run von `on_retry_unblock`, seit 0.6.0) | – |
 | `{run.started_at}` | ISO-8601 mit ms (UTC) | in `on_start` und in Hooks von Runs, deren Worker nie lief |
 | `{workspace.path}` | absoluter Workspace-Pfad des Runs | in `on_start`; in Abschluss-Hooks, wenn der Worker nie gespawnt wurde |
 | `{source.id}` | Source-ID | Run ohne Item |
@@ -1905,7 +1975,13 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{result.result}` | `success` \| `failure` | bei technischem Fehler/Cancel |
 | `{result.message}` | `message` der Ergebnisdatei | keine/ungültige Ergebnisdatei oder ohne `message` |
 | `{result.outcome}` | benanntes Ergebnis (`outcome` der Ergebnisdatei, z. B. `approved`) | ohne/ungültiges `outcome`, bei technischem Fehler/Cancel |
-| `{parameters.<name>}` | Parameterwert (`true`, `5`, Text) | optionaler Parameter ohne Wert und ohne Default |
+| `{parameters.<name>}` | Parameterwert (`true`, `5`, Text) | optionaler Parameter ohne Wert und ohne Default; in `on_retry_unblock` immer |
+| `{block.id}` | ID des Retry-Blocks (seit 0.6.0, nur `on_retry_block`/`on_retry_unblock`) | – |
+| `{block.failures}` | Anzahl der gezählten technischen Fehler | – |
+| `{block.created_at}` | Entstehungszeitpunkt des Blocks, ISO-8601 (UTC) | – |
+| `{block.last_status}` | technischer Endstatus des auslösenden Runs (`crashed`, `start_error`, `timed_out`) | Blocks von vor 0.6.0, deren Run gelöscht ist |
+| `{block.cleared_at}` | Zeitpunkt des Aufhebens, ISO-8601 (UTC) | nur in `on_retry_unblock` erlaubt |
+| `{block.cleared_by}` | wer aufgehoben hat: angemeldeter Benutzer (§3.1 `auth`), sonst der vom Client mitgeschickte Name (UI `ui`, sonst `api`); `anonymous`, wenn keiner bekannt ist | nur in `on_retry_unblock` erlaubt |
 
 Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_error`).
 
@@ -1913,16 +1989,18 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 
 ✓ = erlaubt, – = Konfigurationsfehler, (s) = nur wenn `trigger.type: source`, (leer) = erlaubt, aber dort leer.
 
-| Platzhalter | `execute.working_directory` (path) | `execute.args`, `execute.env` | `on_start` (`message`, `args`, `env`) | übrige Hooks | `conditions.workflow[].args` | `conditions.item[].args` |
-|---|---|---|---|---|---|---|
-| `workflow.*`, `workspace.base_dir`, `timestamp` | ✓ (`base_dir` nur am Anfang) | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `run.id`, `run.trigger` | ✓ | ✓ | ✓ | ✓ | – | – |
-| `run.started_at` | ✓ | ✓ | ✓ (leer) | ✓ | – | – |
-| `workspace.path` | – | ✓ | ✓ (leer) | ✓ | – | – |
-| `source.*` (inkl. `source.vars.<name>`), `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | – | ✓ |
-| `result.*` | – | – | – | ✓ | – | – |
-| `parameters.<name>` | ✓ nur `required` oder mit `default` | ✓ | ✓ | ✓ | – | – |
-| `item.work_branch`, `item.work_pr` | ✓ (s, GitHub; `null` → Fehler) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | – | – |
+| Platzhalter | `execute.working_directory` (path) | `execute.args`, `execute.env` | `on_start` (`message`, `args`, `env`) | übrige Hooks | `on_retry_unblock` | `conditions.workflow[].args` | `conditions.item[].args` |
+|---|---|---|---|---|---|---|---|
+| `workflow.*`, `workspace.base_dir`, `timestamp` | ✓ (`base_dir` nur am Anfang) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `run.id`, `run.trigger` | ✓ | ✓ | ✓ | ✓ | ✓ (des Lifecycle-Runs) | – | – |
+| `run.started_at` | ✓ | ✓ | ✓ (leer) | ✓ | ✓ (Start der Kette) | – | – |
+| `workspace.path` | – | ✓ | ✓ (leer) | ✓ | ✓ (leer) | – | – |
+| `source.*` (inkl. `source.vars.<name>`), `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s, Item frisch gelesen) | – | ✓ |
+| `result.*` | – | – | – | ✓ | – | – | – |
+| `parameters.<name>` | ✓ nur `required` oder mit `default` | ✓ | ✓ | ✓ | ✓ (leer) | – | – |
+| `item.work_branch`, `item.work_pr` | ✓ (s, GitHub; `null` → Fehler) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | – | – |
+| `block.id`, `block.failures`, `block.created_at`, `block.last_status` | – | – | – | nur `on_retry_block` | ✓ | – | – |
+| `block.cleared_at`, `block.cleared_by` | – | – | – | – | ✓ | – | – |
 
 `{source.vars.<name>}` muss zusätzlich in `vars` **jeder** Source des Workflows stehen (sonst Fehler mit der Liste
 der Sources, in denen sie fehlt); im Pfadmodus wird der Wert wie jeder Platzhalter zu genau einem sicheren
@@ -1931,7 +2009,11 @@ Pfadsegment.
 Nicht als Template ausgewertet (Platzhalter bleiben wörtlich stehen): alle `command`, `source.update.labels`,
 `source.update.project`, `shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
 
-„Übrige Hooks“ schließt `on_result.<outcome>` und `on_error` ein. `{item.work_branch}`/`{item.work_pr}` gelten auch in
+„Übrige Hooks“ schließt `on_result.<outcome>`, `on_error` und `on_retry_block` ein; `on_retry_block` sieht die Werte
+des auslösenden Runs (`run.*`, `result.*`, `item.*`, …) plus `block.*` ohne `block.cleared_*`. In
+`on_retry_unblock` gibt es kein Ergebnis (`result.*` ist wie in `on_start` ein Konfigurationsfehler); Workspace und
+Parameter hat der Lifecycle-Run nicht (leer). Ist das Item beim Aufheben nicht lesbar, bleiben `{item.title}` & Co.
+leer und Actions mit `source.*` scheitern regulär (z. B. `item_not_found`). `{item.work_branch}`/`{item.work_pr}` gelten auch in
 Workflows mit mehreren Sources (`trigger.sources`, alle GitHub); gelesen wird jeweils in der Source des Items.
 Außerhalb dieser Stellen (z. B. in `conditions.item[].args`) oder in Workflows ohne GitHub-Source-Trigger: `Placeholder "{item.work_branch}" is only available in "execute" and lifecycle
 actions of workflows triggered by a GitHub source`.
@@ -2034,6 +2116,11 @@ Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität.
   `finalizing` ein Retry-Block – also bevor `on_crash`/`on_timeout` z. B. das Label zurücksetzen. Der Block
   verhindert automatische Starts, bis er entfernt wird (UI „Remove Block“, `POST /api/v1/blocks/:id/clear`);
   Entfernen startet eine neue Zählperiode. Benachrichtigung `retry_block_created`.
+- **Hooks (seit 0.6.0):** `on_retry_block` läuft im erzeugenden Run nach dessen Abschluss-Hook; `on_retry_unblock`
+  läuft beim Entfernen in einem eigenen Lifecycle-Run (Trigger `unblock`), der bis zum Ende der Kette das Lock hält –
+  das Item wird also erst danach wieder automatisch gestartet. Mit nicht leerem `on_retry_unblock` und laufendem Run
+  für `(Workflow, Item)` wird das Entfernen abgelehnt (`409 block_run_active`). Optional die Benachrichtigung
+  `retry_block_cleared`. Details §3.4.10.
 
 ### 6.5 Run-Start
 
@@ -2105,7 +2192,8 @@ Ergebnisdatei-Format: [worker-protocol.md](worker-protocol.md).
 
 Die Spalte „Hook“ nennt den spezifischen Hook. Für `crashed`, `start_error`, `timed_out` und `cancelled` läuft
 stattdessen `on_error`, wenn der spezifische Hook nicht definiert ist (§3.4.10). Der gewählte Hook wird mit
-`→ finalizing` gespeichert; die Recovery nach einem Neustart setzt genau ihn fort.
+`→ finalizing` gespeichert; die Recovery nach einem Neustart setzt genau ihn fort. Erzeugt der Übergang einen
+Retry-Block, läuft danach zusätzlich `on_retry_block` (seit 0.6.0, auch bei `start_error` ohne Hooks; §3.4.10).
 
 ### 6.9 Action-Ketten
 
@@ -2148,7 +2236,7 @@ stattdessen `on_error`, wenn der spezifische Hook nicht definiert ist (§3.4.10)
 |---|---|---|---|
 | Basis | `PATH`, `HOME`, `LANG`, `TZ`, `USER`, `LOGNAME`, `TMPDIR` aus der Controller-Umgebung (PATH-Fallback `/usr/local/bin:/usr/bin:/bin`) | wie Worker | dieselben Variablen (ohne PATH-Fallback) |
 | Konfiguriert | `execute.env`, dann `execute.secrets` (`<NAME>` bzw. bei `delivery: file` `<NAME>_FILE`) | Action-`env`, dann Action-`secrets` (ebenso) | – |
-| Orchestrator | `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`, `ADISPATCH_CONTEXT_FILE`, `ADISPATCH_RESULT_FILE`, `ADISPATCH_WORKSPACE`; bei Item zusätzlich `ADISPATCH_SOURCE_TYPE`, `ADISPATCH_SOURCE_ID`, `ADISPATCH_SOURCE_ITEM_ID`, `ADISPATCH_SOURCE_URL` | dieselben (`ADISPATCH_WORKSPACE` = Arbeitsverzeichnis der Action; Kontext `kind: lifecycle_action` mit Hook, Action, `result`) | `ADISPATCH_CHECK_CONTEXT_FILE` (JSON: `kind`, `workflow.id`, bei Item `source{id,type,item_id,item_key,url,item_type,created_at,attributes}`) |
+| Orchestrator | `ADISPATCH_RUN_ID`, `ADISPATCH_WORKFLOW_ID`, `ADISPATCH_CONTEXT_FILE`, `ADISPATCH_RESULT_FILE`, `ADISPATCH_WORKSPACE`; bei Item zusätzlich `ADISPATCH_SOURCE_TYPE`, `ADISPATCH_SOURCE_ID`, `ADISPATCH_SOURCE_ITEM_ID`, `ADISPATCH_SOURCE_URL` | dieselben (`ADISPATCH_WORKSPACE` = Arbeitsverzeichnis der Action; Kontext `kind: lifecycle_action` mit Hook, Action, `result`, in den Retry-Block-Hooks `block`) | `ADISPATCH_CHECK_CONTEXT_FILE` (JSON: `kind`, `workflow.id`, bei Item `source{id,type,item_id,item_key,url,item_type,created_at,attributes}`) |
 | Arbeitsverzeichnis | Workspace | Workspace, falls vorhanden, sonst Versuchsverzeichnis | temporäres Verzeichnis |
 
 **Info-Skripte** (`dashboard.yaml`, §3.7): Basis wie Conditions, dann `info[].env`, dann `ADISPATCH_INFO_ID`,
@@ -2853,6 +2941,46 @@ on_result:
 
 Lösung: `on_error` (Singular); Ergebnis-Schlüssel wie Konfigurations-IDs schreiben (`needs_maintainer`) – genauso
 muss der Worker sie als `outcome` liefern.
+
+**Retry-Block-Hooks** (seit 0.6.0) – `{block.*}` außerhalb von `on_retry_block`/`on_retry_unblock`,
+`{block.cleared_*}` in `on_retry_block`, `{result.*}` in `on_retry_unblock`, `source.*` ohne Item.
+
+```yaml
+# example: err-retry-block-hooks
+# extends: github
+# invalid
+# expect: workflows/coder.yaml: on_crash[0].message: Placeholder "{block.id}" is only available in "on_retry_block" and "on_retry_unblock"
+# expect: workflows/coder.yaml: on_retry_block[0].message: Placeholder "{block.cleared_by}" is only available in "on_retry_unblock"
+# expect: workflows/coder.yaml: on_retry_unblock[0].message: Placeholder "{result.message}" is not available in this context
+# expect: workflows/nightly.yaml: on_retry_block[0].type: "source.update" needs a source item; the workflow has no source trigger
+# file: workflows/coder.yaml
+id: coder
+trigger: { type: source, source: project_a }
+execute: { type: shell, command: scripts/coder.sh }
+on_crash:
+  - type: source.comment
+    message: 'Block {block.id}'
+on_retry_block:
+  - type: source.comment
+    message: 'Aufgehoben von {block.cleared_by}'
+on_retry_unblock:
+  - type: source.comment
+    message: 'Ergebnis {result.message}'
+```
+
+```yaml
+# example: err-retry-block-hooks
+# file: workflows/nightly.yaml
+id: nightly
+trigger: { type: schedule, cron: '0 3 * * *' }
+execute: { type: shell, command: scripts/nightly.sh }
+on_retry_block:
+  - type: source.update
+    labels: { add: [blocked] }
+```
+
+Lösung: `{block.*}` nur in den beiden Retry-Block-Hooks verwenden, `{block.cleared_at}`/`{block.cleared_by}` nur in
+`on_retry_unblock`; dort gibt es kein Ergebnis. In Workflows ohne Item nur `shell`-Actions.
 
 **Falsches Dauerformat** – keine zusammengesetzten Dauern, keine Leerzeichen.
 

@@ -34,6 +34,14 @@ export interface BlockRecord {
   createdAt: string;
   clearedAt: string | null;
   clearedBy: string | null;
+  /**
+   * Technical final status of the run that created the block (`crashed`,
+   * `start_error`, `timed_out`; WI-30, `{block.last_status}`); `null` for
+   * blocks without run.
+   */
+  lastStatus: string | null;
+  /** Lifecycle run (trigger `unblock`) started when the block was removed (WI-30), if any. */
+  clearedRunId: string | null;
 }
 
 /** Input for {@link BlockRepository.create}. */
@@ -43,6 +51,8 @@ export interface CreateBlockInput {
   reason: string;
   runId?: string | null;
   failureCount?: number;
+  /** Final status of the creating run (WI-30). */
+  lastStatus?: string | null;
 }
 
 /** Current counter state of one workflow/scope. */
@@ -68,8 +78,8 @@ export class BlockRepository {
       const { generation } = this.counter(input.workflowId, input.itemKey);
       const res = run(
         this.db,
-        `INSERT INTO blocks (workflow_id, source_item_key, reason, run_id, failure_count, generation, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO blocks (workflow_id, source_item_key, reason, run_id, failure_count, generation, created_at, last_status)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           input.workflowId,
           input.itemKey,
@@ -78,6 +88,7 @@ export class BlockRepository {
           input.failureCount ?? 0,
           generation,
           this.clock.now().toISOString(),
+          input.lastStatus ?? null,
         ],
       );
       return this.require(res.lastInsertRowid);
@@ -87,13 +98,14 @@ export class BlockRepository {
   /**
    * Clear (remove) a block: sets `cleared_at`, resets the counter and starts
    * a new counting period (`generation + 1`). Idempotent for already cleared blocks.
+   * `clearedRunId`: lifecycle run of the removal (WI-30, `on_retry_unblock`).
    */
-  clear(id: number, clearedBy: string | null = null): BlockRecord {
+  clear(id: number, clearedBy: string | null = null, clearedRunId: string | null = null): BlockRecord {
     return transaction(this.db, () => {
       const block = this.require(id);
       if (block.clearedAt !== null) return block;
       const now = this.clock.now().toISOString();
-      run(this.db, 'UPDATE blocks SET cleared_at = ?, cleared_by = ? WHERE id = ?', [now, clearedBy, id]);
+      run(this.db, 'UPDATE blocks SET cleared_at = ?, cleared_by = ?, cleared_run_id = ? WHERE id = ?', [now, clearedBy, clearedRunId, id]);
       this.ensureCounter(block.workflowId, block.itemKey);
       run(
         this.db,
@@ -108,6 +120,18 @@ export class BlockRepository {
   /** Block by ID or `null`. */
   get(id: number): BlockRecord | null {
     const row = get(this.db, 'SELECT * FROM blocks WHERE id = ?', [id]);
+    return row ? toBlock(row) : null;
+  }
+
+  /** Block created by run `runId` (WI-30: `on_retry_block`), or `null`. */
+  createdByRun(runId: string): BlockRecord | null {
+    const row = get(this.db, 'SELECT * FROM blocks WHERE run_id = ? ORDER BY id DESC LIMIT 1', [runId]);
+    return row ? toBlock(row) : null;
+  }
+
+  /** Block whose removal started lifecycle run `runId` (WI-30: `on_retry_unblock`), or `null`. */
+  clearedByRun(runId: string): BlockRecord | null {
+    const row = get(this.db, 'SELECT * FROM blocks WHERE cleared_run_id = ? ORDER BY id DESC LIMIT 1', [runId]);
     return row ? toBlock(row) : null;
   }
 
@@ -226,5 +250,7 @@ function toBlock(row: Row): BlockRecord {
     createdAt: String(row.created_at),
     clearedAt: str(row.cleared_at),
     clearedBy: str(row.cleared_by),
+    lastStatus: str(row.last_status),
+    clearedRunId: str(row.cleared_run_id),
   };
 }

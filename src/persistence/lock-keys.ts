@@ -9,6 +9,9 @@
  *   cron slot (in addition to the `cron_firings` unique key). Overlap of
  *   different slots of the same workflow is governed by `max_concurrent`.
  * - Manual runs without item: `manual:<runId>` → unique per run, never conflicts.
+ * - Lifecycle runs of removed blocks (trigger `unblock`, WI-30): `item:<key>`
+ *   for item-scoped blocks (holds the item lock while `on_retry_unblock`
+ *   runs), `unblock:<runId>` for workflow-scoped blocks.
  *
  * Prefixes keep the namespaces disjoint (a source could be named `cron`).
  * The retry-block / failure-counter scope is separate: the source item key,
@@ -39,6 +42,9 @@ export function lockKeyFor(input: LockKeyInput): string {
       return `cron:${iso(input.scheduledFor)}`;
     case 'manual':
       return `manual:${input.runId}`;
+    case 'unblock':
+      // Lifecycle run of a removed workflow-scoped block (WI-30); item-scoped ones take the item lock above.
+      return `unblock:${input.runId}`;
   }
 }
 

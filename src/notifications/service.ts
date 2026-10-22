@@ -1,6 +1,6 @@
 /**
  * Central orchestrator notifications (Spec §18): `retry_block_created`,
- * `lifecycle_action_failed`, `recovery_failed`.
+ * `lifecycle_action_failed`, `recovery_failed`, `retry_block_cleared` (WI-30, opt-in).
  *
  * Flow: {@link NotificationService.notify} persists the notification plus one
  * delivery row per subscribed channel synchronously (a few SQLite writes,
@@ -400,5 +400,7 @@ export function summarize(type: NotificationEventType, p: Record<string, unknown
       return `[adispatchd] Lifecycle action ${s(p.actionName ?? p.actionId)} (${s(p.hook)}) of run ${s(p.runId)} failed finally`;
     case 'recovery_failed':
       return `[adispatchd] Recovery of run ${s(p.runId)} (workflow ${s(p.workflowId)}) failed: ${s(p.reason)}`;
+    case 'retry_block_cleared':
+      return `[adispatchd] Retry block ${s(p.blockId)} removed for workflow ${s(p.workflowId)} (item ${s(p.itemKey ?? 'workflow')}) by ${s(p.clearedBy ?? 'anonymous')}${p.runId ? `, lifecycle run ${s(p.runId)}` : ''}`;
   }
 }

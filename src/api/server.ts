@@ -21,12 +21,14 @@ import { z } from 'zod';
 import {
   ACTIVE_STATUSES,
   TECHNICAL_STATUSES,
+  TRIGGER_TYPES,
   dataPaths,
   errorMessage,
   isSecretKey,
   isValidRunId,
   jsonErrorPosition,
   noopLogger,
+  parseSourceItemKey,
   REDACTED,
   redactValue,
   systemClock,
@@ -157,7 +159,7 @@ const runsQuery = z
   .object({
     workflow: z.string().optional(),
     status: z.string().optional(),
-    trigger: z.enum(['source', 'schedule', 'manual']).optional(),
+    trigger: z.enum(TRIGGER_TYPES).optional(),
     item: z.string().optional(),
     result: z.enum(['success', 'failure']).optional(),
     active: z.enum(['true', 'false']).optional(),
@@ -696,6 +698,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
         .map((e) => String(e.payload.stream ?? (e.payload.details as { stream?: unknown } | undefined)?.stream ?? '')),
     );
     const block = repos.blocks.activeFor(run.workflowId, run.sourceItemKey);
+    const retryBlock = run.triggerType === 'unblock' ? repos.blocks.clearedByRun(id) : repos.blocks.createdByRun(id);
     const keptEvent = allEvents.findLast((e) => e.type === RUN_EVENTS.keptFiles);
     return redactValue(
       {
@@ -713,6 +716,8 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
           stderr: { size: stderrSize, truncated: truncatedStreams.has('stderr') },
         },
         block: block ? toBlockView(block, { affectedRunIds: repos.blocks.affectedRunIds(block.id), sourceUrl: run.sourceUrl, workflowName: null }) : null,
+        // WI-30: the block whose removal started this lifecycle run, or the block this run created.
+        retryBlock: retryBlock ? toBlockView(retryBlock, { affectedRunIds: repos.blocks.affectedRunIds(retryBlock.id), sourceUrl: run.sourceUrl, workflowName: null }) : null,
         kept: keptEvent ? keptSummary(keptEvent.payload) : null,
         supervised: deps.controller.activeRunIds().includes(id),
       },
@@ -828,9 +833,24 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     if (!repos.blocks.get(id)) throw new ApiError(404, 'not_found', `Block ${id} not found`);
     // With authentication the logged-in user is recorded (WI-26 audit), not a client-supplied name.
     const actor = actorOf(req);
-    deps.controller.clearBlock(id, actor ? actor.name : (body.clearedBy ?? 'api'));
+    const existing = repos.blocks.get(id);
+    // WI-30: `on_retry_unblock` runs with the workflow configuration loaded now (no hook if the workflow is gone).
+    const wf = existing && existing.clearedAt === null ? deps.config.getWorkflow(existing.workflowId) : undefined;
+    let snapshot = null;
+    if (wf && existing) {
+      try {
+        snapshot = deps.config.snapshotWorkflow(existing.workflowId, existing.itemKey ? parseSourceItemKey(existing.itemKey).sourceId : undefined);
+      } catch (err) {
+        // E.g. the item's source is no longer a trigger source of the workflow: remove without on_retry_unblock.
+        logger.warn('on_retry_unblock skipped: no snapshot of the workflow', { blockId: id, error: errorMessage(err) });
+      }
+    }
+    const block = deps.controller.clearBlock(id, actor ? actor.name : (body.clearedBy ?? 'api'), { snapshot });
+    const runId = existing?.clearedAt === null ? block.clearedRunId : null;
     void deps.scheduler.planOnce().catch(() => undefined);
-    return { block: blockView(id) };
+    // Plan again once the lifecycle run released the item lock.
+    if (runId) void deps.controller.whenSupervisionEnds(runId)?.then(() => deps.scheduler.planOnce()).catch(() => undefined);
+    return { block: blockView(id), runId };
   });
 
   // --- Lifecycle actions ----------------------------------------------------

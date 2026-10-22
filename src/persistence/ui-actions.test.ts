@@ -17,7 +17,7 @@ describe('UiActionRepository (schema v4, WI-27)', () => {
   const base = { actor: 'alice', actorVia: 'password', identity: 'maintainer', sourceId: 'repo_a', itemId: '1', itemKey: 'repo_a:1' } as const;
 
   it('migrates to v4 and records entries (newest first, filters, paging)', () => {
-    expect(schemaVersion(p.db)).toBe(4);
+    expect(schemaVersion(p.db)).toBeGreaterThanOrEqual(4);
     const a = p.uiActions.record({ ...base, kind: 'comment', result: 'succeeded', commentId: '9', commentUrl: 'https://github.com/x/y/issues/1#issuecomment-9' });
     clock.advance(1000);
     p.uiActions.record({ ...base, kind: 'labels', result: 'failed', errorCode: 'github_forbidden', errorMessage: 'no', details: { add: ['x'] } });

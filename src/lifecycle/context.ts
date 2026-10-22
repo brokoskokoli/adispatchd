@@ -6,6 +6,7 @@
 import {
   WORKER_PROTOCOL_VERSION,
   buildTemplateValues,
+  isRetryBlockHook,
   linkedTemplateItem,
   parseSourceItemKey,
   renderTemplate,
@@ -62,16 +63,42 @@ export function resolveActionIdentity(action: LifecycleActionConfig, snapshot: W
   return snapshot.workflow.identity ?? snapshot.source?.identity ?? null;
 }
 
-/** Placeholder scope of hook actions (WI-02): `result` everywhere except `on_start`. */
+/**
+ * Placeholder scope of hook actions (WI-02): `result` everywhere except
+ * `on_start` and `on_retry_unblock`; `block.*` only in the retry-block hooks
+ * (WI-30), `block.cleared_*` only in `on_retry_unblock`.
+ */
 export function hookTemplateScope(snapshot: WorkflowSnapshot, hook: HookName): TemplateScope {
   return {
     run: true,
     workspace: true,
     source: isSourceWorkflow(snapshot),
-    result: hook !== 'on_start',
+    result: hasResult(hook),
     linked: isSourceWorkflow(snapshot),
     parameters: Object.keys(snapshot.workflow.parameters ?? {}),
+    block: isRetryBlockHook(hook),
+    blockCleared: hook === 'on_retry_unblock',
   };
+}
+
+/** Hooks that see the run's result (`result.*`): all but `on_start` and `on_retry_unblock` (WI-30). */
+function hasResult(hook: HookName): boolean {
+  return hook !== 'on_start' && hook !== 'on_retry_unblock';
+}
+
+/** Retry block of a hook action (WI-30) as rendered into `{block.*}` and the shell context. */
+export interface HookBlockInfo {
+  id: number;
+  failureCount: number;
+  createdAt: string;
+  lastStatus: string | null;
+  clearedAt: string | null;
+  clearedBy: string | null;
+}
+
+/** `{block.cleared_by}` / shell context `block.cleared_by`: the recorded name, `anonymous` if none. */
+function clearedByOf(block: HookBlockInfo): string | null {
+  return block.clearedAt === null ? null : (block.clearedBy ?? 'anonymous');
 }
 
 /** Minimal item derived from the run when the source item is not available. */
@@ -106,6 +133,8 @@ export interface HookValueInput {
   now: Date;
   /** Freshly resolved linked fields (WI-21) when an action template uses them. */
   linked?: Readonly<Record<string, FieldResolution>>;
+  /** Retry block of `on_retry_block` / `on_retry_unblock` (WI-30). */
+  block?: HookBlockInfo | null;
 }
 
 /** Placeholder values for a hook action of `run`. Result values only outside `on_start`. */
@@ -145,7 +174,19 @@ export function buildHookTemplateValues(input: HookValueInput): TemplateValues {
           },
         }
       : {}),
-    ...(hook !== 'on_start'
+    ...(input.block && isRetryBlockHook(hook)
+      ? {
+          block: {
+            id: input.block.id,
+            failures: input.block.failureCount,
+            createdAt: input.block.createdAt,
+            lastStatus: input.block.lastStatus,
+            clearedAt: hook === 'on_retry_unblock' ? input.block.clearedAt : null,
+            clearedBy: hook === 'on_retry_unblock' ? input.block.clearedBy : null,
+          },
+        }
+      : {}),
+    ...(hasResult(hook)
       ? {
           result: {
             ...(run.finalStatus ? { status: run.finalStatus } : {}),
@@ -194,7 +235,16 @@ export type ShellActionContext = {
   };
   parameters: Record<string, string | number | boolean>;
   workspace: { path: string | null; base_dir: string };
-  /** Final run outcome and worker result; `null` in `on_start`. */
+  /** Retry block (WI-30): only in `on_retry_block` / `on_retry_unblock` (`cleared_*` `null` in `on_retry_block`). */
+  block?: {
+    id: number;
+    failures: number;
+    created_at: string;
+    last_status: string | null;
+    cleared_at: string | null;
+    cleared_by: string | null;
+  };
+  /** Final run outcome and worker result; `null` in `on_start` and `on_retry_unblock`. */
   result: {
     status: string | null;
     result: string | null;
@@ -216,6 +266,8 @@ export function buildShellActionContext(input: {
   action: { id: number; name: string | null; ordinal: number; attempt: number };
   /** Linked fields (WI-21) resolved for this attempt; known values go to `source.attributes`. */
   linked?: Readonly<Record<string, FieldResolution>>;
+  /** Retry block of `on_retry_block` / `on_retry_unblock` (WI-30). */
+  block?: HookBlockInfo | null;
 }): ShellActionContext {
   const { run, snapshot, hook, item } = input;
   const result = runResult(run);
@@ -245,10 +297,22 @@ export function buildShellActionContext(input: {
           },
         }
       : {}),
+    ...(input.block && isRetryBlockHook(hook)
+      ? {
+          block: {
+            id: input.block.id,
+            failures: input.block.failureCount,
+            created_at: input.block.createdAt,
+            last_status: input.block.lastStatus,
+            cleared_at: hook === 'on_retry_unblock' ? input.block.clearedAt : null,
+            cleared_by: hook === 'on_retry_unblock' ? clearedByOf(input.block) : null,
+          },
+        }
+      : {}),
     parameters: scalarParameters(run),
     workspace: { path: run.workspacePath, base_dir: snapshot.workspace.baseDir },
     result:
-      hook === 'on_start'
+      !hasResult(hook)
         ? null
         : {
             status: run.finalStatus,

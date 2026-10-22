@@ -141,12 +141,14 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
             ['Run ID', h('code', null, d.id)],
             ['Workflow', routeLink(['workflows', d.workflowId], d.workflowId)],
             ['Identity / role', text(d.identity)],
-            ['Trigger', h('span', null, d.triggerType, d.scheduledFor ? ` (slot ${d.scheduledFor})` : '')],
+            ['Trigger', h('span', null, d.triggerType === 'unblock' ? 'unblock (lifecycle run of a removed retry block)' : d.triggerType, d.scheduledFor ? ` (slot ${d.scheduledFor})` : '')],
             ['Source item', h('span', null, d.sourceUrl ? externalLink(d.sourceUrl) : text(d.sourceItemKey), d.sourceItemKey ? [' ', itemPanelLink(d.sourceId, d.sourceItemKey.slice(d.sourceItemKey.indexOf(':') + 1))] : null)],
             ['Technical state', badge(d.status, d.active ? 'info' : 'muted')],
             ['Business result', d.businessResult ? badge(d.businessResult, d.businessResult === 'success' ? 'ok' : 'warn') : text(null)],
             ['Outcome', d.resultOutcome ? badge(d.resultOutcome, 'info') : text(null)],
-            ['Completion hook', d.completionHook ? h('code', null, d.completionHook) : text(null)],
+            ['Completion hook', d.completionHook || d.retryBlockHook
+              ? h('span', null, d.completionHook ? h('code', null, d.completionHook) : '', d.retryBlockHook ? [d.completionHook ? ' + ' : '', h('code', null, 'on_retry_block')] : '')
+              : text(null)],
             ['Final reason', text(d.finalReason)],
             ['Lifecycle', d.lifecycleStatus ? (d.lifecycleFailed ? badge('lifecycle failed', 'error') : badge(d.lifecycleStatus, stateTone(d.lifecycleStatus))) : text(null)],
             ['Exit code', text(d.exitCode)],

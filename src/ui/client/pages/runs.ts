@@ -6,10 +6,15 @@ import { createRefresher } from '../../shared/throttle.js';
 import { formatDuration } from '../../shared/format.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
 import type { RunSummary, Workflow } from '../types.js';
-import { errorBox, externalLink, loading, runLink, runOutcomeBadges, table, text, time } from '../ui.js';
+import { badge, errorBox, externalLink, loading, runLink, runOutcomeBadges, table, text, time } from '../ui.js';
 import { cancelRunButton } from './dashboard.js';
 
 const PAGE_SIZE = 50;
+
+/** Trigger column: lifecycle runs of removed blocks (WI-30) as a badge. */
+export function triggerLabel(trigger: string): HTMLElement | string {
+  return trigger === 'unblock' ? badge('unblock', 'info', 'Lifecycle run of a removed retry block (on_retry_unblock)') : trigger;
+}
 
 export const runsPage = (ctx: PageContext): Page => {
   ctx.setTitle('Runs');
@@ -35,7 +40,7 @@ export const runsPage = (ctx: PageContext): Page => {
   const trSelect = h(
     'select',
     { class: 'input', 'aria-label': 'Trigger', on: { change: () => go({ trigger: trSelect.value }) } },
-    [['', 'All triggers'], ['source', 'source'], ['schedule', 'schedule'], ['manual', 'manual']].map(([v, l]) => h('option', { value: v!, selected: v === trigger }, l!)),
+    [['', 'All triggers'], ['source', 'source'], ['schedule', 'schedule'], ['manual', 'manual'], ['unblock', 'unblock (lifecycle)']].map(([v, l]) => h('option', { value: v!, selected: v === trigger }, l!)),
   ) as HTMLSelectElement;
   const resSelect = h(
     'select',
@@ -62,7 +67,7 @@ export const runsPage = (ctx: PageContext): Page => {
       const rows = res.runs.map((r) => [
         runLink(r.id),
         h('span', null, r.workflowName ?? r.workflowId, h('br'), h('small', { class: 'muted' }, r.workflowId)),
-        r.triggerType,
+        triggerLabel(r.triggerType),
         r.sourceUrl ? externalLink(r.sourceUrl, r.sourceItemKey ?? undefined) : text(r.sourceItemKey ?? (r.scheduledFor ? `slot ${r.scheduledFor}` : null)),
         runOutcomeBadges(r),
         time(r.startedAt ?? r.createdAt),
