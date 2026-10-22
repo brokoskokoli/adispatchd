@@ -36,8 +36,10 @@ export type TemplateMode = 'text' | 'path';
  * - `linked`: work branch / PR of the item (WI-21, GitHub). Expensive: the
  *   caller resolves them right before rendering (run start, action attempt);
  *   only in `execute` and lifecycle actions of source-bound workflows.
+ * - `block`: the retry block (WI-30), only in `on_retry_block` and `on_retry_unblock`
+ * - `block_cleared`: removal of the retry block (WI-30), only in `on_retry_unblock`
  */
-export type PlaceholderGroup = 'always' | 'run' | 'workspace' | 'source' | 'result' | 'parameters' | 'linked';
+export type PlaceholderGroup = 'always' | 'run' | 'workspace' | 'source' | 'result' | 'parameters' | 'linked' | 'block' | 'block_cleared';
 
 /** Definition of a whitelisted placeholder. */
 export interface PlaceholderDefinition {
@@ -55,7 +57,7 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'workspace.base_dir', group: 'always', description: 'Configured workspace base directory', pathRoot: true },
   { name: 'timestamp', group: 'always', description: 'Current UTC time, compact (YYYYMMDDTHHMMSSZ)' },
   { name: 'run.id', group: 'run', description: 'Run ID' },
-  { name: 'run.trigger', group: 'run', description: 'Trigger type (source|schedule|manual)' },
+  { name: 'run.trigger', group: 'run', description: 'Trigger type (source|schedule|manual|unblock)' },
   { name: 'run.started_at', group: 'run', description: 'Run start time (ISO-8601)' },
   { name: 'workspace.path', group: 'workspace', description: 'Absolute workspace path of the run', pathRoot: true },
   { name: 'source.id', group: 'source', description: 'Source ID' },
@@ -72,6 +74,12 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'result.result', group: 'result', description: 'Business result (success|failure|empty)' },
   { name: 'result.message', group: 'result', description: 'Message from the worker result file' },
   { name: 'result.outcome', group: 'result', description: 'Named outcome from the worker result file (empty if none)' },
+  { name: 'block.id', group: 'block', description: 'ID of the retry block' },
+  { name: 'block.failures', group: 'block', description: 'Counted consecutive technical failures of the block' },
+  { name: 'block.created_at', group: 'block', description: 'Creation time of the block (ISO-8601, UTC)' },
+  { name: 'block.last_status', group: 'block', description: 'Technical final status of the run that created the block' },
+  { name: 'block.cleared_at', group: 'block_cleared', description: 'Removal time of the block (ISO-8601, UTC)' },
+  { name: 'block.cleared_by', group: 'block_cleared', description: 'Who removed the block: logged-in user, else the client name (ui/api)' },
 ];
 
 /**
@@ -245,6 +253,10 @@ export interface TemplateScope {
   linked?: boolean;
   /** Declared parameter names usable as `{parameters.<name>}`. */
   parameters?: readonly string[];
+  /** `{block.id|failures|created_at|last_status}` (WI-30: `on_retry_block`, `on_retry_unblock`). */
+  block?: boolean;
+  /** `{block.cleared_at|cleared_by}` (WI-30: `on_retry_unblock` only). */
+  blockCleared?: boolean;
   /**
    * Check of a source variable `{source.vars.<name>}` (WI-20, needs `source`):
    * returns a problem (e.g. "not defined in source b") or `undefined`.
@@ -254,7 +266,7 @@ export interface TemplateScope {
 }
 
 /** Scope with every group enabled (parameters: none). */
-export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true, linked: true };
+export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true, linked: true, block: true, blockCleared: true };
 
 /** True if `name` is on the whitelist (parameters: any syntactically valid name). */
 export function isKnownPlaceholder(name: string): boolean {
@@ -293,6 +305,18 @@ function checkAvailability(name: string, scope: TemplateScope): TemplateIssue | 
     return {
       code: 'unavailable_placeholder',
       message: `Placeholder "{${name}}" is only available in "execute" and lifecycle actions of workflows triggered by a GitHub source`,
+      placeholder: name,
+    };
+  }
+  if (def.group === 'block' || def.group === 'block_cleared') {
+    const available = def.group === 'block' ? scope.block : scope.blockCleared;
+    if (available) return undefined;
+    return {
+      code: 'unavailable_placeholder',
+      message:
+        def.group === 'block'
+          ? `Placeholder "{${name}}" is only available in "on_retry_block" and "on_retry_unblock"`
+          : `Placeholder "{${name}}" is only available in "on_retry_unblock"`,
       placeholder: name,
     };
   }
@@ -438,6 +462,8 @@ export interface TemplateInput {
     workPr?: number | null;
   };
   result?: { status?: TerminalStatus; result?: BusinessResult; message?: string; outcome?: string };
+  /** Retry block (WI-30, `on_retry_block` / `on_retry_unblock`). */
+  block?: { id: number; failures: number; createdAt: string; lastStatus?: string | null; clearedAt?: string | null; clearedBy?: string | null };
   parameters?: Readonly<Record<string, string | number | boolean>>;
   /** Time used for `{timestamp}`. */
   now: Date;
@@ -468,6 +494,12 @@ export function buildTemplateValues(input: TemplateInput): TemplateValues {
     'result.result': input.result?.result ?? undefined,
     'result.message': input.result?.message,
     'result.outcome': input.result?.outcome,
+    'block.id': input.block?.id,
+    'block.failures': input.block?.failures,
+    'block.created_at': input.block?.createdAt,
+    'block.last_status': input.block?.lastStatus ?? undefined,
+    'block.cleared_at': input.block?.clearedAt ?? undefined,
+    'block.cleared_by': input.block ? (input.block.clearedAt ? (input.block.clearedBy ?? 'anonymous') : undefined) : undefined,
   };
   for (const [name, value] of Object.entries(input.parameters ?? {})) {
     values[`${PARAMETER_PLACEHOLDER_PREFIX}${name}`] = value;

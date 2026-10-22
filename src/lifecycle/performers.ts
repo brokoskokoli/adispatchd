@@ -38,6 +38,7 @@ import {
   itemFromRun,
   renderHookText,
   resolveActionIdentity,
+  type HookBlockInfo,
 } from './context.js';
 import { LifecycleError } from './errors.js';
 
@@ -58,6 +59,8 @@ export interface AttemptInput {
   item: SourceItem | undefined;
   signal: AbortSignal | undefined;
   now: Date;
+  /** Retry block of `on_retry_block` / `on_retry_unblock` (WI-30), else `null`/absent. */
+  block?: HookBlockInfo | null;
 }
 
 /** Successful attempt. */
@@ -253,6 +256,7 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     now: input.now,
     ...(resolved?.target.adapter.repository ? { repository: resolved.target.adapter.repository } : {}),
     ...(linked ? { linked } : {}),
+    block: input.block ?? null,
   });
   const args = config.args.map((a) => renderHookText(a, values, scope));
   const env: Record<string, string> = {};
@@ -277,6 +281,7 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     item,
     action: { id: action.id, name: action.name, ordinal: action.ordinal, attempt: input.attempt },
     ...(linked ? { linked } : {}),
+    block: input.block ?? null,
   });
 
   // Secrets (WI-18). Journal entries from before WI-18 have no `secrets`.

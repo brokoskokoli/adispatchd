@@ -46,8 +46,9 @@ who picks which issue, what happens when an agent crashes, how do labels get res
 - **Multi-source workflows** – one workflow can serve several repositories (`sources: [...]`), with per-repository
   variables such as `{source.vars.base_branch}`.
 - **Lifecycle hooks** – `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`,
-  `on_cancel`, plus **`on_result.<outcome>`** for named business outcomes and a catch-all **`on_error`** for all
-  technical ends.
+  `on_cancel`, plus **`on_result.<outcome>`** for named business outcomes, a catch-all **`on_error`** for all
+  technical ends and (0.6.0) **`on_retry_block`/`on_retry_unblock`** when a retry block is created or removed (e.g.
+  label the item `agent-blocked`, call a script).
 - **Actions** – `source.update` (add/remove labels, set **GitHub Projects fields**, adding the item to the project
   if needed), `source.comment`, and `shell` hooks; idempotent (read before write) with journal and retries.
 - **Shell or container workers** – `execute.type: shell` runs a command without a shell in its own process group;

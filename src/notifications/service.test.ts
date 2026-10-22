@@ -207,5 +207,8 @@ describe('NotificationService', () => {
   it('summarizes events', () => {
     expect(summarize('recovery_failed', { runId: 'r1', workflowId: 'wf', reason: 'x' })).toContain('r1');
     expect(summarize('lifecycle_action_failed', { runId: 'r1', hook: 'on_success', actionName: 'a' })).toContain('on_success');
+    expect(summarize('retry_block_cleared', { blockId: 4, workflowId: 'wf', itemKey: 'repo_a:7', clearedBy: 'olga', runId: 'r2' })).toBe(
+      '[adispatchd] Retry block 4 removed for workflow wf (item repo_a:7) by olga, lifecycle run r2',
+    );
   });
 });

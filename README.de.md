@@ -49,6 +49,8 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
   idempotent (erst lesen, dann schreiben) mit Journal und Retries.
 - **Mehr als zwei Ausgänge:** benannte Ergebnisse (`outcome` in der Ergebnisdatei → `on_result.<outcome>`) und ein
   Sammel-Hook `on_error` für alle technischen Ausgänge.
+- **Retry-Blocks mit Hooks (0.6.0):** `on_retry_block` beim Entstehen eines Blocks (z. B. Label `agent-blocked`,
+  Skript per SSH), `on_retry_unblock` beim Aufheben – als eigener Lifecycle-Run, der das Item bis zum Ende hält.
 - **Worker im Container:** `execute.type: container` startet den Worker in einem Wegwerf-Container (Docker oder
   Podman) mit festen Mounts für Workspace, Kontext, Ergebnis und Token-Dateien, Ressourcenlimits, `--cap-drop ALL` –
   Secrets nie auf der Kommandozeile; Cancel/Timeout stoppen den Container, nach einem Neustart räumt die Recovery
@@ -250,8 +252,8 @@ on_error:                            # crashed, start_error, timed_out, cancelle
 ```
 
 - Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`, `on_cancel`, `on_error`
-  (Sammel-Hook, wenn der spezifische technische Hook fehlt) und `on_result.<outcome>` (benannte Ergebnisse statt
-  `on_success`/`on_failure`); Actions `source.update`, `source.comment`, `shell`; Retry 3 × 30 s
+  (Sammel-Hook, wenn der spezifische technische Hook fehlt), `on_result.<outcome>` (benannte Ergebnisse statt
+  `on_success`/`on_failure`) und `on_retry_block`/`on_retry_unblock` (Retry-Block entsteht/wird aufgehoben, 0.6.0); Actions `source.update`, `source.comment`, `shell`; Retry 3 × 30 s
   (`lifecycle.action_retry`), `continue_on_error`.
 - Platzhalter (feste Liste): `{run.id}`, `{workflow.id}`, `{item.number}`, `{item.url}`, `{result.message}`,
   `{parameters.<name>}`, `{source.vars.<name>}`, `{workspace.base_dir}`, `{item.work_branch}`, `{item.work_pr}` … –

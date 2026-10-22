@@ -33,6 +33,22 @@ export class BlockedError extends OrchestratorError {
   }
 }
 
+/**
+ * WI-30: refused because the lifecycle run (trigger `unblock`) of a removed
+ * workflow-scoped retry block is still running `on_retry_unblock`. Item-scoped
+ * lifecycle runs hold the item lock instead ({@link LockConflictError}).
+ */
+export class UnblockRunActiveError extends OrchestratorError {
+  readonly runId: string;
+
+  constructor(workflowId: string, runId: string) {
+    super('unblock_run_active', `Workflow '${workflowId}': unblock run ${runId} active (on_retry_unblock is still running)`, {
+      details: { workflowId, runId },
+    });
+    this.runId = runId;
+  }
+}
+
 /** An active block already exists for the workflow/scope. */
 export class BlockExistsError extends OrchestratorError {
   readonly blockId: number;

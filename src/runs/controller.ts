@@ -198,7 +198,7 @@ export interface RunControllerOptions {
   credentials?: CredentialProvider;
   /** Tuning of token files (`delivery: file`, WI-18); defaults from `executors`. Tests only. */
   tokenFiles?: { renewBeforeMs?: number; retryDelayMs?: number; maxRetryDelayMs?: number };
-  /** Receives `retry_block_created` and `recovery_failed` after commit. Must not block/throw. */
+  /** Receives `retry_block_created`, `retry_block_cleared` (WI-30) and `recovery_failed` after commit. Must not block/throw. */
   notifier?: Notifier;
   /**
    * Executor per run; default by `execute.type`: `new ShellExecutor({clock, logger, workspaceBaseDir})`
@@ -250,8 +250,11 @@ export interface SupervisedProcess {
 
 interface ActiveRun {
   runId: string;
-  /** `run`: supervised execution; `recovery`: recovery / retryRecovery in progress (not cancellable). */
-  kind: 'run' | 'recovery';
+  /**
+   * `run`: supervised execution; `recovery`: recovery / retryRecovery in progress (not cancellable);
+   * `lifecycle`: `on_retry_unblock` chain of a removed block (trigger `unblock`, WI-30; not cancellable).
+   */
+  kind: 'run' | 'recovery' | 'lifecycle';
   /** Aborted on cancel (on_start chain, item re-read, secret resolution). */
   cancel: AbortController;
   cancelRequested: boolean;
@@ -419,14 +422,84 @@ export class RunController {
     this.publisher.flush();
   }
 
-  /** Remove a block: starts a new counting period; runs/history stay (idempotent). */
-  clearBlock(blockId: number, clearedBy: string | null = null): BlockRecord {
+  /**
+   * Remove a block: starts a new counting period; runs/history stay (idempotent).
+   *
+   * WI-30: if `options.snapshot` (the workflow configuration loaded now) has a
+   * non-empty `on_retry_unblock`, a lifecycle run (trigger `unblock`, no
+   * worker, no workspace) is reserved in the SAME transaction as the removal
+   * and runs that chain; it holds the item lock until the chain is done
+   * (`block.clearedRunId`). With an active run in the block scope this is
+   * refused (`block_run_active`, nothing changes); without the hook the
+   * removal works as before, also while a run is active.
+   *
+   * @throws RunControllerError `block_run_active`, `run_controller_not_ready`, `run_controller_not_accepting`
+   */
+  clearBlock(blockId: number, clearedBy: string | null = null, options: { snapshot?: WorkflowSnapshot | null } = {}): BlockRecord {
     const before = this.repos.blocks.get(blockId);
-    const block = this.repos.blocks.clear(blockId, clearedBy);
-    if (before && before.clearedAt === null) {
-      this.repos.afterCommit(() => this.bus.publish({ type: 'block.cleared', block }));
+    const snapshot = options.snapshot ?? null;
+    if (!before || before.clearedAt !== null || !snapshot || !hasActions(snapshot, 'on_retry_unblock')) {
+      const block = this.repos.blocks.clear(blockId, clearedBy);
+      if (before && before.clearedAt === null) this.afterBlockCleared(block);
+      return block;
     }
+    if (!this.ready) {
+      throw new RunControllerError('run_controller_not_ready', 'Recovery is still running; on_retry_unblock cannot start yet', { blockId });
+    }
+    if (this.draining || this.stopping) {
+      throw new RunControllerError('run_controller_not_accepting', 'Controller is draining / shutting down; on_retry_unblock cannot start', { blockId });
+    }
+    const { block, run } = this.repos.transaction(() => {
+      const active = this.repos.runs.activeRunsInBlockScope(before.workflowId, before.itemKey)[0];
+      if (active) {
+        throw new RunControllerError(
+          'block_run_active',
+          `Block ${blockId} cannot be removed while run ${active.id} is active: on_retry_unblock must not run in parallel. Wait for the run to finish or cancel it`,
+          { blockId, runId: active.id },
+        );
+      }
+      const creator = before.runId ? this.repos.runs.get(before.runId) : null;
+      const reserved = this.repos.runs.reserve({
+        workflowId: before.workflowId,
+        triggerType: 'unblock',
+        sourceId: before.itemKey ? parseSourceItemKey(before.itemKey).sourceId : null,
+        sourceItemKey: before.itemKey,
+        sourceUrl: creator?.sourceUrl ?? null,
+        configSnapshot: snapshot,
+        failIfBlocked: false,
+      });
+      return { block: this.repos.blocks.clear(blockId, clearedBy, reserved.id), run: reserved };
+    });
+    this.publisher.flush();
+    this.afterBlockCleared(block);
+    this.logger.info('block removed, lifecycle run reserved', { blockId, runId: run.id });
+    this.startUnblockRun(run.id);
     return block;
+  }
+
+  /**
+   * Promise of a supervised run (resolves when supervision ended), `null` if
+   * the run is not supervised by this controller (e.g. finished already).
+   */
+  whenSupervisionEnds(runId: string): Promise<RunRecord> | null {
+    return this.active.get(runId)?.done ?? null;
+  }
+
+  /** Bus event and `retry_block_cleared` notification (WI-30, opt-in) after a removal. */
+  private afterBlockCleared(block: BlockRecord): void {
+    const payload = {
+      blockId: block.id,
+      workflowId: block.workflowId,
+      itemKey: block.itemKey,
+      failureCount: block.failureCount,
+      clearedAt: block.clearedAt,
+      clearedBy: block.clearedBy,
+      runId: block.clearedRunId,
+    };
+    this.repos.afterCommit(() => {
+      this.bus.publish({ type: 'block.cleared', block });
+      this.notify('retry_block_cleared', payload);
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -451,6 +524,13 @@ export class RunController {
         runId,
         status: current.status,
       });
+    }
+    if (current.triggerType === 'unblock') {
+      // Lifecycle run of a removed block (WI-30): never a worker.
+      if (!this.ready || this.draining || this.stopping) {
+        throw new RunControllerError('run_controller_not_accepting', `Run ${runId} not started: controller not accepting runs`, { runId });
+      }
+      return { runId, done: this.startUnblockRun(runId) };
     }
     if (!this.ready || this.draining || this.stopping) {
       const notReady = !this.ready;
@@ -523,6 +603,12 @@ export class RunController {
       throw new RunControllerError('run_not_active', `Run ${runId} already finished (${run.status})`, { runId, status: run.status });
     }
     const entry = this.active.get(runId);
+    if (run.triggerType === 'unblock') {
+      throw new RunControllerError('run_not_cancellable', `Run ${runId} is a lifecycle run (on_retry_unblock) and cannot be cancelled`, {
+        runId,
+        status: run.status,
+      });
+    }
     if (run.status === 'finalizing' || run.status === 'recovery_pending' || entry?.kind === 'recovery') {
       const what = entry?.kind === 'recovery' ? `'${run.status}' (being recovered)` : `'${run.status}'`;
       throw new RunControllerError('run_not_cancellable', `Run ${runId} is ${what} and cannot be cancelled`, {
@@ -707,7 +793,8 @@ export class RunController {
       });
     }
     return this.trackRecovery(run, async () => {
-      if (run.status === 'finalizing') await this.resumeFinalizing(run);
+      if (run.triggerType === 'unblock') await this.recoverUnblockRun(run);
+      else if (run.status === 'finalizing') await this.resumeFinalizing(run);
       else {
         await this.recoverProcessRun(run, options.assumeGone ? { gone: true, detail: 'operator confirmed the worker is gone' } : undefined);
       }
@@ -874,6 +961,10 @@ export class RunController {
   }
 
   private async recoverRun(run: RunRecord): Promise<void> {
+    if (run.triggerType === 'unblock') {
+      await this.recoverUnblockRun(run);
+      return;
+    }
     switch (run.status) {
       case 'finalizing':
         await this.resumeFinalizing(run);
@@ -996,6 +1087,23 @@ export class RunController {
     await this.completeFinalization(run.id, snapshot, { hooks: started && snapshot !== null });
   }
 
+  /**
+   * Recovery of a lifecycle run (trigger `unblock`, WI-30): actions left
+   * `running` are made safe, then the `on_retry_unblock` chain continues and
+   * the run ends; a run already `finalizing` just finishes.
+   */
+  private async recoverUnblockRun(run: RunRecord): Promise<void> {
+    const snapshot = tryParseSnapshot(run);
+    if (snapshot) await this.makeActionsSafe(run.id, { abandonOnStart: false });
+    if (run.status === 'finalizing') {
+      this.recordRecovered(run.id, 'resumed', 'finishing lifecycle run');
+      await this.completeFinalization(run.id, snapshot, { hooks: false });
+      return;
+    }
+    this.recordRecovered(run.id, 'resumed', 'resuming on_retry_unblock');
+    await this.executeUnblock(run.id);
+  }
+
   private async resumeTerminalRunActions(run: RunRecord): Promise<void> {
     if (!tryParseSnapshot(run)) return;
     await this.makeActionsSafe(run.id, { abandonOnStart: true });
@@ -1015,6 +1123,99 @@ export class RunController {
       await this.lifecycle.abandonHook(runId, 'on_start', { wait: true });
     }
     this.publisher.flush();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle run of a removed block (trigger `unblock`, WI-30)
+
+  /** Supervise the `on_retry_unblock` chain of a reserved lifecycle run. */
+  private startUnblockRun(runId: string): Promise<RunRecord> {
+    const entry: ActiveRun = {
+      runId,
+      kind: 'lifecycle',
+      cancel: new AbortController(),
+      cancelRequested: false,
+      cancelReason: '',
+      proc: undefined,
+      tokenFiles: undefined,
+      done: Promise.resolve(this.repos.runs.require(runId)),
+    };
+    this.active.set(runId, entry);
+    entry.done = this.track(
+      runId,
+      this.executeUnblock(runId).catch((err: unknown) => this.onUnexpected(entry, err)),
+    );
+    this.publishStatus();
+    return entry.done;
+  }
+
+  /**
+   * `reserved → starting → running`, the `on_retry_unblock` chain, then
+   * `completed` + `success` (all actions succeeded) or `failure` (chain
+   * stopped). Not counted and no counter reset. Interrupted by a forced stop:
+   * the run stays `running`, recovery continues the chain.
+   */
+  private async executeUnblock(runId: string): Promise<RunRecord> {
+    const run = this.repos.runs.require(runId);
+    const snapshot = tryParseSnapshot(run);
+    if (run.status === 'reserved') this.repos.runs.transition(runId, 'starting', { expectedFrom: 'reserved' });
+    if (this.repos.runs.require(runId).status === 'starting') this.repos.runs.transition(runId, 'running', { expectedFrom: 'starting' });
+    this.publisher.flush();
+    let target: FinalizationTarget;
+    if (!snapshot) {
+      target = { status: 'completed', businessResult: 'failure', reason: 'invalid configuration snapshot' };
+    } else {
+      const item = await this.readUnblockItem(run);
+      let result: HookResult | undefined;
+      let hookError: unknown;
+      try {
+        result = await this.lifecycle.runHook(runId, 'on_retry_unblock', snapshot, {
+          ...(item ? { item } : {}),
+          signal: this.hookAbort.signal,
+          wait: true,
+        });
+      } catch (err) {
+        hookError = err;
+      }
+      this.publisher.flush();
+      if (result?.status === 'interrupted' || (hookError !== undefined && this.hookAbort.signal.aborted)) {
+        return this.repos.runs.require(runId);
+      }
+      if (hookError !== undefined) {
+        this.logger.error('on_retry_unblock failed unexpectedly', { runId, error: hookError });
+        this.appendEvent(runId, RUN_EVENTS.hookError, { hook: 'on_retry_unblock', message: errorMessage(hookError) });
+        target = { status: 'completed', businessResult: 'failure', reason: `on_retry_unblock failed: ${errorMessage(hookError)}` };
+      } else if (result?.status === 'failed') {
+        const name = result.failedAction ? (result.failedAction.name ?? String(result.failedAction.id)) : '?';
+        target = { status: 'completed', businessResult: 'failure', reason: `on_retry_unblock action '${name}' failed` };
+      } else {
+        target = { status: 'completed', businessResult: 'success', reason: 'on_retry_unblock succeeded' };
+      }
+    }
+    this.repos.transaction(() => {
+      this.repos.runs.beginFinalization(runId, target, { countOutcome: false });
+      this.repos.runs.finish(runId);
+    });
+    this.publisher.flush();
+    return this.repos.runs.require(runId);
+  }
+
+  /**
+   * Item of a lifecycle run, read freshly for `{item.*}`; `undefined` if the
+   * run has no item or it cannot be read (source actions then re-read it and
+   * fail regularly, e.g. `item_not_found`).
+   */
+  private async readUnblockItem(run: RunRecord): Promise<SourceItem | undefined> {
+    if (!run.sourceItemKey) return undefined;
+    const { sourceId, itemId } = parseSourceItemKey(run.sourceItemKey);
+    const adapter = this.options.sources(run.sourceId ?? sourceId);
+    if (!adapter) return undefined;
+    try {
+      return (await adapter.getItem(itemId, { signal: this.hookAbort.signal })) ?? undefined;
+    } catch (err) {
+      this.logger.warn('item of lifecycle run could not be read', { runId: run.id, error: errorMessage(err) });
+      return undefined;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -1399,7 +1600,15 @@ export class RunController {
       for (const warning of warnings) this.repos.events.append(runId, RUN_EVENTS.outcomeWarning, warning);
       const res = this.repos.runs.beginFinalization(runId, target, {
         ...(update ? { update } : {}),
-        ...(snapshot ? { blockPolicy: { maxTechnicalFailures: snapshot.workflow.retry.maxTechnicalFailures } } : {}),
+        ...(snapshot
+          ? {
+              blockPolicy: {
+                maxTechnicalFailures: snapshot.workflow.retry.maxTechnicalFailures,
+                // WI-30: a block created now appends `on_retry_block` to this run's finalization.
+                retryBlockHook: hasActions(snapshot, 'on_retry_block'),
+              },
+            }
+          : {}),
       });
       const block = res.blockCreated;
       if (block) {
@@ -1431,22 +1640,13 @@ export class RunController {
     if (options.hooks && snapshot) {
       // Runs finalized before 0.3.0 have no persisted hook: same selection (their snapshots define every list hook).
       const hook = run.completionHook ?? selectCompletionHook(snapshot.workflow.hooks, target.status, target.businessResult, run.outcome);
-      if (hasActions(snapshot, hook)) {
-        try {
-          const result = await this.lifecycle.runHook(runId, hook, snapshot, {
-            ...(options.item ? { item: options.item } : {}),
-            signal: this.hookAbort.signal,
-            wait: true,
-          });
-          this.publisher.flush();
-          // Interrupted by a forced stop: stay `finalizing`, recovery resumes the chain.
-          if (result.status === 'interrupted') return this.repos.runs.require(runId);
-        } catch (err) {
-          this.publisher.flush();
-          if (this.hookAbort.signal.aborted) return this.repos.runs.require(runId);
-          this.logger.error('completion hook failed unexpectedly', { runId, hook, error: err });
-          this.appendEvent(runId, RUN_EVENTS.hookError, { hook, message: errorMessage(err) });
-        }
+      if ((await this.runFinalizationHook(runId, hook, snapshot, options.item)) === 'interrupted') return this.repos.runs.require(runId);
+    }
+    // WI-30: the run created a retry block → `on_retry_block` after the completion hook, as its own chain
+    // (also when the completion hook stopped, and for `start_error` without hooks).
+    if (run.retryBlockHook && snapshot) {
+      if ((await this.runFinalizationHook(runId, 'on_retry_block', snapshot, options.item)) === 'interrupted') {
+        return this.repos.runs.require(runId);
       }
     }
     if (snapshot) {
@@ -1457,6 +1657,34 @@ export class RunController {
     this.runSecrets.delete(runId);
     this.publisher.flush();
     return finished;
+  }
+
+  /**
+   * One hook chain while `finalizing`. `interrupted`: a forced stop interrupted
+   * it – the run stays `finalizing` and recovery resumes the chain.
+   */
+  private async runFinalizationHook(
+    runId: string,
+    hook: HookName,
+    snapshot: WorkflowSnapshot,
+    item: SourceItem | null | undefined,
+  ): Promise<'done' | 'interrupted'> {
+    if (!hasActions(snapshot, hook)) return 'done';
+    try {
+      const result = await this.lifecycle.runHook(runId, hook, snapshot, {
+        ...(item ? { item } : {}),
+        signal: this.hookAbort.signal,
+        wait: true,
+      });
+      this.publisher.flush();
+      return result.status === 'interrupted' ? 'interrupted' : 'done';
+    } catch (err) {
+      this.publisher.flush();
+      if (this.hookAbort.signal.aborted) return 'interrupted';
+      this.logger.error('completion hook failed unexpectedly', { runId, hook, error: err });
+      this.appendEvent(runId, RUN_EVENTS.hookError, { hook, message: errorMessage(err) });
+      return 'done';
+    }
   }
 
   /** Finalize a run that never reached `starting`: `cancelled`, not counted, no hooks (synchronous). */
@@ -1602,7 +1830,7 @@ export class RunController {
     return typeof v === 'function' ? v() : v;
   }
 
-  private notify(type: 'retry_block_created' | 'recovery_failed', payload: Record<string, unknown>): void {
+  private notify(type: 'retry_block_created' | 'retry_block_cleared' | 'recovery_failed', payload: Record<string, unknown>): void {
     try {
       this.options.notifier?.notify(type, payload);
     } catch (err) {

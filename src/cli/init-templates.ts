@@ -57,7 +57,7 @@ notifications:
   #   - type: webhook
   #     url_env: SLACK_WEBHOOK_URL
   #     headers_env: { Authorization: WEBHOOK_AUTH_HEADER }
-  on: [retry_block_created, lifecycle_action_failed, recovery_failed]
+  on: [retry_block_created, lifecycle_action_failed, recovery_failed]   # optional also: retry_block_cleared
 
 # Web UI: external tools in the toolbar (optional). url = how the BROWSER reaches the tool.
 # embed: true shows it inside the UI (#/tools/<id>), false (default) opens a new tab.
@@ -248,6 +248,16 @@ on_timeout:
 on_cancel:
   - type: source.update
     labels: { add: [ready-for-coding], remove: [coding] }
+# Retry block hooks (optional): on_retry_block runs in the run that created the block, after on_crash & co.;
+# on_retry_unblock runs in its own lifecycle run (trigger "unblock") when the block is removed in the UI.
+# on_retry_block:
+#   - type: source.update
+#     labels: { add: [agent-blocked], remove: [ready-for-coding] }
+#   - type: source.comment
+#     message: 'Blocked after {block.failures} technical failures (last {block.last_status}).'
+# on_retry_unblock:
+#   - type: source.update
+#     labels: { add: [ready-for-coding], remove: [agent-blocked] }
 `;
 
 const NIGHTLY_YAML = `# workflows/nightly-maintenance.yaml – time-triggered workflow (Spec §5.5). DISABLED example.

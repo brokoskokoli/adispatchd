@@ -30,8 +30,10 @@ function meter(active: number, max: number): HTMLElement {
   );
 }
 
-export function cancelRunButton(run: { id: string; status: string; active: boolean }, after: () => void): HTMLElement | null {
+export function cancelRunButton(run: { id: string; status: string; active: boolean; triggerType?: string }, after: () => void): HTMLElement | null {
   if (!run.active || run.status === 'cancelling' || run.status === 'finalizing' || run.status === 'recovery_pending') return null;
+  // Lifecycle runs of removed blocks (WI-30) only run on_retry_unblock and cannot be cancelled.
+  if (run.triggerType === 'unblock') return null;
   const btn: HTMLButtonElement = button(
     'Cancel',
     () => {

@@ -47,12 +47,25 @@ function manualWorkflow(e: AppEnv, id: string): void {
   writeFileSync(path.join(e.configDir, 'workflows', `${id}.yaml`), `id: ${id}\nname: ${id}\ntrigger: { type: manual }\nexecute:\n  type: shell\n  command: ${script}\n  cancel_grace: 300ms\n`);
 }
 
+/** Manual workflow (workflow-scoped blocks) whose on_retry_unblock records {block.cleared_by} (WI-30). */
+function unblockWorkflow(e: AppEnv, id: string): void {
+  manualWorkflow(e, id);
+  const release = path.join(e.marks, `${id}-unblock-release`);
+  const record = e.script(
+    `${id}-unblock.sh`,
+    `printf '%s' "$1" > "${path.join(e.marks, `${id}-cleared-by`)}"\nwhile [ ! -f "${release}" ]; do sleep 0.05; done`,
+  );
+  const file = path.join(e.configDir, 'workflows', `${id}.yaml`);
+  writeFileSync(file, `${readFileSync(file, 'utf8')}on_retry_unblock:\n  - type: shell\n    command: ${record}\n    args: ['{block.cleared_by}']\n`);
+}
+
 describe('auth.mode: password', () => {
   let env: AppEnv;
   beforeAll(async () => {
     env = await startAppEnv({ configExtra: PASSWORD_AUTH_CONFIG, app: FAST_AUTH }, (e) => {
       authEnvSetup(e);
       manualWorkflow(e, 'slow');
+      unblockWorkflow(e, 'gated');
     });
   });
   afterAll(async () => env?.cleanup());
@@ -154,6 +167,34 @@ describe('auth.mode: password', () => {
     const res = await call(env, 'POST', `/api/v1/blocks/${block.id}/clear`, { headers: { cookie }, body: { clearedBy: 'someone-else' } });
     expect(res.status).toBe(200);
     expect(res.json.block.clearedBy).toBe('olga');
+  });
+
+  it('WI-30: on_retry_unblock sees the logged-in user as {block.cleared_by}; an active run → 409', async () => {
+    const cookie = await login(env, 'olga');
+    const block = env.app.persistence.blocks.create({ workflowId: 'gated', itemKey: null, reason: 'test', failureCount: 3 });
+    // A run of the block scope is active: removal with on_retry_unblock is refused, nothing changes.
+    const start = await call(env, 'POST', '/api/v1/workflows/gated/start', { headers: { cookie } });
+    expect(start.status).toBe(202);
+    const refused = await call(env, 'POST', `/api/v1/blocks/${block.id}/clear`, { headers: { cookie } });
+    expect(refused.status).toBe(409);
+    expect(refused.json.error.code).toBe('block_run_active');
+    expect(env.app.persistence.blocks.get(block.id)?.clearedAt).toBeNull();
+    writeFileSync(path.join(env.marks, 'release-gated'), '');
+    await env.waitTerminal(start.json.run.id);
+
+    const res = await call(env, 'POST', `/api/v1/blocks/${block.id}/clear`, { headers: { cookie }, body: { clearedBy: 'someone-else' } });
+    expect(res.status).toBe(200);
+    expect(res.json.block).toMatchObject({ clearedBy: 'olga', clearedRunId: res.json.runId });
+    // While on_retry_unblock runs, a manual start of the workflow (no item) would run in parallel: 409.
+    await env.waitRun(res.json.runId, (r) => r.status === 'running');
+    const parallel = await call(env, 'POST', '/api/v1/workflows/gated/start', { headers: { cookie } });
+    expect(parallel.status).toBe(409);
+    expect(parallel.json.error.code).toBe('unblock_run_active');
+    expect(parallel.json.error.message).toContain(`unblock run ${res.json.runId} active`);
+    writeFileSync(path.join(env.marks, 'gated-unblock-release'), '');
+    const run = await env.waitTerminal(res.json.runId);
+    expect(run).toMatchObject({ triggerType: 'unblock', status: 'completed', businessResult: 'success' });
+    expect(readFileSync(path.join(env.marks, 'gated-cleared-by'), 'utf8')).toBe('olga');
   });
 
   it('writes a fresh control token file (0600, port, pid) at start; it works from loopback on CLI routes only', async () => {

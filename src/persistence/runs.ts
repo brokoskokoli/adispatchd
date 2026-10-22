@@ -28,7 +28,7 @@ import {
   type TriggerType,
 } from '../core/index.js';
 import type { BlockRecord, BlockRepository } from './blocks.js';
-import { BlockedError, InvalidTransitionError, LockConflictError, NotFoundError } from './errors.js';
+import { BlockedError, InvalidTransitionError, LockConflictError, NotFoundError, UnblockRunActiveError } from './errors.js';
 import { RUN_STATUS_EVENT, type EventRepository } from './events.js';
 import { lockKeyFor } from './lock-keys.js';
 import { all, fromJson, get, iso, num, placeholders, run, str, toJson, transaction, type Params, type Row } from './sqlite.js';
@@ -76,6 +76,11 @@ export interface RunRecord {
    * (run never reached `starting`) or for runs finalized before 0.3.0.
    */
   completionHook: HookName | null;
+  /**
+   * WI-30: this run created a retry block and `on_retry_block` is appended to
+   * its finalization (after the completion hook); set with `→ finalizing`.
+   */
+  retryBlockHook: boolean;
   /** Technical error diagnostics (no secrets). */
   error: unknown;
   lifecycleStatus: LifecycleStatus | null;
@@ -138,12 +143,19 @@ export interface BlockPolicy {
   maxTechnicalFailures: number;
   /** Block reason; default describes the count and the final reason. */
   reason?: string;
+  /** Mark the run for `on_retry_block` (WI-30) if this finalization creates the block. */
+  retryBlockHook?: boolean;
 }
 
 /** Options for {@link RunRepository.beginFinalization}. */
 export interface BeginFinalizationOptions {
   update?: RunUpdate;
   blockPolicy?: BlockPolicy;
+  /**
+   * Apply the outcome to the technical-failure counter (default `true`).
+   * `false` for lifecycle runs (trigger `unblock`, WI-30): neither counted nor reset.
+   */
+  countOutcome?: boolean;
 }
 
 /** Outcome of {@link RunRepository.beginFinalization}. */
@@ -200,7 +212,8 @@ export class RunRepository {
   /**
    * Atomically reserve a run: check + create the lock `(workflowId, lockKey)`
    * and insert the run in status `reserved`. Throws {@link LockConflictError}
-   * if an active run holds the lock, {@link BlockedError} with `failIfBlocked`.
+   * if an active run holds the lock, {@link BlockedError} with `failIfBlocked`,
+   * {@link UnblockRunActiveError} for runs without item while the workflow's unblock run is active (WI-30).
    */
   reserve(input: ReserveRunInput): RunRecord {
     if (input.triggerType === 'source' && !input.sourceItemKey) {
@@ -220,6 +233,12 @@ export class RunRepository {
       if (input.failIfBlocked) {
         const block = this.blocks.activeFor(input.workflowId, itemKey);
         if (block) throw new BlockedError(input.workflowId, itemKey, block.id);
+      }
+      // WI-30: while the `on_retry_unblock` chain of a removed workflow-scoped block runs, no other run of the
+      // workflow without item may start (automatic or manual). Item scope: the lifecycle run holds the item lock.
+      if (itemKey === null && input.triggerType !== 'unblock') {
+        const unblock = this.activeUnblockRun(input.workflowId, null);
+        if (unblock) throw new UnblockRunActiveError(input.workflowId, unblock.id);
       }
       const now = this.clock.now().toISOString();
       try {
@@ -302,12 +321,15 @@ export class RunRepository {
     return transaction(this.db, () => {
       const current = this.require(runId);
       this.assertTransition(current, 'finalizing');
-      const technicalFailure = isTechnicalFailure(target.status);
-      const effect = technicalFailure
-        ? 'increment'
-        : target.status === 'completed' && target.businessResult === 'success'
-          ? 'reset'
-          : 'none';
+      const counted = options.countOutcome !== false;
+      const technicalFailure = counted && isTechnicalFailure(target.status);
+      const effect = !counted
+        ? 'none'
+        : technicalFailure
+          ? 'increment'
+          : target.status === 'completed' && target.businessResult === 'success'
+            ? 'reset'
+            : 'none';
       const counter = this.blocks.applyOutcome(current.workflowId, current.sourceItemKey, effect);
       const now = this.clock.now().toISOString();
       this.applyUpdate(runId, options.update ?? {}, {
@@ -335,7 +357,9 @@ export class RunRepository {
             `${counter.consecutive} consecutive technical failures (last: ${target.status}: ${target.reason})`,
           runId,
           failureCount: counter.consecutive,
+          lastStatus: target.status,
         });
+        if (policy.retryBlockHook) run(this.db, 'UPDATE runs SET retry_block_hook = 1 WHERE id = ?', [runId]);
       }
       this.events.append(runId, RUN_STATUS_EVENT, {
         from: current.status,
@@ -344,6 +368,7 @@ export class RunRepository {
         ...(options.update?.outcome ? { outcome: options.update.outcome } : {}),
         ...(options.update?.completionHook ? { hook: options.update.completionHook } : {}),
         ...(blockCreated ? { blockId: blockCreated.id } : {}),
+        ...(blockCreated && policy?.retryBlockHook ? { retryBlockHook: true } : {}),
       });
       return {
         run: this.require(runId),
@@ -411,18 +436,45 @@ export class RunRepository {
     return all(this.db, `${sql} ORDER BY created_at ASC, id ASC`, params).map(toRun);
   }
 
-  /** Number of active runs (all triggers incl. manual), optionally per workflow (Spec §7 concurrency). */
+  /**
+   * Number of active runs (all triggers incl. manual), optionally per workflow (Spec §7 concurrency).
+   * Lifecycle runs of removed blocks (trigger `unblock`, WI-30) start no worker and do not count.
+   */
   countActive(workflowId?: string, sourceId?: string): number {
+    const base = `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND trigger_type <> 'unblock'`;
     const row =
       workflowId === undefined
-        ? get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL}`)
+        ? get(this.db, base)
         : sourceId === undefined
-          ? get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND workflow_id = ?`, [workflowId])
-          : get(this.db, `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND workflow_id = ? AND source_id = ?`, [
-              workflowId,
-              sourceId,
-            ]);
+          ? get(this.db, `${base} AND workflow_id = ?`, [workflowId])
+          : get(this.db, `${base} AND workflow_id = ? AND source_id = ?`, [workflowId, sourceId]);
     return Number(row?.n ?? 0);
+  }
+
+  /**
+   * Active runs in the block scope of `(workflowId, itemKey)` (WI-30): the
+   * run holding the item lock, or for `itemKey = null` every active run of
+   * the workflow without item.
+   */
+  activeRunsInBlockScope(workflowId: string, itemKey: string | null): RunRecord[] {
+    if (itemKey !== null) {
+      const run = this.activeRunForItem(workflowId, itemKey);
+      return run ? [run] : [];
+    }
+    return all(this.db, `SELECT * FROM runs WHERE status IN ${ACTIVE_SQL} AND workflow_id = ? AND source_item_key IS NULL ORDER BY created_at ASC`, [
+      workflowId,
+    ]).map(toRun);
+  }
+
+  /** Active lifecycle run (trigger `unblock`, WI-30) in the block scope of `(workflowId, itemKey)`, or `null`. */
+  activeUnblockRun(workflowId: string, itemKey: string | null): RunRecord | null {
+    const row = get(
+      this.db,
+      `SELECT * FROM runs WHERE status IN ${ACTIVE_SQL} AND trigger_type = 'unblock' AND workflow_id = ?
+         AND COALESCE(source_item_key, '') = ? LIMIT 1`,
+      [workflowId, itemKey ?? ''],
+    );
+    return row ? toRun(row) : null;
   }
 
   /** Run history with filter and paging, newest first. */
@@ -470,7 +522,10 @@ export class RunRepository {
     return this.lastRunsForItems([itemKey], options).get(itemKey) ?? null;
   }
 
-  /** Latest run per item key (views: `run.last_*`, Spec §17). Keys without runs are absent. */
+  /**
+   * Latest run per item key (views: `run.last_*`, Spec §17). Keys without runs are absent.
+   * Lifecycle runs of removed blocks (trigger `unblock`, WI-30) are not considered.
+   */
   lastRunsForItems(
     itemKeys: readonly string[],
     options: { workflowId?: string; finishedOnly?: boolean } = {},
@@ -491,7 +546,7 @@ export class RunRepository {
         this.db,
         `SELECT * FROM (
            SELECT *, ROW_NUMBER() OVER (PARTITION BY source_item_key ORDER BY ${order}) AS rn
-           FROM runs WHERE source_item_key IN (${placeholders(chunk.length)})${filter}
+           FROM runs WHERE source_item_key IN (${placeholders(chunk.length)}) AND trigger_type <> 'unblock'${filter}
          ) WHERE rn = 1`,
         params,
       );
@@ -603,6 +658,7 @@ function toRun(row: Row): RunRecord {
     result: fromJson(row.result_json),
     outcome: str(row.outcome),
     completionHook: completionHookOf(row.completion_hook),
+    retryBlockHook: Number(row.retry_block_hook ?? 0) === 1,
     error: fromJson(row.error_json),
     lifecycleStatus: (str(row.lifecycle_status) as LifecycleStatus | null) ?? null,
     blockGeneration: num(row.block_generation),

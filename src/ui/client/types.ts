@@ -25,6 +25,8 @@ export interface RunSummary {
   resultOutcome?: string | null;
   /** Completion hook that ran / runs (WI-17). */
   completionHook?: string | null;
+  /** WI-30: `on_retry_block` runs after the completion hook. */
+  retryBlockHook?: boolean;
   statusMessage: string | null;
   exitCode: number | null;
   lifecycleStatus: string | null;
@@ -86,6 +88,10 @@ export interface Block {
   createdAt: string;
   clearedAt: string | null;
   clearedBy: string | null;
+  /** Final status of the run that created the block (WI-30). */
+  lastStatus: string | null;
+  /** Lifecycle run of the removal (`on_retry_unblock`, WI-30). */
+  clearedRunId: string | null;
   active: boolean;
   affectedRunIds: string[];
   sourceUrl: string | null;

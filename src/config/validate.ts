@@ -16,6 +16,7 @@ import {
   keepPatternError,
   outcomeOfHook,
   TECHNICAL_OUTCOME_HOOKS,
+  isRetryBlockHook,
   validateTemplate,
   type HookName,
   type TemplateMode,
@@ -642,9 +643,12 @@ function validateAction(
     workspace: true,
     source: isSource,
     sourceVar: sourceCtx.sourceVar,
-    result: hook !== 'on_start',
+    // `on_retry_unblock` (WI-30) runs in a lifecycle run without worker: no result (like `on_start`).
+    result: hook !== 'on_start' && hook !== 'on_retry_unblock',
     linked: sourceCtx.linked,
     parameters: parameterNames,
+    block: isRetryBlockHook(hook),
+    blockCleared: hook === 'on_retry_unblock',
   };
   if ((action.type === 'source.update' || action.type === 'source.comment') && !isSource) {
     issues.error(file, [...at, 'type'], `"${action.type}" needs a source item; the workflow has no source trigger`);

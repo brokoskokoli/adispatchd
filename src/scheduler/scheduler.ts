@@ -41,6 +41,7 @@ import {
 import { ShellCheckRunner, sortCandidates } from '../filters/index.js';
 import {
   BlockedError,
+  UnblockRunActiveError,
   LockConflictError,
   type CronFiringRecord,
   type Repositories,
@@ -684,6 +685,7 @@ export class Scheduler {
       });
     } catch (err) {
       if (err instanceof BlockedError) return this.recordFiring(state, slot, 'skipped_blocked', `retry block ${err.blockId}`);
+      if (err instanceof UnblockRunActiveError) return this.recordFiring(state, slot, 'skipped_blocked', `unblock run ${err.runId} active`);
       if (err instanceof LockConflictError) return this.recordFiring(state, slot, 'skipped_lock', `slot lock held by run ${err.holderRunId}`);
       this.logger.error('cron reservation failed', { workflowId, slot: slot.toISOString(), error: errorMessage(err) });
       return this.recordFiring(state, slot, 'start_failed', errorMessage(err));
@@ -721,7 +723,7 @@ export class Scheduler {
    * the workflow+item (`LockConflictError`, HTTP 409). The run counts towards
    * the limits of automatic starts.
    *
-   * @throws UnknownWorkflowError, SchedulerError, LockConflictError
+   * @throws UnknownWorkflowError, SchedulerError, LockConflictError, UnblockRunActiveError (WI-30: workflow without item while its unblock run is active)
    */
   async startManual(workflowId: string, request: ManualStartRequest = {}): Promise<ManualStartResult> {
     const eff = this.config.getWorkflow(workflowId);

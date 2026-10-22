@@ -234,6 +234,10 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
   (`backups/adispatchd-2-<zeitstempel>.sqlite`, siehe Rollback).
 - **0.4.0 hebt das Schema auf v4** (Tabelle `ui_actions` für das Audit der UI-Aktionen). Ebenfalls eine Einbahnstraße:
   0.3.x startet mit einer v4-DB nicht mehr; zurück nur über das Backup `backups/adispatchd-3-<zeitstempel>.sqlite`.
+- **0.6.0 hebt das Schema auf v5** (Retry-Block-Hooks: Trigger `unblock`, `runs.retry_block_hook`,
+  `blocks.last_status`/`cleared_run_id`; `runs` und `run_actions` werden dabei neu aufgebaut, Daten bleiben erhalten).
+  Einbahnstraße: 0.5.x startet mit einer v5-DB nicht mehr; zurück nur über das Backup
+  `backups/adispatchd-4-<zeitstempel>.sqlite`.
 - **Rollback:** Dienst stoppen, alte Paketversion installieren, `adispatchd.sqlite`, `adispatchd.sqlite-wal` und
   `adispatchd.sqlite-shm` beiseitelegen, das passende Backup als `adispatchd.sqlite` zurückkopieren (Eigentümer
   `adispatchd`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).

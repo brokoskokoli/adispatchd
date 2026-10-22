@@ -16,6 +16,7 @@ import {
   CONTAINER_PULL_POLICIES,
   HOOK_NAMES,
   NOTIFICATION_EVENT_TYPES,
+  DEFAULT_NOTIFICATION_EVENTS,
   parseDuration,
   parseSize,
 } from '../core/index.js';
@@ -272,7 +273,7 @@ export const globalConfigSchema = z.strictObject({
     .prefault({}),
   notifications: z
     .strictObject({
-      on: z.array(notificationEvent).default([...NOTIFICATION_EVENT_TYPES]),
+      on: z.array(notificationEvent).default([...DEFAULT_NOTIFICATION_EVENTS]),
       channels: z.array(z.discriminatedUnion('type', [webhookChannelSchema])).default([]),
     })
     .prefault({}),

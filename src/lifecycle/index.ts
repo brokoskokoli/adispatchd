@@ -24,6 +24,7 @@ export {
   buildHookTemplateValues,
   buildShellActionContext,
   renderHookText,
+  type HookBlockInfo,
   type ShellActionContext,
 } from './context.js';
 export type { SourceResolver } from './performers.js';

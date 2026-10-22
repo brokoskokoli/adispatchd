@@ -144,13 +144,20 @@ export interface FinalizationTarget {
   reason: string;
 }
 
-/** How a run was triggered. */
-export type TriggerType = 'source' | 'schedule' | 'manual';
+/**
+ * How a run was triggered. `unblock` (WI-30): lifecycle run created when a
+ * retry block is removed; no worker, no workspace, only `on_retry_unblock`.
+ */
+export type TriggerType = 'source' | 'schedule' | 'manual' | 'unblock';
+
+/** All trigger types (API filters, UI). */
+export const TRIGGER_TYPES = ['source', 'schedule', 'manual', 'unblock'] as const satisfies readonly TriggerType[];
 
 /**
  * Lifecycle hooks configured as action lists, in declaration order (Spec §10;
- * `on_error` since WI-17). Named-outcome hooks (`on_result.<outcome>`) are
- * configured as a map and are not part of this list.
+ * `on_error` since WI-17; `on_retry_block`/`on_retry_unblock` since WI-30).
+ * Named-outcome hooks (`on_result.<outcome>`) are configured as a map and are
+ * not part of this list.
  */
 export const HOOK_NAMES = [
   'on_start',
@@ -161,7 +168,24 @@ export const HOOK_NAMES = [
   'on_cancel',
   'on_timeout',
   'on_error',
+  'on_retry_block',
+  'on_retry_unblock',
 ] as const;
+
+/**
+ * Retry-block hooks (WI-30): `on_retry_block` runs in the run whose failure
+ * created a retry block (after its completion hook), `on_retry_unblock` in
+ * the lifecycle run created when the block is removed. Never completion hooks.
+ */
+export const RETRY_BLOCK_HOOKS = ['on_retry_block', 'on_retry_unblock'] as const satisfies readonly (typeof HOOK_NAMES)[number][];
+
+/** A retry-block hook (see {@link RETRY_BLOCK_HOOKS}). */
+export type RetryBlockHookName = (typeof RETRY_BLOCK_HOOKS)[number];
+
+/** True for `on_retry_block` / `on_retry_unblock`. */
+export function isRetryBlockHook(hook: string): hook is RetryBlockHookName {
+  return (RETRY_BLOCK_HOOKS as readonly string[]).includes(hook);
+}
 
 /** Name of a hook configured as an action list (see {@link HOOK_NAMES}). */
 export type ListHookName = (typeof HOOK_NAMES)[number];
@@ -259,8 +283,18 @@ export type ActionStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'ski
  */
 export type LifecycleStatus = 'pending' | 'running' | 'succeeded' | 'failed';
 
-/** Orchestrator events that can trigger central notifications (Spec §18). */
-export const NOTIFICATION_EVENT_TYPES = ['retry_block_created', 'lifecycle_action_failed', 'recovery_failed'] as const;
+/**
+ * Orchestrator events that can trigger central notifications (Spec §18;
+ * `retry_block_cleared` since WI-30).
+ */
+export const NOTIFICATION_EVENT_TYPES = ['retry_block_created', 'lifecycle_action_failed', 'recovery_failed', 'retry_block_cleared'] as const;
+
+/**
+ * Default of `notifications.on`: the events enabled when nothing is
+ * configured. `retry_block_cleared` (WI-30) is opt-in so that existing
+ * configurations do not get more messages.
+ */
+export const DEFAULT_NOTIFICATION_EVENTS = ['retry_block_created', 'lifecycle_action_failed', 'recovery_failed'] as const satisfies readonly (typeof NOTIFICATION_EVENT_TYPES)[number][];
 
 /** A notification event type. */
 export type NotificationEventType = (typeof NOTIFICATION_EVENT_TYPES)[number];
