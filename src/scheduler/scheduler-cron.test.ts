@@ -97,6 +97,21 @@ describe('Scheduler – cron trigger (Spec §5.5, §7)', () => {
     expect((await waitStatus(b, s.env, runs[0]?.id as string, 'completed')).scheduledFor).toBe('2026-01-01T00:06:00.000Z');
   });
 
+  it('WI-30: skips slots while the unblock run of a removed workflow block is active (reason names the run)', async () => {
+    s.workflow(WF, scheduleWorkflow(WF, s.env.script('ok.sh', 'exit 0'), '* * * * *'));
+    const b = await s.build();
+    b.scheduler.start();
+    await b.scheduler.whenIdle();
+    const block = s.env.p.blocks.create({ workflowId: WF, itemKey: null, reason: 'three crashes' });
+    // A lifecycle run of the removal that is still running on_retry_unblock (not supervised here).
+    const unblock = s.env.p.runs.reserve({ workflowId: WF, triggerType: 'unblock', configSnapshot: {} });
+    s.env.p.blocks.clear(block.id, null, unblock.id);
+    await advance(s, b, 30_000); // 00:01
+    const [firing] = s.env.p.cronFirings.listForWorkflow(WF);
+    expect(firing).toMatchObject({ decision: 'skipped_blocked', reason: `unblock run ${unblock.id} active` });
+    expect(s.env.p.runs.list({ workflowId: WF, triggerType: 'schedule' }).total).toBe(0);
+  });
+
   it('keeps the schedule alive when handling a slot throws (e.g. a database error)', async () => {
     s.workflow(WF, scheduleWorkflow(WF, s.env.script('ok.sh', 'exit 0'), '* * * * *', 'max_concurrent: 5'));
     const b = await s.build();

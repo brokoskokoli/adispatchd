@@ -1242,8 +1242,8 @@ GitHub-Abhängigkeiten (`dependencies.blocked`).
 - **`on_retry_unblock`** läuft, wenn der Block aufgehoben wird (UI „Remove Block“, `POST /api/v1/blocks/:id/clear`).
   Dabei gibt es keinen Run; deshalb legt das Aufheben in **derselben Transaktion** einen **Lifecycle-Run** an: Trigger
   `unblock`, kein Worker, kein Workspace, nur diese Kette, Konfiguration = beim Aufheben geladene Workflow-Datei.
-  Er hält das Lock für `(Workflow, Item)` bis die Kette fertig ist (bei Blocks ohne Item: kein Cron-Start, solange
-  er läuft), zählt nicht als technischer Fehler, setzt den Zähler nicht zurück, zählt nicht zu den Limits
+  Er hält das Lock für `(Workflow, Item)` bis die Kette fertig ist (bei Blocks ohne Item: kein Cron-Start und kein
+  manueller Start ohne Item, solange er läuft – `409 unblock_run_active`), zählt nicht als technischer Fehler, setzt den Zähler nicht zurück, zählt nicht zu den Limits
   (`max_concurrent`) und nicht als „letzter Run“ in Views (`run.last_*`). Endstatus `completed` + `success`, wenn
   alle Actions gelangen, sonst `completed` + `failure` (endgültiges Scheitern → `lifecycle_action_failed`); der Block
   bleibt in jedem Fall aufgehoben. In UI/API erscheint er wie jeder Run (Journal, Retry/Skip einzelner Actions,
@@ -1981,7 +1981,7 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `{block.created_at}` | Entstehungszeitpunkt des Blocks, ISO-8601 (UTC) | – |
 | `{block.last_status}` | technischer Endstatus des auslösenden Runs (`crashed`, `start_error`, `timed_out`) | Blocks von vor 0.6.0, deren Run gelöscht ist |
 | `{block.cleared_at}` | Zeitpunkt des Aufhebens, ISO-8601 (UTC) | nur in `on_retry_unblock` erlaubt |
-| `{block.cleared_by}` | wer aufgehoben hat: angemeldeter Benutzer (§3.1 `auth`), sonst der vom Client mitgeschickte Name (UI `ui`, sonst `api`); `anonymous`, wenn keiner bekannt ist | nur in `on_retry_unblock` erlaubt |
+| `{block.cleared_by}` | wer aufgehoben hat: angemeldeter Benutzer (§3.1 `auth`), ohne Anmeldung der vom Client mitgeschickte Name (UI `ui`, sonst `api`) – über die API also immer gesetzt; `anonymous` nur bei einem intern ohne Namen aufgehobenen Block | nur in `on_retry_unblock` erlaubt |
 
 Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_error`).
 
@@ -2118,7 +2118,9 @@ Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität.
   Entfernen startet eine neue Zählperiode. Benachrichtigung `retry_block_created`.
 - **Hooks (seit 0.6.0):** `on_retry_block` läuft im erzeugenden Run nach dessen Abschluss-Hook; `on_retry_unblock`
   läuft beim Entfernen in einem eigenen Lifecycle-Run (Trigger `unblock`), der bis zum Ende der Kette das Lock hält –
-  das Item wird also erst danach wieder automatisch gestartet. Mit nicht leerem `on_retry_unblock` und laufendem Run
+  das Item wird also erst danach wieder automatisch gestartet (Planung zeigt `locked: run <id>`). Bei Blocks ohne Item
+  (z. B. Cron) startet währenddessen kein Run ohne Item: Cron-Slots werden `skipped_blocked` mit Grund
+  `unblock run <id> active`, manuelle Starts ohne Item scheitern mit `409 unblock_run_active`. Mit nicht leerem `on_retry_unblock` und laufendem Run
   für `(Workflow, Item)` wird das Entfernen abgelehnt (`409 block_run_active`). Optional die Benachrichtigung
   `retry_block_cleared`. Details §3.4.10.
 
@@ -2141,7 +2143,8 @@ UI oder `POST /api/v1/workflows/:id/start` `{"item"?: "…", "parameters"?: {…
 - **Umgeht:** `enabled`/Overrides, Pause, Filter, `shell_filter`, Conditions, Retry-Blocks, Prioritäten, Limits,
   den Filter-Recheck vor `on_start`.
 - **Umgeht nicht:** den Lock pro Workflow+Item (HTTP 409 `lock_conflict`), Drain/Shutdown, laufende Recovery,
-  Parametervalidierung.
+  Parametervalidierung und (seit 0.6.0) einen laufenden Lifecycle-Run eines aufgehobenen Workflow-Blocks: Start ohne
+  Item, solange `on_retry_unblock` läuft → HTTP 409 `unblock_run_active`.
 - Source-Workflow: Item-Referenz Pflicht – `123`, `#123`, `owner/repo#123`,
   `https://github.com/owner/repo/issues/123` bzw. `/pull/123` (Owner/Repo ohne Groß-/Kleinschreibung, muss zur
   Source passen) oder (seit 0.3.0) `<source>:<ref>` wie `project_a:123`; das Item muss existieren. Bei mehreren

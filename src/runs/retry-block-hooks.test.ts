@@ -6,7 +6,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { BlockedError, LockConflictError } from '../persistence/index.js';
+import { LockConflictError, UnblockRunActiveError } from '../persistence/index.js';
 import { ISSUE, ITEM_KEY, REPO, createRunsEnv, waitForRun, type RunsTestEnv } from './testing/helpers.js';
 
 const supported = process.platform === 'linux' || process.platform === 'darwin';
@@ -319,7 +319,11 @@ on_retry_unblock:
       const block = env.p.blocks.activeFor('nightly', null)!;
       const runId = h.controller.clearBlock(block.id, null, { snapshot }).clearedRunId!;
       await waitForRun(h, env.p, runId, () => existsSync(out));
-      expect(() => env.p.runs.reserve({ ...slot, scheduledFor: '2026-10-23T03:00:00.000Z', failIfBlocked: true })).toThrow(BlockedError);
+      expect(() => env.p.runs.reserve({ ...slot, scheduledFor: '2026-10-23T03:00:00.000Z', failIfBlocked: true })).toThrow(UnblockRunActiveError);
+      // A manual start without item would run in parallel to the chain: refused too (HTTP 409 unblock_run_active).
+      expect(() => env.p.runs.reserve({ workflowId: 'nightly', triggerType: 'manual', configSnapshot: snapshot })).toThrow(
+        expect.objectContaining({ code: 'unblock_run_active' }),
+      );
       writeFileSync(gate, '');
       await h.controller.whenSupervisionEnds(runId);
       expect(readFileSync(out, 'utf8')).toBe('anonymous 1 unblock ');

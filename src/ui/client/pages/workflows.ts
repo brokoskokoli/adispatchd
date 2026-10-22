@@ -13,6 +13,7 @@ import { buildHash } from '../../shared/route.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
 import type { CheckCountsView, CheckDiagnosis, DryRunResult, FilterTrace, LastConditionCheck, RunSummary, SecretInfo, SourcePoll, Workflow, WorkflowConditions } from '../types.js';
 import { act, badge, button, errorBox, externalLink, isEditing, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, toast } from '../ui.js';
+import { triggerLabel } from './runs.js';
 
 function timeoutText(t: unknown): string {
   const o = (t ?? {}) as { maxDurationMs?: unknown; idleTimeoutMs?: unknown };
@@ -579,7 +580,7 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
         h('h2', null, `Recent runs (${runs.total})`),
         table(
           ['Run', 'Trigger', 'Outcome', 'Started', 'Duration', 'Message'],
-          runs.runs.map((r) => [runLink(r.id), r.triggerType, runOutcomeBadges(r), time(r.startedAt ?? r.createdAt), formatDuration(r.durationMs), text(r.active ? r.statusMessage : (r.resultMessage ?? r.finalReason))]),
+          runs.runs.map((r) => [runLink(r.id), triggerLabel(r.triggerType), runOutcomeBadges(r), time(r.startedAt ?? r.createdAt), formatDuration(r.durationMs), text(r.active ? r.statusMessage : (r.resultMessage ?? r.finalReason))]),
           { empty: 'No runs yet.' },
         ),
         runs.total > runs.runs.length ? h('p', null, routeLink(['runs'], 'All runs of this workflow →', { workflow: id })) : null,

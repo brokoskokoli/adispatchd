@@ -806,6 +806,8 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const op = deps.background(`recovery retry ${id}`, () => deps.controller.retryRecovery(id, { assumeGone: body.assumeGone === true }));
     const error = await earlyError(op);
     if (error) throw error;
+    // The finalized run released its lock (e.g. a recovered unblock run, WI-30): plan without waiting for the next poll.
+    void op.then(() => deps.scheduler.planOnce()).catch(() => undefined);
     auditRun(req, id, 'recovery_retry', { assumeGone: body.assumeGone === true });
     return accepted(reply, { accepted: true, run: toRunSummary(requireRun(id)) });
   });

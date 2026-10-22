@@ -48,6 +48,7 @@ export const ERROR_STATUS: Readonly<Record<string, number>> = {
   lifecycle_busy: 409,
   lifecycle_not_retryable: 409,
   block_run_active: 409,
+  unblock_run_active: 409,
   config_invalid: 422,
   source_unavailable: 502,
   run_controller_not_ready: 503,

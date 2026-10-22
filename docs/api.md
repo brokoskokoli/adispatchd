@@ -206,7 +206,7 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed`, `control_token_not_allowed` (WI-26), `ui_actions_disabled`, `user_login_required`, `identity_not_allowed` (WI-27) |
 | 421 | `host_not_allowed` (Host-Allowlist) |
 | 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found`, `source_not_found`, `item_not_found`, `github_not_found` (WI-27) |
-| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27), `block_run_active` (WI-30) |
+| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27), `block_run_active`, `unblock_run_active` (WI-30) |
 | 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt), `github_rejected` (WI-27) |
 | 429 | `too_many_attempts` (Login, WI-26), `rate_limited` (Info-Refresh), `ui_actions_throttled`, `github_rate_limited` (WI-27) |
 | 502 | `source_unavailable`, `github_forbidden`, `github_auth_failed`, `github_unavailable`, `github_outcome_unknown` (WI-27) |
@@ -308,7 +308,9 @@ pushdown}]`; neuer Kandidaten-Status `source_limit` (`max_concurrent_per_source`
 `<source>:<nr>` sein; bei mehreren Sources wird die Source aus URL bzw. Präfix abgeleitet, sonst `400
 manual_item_invalid_ref` mit Hinweis.
 
-Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven Lock (`409 lock_conflict`).
+Manueller Start umgeht Filter/Conditions/Limits/Blocks/Pause, nicht den aktiven Lock (`409 lock_conflict`). Ab 0.6.0:
+Start ohne Item, während der Lifecycle-Run (Trigger `unblock`) eines aufgehobenen Workflow-Blocks noch `on_retry_unblock`
+ausführt → `409 unblock_run_active` (Meldung nennt den Run).
 
 ### Runs
 

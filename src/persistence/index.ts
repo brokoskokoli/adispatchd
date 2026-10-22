@@ -79,6 +79,7 @@ export { RetentionRepository, type RunRetentionCategory, type RunRetentionCandid
 export {
   LockConflictError,
   BlockedError,
+  UnblockRunActiveError,
   BlockExistsError,
   InvalidTransitionError,
   NotFoundError,

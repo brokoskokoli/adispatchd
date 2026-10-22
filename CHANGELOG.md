@@ -15,7 +15,8 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   `unblock` (kein Worker, kein Workspace): Er hält das Lock für Workflow + Item, bis die Kette fertig ist, zählt nicht
   als technischer Fehler und nicht zu den Limits, endet als `completed` + `success`/`failure` und erscheint in UI/API
   wie jeder Run (Retry/Skip, Recovery). Läuft für Workflow + Item gerade ein Run, wird das Aufheben mit nicht leerem
-  `on_retry_unblock` mit `409 block_run_active` abgelehnt. Neue Platzhalter `{block.id}`, `{block.failures}`,
+  `on_retry_unblock` mit `409 block_run_active` abgelehnt; bei Blocks ohne Item scheitern manuelle Starts ohne Item
+  während der Kette mit `409 unblock_run_active`. Neue Platzhalter `{block.id}`, `{block.failures}`,
   `{block.created_at}`, `{block.last_status}`, in `on_retry_unblock` zusätzlich `{block.cleared_at}`,
   `{block.cleared_by}`. Workflows ohne Item: nur `shell`. Referenz §3.4.10, §5, §6.4; Beispiel
   `examples/config/workflows/coder-project-a.yaml`.

@@ -28,7 +28,7 @@ import {
   type TriggerType,
 } from '../core/index.js';
 import type { BlockRecord, BlockRepository } from './blocks.js';
-import { BlockedError, InvalidTransitionError, LockConflictError, NotFoundError } from './errors.js';
+import { BlockedError, InvalidTransitionError, LockConflictError, NotFoundError, UnblockRunActiveError } from './errors.js';
 import { RUN_STATUS_EVENT, type EventRepository } from './events.js';
 import { lockKeyFor } from './lock-keys.js';
 import { all, fromJson, get, iso, num, placeholders, run, str, toJson, transaction, type Params, type Row } from './sqlite.js';
@@ -212,7 +212,8 @@ export class RunRepository {
   /**
    * Atomically reserve a run: check + create the lock `(workflowId, lockKey)`
    * and insert the run in status `reserved`. Throws {@link LockConflictError}
-   * if an active run holds the lock, {@link BlockedError} with `failIfBlocked`.
+   * if an active run holds the lock, {@link BlockedError} with `failIfBlocked`,
+   * {@link UnblockRunActiveError} for runs without item while the workflow's unblock run is active (WI-30).
    */
   reserve(input: ReserveRunInput): RunRecord {
     if (input.triggerType === 'source' && !input.sourceItemKey) {
@@ -232,10 +233,12 @@ export class RunRepository {
       if (input.failIfBlocked) {
         const block = this.blocks.activeFor(input.workflowId, itemKey);
         if (block) throw new BlockedError(input.workflowId, itemKey, block.id);
-        // WI-30: while the `on_retry_unblock` chain of a removed block runs, no automatic start
-        // (item scope: also the lock; workflow scope, e.g. cron: only this check).
-        const unblock = this.activeUnblockRun(input.workflowId, itemKey);
-        if (unblock) throw new BlockedError(input.workflowId, itemKey, this.blocks.clearedByRun(unblock.id)?.id ?? 0);
+      }
+      // WI-30: while the `on_retry_unblock` chain of a removed workflow-scoped block runs, no other run of the
+      // workflow without item may start (automatic or manual). Item scope: the lifecycle run holds the item lock.
+      if (itemKey === null && input.triggerType !== 'unblock') {
+        const unblock = this.activeUnblockRun(input.workflowId, null);
+        if (unblock) throw new UnblockRunActiveError(input.workflowId, unblock.id);
       }
       const now = this.clock.now().toISOString();
       try {

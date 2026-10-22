@@ -74,7 +74,7 @@ Neue Gruppe `block.*`, nur in `on_retry_block` und `on_retry_unblock` erlaubt (s
 | `{block.created_at}` | ISO-8601 (UTC) | – |
 | `{block.last_status}` | technischer Endstatus des auslösenden Runs (`crashed`, `start_error`, `timed_out`) | – |
 | `{block.cleared_at}` | ISO-8601 (UTC) | in `on_retry_block` |
-| `{block.cleared_by}` | angemeldeter Benutzer (WI-26) bzw. `cli`/`api` | in `on_retry_block`; `auth.mode: none` → `anonymous` |
+| `{block.cleared_by}` | angemeldeter Benutzer (WI-26); ohne Anmeldung der vom Client mitgeschickte Name (UI `ui`, sonst `api`) – über die API also nie leer | in `on_retry_block` (dort Konfigurationsfehler); `anonymous` nur, wenn intern ohne Namen aufgehoben wurde |
 
 In `on_retry_block` gelten zusätzlich alle Platzhalter der übrigen Hooks (`run.*`, `result.*`, `item.*`, …) des
 auslösenden Runs. In `on_retry_unblock` gelten `workflow.*`, `run.*` (des Lifecycle-Runs), `source.*`/`item.*`
@@ -108,7 +108,7 @@ committeter Doku.
 - [ ] Aufheben: Lifecycle-Run mit Trigger `unblock`, hält das Lock, kein automatischer Start während der Kette,
       Zähler unverändert, Block auch bei Fehlschlag aufgehoben, `lifecycle_action_failed`, Recovery nach Neustart;
       leerer Hook → kein Run; laufender Run → 409.
-- [ ] Platzhalter `block.*` korrekt gerendert, inkl. `cleared_by` mit Anmeldung (WI-26) und ohne.
+- [ ] Platzhalter `block.*` korrekt gerendert, inkl. `cleared_by` mit Anmeldung (WI-26: Benutzername) und ohne (Client-Name `ui`/`api`).
 - [ ] Migration v4 → v5 mit Backup; bestehende Blocks bleiben gültig.
 - [ ] API/UI wie oben; `retry_block_cleared` abonnierbar.
 - [ ] End-to-end gegen Fake-GitHub: 3 Crashes → Label `agent-blocked` gesetzt → Remove Block → Label zurück, Run

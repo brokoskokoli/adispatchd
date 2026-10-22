@@ -79,7 +79,7 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'block.created_at', group: 'block', description: 'Creation time of the block (ISO-8601, UTC)' },
   { name: 'block.last_status', group: 'block', description: 'Technical final status of the run that created the block' },
   { name: 'block.cleared_at', group: 'block_cleared', description: 'Removal time of the block (ISO-8601, UTC)' },
-  { name: 'block.cleared_by', group: 'block_cleared', description: 'Who removed the block (user, or cli/api/ui; anonymous if unknown)' },
+  { name: 'block.cleared_by', group: 'block_cleared', description: 'Who removed the block: logged-in user, else the client name (ui/api)' },
 ];
 
 /**

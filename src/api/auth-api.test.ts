@@ -50,7 +50,11 @@ function manualWorkflow(e: AppEnv, id: string): void {
 /** Manual workflow (workflow-scoped blocks) whose on_retry_unblock records {block.cleared_by} (WI-30). */
 function unblockWorkflow(e: AppEnv, id: string): void {
   manualWorkflow(e, id);
-  const record = e.script(`${id}-unblock.sh`, `printf '%s' "$1" > "${path.join(e.marks, `${id}-cleared-by`)}"`);
+  const release = path.join(e.marks, `${id}-unblock-release`);
+  const record = e.script(
+    `${id}-unblock.sh`,
+    `printf '%s' "$1" > "${path.join(e.marks, `${id}-cleared-by`)}"\nwhile [ ! -f "${release}" ]; do sleep 0.05; done`,
+  );
   const file = path.join(e.configDir, 'workflows', `${id}.yaml`);
   writeFileSync(file, `${readFileSync(file, 'utf8')}on_retry_unblock:\n  - type: shell\n    command: ${record}\n    args: ['{block.cleared_by}']\n`);
 }
@@ -181,6 +185,13 @@ describe('auth.mode: password', () => {
     const res = await call(env, 'POST', `/api/v1/blocks/${block.id}/clear`, { headers: { cookie }, body: { clearedBy: 'someone-else' } });
     expect(res.status).toBe(200);
     expect(res.json.block).toMatchObject({ clearedBy: 'olga', clearedRunId: res.json.runId });
+    // While on_retry_unblock runs, a manual start of the workflow (no item) would run in parallel: 409.
+    await env.waitRun(res.json.runId, (r) => r.status === 'running');
+    const parallel = await call(env, 'POST', '/api/v1/workflows/gated/start', { headers: { cookie } });
+    expect(parallel.status).toBe(409);
+    expect(parallel.json.error.code).toBe('unblock_run_active');
+    expect(parallel.json.error.message).toContain(`unblock run ${res.json.runId} active`);
+    writeFileSync(path.join(env.marks, 'gated-unblock-release'), '');
     const run = await env.waitTerminal(res.json.runId);
     expect(run).toMatchObject({ triggerType: 'unblock', status: 'completed', businessResult: 'success' });
     expect(readFileSync(path.join(env.marks, 'gated-cleared-by'), 'utf8')).toBe('olga');

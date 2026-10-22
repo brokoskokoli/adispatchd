@@ -8,7 +8,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FakeClock } from '../core/index.js';
 import { openDatabase, schemaVersion } from './database.js';
-import { BlockedError } from './errors.js';
+import { BlockedError, LockConflictError, UnblockRunActiveError } from './errors.js';
 import { openPersistence } from './persistence.js';
 import { MIGRATIONS } from './schema.js';
 import { CRASH, SUCCESS, completeRun, openTestPersistence, reserveSource, tempDataDir } from './testing/helpers.js';
@@ -151,7 +151,18 @@ describe('repositories – lifecycle runs and retry-block hooks (WI-30)', () => 
     expect(p.runs.lastRunForItem('repo_a:1')?.id).toBe(work?.id);
   });
 
-  it('refuses automatic reservations while a lifecycle run of the block scope is active', () => {
+  it('item scope: the lifecycle run holds the item lock (lock conflict, not a stale block)', () => {
+    env = openTestPersistence();
+    const { p } = env;
+    const block = p.blocks.create({ workflowId: 'wf', itemKey: 'repo_a:1', reason: 'x', failureCount: 3 });
+    const unblock = p.runs.reserve({ workflowId: 'wf', triggerType: 'unblock', sourceItemKey: 'repo_a:1', configSnapshot: {} });
+    p.blocks.clear(block.id, null, unblock.id);
+    expect(() => reserveSource(p, 'wf', 'repo_a:1', { failIfBlocked: true })).toThrow(LockConflictError);
+    expect(() => reserveSource(p, 'wf', 'repo_a:1', { failIfBlocked: true })).not.toThrow(BlockedError);
+    expect(reserveSource(p, 'wf', 'repo_a:2', { failIfBlocked: true }).status).toBe('reserved');
+  });
+
+  it('refuses reservations without item while a lifecycle run of the workflow scope is active', () => {
     env = openTestPersistence();
     const { p } = env;
     const block = p.blocks.create({ workflowId: 'cron', itemKey: null, reason: 'x', failureCount: 3 });
@@ -160,11 +171,14 @@ describe('repositories – lifecycle runs and retry-block hooks (WI-30)', () => 
     p.blocks.clear(block.id, 'olga', unblock.id);
     expect(p.blocks.clearedByRun(unblock.id)).toMatchObject({ id: block.id, clearedBy: 'olga', clearedRunId: unblock.id });
     const slot = { workflowId: 'cron', triggerType: 'schedule' as const, scheduledFor: '2026-10-22T12:00:00.000Z', configSnapshot: {} };
-    expect(() => p.runs.reserve({ ...slot, failIfBlocked: true })).toThrow(BlockedError);
+    // Reported with the unblock run, not with the (already cleared) block.
+    expect(() => p.runs.reserve({ ...slot, failIfBlocked: true })).toThrow(UnblockRunActiveError);
+    expect(() => p.runs.reserve({ ...slot, failIfBlocked: true })).toThrow(`unblock run ${unblock.id} active`);
     expect(p.runs.activeRunsInBlockScope('cron', null).map((r) => r.id)).toEqual([unblock.id]);
-    // Manual starts (no failIfBlocked) are not refused.
-    const manual = p.runs.reserve({ ...slot, failIfBlocked: false });
-    expect(manual.status).toBe('reserved');
+    // Manual starts without item are refused as well (they would run in parallel to on_retry_unblock).
+    expect(() => p.runs.reserve({ workflowId: 'cron', triggerType: 'manual', configSnapshot: {} })).toThrow(UnblockRunActiveError);
+    // Other workflows are not affected.
+    expect(p.runs.reserve({ workflowId: 'other', triggerType: 'manual', configSnapshot: {} }).status).toBe('reserved');
     p.runs.transition(unblock.id, 'starting');
     p.runs.beginFinalization(unblock.id, SUCCESS, { countOutcome: false });
     p.runs.finish(unblock.id);
