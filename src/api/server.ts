@@ -665,7 +665,9 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
       if (def.optionsFrom) throw new ApiError(503, 'not_ready', 'Parameter options are not available');
       return { options: def.values.map((v) => ({ value: v, label: v })), fetchedAt: null, cached: false, allowCustom: def.allowCustom === true };
     }
-    return deps.parameterOptions.get(wf.config, name, { refresh: q.refresh === 'true' });
+    // `refresh` (bypassing the cache) only for roles that may start runs: viewers get the cached result (rate limits).
+    const mayRefresh = !authEnabled() || roleAllows(req.principal?.role ?? null, 'operator');
+    return deps.parameterOptions.get(wf.config, name, { refresh: q.refresh === 'true' && mayRefresh });
   });
   app.post('/api/v1/workflows/:id/dry-run', async (req) => {
     const { id } = parse(idParam, req.params, 'path');

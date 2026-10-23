@@ -14,6 +14,7 @@ import { isStateChange, type Page, type PageContext } from '../page.js';
 import type { CheckCountsView, CheckDiagnosis, DryRunResult, FilterTrace, LastConditionCheck, RunSummary, SecretInfo, SourcePoll, Workflow, WorkflowConditions } from '../types.js';
 import { act, badge, button, errorBox, externalLink, isEditing, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time, toast } from '../ui.js';
 import { triggerLabel } from './runs.js';
+import { denied } from '../auth.js';
 
 function timeoutText(t: unknown): string {
   const o = (t ?? {}) as { maxDurationMs?: unknown; idleTimeoutMs?: unknown };
@@ -90,7 +91,13 @@ function dynamicEnumField(
     }
   };
   const reload = button('Reload', () => void load(true), { title: 'Fetch the options again (bypasses the cache)' });
-  void load(false);
+  // Options of a script are only fetched for roles that may start runs (the API answers 403 otherwise).
+  const scriptDenied = def.optionsFrom?.type === 'command' ? denied('operator') : null;
+  if (scriptDenied) {
+    reload.disabled = true;
+    render();
+    setStatus('muted', `Options come from a script and are only loaded for users who may start runs (${scriptDenied}).`);
+  } else void load(false);
   return {
     control,
     box: h('div', { class: 'option-field' }, search, h('div', { class: 'option-row' }, control, reload), custom ? datalist : null, status),

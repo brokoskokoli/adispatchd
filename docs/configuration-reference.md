@@ -1055,16 +1055,22 @@ aus GitHub (Branches/Tags einer Source) oder aus einem eigenen Skript beziehen:
   JSON-Liste aus Strings bzw. `{"value": "…", "label": "…"}` (`label` nur Anzeige). Exit ≠ 0, Timeout, ungültiges
   JSON, mehr als 500 Optionen, leere Werte, Werte/Labels über 200 Zeichen oder mit Steuerzeichen, mehr als 256 KiB
   Ausgabe → Fehler mit kurzer Meldung (Exit-Code + erste stderr-Zeile, Secrets geschwärzt). Doppelte Werte zählen einmal.
+  `timeout` gilt für den ganzen Abruf einschließlich Token-Beschaffung.
 - **Start:** `POST …/start` prüft Werte ohne `allow_custom` gegen die **aktuelle** Liste (Cache erlaubt): nicht
   enthalten → HTTP 400 `invalid_parameters`; Liste nicht abrufbar → HTTP 502 `parameter_options_unavailable`, kein
   Start. Mit `allow_custom` keine Listenprüfung (aber höchstens 200 Zeichen, keine Steuerzeichen). Werte gelangen wie
   alle Parameter als einzelne Argumente/Env-Werte zum Prozess (keine Shell), im Pfadmodus als sicheres Segment.
+  **Achtung:** Ein frei eingegebener Wert (`allow_custom`, `type: string`) kann mit `-` beginnen und kommt dann als
+  eigenes argv-Element an, das ein Programm als Option deuten könnte – im Skript Optionen mit `--` abschließen (z. B.
+  `git checkout -- "$1"`) oder den Wert als `--name=<wert>` übergeben (`args: ['--target={parameters.target}']`).
 - **`default`** muss nicht in einer Liste stehen; fehlt er in der aktuellen Liste, zeigt das Formular einen Hinweis,
   beim Start gilt die normale Prüfung.
 - **Automatische Workflows** (Source/Cron) erhalten nur den `default` (ohne Abruf, ohne Listenprüfung);
   `options_from` ohne `default` ist dort ein Fehler.
 - **Rollen:** die Optionen eines Skripts darf nur abrufen, wer starten darf (`operator`); GitHub-Optionen schon `viewer`
-  (API: `GET /api/v1/workflows/:id/parameters/:name/options`).
+  (API: `GET /api/v1/workflows/:id/parameters/:name/options`); `refresh` (Cache umgehen) nur ab `operator`.
+- **Drosselung:** GitHub-Optionen werden höchstens alle `max(30 s, cache)` neu geholt (auch mit „Reload“), Skripte
+  höchstens alle 2 s.
 
 ```yaml
 # example: dynamic-options
@@ -1745,8 +1751,8 @@ Dateiliste (`GET /api/v1/config/files`, UI: Configuration); `config reload` läd
   2 parallele Ausführungen, Ausgabe bis 4 KiB je Stream; Werte und Status nur im Speicher (nach einem Neustart
   zunächst `pending`, bis der erste Abruf fertig ist).
 - Auswahllisten (`options_from`, WI-31): höchstens 500 Optionen, Werte/Labels bis 200 Zeichen, Skriptausgabe bis
-  256 KiB je Stream; Cache nur im Speicher (ein Reload verwirft ihn); ein Parameter wird höchstens alle 2 s neu
-  geholt; kein `env` für das Skript (nur `secrets`); keine Auswahl von Items per Filter.
+  256 KiB je Stream; Cache nur im Speicher (ein Reload verwirft ihn); ein Parameter wird höchstens alle 2 s (Skript)
+  bzw. `max(30 s, cache)` (GitHub) neu geholt; kein `env` für das Skript (nur `secrets`); keine Auswahl von Items per Filter.
 - Der angezeigte letzte Condition-Status liegt nur im Speicher; Item-Conditions und `shell_filter` werden nur als
   Zusammenfassung je Planungsschritt angezeigt, nicht je Item.
 - Nur Adapter `github` (github.com), Identity-Typen `github_app` und `github_token`, nur Kanaltyp `webhook`, nur

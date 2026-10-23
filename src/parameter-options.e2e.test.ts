@@ -7,7 +7,8 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { ParameterOptionsService } from './parameter-options/index.js';
 import { AUTH_PASSWORDS, authEnvSetup, FAST_AUTH, PASSWORD_AUTH_CONFIG } from './api/testing/auth.js';
 import { REPO_A, startAppEnv, type AppEnv } from './api/testing/helpers.js';
 import { CSRF_HEADER } from './api/server.js';
@@ -188,5 +189,20 @@ describe('parameter options and roles (auth.mode: password)', () => {
     const allowed = await env.request('GET', '/api/v1/workflows/deploy/parameters/target/options', undefined, { cookie: operator });
     expect(allowed.status).toBe(200);
     expect(allowed.json.options).toHaveLength(2);
+  });
+
+  it('refresh=true is passed on only for operators; viewers get the cached result', async () => {
+    const viewer = await login('victor');
+    const operator = await login('olga');
+    const spy = vi.spyOn(ParameterOptionsService.prototype, 'get');
+    try {
+      const url = '/api/v1/workflows/deploy/parameters/tag/options';
+      expect((await env.request('GET', url, undefined, { cookie: viewer })).status).toBe(200);
+      expect((await env.request('GET', `${url}?refresh=true`, undefined, { cookie: viewer })).json.cached).toBe(true);
+      await env.request('GET', `${url}?refresh=true`, undefined, { cookie: operator });
+      expect(spy.mock.calls.map((c) => c[2])).toEqual([{ refresh: false }, { refresh: false }, { refresh: true }]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

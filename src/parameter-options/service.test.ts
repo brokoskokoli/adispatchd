@@ -279,7 +279,63 @@ describe('ParameterOptionsService – GitHub', () => {
     const forbidden = await service.get(wf, 'tag');
     expect(forbidden.error).toMatchObject({ code: 'source_error', message: expect.stringContaining('forbidden') });
     github.failNext({ path: /\/tags$/ }, { status: 403, body: { message: 'API rate limit exceeded' }, headers: { 'x-ratelimit-remaining': '0', 'retry-after': '600' } });
-    clock.advance(3_000);
+    clock.advance(61_000);
     expect((await service.get(wf, 'tag')).error).toMatchObject({ code: 'rate_limited' });
+  });
+});
+
+describe('ParameterOptionsService – review follow-up', () => {
+  it('fetches GitHub options at most every max(30s, cache), even with refresh', async () => {
+    const clock = new FakeClock('2026-10-23T12:00:00Z');
+    const github = new FakeGitHub({ clock });
+    github.setRepoRefs('example/project-a', { tags: ['v1'] });
+    const adapter = createFakeGitHubSource(github, { clock });
+    const service = new ParameterOptionsService({ sources: () => adapter, configDir: () => '/cfg', dataDir: '/data', clock });
+    const tagRequests = (): number => github.requests.filter((r) => r.path.endsWith('/tags')).length;
+    const noCache = workflow({ tag: githubParam('tags', 'project_a', { cacheMs: 0 }) });
+    await service.get(noCache, 'tag');
+    clock.advance(10_000);
+    expect(await service.get(noCache, 'tag', { refresh: true })).toMatchObject({ cached: true });
+    expect(tagRequests()).toBe(1);
+    clock.advance(21_000);
+    expect(await service.get(noCache, 'tag', { refresh: true })).toMatchObject({ cached: false });
+    expect(tagRequests()).toBe(2);
+
+    const longCache = workflow({ tag: githubParam('tags', 'project_a', { cacheMs: 120_000 }) });
+    service.invalidate();
+    await service.get(longCache, 'tag');
+    clock.advance(60_000);
+    expect(await service.get(longCache, 'tag', { refresh: true })).toMatchObject({ cached: true });
+    clock.advance(61_000);
+    expect(await service.get(longCache, 'tag', { refresh: true })).toMatchObject({ cached: false });
+    expect(tagRequests()).toBe(4);
+  });
+
+  it('applies the timeout to token retrieval (hanging provider) and reports a shutdown as aborted', async () => {
+    const hanging: CredentialProvider = { getToken: () => new Promise<AccessToken>(() => undefined) };
+    const executor: OptionsExecutor = async () => ok('never\n');
+    const service = new ParameterOptionsService({ sources: () => undefined, credentials: hanging, configDir: () => '/cfg', dataDir: '/data', executor, minIntervalMs: 0 });
+    const wf = (delivery: 'env' | 'file') => workflow({ target: commandParam({ timeoutMs: 200, secrets: { T: { identity: 'x', delivery } } }) });
+    const started = Date.now();
+    expect((await service.get(wf('env'), 'target')).error).toEqual({ code: 'timeout', message: 'Script timed out after 200ms' });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    service.invalidate();
+    const pending = service.get(workflow({ target: commandParam({ timeoutMs: 30_000, secrets: { T: { identity: 'x', delivery: 'env' } } }) }), 'target');
+    await new Promise((r) => setTimeout(r, 20));
+    service.stop();
+    expect((await pending).error).toEqual({ code: 'aborted', message: 'Fetch aborted (shutting down)' });
+  });
+
+  it('logs a failed option script once (no shell-check log line)', async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'adispatch-options-log-'));
+    try {
+      const logger = new MemoryLogger();
+      const service = new ParameterOptionsService({ sources: () => undefined, configDir: () => dir, dataDir: path.join(dir, 'data'), logger });
+      const wf = workflow({ target: commandParam({ command: '/bin/sh', args: ['-c', 'exit 5'] }) });
+      expect((await service.get(wf, 'target')).error).toEqual({ code: 'command_failed', message: 'exit code 5' });
+      expect(logger.records.map((r) => r.msg)).toEqual(['parameter options could not be fetched']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

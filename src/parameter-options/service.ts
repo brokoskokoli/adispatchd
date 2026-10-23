@@ -42,6 +42,12 @@ import { parseOptionsOutput, type ParameterOption } from './parse.js';
 
 /** Default min. distance between two fetches of the same parameter. */
 export const DEFAULT_OPTIONS_MIN_INTERVAL_MS = 2_000;
+/**
+ * Min. distance between two real GitHub fetches of the same parameter (also
+ * with `refresh`); the effective interval is `max(this, cache)`. Protects the
+ * installation's rate limit against polling clients.
+ */
+export const DEFAULT_GITHUB_OPTIONS_MIN_INTERVAL_MS = 30_000;
 /** Output limit per stream of an options script (500 options with labels fit). */
 export const OPTIONS_MAX_OUTPUT_BYTES = 256 * 1024;
 /** Longest rate-limit wait of a GitHub fetch (interactive). */
@@ -60,7 +66,7 @@ export const OPTIONS_ENV = {
 } as const;
 
 /** Stable error codes of an options result. */
-export type ParameterOptionsErrorCode = 'source_unavailable' | 'source_error' | 'rate_limited' | 'timeout' | 'command_failed' | 'invalid_output';
+export type ParameterOptionsErrorCode = 'source_unavailable' | 'source_error' | 'rate_limited' | 'timeout' | 'aborted' | 'command_failed' | 'invalid_output';
 
 /** Error of an options fetch (message short and redacted). */
 export interface ParameterOptionsError {
@@ -110,6 +116,8 @@ export interface ParameterOptionsServiceOptions {
   redact?: Redactor;
   hostEnv?: Readonly<Record<string, string | undefined>>;
   minIntervalMs?: number;
+  /** Default {@link DEFAULT_GITHUB_OPTIONS_MIN_INTERVAL_MS}. */
+  githubMinIntervalMs?: number;
 }
 
 /** Result of {@link ParameterOptionsService.check}. */
@@ -141,6 +149,7 @@ export class ParameterOptionsService {
   private readonly redact: Redactor;
   private readonly executor: OptionsExecutor;
   private readonly minIntervalMs: number;
+  private readonly githubMinIntervalMs: number;
   private readonly entries = new Map<string, Entry>();
   private readonly abort = new AbortController();
 
@@ -149,11 +158,13 @@ export class ParameterOptionsService {
     this.logger = (options.logger ?? noopLogger).child({ component: 'parameter-options' });
     this.redact = options.redact ?? ((s: string) => s);
     this.minIntervalMs = options.minIntervalMs ?? DEFAULT_OPTIONS_MIN_INTERVAL_MS;
+    this.githubMinIntervalMs = options.githubMinIntervalMs ?? DEFAULT_GITHUB_OPTIONS_MIN_INTERVAL_MS;
     if (options.executor) this.executor = options.executor;
     else {
+      // The runner's own "shell check failed" log line would be misleading; failures are logged by fetch().
       const runner = new ShellCheckRunner({
         clock: this.clock,
-        logger: this.logger,
+        logger: noopLogger,
         maxOutputBytes: OPTIONS_MAX_OUTPUT_BYTES,
         ...(options.hostEnv ? { hostEnv: options.hostEnv } : {}),
       });
@@ -173,7 +184,8 @@ export class ParameterOptionsService {
 
   /**
    * Options of parameter `name` of `workflow`. Static enums return their
-   * `values`. `refresh` bypasses the cache (not the minimum interval).
+   * `values`. `refresh` bypasses the cache (not the minimum interval: for
+   * GitHub `max(30 s, cache)`, for scripts 2 s).
    * Never throws for fetch problems (they are reported in `error`).
    */
   async get(workflow: WorkflowConfig, name: string, opts: { refresh?: boolean } = {}): Promise<ParameterOptionsResult> {
@@ -196,7 +208,8 @@ export class ParameterOptionsService {
       return withCustom(entry.success, true);
     }
     if (entry.inflight) return withCustom(await entry.inflight, false);
-    if (entry.last && entry.lastAt !== null && now - entry.lastAt < this.minIntervalMs) return withCustom(entry.last, true);
+    const minInterval = source.type === 'github' ? Math.max(this.minIntervalMs, this.githubMinIntervalMs, source.cacheMs) : this.minIntervalMs;
+    if (entry.last && entry.lastAt !== null && now - entry.lastAt < minInterval) return withCustom(entry.last, true);
 
     const current = entry;
     const p = this.fetch(workflow, name, source).then((result) => {
@@ -274,6 +287,7 @@ export class ParameterOptionsService {
       });
       return { options: names.map((n) => ({ value: n, label: n })) };
     } catch (err) {
+      if (this.abort.signal.aborted) return { error: { code: 'aborted', message: 'Fetch aborted (shutting down)' } };
       if (signal.aborted) return { error: { code: 'timeout', message: `GitHub did not answer within ${formatSeconds(source.timeoutMs)}` } };
       if (err instanceof SourceError) {
         return { error: { code: err.kind === 'rate_limited' ? 'rate_limited' : 'source_error', message: `GitHub (${err.kind}): ${err.message}` } };
@@ -301,7 +315,15 @@ export class ParameterOptionsService {
       [OPTIONS_ENV.configDir]: configDir,
       [OPTIONS_ENV.dataDir]: dataDir,
     };
-    const signal = this.abort.signal;
+    // One deadline for the whole fetch (tokens, token files, script); the script also has its own timer.
+    const deadline = AbortSignal.timeout(source.timeoutMs);
+    const signal = AbortSignal.any([this.abort.signal, deadline]);
+    const stopped = (): { error: ParameterOptionsError } | null =>
+      this.abort.signal.aborted
+        ? { error: { code: 'aborted', message: 'Fetch aborted (shutting down)' } }
+        : deadline.aborted
+          ? { error: { code: 'timeout', message: `Script timed out after ${formatSeconds(source.timeoutMs)}` } }
+          : null;
     // Secrets (WI-18): `env` = token in the variable, `file` = private token file (`<NAME>_FILE`), removed afterwards.
     const secretValues: string[] = [];
     const fileRequests: TokenFileRequest[] = [];
@@ -315,10 +337,12 @@ export class ParameterOptionsService {
         continue;
       }
       try {
-        const token = await this.options.credentials!.getToken(ref.identity, { signal });
+        const token = await untilAborted(this.options.credentials!.getToken(ref.identity, { signal }), signal);
         env[secret] = token.token;
         secretValues.push(token.token);
       } catch (err) {
+        const s = stopped();
+        if (s) return s;
         return { error: { code: 'command_failed', message: `Token for "${secret}" (identity "${ref.identity}") unavailable: ${errorMessage(err)}` } };
       }
     }
@@ -341,7 +365,7 @@ export class ParameterOptionsService {
           ...(this.options.timers ? { timers: this.options.timers } : {}),
           logger: this.logger,
         });
-        Object.assign(env, await session.open(signal));
+        Object.assign(env, await untilAborted(session.open(signal), signal));
       }
       const spec: ShellCheckSpec = { command: source.command, args, timeoutMs: source.timeoutMs, cwd: configDir, env };
       const context: OptionsScriptContext = {
@@ -355,6 +379,8 @@ export class ParameterOptionsService {
       const result = await this.executor(spec, context, signal);
       if (session) secretValues.push(...session.values());
       if (result.timedOut) return { error: { code: 'timeout', message: `Script timed out after ${formatSeconds(source.timeoutMs)}` } };
+      const s = result.exitCode !== 0 ? stopped() : null;
+      if (s) return s;
       if (result.exitCode !== 0 || result.signal !== null || result.error !== undefined) {
         // Exit codes are reported plainly ("exit code 2"); signals and spawn errors with their detail.
         const plainExit =
@@ -368,12 +394,31 @@ export class ParameterOptionsService {
       if (!parsed.ok) return { error: { code: 'invalid_output', message: scrub(parsed.error) } };
       return { options: parsed.options };
     } catch (err) {
-      return { error: { code: 'command_failed', message: scrub(errorMessage(err)) } };
+      return stopped() ?? { error: { code: 'command_failed', message: scrub(errorMessage(err)) } };
     } finally {
       await session?.close().catch(() => undefined);
       if (sessionRoot) await rm(sessionRoot, { recursive: true, force: true }).catch(() => undefined);
     }
   }
+}
+
+/** `promise`, but rejects as soon as `signal` aborts (for callees that might ignore the signal). */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(signal.reason ?? new Error('aborted'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason ?? new Error('aborted'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (v) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(v);
+      },
+      (e: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(e);
+      },
+    );
+  });
 }
 
 function formatSeconds(ms: number): string {

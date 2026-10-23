@@ -5,6 +5,7 @@
  * them. Other components import from this module only.
  */
 export {
+  DEFAULT_GITHUB_OPTIONS_MIN_INTERVAL_MS,
   DEFAULT_OPTIONS_MIN_INTERVAL_MS,
   hasDynamicOptions,
   OPTIONS_ENV,

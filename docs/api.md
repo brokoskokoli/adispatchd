@@ -213,7 +213,7 @@ mit `auth.mode: none` wie bisher ohne Einschränkung. `admin` umfasst alles von 
 | 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt), `github_rejected` (WI-27) |
 | 429 | `too_many_attempts` (Login, WI-26), `rate_limited` (Info-Refresh), `ui_actions_throttled`, `github_rate_limited` (WI-27) |
 | 502 | `source_unavailable`, `parameter_options_unavailable` (WI-31, `details: {parameter, error: {code, message}}`), `github_forbidden`, `github_auth_failed`, `github_unavailable`, `github_outcome_unknown` (WI-27) |
-| 503 | `run_controller_not_ready` (Recovery läuft), `run_controller_not_accepting` / `scheduler_not_accepting` (Drain/Shutdown) |
+| 503 | `run_controller_not_ready` (Recovery läuft), `run_controller_not_accepting` / `scheduler_not_accepting` (Drain/Shutdown), `not_ready` (Auswahllisten-Dienst nicht verfügbar, `GET …/parameters/:name/options`, WI-31) |
 | 500 | `kill_failed`, `internal_error` |
 
 ## Endpunkte
@@ -261,7 +261,7 @@ mit `auth.mode: none` wie bisher ohne Einschränkung. `admin` umfasst alles von 
 | GET | `/api/v1/workflows/:id` | – | Workflow + `diagnosis` (letzte Planungsdiagnose), `filter`, `hooks` |
 | PATCH | `/api/v1/workflows/:id/runtime` | `{"enabled"?: bool\|null, "priority"?: number\|null, "maxConcurrent"?: int≥1\|null}` (`null` = Override entfernen) | `200` Workflow |
 | POST | `/api/v1/workflows/:id/start` | `{"item"?: "https://github.com/o/r/issues/7" \| "#7" \| "7" \| "repo_a:7", "parameters"?: {…}}` | `202 {"run": RunSummary}` |
-| GET | `/api/v1/workflows/:id/parameters/:name/options?refresh=true` | – | `200 ParameterOptions` (seit 0.7.0, WI-31, siehe unten); `404 unknown_parameter`, `400 parameter_has_no_options` (kein `enum`) |
+| GET | `/api/v1/workflows/:id/parameters/:name/options?refresh=true` | – | `200 ParameterOptions` (seit 0.7.0, WI-31, siehe unten); `404 unknown_parameter`, `400 parameter_has_no_options` (kein `enum`), `503 not_ready` (Dienst für Auswahllisten nicht verfügbar) |
 | POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14; `hooks: {onResult: [...], technical: {crashed, start_error, timed_out, cancelled → Hook}}`, WI-17; seit 0.3.0 `secrets` wie beim Workflow, WI-18; `source.sources` je Source, `capacity.perSource`, WI-20; je Kandidat optional `linkedFields` für `linked_branches` … `work_pr_url`, wenn der Workflow sie verwendet, WI-21; bei `execute.type: container` `container: {engine, image, command, args}` = Engine-Aufruf mit unaufgelösten Templates und `<run-id>`, Secrets nur als `-e NAME`, WI-19) |
 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
@@ -277,12 +277,14 @@ mit `auth.mode: none` wie bisher ohne Einschränkung. `admin` umfasst alles von 
 ```
 
 - Mit `options_from` werden die Optionen zur Laufzeit geholt (GitHub-Branches/-Tags mit der Identity der Source bzw.
-  Ausgabe des Skripts) und `cache` lang im Speicher gehalten (nur Erfolge); `refresh=true` umgeht den Cache. Gleichzeitige
-  Abrufe desselben Parameters werden zusammengelegt; ein Parameter wird höchstens alle 2 s neu geholt – schnellere
-  Anfragen (auch mit `refresh`) erhalten das letzte Ergebnis mit `cached: true`.
+  Ausgabe des Skripts) und `cache` lang im Speicher gehalten (nur Erfolge); `refresh=true` umgeht den Cache – aber nur
+  für Rollen, die starten dürfen (`operator`; mit `auth.mode: none` alle), `viewer` erhalten das gecachte Ergebnis.
+  Gleichzeitige Abrufe desselben Parameters werden zusammengelegt; ein Parameter wird höchstens alle 2 s (Skript) bzw.
+  alle `max(30 s, cache)` (GitHub, schont das Rate-Limit der Installation) neu geholt – schnellere Anfragen (auch mit
+  `refresh`) erhalten das letzte Ergebnis mit `cached: true`.
 - Statische `values` kommen unverändert zurück (`fetchedAt: null`).
 - Fehler beim Abruf ergeben **200** mit `options: []` und `error: {code, message}`; `code` ist `source_unavailable`,
-  `source_error`, `rate_limited`, `timeout`, `command_failed` oder `invalid_output`, `message` kurz und ohne Secrets
+  `source_error`, `rate_limited`, `timeout`, `aborted` (Shutdown), `command_failed` oder `invalid_output`, `message` kurz und ohne Secrets
   (bei Skripten Exit-Code und erste stderr-Zeile).
 - `POST …/start` prüft Werte von `options_from`-Parametern ohne `allow_custom` gegen die aktuelle Liste (Cache erlaubt):
   Wert nicht enthalten → `400 invalid_parameters` (`details.errors: [{parameter, message: "\"x\" is not one of the
