@@ -5,6 +5,8 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+## [0.7.0] – 2026-10-23
+
 ### Hinzugefügt
 
 - **Auswahllisten zur Laufzeit für Parameter manueller Starts (`options_from`).** Ein `enum`-Parameter kann seine
@@ -380,6 +382,7 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
+[0.7.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.3.0...v0.4.0

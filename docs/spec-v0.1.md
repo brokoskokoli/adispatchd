@@ -2,7 +2,7 @@
 
 > **Name:** Agent Dispatch Daemon – npm-Paket, Repository, systemd-Unit und Standardpfade `adispatchd`, CLI-Befehl `adispatch`. Ursprünglicher Arbeitsname: „Agent Orchestrator“ (`agent-orchestrator`); alle Bezeichner wurden entsprechend umbenannt (z. B. Umgebungsvariablen `ADISPATCH_*` statt `ORCH_*`, Kommentar-Marker `adispatchd:` statt `orch:`).
 
-**Status:** Umgesetzt bis Version 0.6.0 (npm `adispatchd`), in Arbeit 0.7.0 (WI-31). Ursprünglich technischer Entwurf v0.1; spätere Erweiterungen stehen als „Nachtrag 0.2.0 … 0.7.0 (WI-NN)“ an der jeweiligen Stelle, verbindliche Dateiformate in [configuration-reference.md](configuration-reference.md)  
+**Status:** Umgesetzt bis Version 0.7.0 (npm `adispatchd`). Ursprünglich technischer Entwurf v0.1; spätere Erweiterungen stehen als „Nachtrag 0.2.0 … 0.7.0 (WI-NN)“ an der jeweiligen Stelle, verbindliche Dateiformate in [configuration-reference.md](configuration-reference.md)  
 **Ziel:** Eigenständig installierbarer, konfigurationsgetriebener Orchestrator für Shell-Prozesse und KI-Agenten  
 **Technologie:** TypeScript, Node.js (unterstützte LTS-Version), SQLite, YAML, HTTP/SSE  
 **Betrieb:** Linux (Produktion, systemd), macOS (lokal)  
