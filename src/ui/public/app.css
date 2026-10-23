@@ -192,6 +192,9 @@ ol.attempts { margin: 4px 0; padding-left: 18px; }
 .form { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field > span { font-weight: 600; font-size: 12.5px; }
+.option-field { display: flex; flex-direction: column; gap: 4px; }
+.option-row { display: flex; gap: 6px; align-items: center; }
+.option-row > .input { flex: 1; min-width: 0; }
 .check { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .inline-form { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .filters { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }

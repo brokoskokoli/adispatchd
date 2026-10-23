@@ -6,7 +6,7 @@
 import { ApiError, api, qs, seg } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
-import { buildRuntimeBody, buildStartBody } from '../../shared/params.js';
+import { buildRuntimeBody, buildStartBody, defaultOptionHint, filterOptions, OPTION_SEARCH_THRESHOLD, optionsSourceText, type ParameterDef, type ParameterOptionView, type ParameterOptionsView } from '../../shared/params.js';
 import { checkValueLabel, decisionTone, formatBytes, formatDuration, triggerSummary, truncate } from '../../shared/format.js';
 import { checkCountsText, checkCountsTone, checkTitle, conditionStatusInfo } from '../../shared/checks.js';
 import { buildHash } from '../../shared/route.js';
@@ -19,6 +19,82 @@ function timeoutText(t: unknown): string {
   const o = (t ?? {}) as { maxDurationMs?: unknown; idleTimeoutMs?: unknown };
   const fmt = (v: unknown): string => (typeof v === 'number' ? formatDuration(v) : 'none');
   return `max ${fmt(o.maxDurationMs)}, idle ${fmt(o.idleTimeoutMs)}`;
+}
+
+/**
+ * Start-form control of an enum parameter with `options_from` or
+ * `allow_custom` (WI-31): loads the options when the form opens; a select
+ * (with search above {@link OPTION_SEARCH_THRESHOLD} options) or – with
+ * `allow_custom` – a text input with suggestions (`datalist`); "Reload"
+ * bypasses the cache; loading and error states as text (labels as text only).
+ */
+function dynamicEnumField(
+  workflowId: string,
+  name: string,
+  def: ParameterDef,
+  dflt: string | null,
+): { control: HTMLInputElement | HTMLSelectElement; box: HTMLElement } {
+  const custom = def.allowCustom === true;
+  const listId = `start-options-${name}`;
+  const datalist = h('datalist', { id: listId });
+  const control = custom
+    ? (h('input', { class: 'input', type: 'text', list: listId, placeholder: dflt ?? '', maxlength: 200, 'aria-label': name }) as HTMLInputElement)
+    : (h('select', { class: 'input', 'aria-label': name }) as HTMLSelectElement);
+  const search = h('input', { class: 'input', type: 'search', placeholder: 'Search options…', hidden: true, 'aria-label': `Search options of ${name}` }) as HTMLInputElement;
+  const status = h('small', { class: 'muted', 'aria-live': 'polite' }, 'Loading options…');
+  let options: ParameterOptionView[] = [];
+  const optionText = (o: ParameterOptionView): string => (o.label === o.value ? o.value : `${o.label} (${o.value})`);
+  const render = (): void => {
+    if (custom) {
+      replaceChildren(datalist, options.map((o) => h('option', { value: o.value, label: o.label === o.value ? null : o.label })));
+      return;
+    }
+    const select = control as HTMLSelectElement;
+    const current = select.value;
+    const shown = filterOptions(options, search.value, current);
+    replaceChildren(
+      select,
+      h('option', { value: '' }, dflt !== null ? `default (${dflt})` : def.required ? '— choose —' : '(none)'),
+      shown.map((o) => h('option', { value: o.value }, optionText(o))),
+    );
+    select.value = shown.some((o) => o.value === current) ? current : '';
+  };
+  search.addEventListener('input', render);
+  const setStatus = (cls: string, message: string): void => {
+    status.className = cls;
+    status.textContent = message;
+  };
+  const load = async (refresh: boolean): Promise<void> => {
+    reload.disabled = true;
+    setStatus('muted', 'Loading options…');
+    try {
+      const res = await api.get<ParameterOptionsView>(`/api/v1/workflows/${seg(workflowId)}/parameters/${seg(name)}/options${qs({ refresh: refresh ? 'true' : null })}`);
+      options = res.options;
+      search.hidden = custom || options.length <= OPTION_SEARCH_THRESHOLD;
+      render();
+      if (res.error) {
+        setStatus('error-text', `Options unavailable: ${res.error.message}${custom ? ' – you can still enter a value.' : ''}`);
+        return;
+      }
+      const hint = defaultOptionHint(def, options);
+      if (hint) {
+        setStatus('error-text', hint);
+        return;
+      }
+      const from = optionsSourceText(def);
+      setStatus('muted', `${options.length} option${options.length === 1 ? '' : 's'}${from ? ` · ${from}` : ''}${res.cached ? ' · cached' : ''}${custom ? ' · other values allowed' : ''}`);
+    } catch (err) {
+      setStatus('error-text', `Options could not be loaded: ${err instanceof ApiError ? `${err.message} (${err.code})` : err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      reload.disabled = false;
+    }
+  };
+  const reload = button('Reload', () => void load(true), { title: 'Fetch the options again (bypasses the cache)' });
+  void load(false);
+  return {
+    control,
+    box: h('div', { class: 'option-field' }, search, h('div', { class: 'option-row' }, control, reload), custom ? datalist : null, status),
+  };
 }
 
 function triggerText(wf: Workflow): string {
@@ -416,6 +492,14 @@ export const workflowPage = (ctx: PageContext, id: string): Page => {
     for (const [name, def] of Object.entries(wf.parameters)) {
       let input: HTMLInputElement | HTMLSelectElement;
       const dflt = def.default === null || def.default === undefined ? null : String(def.default);
+      const head = h('span', null, name, def.required ? ' *' : '', h('small', { class: 'muted' }, ` ${def.type}`));
+      if (def.type === 'enum' && (def.optionsFrom || def.allowCustom)) {
+        // WI-31: options from GitHub / a script (loaded now), or free input with suggestions.
+        const field = dynamicEnumField(id, name, def, dflt);
+        fields[name] = field.control;
+        rows.push(h('div', { class: 'field' }, head, field.box, def.description ? h('small', { class: 'muted' }, def.description) : null));
+        continue;
+      }
       if (def.type === 'enum' || def.type === 'boolean') {
         const values = def.type === 'enum' ? (def.values ?? []) : ['true', 'false'];
         input = h(

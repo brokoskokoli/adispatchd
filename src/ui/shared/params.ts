@@ -12,6 +12,51 @@ export interface ParameterDef {
   default: unknown;
   description?: string | null;
   values?: readonly string[];
+  /** WI-31: options fetched at run time (`null`/absent = static `values`). */
+  optionsFrom?: { type: 'github' | 'command' | string; github?: string; source?: string; command?: string } | null;
+  /** WI-31: values outside the list are accepted. */
+  allowCustom?: boolean;
+}
+
+/** One option of `GET /api/v1/workflows/:id/parameters/:name/options` (WI-31). */
+export interface ParameterOptionView {
+  value: string;
+  label: string;
+}
+
+/** Response of the options endpoint (WI-31). */
+export interface ParameterOptionsView {
+  options: ParameterOptionView[];
+  fetchedAt: string | null;
+  cached: boolean;
+  allowCustom: boolean;
+  error?: { code: string; message: string };
+}
+
+/** From this many options on, the start form offers a search field (WI-31). */
+export const OPTION_SEARCH_THRESHOLD = 15;
+
+/** Options whose value or label contains `query` (case-insensitive); `keep` stays in the list (current selection). */
+export function filterOptions(options: readonly ParameterOptionView[], query: string, keep = ''): ParameterOptionView[] {
+  const q = query.trim().toLowerCase();
+  if (q === '') return [...options];
+  return options.filter((o) => o.value === keep || o.value.toLowerCase().includes(q) || o.label.toLowerCase().includes(q));
+}
+
+/** Short description of where the options come from (start form). */
+export function optionsSourceText(def: ParameterDef): string {
+  const o = def.optionsFrom;
+  if (!o) return '';
+  if (o.type === 'github') return `${o.github ?? 'refs'} of ${o.source ?? 'the source'}`;
+  return `script ${o.command ?? ''}`.trim();
+}
+
+/** Hint when the default is missing from the current options (`null` = fine). */
+export function defaultOptionHint(def: ParameterDef, options: readonly ParameterOptionView[]): string | null {
+  if (def.default === null || def.default === undefined || def.default === '') return null;
+  const value = String(def.default);
+  if (options.some((o) => o.value === value)) return null;
+  return def.allowCustom ? null : `Default "${value}" is not in the current list – the start will be rejected unless you choose another value.`;
 }
 
 /** Result of {@link buildStartBody}. */
@@ -59,7 +104,9 @@ export function buildStartBody(
         else params[name] = raw === 'true';
         break;
       case 'enum':
-        if (!(def.values ?? []).includes(raw)) errors.push({ field: name, message: `Expected one of: ${(def.values ?? []).join(', ')}` });
+        // Dynamic options / custom values (WI-31): the server checks against the current list.
+        if (def.optionsFrom || def.allowCustom) params[name] = raw;
+        else if (!(def.values ?? []).includes(raw)) errors.push({ field: name, message: `Expected one of: ${(def.values ?? []).join(', ')}` });
         else params[name] = raw;
         break;
       default:
