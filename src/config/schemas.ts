@@ -141,9 +141,8 @@ const stringList = z.array(z.string()).default([]);
 export const SECRET_DELIVERIES = ['env', 'file'] as const;
 
 /** `secrets` of `execute` and `shell` actions: env name → identity whose token is handed over. */
-const secretsMap = z
-  .record(envName, z.strictObject({ identity: configId, delivery: z.enum(SECRET_DELIVERIES).default('env') }))
-  .default({});
+const secretsRecord = z.record(envName, z.strictObject({ identity: configId, delivery: z.enum(SECRET_DELIVERIES).default('env') }));
+const secretsMap = secretsRecord.default({});
 
 const notificationEvent = z.enum(NOTIFICATION_EVENT_TYPES);
 
@@ -478,6 +477,43 @@ const parameterBase = {
   description: z.string().optional(),
 };
 
+/** `options_from.github` (WI-31): which refs of the repository become the options. */
+export const PARAMETER_OPTIONS_GITHUB_KINDS = ['branches', 'tags'] as const;
+/** Upper bound of `options_from.limit` and of the options a command may return (WI-31). */
+export const MAX_PARAMETER_OPTIONS = 500;
+/** Defaults and limits of `options_from` (WI-31). */
+export const PARAMETER_OPTIONS_DEFAULTS = {
+  limit: 100,
+  timeoutMs: 10_000,
+  maxTimeoutMs: 60_000,
+  githubCacheMs: 60_000,
+  commandCacheMs: 0,
+} as const;
+
+/**
+ * `options_from` of an enum parameter (WI-31): the options are fetched at run
+ * time from GitHub (branches/tags) or a trusted script. Which keys combine is
+ * checked in validate.ts (exactly one of `github`/`command`, …).
+ */
+const parameterOptionsFromSchema = z.strictObject({
+  github: z.enum(PARAMETER_OPTIONS_GITHUB_KINDS).optional(),
+  source: configId.optional(),
+  limit: z
+    .number()
+    .int('Must be an integer')
+    .min(1, 'Must be at least 1')
+    .max(MAX_PARAMETER_OPTIONS, `Must be at most ${MAX_PARAMETER_OPTIONS}`)
+    .optional(),
+  command: nonEmpty.optional(),
+  args: z.array(z.string()).optional(),
+  secrets: secretsRecord.optional(),
+  timeout: positiveDuration.optional(),
+  cache: durationSchema.optional(),
+});
+
+/** Parsed `options_from` (WI-31). */
+export type RawParameterOptionsFrom = z.output<typeof parameterOptionsFromSchema>;
+
 const parameterSchema = z.discriminatedUnion('type', [
   z.strictObject({ type: z.literal('string'), ...parameterBase, default: z.unknown().optional() }),
   z.strictObject({ type: z.literal('number'), ...parameterBase, default: z.unknown().optional() }),
@@ -485,7 +521,10 @@ const parameterSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('enum'),
     ...parameterBase,
-    values: z.array(z.union([z.string(), z.number(), z.boolean()]).transform(String)).min(1, 'Enum needs values'),
+    // `values` or `options_from` (WI-31); exactly one of them is checked in validate.ts.
+    values: z.array(z.union([z.string(), z.number(), z.boolean()]).transform(String)).min(1, 'Enum needs values').optional(),
+    options_from: parameterOptionsFromSchema.optional(),
+    allow_custom: z.boolean().default(false),
     // Scalars are stringified like `values`, so `values: [1, 2]` + `default: 1` matches.
     default: z
       .unknown()

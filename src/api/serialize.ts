@@ -4,7 +4,7 @@
  * are redacted by the executor, error details pass `redactValue`.
  */
 import { ACTIVE_STATUSES, isTerminalStatus, type TechnicalStatus } from '../core/index.js';
-import { workflowSecrets, type EffectiveWorkflow, type ParameterDefinition, type WorkflowConfig } from '../config/index.js';
+import { workflowSecrets, type EffectiveWorkflow, type ParameterDefinition, type ParameterOptionsSource, type WorkflowConfig } from '../config/index.js';
 import { describeContainerExecute } from '../executors/index.js';
 import type { ActionAttemptRecord, BlockRecord, RunActionRecord, RunRecord } from '../persistence/index.js';
 import { checkDisplayName, displayCommand, type CronWorkflowStatus, type WorkflowConditionStatus, type WorkflowPlanningDiagnosis } from '../scheduler/index.js';
@@ -145,13 +145,32 @@ export function runDetailFields(run: RunRecord): Record<string, unknown> {
 }
 
 /** Parameter definition in API form. */
-function parameterView(def: ParameterDefinition): Record<string, unknown> {
+function parameterView(def: ParameterDefinition, configDir?: string): Record<string, unknown> {
   return {
     type: def.type,
     required: def.required,
     default: def.default,
     description: def.description,
-    ...(def.type === 'enum' ? { values: def.values } : {}),
+    ...(def.type === 'enum' ? { values: def.values, optionsFrom: optionsFromView(def.optionsFrom ?? null, configDir), allowCustom: def.allowCustom === true } : {}),
+  };
+}
+
+/**
+ * `options_from` of an enum parameter (WI-31): kind, source and limits; for
+ * scripts the command (relative to the config dir) and the secret *names* –
+ * never the arguments.
+ */
+function optionsFromView(source: ParameterOptionsSource | null, configDir?: string): Record<string, unknown> | null {
+  if (!source) return null;
+  if (source.type === 'github') {
+    return { type: 'github', github: source.github, source: source.source, limit: source.limit, timeoutMs: source.timeoutMs, cacheMs: source.cacheMs };
+  }
+  return {
+    type: 'command',
+    command: displayCommand(source.command, configDir),
+    secrets: Object.keys(source.secrets),
+    timeoutMs: source.timeoutMs,
+    cacheMs: source.cacheMs,
   };
 }
 
@@ -187,7 +206,7 @@ export function toWorkflowView(
     identity: c.identity,
     activeRuns: extra.activeRuns,
     activeBlocks: extra.activeBlocks,
-    parameters: Object.fromEntries(Object.entries(c.parameters).map(([k, v]) => [k, parameterView(v)])),
+    parameters: Object.fromEntries(Object.entries(c.parameters).map(([k, v]) => [k, parameterView(v, extra.configDir)])),
     execute: {
       type: c.execute.type,
       // Container (WI-19): the engine command line with unresolved templates (secrets by name only).

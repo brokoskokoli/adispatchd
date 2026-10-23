@@ -46,6 +46,8 @@ import {
   type GlobalConfig,
   type IdentityConfig,
   type LifecycleActionConfig,
+  type ParameterDefinition,
+  type ParameterOptionsSource,
   type SecretRef,
   type SourceConfig,
   type ViewConfig,
@@ -54,7 +56,7 @@ import {
   type WorkflowConfig,
 } from './model.js';
 import type { NamedFilters } from './named-filters.js';
-import { MAX_MONITORING_SAMPLES, MIN_MONITORING_SAMPLES, type RawParameter } from './schemas.js';
+import { MAX_MONITORING_SAMPLES, MIN_MONITORING_SAMPLES, PARAMETER_OPTIONS_DEFAULTS, type RawParameter, type RawParameterOptionsFrom } from './schemas.js';
 
 /** Files of the top-level documents. */
 export const CONFIG_FILE = 'config.yaml';
@@ -407,7 +409,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   // Parameters
   const automatic = wf.trigger.type !== 'manual';
   for (const [name, raw] of Object.entries(entry.rawParameters)) {
-    validateParameter(name, raw, automatic, issues, file);
+    validateParameter(name, raw, wf.parameters[name], automatic, input, issues, file);
   }
   const parameterNames = Object.keys(wf.parameters);
 
@@ -747,41 +749,124 @@ function checkProjectUpdate(
 function validateParameter(
   name: string,
   raw: RawParameter,
+  def: ParameterDefinition | undefined,
   automatic: boolean,
+  input: SemanticInput,
   issues: IssueCollector,
   file: string,
 ): void {
   const at: IssuePath = ['parameters', name];
-  if (raw.type === 'enum' && new Set(raw.values).size !== raw.values.length) {
-    issues.error(file, [...at, 'values'], 'Enum values must be unique');
+  const dynamic = raw.type === 'enum' && raw.options_from !== undefined;
+  if (raw.type === 'enum') {
+    if (raw.values !== undefined && raw.options_from !== undefined) {
+      issues.error(file, [...at, 'options_from'], '"options_from" cannot be combined with "values" (use one of them)');
+    } else if (raw.values === undefined && raw.options_from === undefined) {
+      issues.error(file, [...at, 'values'], 'Enum needs "values" or "options_from"');
+    }
+    if (raw.values !== undefined && new Set(raw.values).size !== raw.values.length) {
+      issues.error(file, [...at, 'values'], 'Enum values must be unique');
+    }
+    if (raw.options_from !== undefined && def?.type === 'enum' && def.optionsFrom) {
+      validateOptionsFrom(raw.options_from, def.optionsFrom, input, issues, file, [...at, 'options_from']);
+    }
   }
   if (raw.default !== undefined) {
-    const def = raw.default;
+    const value = raw.default;
     let ok: boolean;
     switch (raw.type) {
       case 'string':
-        ok = typeof def === 'string';
+        ok = typeof value === 'string';
         break;
       case 'number':
-        ok = typeof def === 'number' && Number.isFinite(def);
+        ok = typeof value === 'number' && Number.isFinite(value);
         break;
       case 'boolean':
-        ok = typeof def === 'boolean';
+        ok = typeof value === 'boolean';
         break;
       case 'enum':
-        ok = typeof def === 'string' && raw.values.includes(def);
+        // With `options_from` / `allow_custom` the default is checked at run time only (WI-31).
+        ok = typeof value === 'string' && (dynamic || raw.allow_custom || (raw.values ?? []).includes(value));
         break;
     }
     if (!ok) {
-      const expected = raw.type === 'enum' ? `one of ${raw.values.map((v) => `"${v}"`).join(', ')}` : `a ${raw.type}`;
+      const expected =
+        raw.type === 'enum'
+          ? dynamic || raw.allow_custom
+            ? 'a string'
+            : `one of ${(raw.values ?? []).map((v) => `"${v}"`).join(', ')}`
+          : `a ${raw.type}`;
       issues.error(file, [...at, 'default'], `Default does not match parameter type: expected ${expected}`);
     }
+  } else if (dynamic && automatic) {
+    issues.error(
+      file,
+      [...at, 'default'],
+      '"options_from" without "default" in an automatically triggered workflow: automatic runs only receive the default',
+    );
   } else if (raw.required && automatic) {
     issues.error(
       file,
       [...at, 'required'],
       'Required parameter without default in an automatically triggered workflow: automatic runs could never supply it',
     );
+  }
+}
+
+/**
+ * `options_from` (WI-31): exactly one of `github`/`command`, keys of the other
+ * kind are errors; the GitHub source exists and is a GitHub source; timeout
+ * within bounds; `args` only with `always` placeholders; secrets as for shell
+ * actions; a script given as path must exist (like dashboard info tiles).
+ */
+function validateOptionsFrom(
+  raw: RawParameterOptionsFrom,
+  def: ParameterOptionsSource,
+  input: SemanticInput,
+  issues: IssueCollector,
+  file: string,
+  at: IssuePath,
+): void {
+  if (raw.github !== undefined && raw.command !== undefined) {
+    issues.error(file, at, '"options_from" needs exactly one of "github" or "command", not both');
+    return;
+  }
+  if (raw.github === undefined && raw.command === undefined) {
+    issues.error(file, at, '"options_from" needs "github" (branches|tags) or "command"');
+    return;
+  }
+  const wrongKeys = def.type === 'github' ? (['args', 'secrets'] as const) : (['source', 'limit'] as const);
+  for (const key of wrongKeys) {
+    if (raw[key] !== undefined) {
+      issues.error(file, [...at, key], `"${key}" is only allowed with "options_from.${def.type === 'github' ? 'command' : 'github'}"`);
+    }
+  }
+  if (def.timeoutMs > PARAMETER_OPTIONS_DEFAULTS.maxTimeoutMs) {
+    issues.error(file, [...at, 'timeout'], `"timeout" must not exceed ${PARAMETER_OPTIONS_DEFAULTS.maxTimeoutMs / 1000}s`);
+  }
+  if (def.type === 'github') {
+    if (def.source === '') {
+      issues.error(file, [...at, 'source'], '"source" is required: the workflow has no single source to read branches/tags from');
+      return;
+    }
+    const source = input.sources[def.source];
+    if (!source) {
+      const suggestion = suggestField(def.source, Object.keys(input.sources));
+      issues.error(file, [...at, 'source'], `Unknown source "${def.source}"${suggestion ? ` (did you mean "${suggestion}"?)` : ''}`);
+    } else if (source.type !== 'github') {
+      issues.error(file, [...at, 'source'], `Source "${def.source}" is not a GitHub source (type "${source.type}")`);
+    }
+    return;
+  }
+  def.args.forEach((arg, i) => checkTemplate(arg, 'text', {}, issues, file, [...at, 'args', i]));
+  checkSecrets(def.secrets, {}, input, issues, file, [...at, 'secrets']);
+  if (def.command.includes('/')) {
+    let problem: string | null = null;
+    try {
+      if (!statSync(def.command).isFile()) problem = 'is not a regular file';
+    } catch {
+      problem = 'does not exist';
+    }
+    if (problem) issues.error(file, [...at, 'command'], `Script ${problem}: ${def.command} (relative paths are resolved against the config dir)`);
   }
 }
 

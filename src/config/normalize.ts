@@ -13,6 +13,7 @@ import type {
   IdentityConfig,
   LifecycleActionConfig,
   ParameterDefinition,
+  ParameterOptionsSource,
   RetryPolicy,
   SecretDelivery,
   SecretRef,
@@ -27,12 +28,13 @@ import type {
   RawGlobalConfig,
   RawIdentitiesFile,
   RawParameter,
+  RawParameterOptionsFrom,
   RawSourcesFile,
   RawView,
   RawViewSortKey,
   RawWorkflow,
 } from './schemas.js';
-import { DEFAULTS, MAX_DEFAULT_MONITORING_INTERVAL_MS, MIN_MONITORING_INTERVAL_MS } from './schemas.js';
+import { DEFAULTS, MAX_DEFAULT_MONITORING_INTERVAL_MS, MIN_MONITORING_INTERVAL_MS, PARAMETER_OPTIONS_DEFAULTS } from './schemas.js';
 
 /**
  * Expands references to named filters in a filter tree used at `at` of the
@@ -171,7 +173,34 @@ export function normalizeIdentities(raw: RawIdentitiesFile): Record<string, Iden
   return out;
 }
 
-function normalizeParameter(raw: RawParameter): ParameterDefinition {
+/**
+ * `options_from` of an enum parameter (WI-31) with defaults applied.
+ * `defaultSource` is the only trigger source of the workflow, else the only
+ * source of the configuration, else `''` (validation reports it).
+ */
+function normalizeOptionsFrom(raw: RawParameterOptionsFrom, configDir: string, defaultSource: string): ParameterOptionsSource {
+  const timeoutMs = raw.timeout ?? PARAMETER_OPTIONS_DEFAULTS.timeoutMs;
+  if (raw.command !== undefined && raw.github === undefined) {
+    return {
+      type: 'command',
+      command: resolveCommand(configDir, raw.command),
+      args: [...(raw.args ?? [])],
+      secrets: normalizeSecrets(raw.secrets ?? {}),
+      timeoutMs,
+      cacheMs: raw.cache ?? PARAMETER_OPTIONS_DEFAULTS.commandCacheMs,
+    };
+  }
+  return {
+    type: 'github',
+    github: raw.github ?? 'branches',
+    source: raw.source ?? defaultSource,
+    limit: raw.limit ?? PARAMETER_OPTIONS_DEFAULTS.limit,
+    timeoutMs,
+    cacheMs: raw.cache ?? PARAMETER_OPTIONS_DEFAULTS.githubCacheMs,
+  };
+}
+
+function normalizeParameter(raw: RawParameter, configDir: string, defaultSource: string): ParameterDefinition {
   const base = { required: raw.required, description: raw.description ?? null };
   // Defaults are type-checked in validate.ts; here they are only narrowed.
   switch (raw.type) {
@@ -181,13 +210,19 @@ function normalizeParameter(raw: RawParameter): ParameterDefinition {
       return { type: 'number', ...base, default: typeof raw.default === 'number' ? raw.default : null };
     case 'boolean':
       return { type: 'boolean', ...base, default: typeof raw.default === 'boolean' ? raw.default : null };
-    case 'enum':
+    case 'enum': {
+      const values = raw.options_from ? [] : [...(raw.values ?? [])];
+      // With `options_from` or `allow_custom` the default is checked at run time only (WI-31).
+      const open = raw.options_from !== undefined || raw.allow_custom;
       return {
         type: 'enum',
         ...base,
-        values: [...raw.values],
-        default: typeof raw.default === 'string' && raw.values.includes(raw.default) ? raw.default : null,
+        values,
+        default: typeof raw.default === 'string' && (open || values.includes(raw.default)) ? raw.default : null,
+        optionsFrom: raw.options_from ? normalizeOptionsFrom(raw.options_from, configDir, defaultSource) : null,
+        allowCustom: raw.allow_custom,
       };
+    }
   }
 }
 
@@ -287,6 +322,8 @@ export function normalizeWorkflow(
   global: GlobalConfig,
   configDir: string,
   expand: FilterExpander,
+  /** IDs of all configured sources (default source of `options_from.github`, WI-31). */
+  sourceIds: readonly string[] = [],
 ): WorkflowConfig {
   const normalizeList = (hook: HookName, actions: readonly RawAction[]): LifecycleActionConfig[] =>
     actions.map((action, i) => normalizeAction(action, hook, i, global.lifecycle.actionRetry, configDir));
@@ -301,7 +338,10 @@ export function normalizeWorkflow(
     hooks[hook] = normalizeList(hook, actions);
   }
   const parameters: Record<string, ParameterDefinition> = {};
-  for (const [name, def] of Object.entries(raw.parameters)) parameters[name] = normalizeParameter(def);
+  // Default source of `options_from.github` (WI-31): the only trigger source, else the only configured source.
+  const triggerIds = raw.trigger.type === 'source' ? (raw.trigger.sources ?? (raw.trigger.source !== undefined ? [raw.trigger.source] : [])) : [];
+  const defaultSource = triggerIds.length === 1 ? (triggerIds[0] as string) : triggerIds.length === 0 && sourceIds.length === 1 ? (sourceIds[0] as string) : '';
+  for (const [name, def] of Object.entries(raw.parameters)) parameters[name] = normalizeParameter(def, configDir, defaultSource);
   const exec = raw.execute;
   return {
     id: raw.id,

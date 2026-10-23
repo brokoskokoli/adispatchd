@@ -6,7 +6,7 @@
  * |---|---|
  * | `manual_item_required`, `manual_item_not_supported`, `manual_item_invalid_ref`, `invalid_parameters` | 400 |
  * | `manual_item_not_found` | 404 |
- * | `source_unavailable` | 502 |
+ * | `source_unavailable`, `parameter_options_unavailable` (WI-31) | 502 |
  * | `scheduler_not_accepting` | 503 |
  *
  * Unknown workflows throw `UnknownWorkflowError` (config, `config_unknown_workflow` → 404);
@@ -22,6 +22,7 @@ export type SchedulerErrorCode =
   | 'manual_item_not_found'
   | 'invalid_parameters'
   | 'source_unavailable'
+  | 'parameter_options_unavailable'
   | 'scheduler_not_accepting';
 
 /** Error of the scheduler API (see module docs for the HTTP mapping). */

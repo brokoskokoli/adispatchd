@@ -146,6 +146,15 @@ parameters:
     type: string
     default: world
     description: Whom to greet
+  # Selection lists fetched when the start form opens (options_from, since 0.7.0):
+  # branch:
+  #   type: enum
+  #   options_from: { github: branches, source: project_a }   # or: { github: tags, limit: 50 }
+  #   default: main
+  # target:
+  #   type: enum
+  #   options_from: { command: scripts/list-targets.sh, cache: 5m }  # one option per line (or JSON)
+  #   allow_custom: true                                         # also accept values not in the list
 execute:
   type: shell
   # Relative paths are resolved against the config dir. Arguments are passed as a list (no shell).

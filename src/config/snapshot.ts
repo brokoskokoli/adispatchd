@@ -62,6 +62,10 @@ export function workflowSecrets(workflow: WorkflowConfig): WorkflowSecretInfo[] 
       if (action.type === 'shell') add(action.id.startsWith(`${hook}.`) ? action.id : `${hook}.${action.id}`, action.secrets);
     }
   }
+  // WI-31: scripts that list the options of an enum parameter.
+  for (const [name, def] of Object.entries(workflow.parameters ?? {})) {
+    if (def.type === 'enum' && def.optionsFrom?.type === 'command') add(`parameters.${name}.options_from`, def.optionsFrom.secrets);
+  }
   return out;
 }
 
@@ -77,6 +81,9 @@ export function workflowIdentityRefs(workflow: WorkflowConfig, source: SourceCon
       if (action.type === 'source.comment' && action.identity) refs.add(action.identity);
       if (action.type === 'shell') for (const ref of Object.values(action.secrets ?? {})) refs.add(ref.identity);
     }
+  }
+  for (const def of Object.values(workflow.parameters ?? {})) {
+    if (def.type === 'enum' && def.optionsFrom?.type === 'command') for (const ref of Object.values(def.optionsFrom.secrets)) refs.add(ref.identity);
   }
   return [...refs].sort();
 }

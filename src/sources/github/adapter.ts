@@ -16,12 +16,14 @@ import {
   type FieldValue,
   type IdentityRef,
   type ListCandidatesOptions,
+  type ListRefsOptions,
   type Logger,
   type ProjectFieldOption,
   type SourceAdapter,
   type SourceAdapterDeps,
   type SourceAdapterFactory,
   type SourceItem,
+  type SourceRefKind,
   type SourceUpdate,
   type SourceUpdateApplied,
   type SourceUpdateOptions,
@@ -418,6 +420,35 @@ export class GitHubSourceAdapter implements SourceAdapter {
       this.http.paginate<{ name?: unknown }>(`${this.repoPath}/labels`, { token, ...(options.signal ? { signal: options.signal } : {}) }),
     );
     return labels.map((l) => l.name).filter((n): n is string => typeof n === 'string' && n !== '');
+  }
+
+  /**
+   * Branch or tag names (WI-31), with the source identity. Branches: the
+   * repository's default branch first, then alphabetical (order of
+   * `GET /branches`); tags: order of `GET /tags` (newest first). Pagination
+   * stops at `limit`.
+   */
+  async listRefs(kind: SourceRefKind, options: ListRefsOptions): Promise<string[]> {
+    const limit = Math.max(1, Math.floor(options.limit));
+    const req = {
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.maxRetryWaitMs !== undefined ? { maxRetryWaitMs: options.maxRetryWaitMs } : {}),
+    };
+    return this.withToken(this.config.identity, options.signal, async (token) => {
+      const names = async (path: string): Promise<string[]> => {
+        const list = await this.http.paginate<{ name?: unknown }>(path, { token, ...req, maxItems: limit });
+        return list.map((r) => r.name).filter((n): n is string => typeof n === 'string' && n !== '');
+      };
+      if (kind === 'tags') return names(`${this.repoPath}/tags`);
+      const [repo, branches] = await Promise.all([
+        this.http.request<{ default_branch?: unknown }>('GET', this.repoPath, { token, ...req }),
+        names(`${this.repoPath}/branches`),
+      ]);
+      const defaultBranch = typeof repo.data?.default_branch === 'string' ? repo.data.default_branch : null;
+      const sorted = [...new Set(branches)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      if (defaultBranch === null) return sorted.slice(0, limit);
+      return [defaultBranch, ...sorted.filter((b) => b !== defaultBranch)].slice(0, limit);
+    });
   }
 
   async findCommentByMarker(item: SourceItem, marker: string, identity: IdentityRef): Promise<CommentRef | null> {

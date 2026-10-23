@@ -40,6 +40,8 @@ export const ROUTE_ROLES: Readonly<Record<string, RouteRule>> = {
   'PATCH /api/v1/workflows/:id/runtime': 'operator',
   'POST /api/v1/workflows/:id/start': 'operator',
   'POST /api/v1/workflows/:id/dry-run': { role: 'viewer', controlToken: true },
+  // WI-31: options of a parameter; `options_from.command` additionally needs `operator` (checked in the handler).
+  'GET /api/v1/workflows/:id/parameters/:name/options': 'viewer',
   // Runs
   'GET /api/v1/runs': 'viewer',
   'GET /api/v1/runs/:id': 'viewer',

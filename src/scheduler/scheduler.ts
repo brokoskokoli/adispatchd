@@ -104,6 +104,23 @@ export interface SchedulerOptions {
   onConditionStatusChange?: (workflowId: string) => void;
   /** Redaction of stderr lines/errors in the condition status (WI-24). */
   redact?: Redactor;
+  /**
+   * Check of manual-start values against the current options of parameters
+   * with `options_from` (WI-31); absent = no list check.
+   */
+  parameterOptions?: ManualParameterOptionsCheck;
+}
+
+/** Check of manual-start parameter values against run-time options (WI-31, see `parameter-options`). */
+export interface ManualParameterOptionsCheck {
+  check(
+    workflow: WorkflowConfig,
+    values: Readonly<Record<string, ParameterValue>>,
+  ): Promise<
+    | { ok: true }
+    | { ok: false; reason: 'invalid'; errors: Array<{ parameter: string; message: string }> }
+    | { ok: false; reason: 'unavailable'; parameter: string; error: { code: string; message: string } }
+  >;
 }
 
 /** Request of {@link Scheduler.startManual}. */
@@ -171,6 +188,7 @@ export class Scheduler {
   private readonly timers: Timers;
   private readonly logger: Logger;
   private readonly misfireToleranceMs: number;
+  private readonly parameterOptions: ManualParameterOptionsCheck | undefined;
   private readonly maxRecordedMissed: number;
 
   private started = false;
@@ -199,6 +217,7 @@ export class Scheduler {
       // A result of a workflow definition that a reload replaced meanwhile must not become its status.
       if (this.isCurrentDefinition(wf)) this.conditionStatusStore.recordWorkflowCondition(wf.id, wf.conditions.workflow.length, diag, result);
     });
+    this.parameterOptions = options.parameterOptions;
     this.misfireToleranceMs = options.cronMisfireToleranceMs ?? 60_000;
     this.maxRecordedMissed = options.maxRecordedMissedSlots ?? 100;
   }
@@ -737,6 +756,20 @@ export class Scheduler {
     const params = this.config.validateParameters(workflowId, request.parameters);
     if (!params.ok) {
       throw new SchedulerError('invalid_parameters', `Invalid parameters for workflow '${workflowId}'`, { errors: params.errors });
+    }
+    // WI-31: values of `options_from` parameters must be in the current options (no list check with `allow_custom`).
+    if (this.parameterOptions) {
+      const checked = await this.parameterOptions.check(workflow, params.values);
+      if (!checked.ok && checked.reason === 'invalid') {
+        throw new SchedulerError('invalid_parameters', `Invalid parameters for workflow '${workflowId}'`, { errors: checked.errors });
+      }
+      if (!checked.ok) {
+        throw new SchedulerError(
+          'parameter_options_unavailable',
+          `Options of parameter '${checked.parameter}' could not be fetched: ${checked.error.message}`,
+          { parameter: checked.parameter, error: checked.error },
+        );
+      }
     }
     let item: { sourceId: string; key: string; url: string } | null = null;
     if (workflow.trigger.type === 'source') {

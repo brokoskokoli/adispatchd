@@ -378,11 +378,52 @@ export interface BooleanParameter extends ParameterBase {
   default: boolean | null;
 }
 
+/** Kind of GitHub refs offered by `options_from.github` (WI-31). */
+export type ParameterOptionsGitHubKind = 'branches' | 'tags';
+
+/** `options_from.github` (WI-31): branches or tags of a GitHub source, read with the source identity. */
+export interface GitHubParameterOptions {
+  type: 'github';
+  github: ParameterOptionsGitHubKind;
+  /** Source ID (explicit, or the only source of the workflow / configuration; `''` = none, reported by validation). */
+  source: string;
+  /** Max. number of options (default 100, ≤ 500). */
+  limit: number;
+  timeoutMs: number;
+  /** Cache lifetime (default 1m); `0` = no cache. */
+  cacheMs: number;
+}
+
+/** `options_from.command` (WI-31): a trusted script prints the options. */
+export interface CommandParameterOptions {
+  type: 'command';
+  /** Executable; relative paths resolved against the config dir. */
+  command: string;
+  /** Argument templates (only `always` placeholders). */
+  args: readonly string[];
+  /** Env variable → identity whose token is handed to the script (like shell actions, WI-18). */
+  secrets: Readonly<Record<string, SecretRef>>;
+  timeoutMs: number;
+  /** Cache lifetime (default 0 = no cache). */
+  cacheMs: number;
+}
+
+/** Where the options of an enum parameter come from at run time (WI-31). */
+export type ParameterOptionsSource = GitHubParameterOptions | CommandParameterOptions;
+
 /** Enum parameter. */
 export interface EnumParameter extends ParameterBase {
   type: 'enum';
+  /** Static values (empty with `optionsFrom`). */
   values: readonly string[];
   default: string | null;
+  /**
+   * Options fetched at run time (WI-31) instead of `values`; `null` = static.
+   * Snapshots written before WI-31 lack the field: readers treat `undefined` as `null`.
+   */
+  optionsFrom?: ParameterOptionsSource | null;
+  /** Values outside the list are accepted (WI-31; default false; absent in older snapshots). */
+  allowCustom?: boolean;
 }
 
 /** Declared manual-start parameter (Spec §5.5). */
