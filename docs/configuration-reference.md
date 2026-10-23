@@ -1014,9 +1014,11 @@ Runs (Source, Cron) erhalten die `default`-Werte (siehe unten).
 | Schlüssel | Typ | Pflicht | Default | Regeln |
 |---|---|---|---|---|
 | `type` | Enum | ja | | `string`, `number`, `boolean`, `enum` |
-| `values` | Liste | bei `enum` ja | | nicht leer, eindeutig; Zahlen/Booleans werden zu Strings |
+| `values` | Liste | bei `enum` eins von `values`/`options_from` | | nicht leer, eindeutig; Zahlen/Booleans werden zu Strings |
+| `options_from` | Map | bei `enum` eins von `values`/`options_from` | | seit 0.7.0: Auswahlliste zur Laufzeit, s. u. „Auswahllisten zur Laufzeit“; nicht zusammen mit `values` |
+| `allow_custom` | Boolean | nein | `false` | nur `enum` (mit `values` oder `options_from`): auch Werte außerhalb der Liste erlaubt |
 | `required` | Boolean | nein | `false` | |
-| `default` | passend zum Typ | nein | keiner | `string` → String, `number` → endliche Zahl, `boolean` → Boolean, `enum` → einer der `values` (Skalare werden zu Strings, `values: [1, 2]` + `default: 1` ist gültig) |
+| `default` | passend zum Typ | nein | keiner | `string` → String, `number` → endliche Zahl, `boolean` → Boolean, `enum` → einer der `values` (Skalare werden zu Strings, `values: [1, 2]` + `default: 1` ist gültig); mit `options_from` oder `allow_custom` ein beliebiger String (Prüfung erst beim Start) |
 | `description` | String | nein | | Anzeige im Formular |
 
 Validierung beim Start: unbekannte Parameter → Fehler; fehlender/leerer Wert (`null`, `""`) → `default`, sonst
@@ -1030,6 +1032,77 @@ Regeln der Konfigurationsprüfung:
 - Automatisch gestartete Runs (Source, Cron) erhalten die **`default`-Werte** aller Parameter, die einen haben
   (gespeichert am Run, sichtbar in API/UI und Kontextdatei). Parameter ohne Default bleiben dort leer
   (`{parameters.x}` = leerer String).
+
+**Auswahllisten zur Laufzeit (`options_from`, seit 0.7.0, WI-31)** – ein `enum` kann seine Werte beim manuellen Start
+aus GitHub (Branches/Tags einer Source) oder aus einem eigenen Skript beziehen:
+
+| Schlüssel | Typ | Pflicht | Default | Regeln |
+|---|---|---|---|---|
+| `options_from.github` | `branches` \| `tags` | eins von `github`/`command` | | Branches: Default-Branch zuerst, dann alphabetisch; Tags: neueste zuerst (Reihenfolge der API) |
+| `options_from.source` | Source-ID | bei `github`; optional, wenn der Workflow genau eine Trigger-Source hat bzw. – ohne Trigger-Source – `sources.yaml` genau eine Source enthält | diese Source | GitHub-Source; gelesen mit deren `identity` |
+| `options_from.limit` | Integer 1–500 | nein | `100` | nur `github`; höchstens so viele Optionen (Paginierung bis dahin) |
+| `options_from.command` | String | eins von `github`/`command` | | wie `command` von Shell-Actions (§2.4, relativ zum Config-Verzeichnis, kein Template); als Pfad angegebenes Skript muss existieren |
+| `options_from.args` | Liste String | nein | `[]` | nur `command`; Templates nur mit `{workflow.id}`, `{workflow.name}`, `{workspace.base_dir}`, `{timestamp}` |
+| `options_from.secrets` | wie bei `execute.secrets` | nein | `{}` | nur `command`; Token der Identity als Env-Wert oder Token-Datei (`delivery: file`) |
+| `options_from.timeout` | Dauer | nein | `10s` | > 0, ≤ `60s` (bei `github` für den ganzen Abruf) |
+| `options_from.cache` | Dauer | nein | `1m` (`github`), `0s` (`command`) | `0s` = nicht cachen; nur erfolgreiche Abrufe werden gecacht |
+
+- **Skript:** läuft wie die Info-Kacheln (§3.7): ohne Shell, minimale Umgebung plus `secrets` sowie
+  `ADISPATCH_WORKFLOW_ID`, `ADISPATCH_PARAMETER`, `ADISPATCH_CONFIG_DIR`, `ADISPATCH_DATA_DIR` und
+  `ADISPATCH_CHECK_CONTEXT_FILE` (JSON `{schema_version, kind: "parameter_options", workflow: {id}, parameter: {name},
+  config_dir, data_dir}`), Arbeitsverzeichnis = Config-Verzeichnis, eigene Prozessgruppe, Kill bei Timeout. stdout
+  (UTF-8): eine Option pro Zeile (getrimmt, leere Zeilen ignoriert) **oder** – beginnt die Ausgabe mit `[` – eine
+  JSON-Liste aus Strings bzw. `{"value": "…", "label": "…"}` (`label` nur Anzeige). Exit ≠ 0, Timeout, ungültiges
+  JSON, mehr als 500 Optionen, leere Werte, Werte/Labels über 200 Zeichen oder mit Steuerzeichen, mehr als 256 KiB
+  Ausgabe → Fehler mit kurzer Meldung (Exit-Code + erste stderr-Zeile, Secrets geschwärzt). Doppelte Werte zählen einmal.
+- **Start:** `POST …/start` prüft Werte ohne `allow_custom` gegen die **aktuelle** Liste (Cache erlaubt): nicht
+  enthalten → HTTP 400 `invalid_parameters`; Liste nicht abrufbar → HTTP 502 `parameter_options_unavailable`, kein
+  Start. Mit `allow_custom` keine Listenprüfung (aber höchstens 200 Zeichen, keine Steuerzeichen). Werte gelangen wie
+  alle Parameter als einzelne Argumente/Env-Werte zum Prozess (keine Shell), im Pfadmodus als sicheres Segment.
+- **`default`** muss nicht in einer Liste stehen; fehlt er in der aktuellen Liste, zeigt das Formular einen Hinweis,
+  beim Start gilt die normale Prüfung.
+- **Automatische Workflows** (Source/Cron) erhalten nur den `default` (ohne Abruf, ohne Listenprüfung);
+  `options_from` ohne `default` ist dort ein Fehler.
+- **Rollen:** die Optionen eines Skripts darf nur abrufen, wer starten darf (`operator`); GitHub-Optionen schon `viewer`
+  (API: `GET /api/v1/workflows/:id/parameters/:name/options`).
+
+```yaml
+# example: dynamic-options
+# extends: github
+# file: workflows/release.yaml
+id: release
+name: Release
+trigger: { type: manual }
+parameters:
+  branch:
+    type: enum
+    options_from: { github: branches, source: project_a }
+    default: main
+  tag:
+    type: enum
+    options_from: { github: tags, source: project_a, limit: 50 }
+  target:
+    type: enum
+    options_from:
+      command: scripts/list-hosts.sh
+      args: ['--env', 'prod']
+      timeout: 10s
+      cache: 5m
+    allow_custom: true
+execute:
+  type: shell
+  command: scripts/deploy.sh
+  args: ['{parameters.branch}', '{parameters.tag}', '{parameters.target}']
+```
+
+```sh
+#!/bin/sh
+# example: dynamic-options
+# file: scripts/list-hosts.sh
+# Eine Option pro Zeile – oder JSON: [{"value": "web-1", "label": "Web 1"}, "web-2"]
+echo web-1
+echo web-2
+```
 
 #### 3.4.8 `execute`
 
@@ -1671,6 +1744,9 @@ Dateiliste (`GET /api/v1/config/files`, UI: Configuration); `config reload` läd
 - Info-Kacheln (`dashboard.yaml`): keine `secrets` (nur `env`), keine Templates in `args`; höchstens 50 Kacheln,
   2 parallele Ausführungen, Ausgabe bis 4 KiB je Stream; Werte und Status nur im Speicher (nach einem Neustart
   zunächst `pending`, bis der erste Abruf fertig ist).
+- Auswahllisten (`options_from`, WI-31): höchstens 500 Optionen, Werte/Labels bis 200 Zeichen, Skriptausgabe bis
+  256 KiB je Stream; Cache nur im Speicher (ein Reload verwirft ihn); ein Parameter wird höchstens alle 2 s neu
+  geholt; kein `env` für das Skript (nur `secrets`); keine Auswahl von Items per Filter.
 - Der angezeigte letzte Condition-Status liegt nur im Speicher; Item-Conditions und `shell_filter` werden nur als
   Zusammenfassung je Planungsschritt angezeigt, nicht je Item.
 - Nur Adapter `github` (github.com), Identity-Typen `github_app` und `github_token`, nur Kanaltyp `webhook`, nur
@@ -3164,6 +3240,41 @@ execute:
   command: scripts/hello.sh
   working_directory: '{workspace.base_dir}/{parameters.name}'
   args: ['{parameters.nme}']
+```
+
+**Auswahllisten zur Laufzeit (`options_from`)**
+
+```yaml
+# example: err-options-from
+# extends: github
+# invalid
+# expect: workflows/release.yaml: parameters.branch.options_from: "options_from" cannot be combined with "values" (use one of them)
+# expect: workflows/release.yaml: parameters.tag.options_from: "options_from" needs exactly one of "github" or "command", not both
+# expect: workflows/release.yaml: parameters.ref.options_from.source: "source" is required: the workflow has no single source to read branches/tags from
+# expect: workflows/release.yaml: parameters.host.options_from.timeout: "timeout" must not exceed 60s
+# expect: workflows/release.yaml: parameters.host.options_from.limit: "limit" is only allowed with "options_from.github"
+# file: workflows/release.yaml
+id: release
+trigger: { type: manual }
+parameters:
+  branch: { type: enum, values: [main], options_from: { github: branches, source: project_a } }
+  tag: { type: enum, options_from: { github: tags, command: scripts/tags.sh } }
+  ref: { type: enum, options_from: { github: tags } }
+  host: { type: enum, options_from: { command: /bin/echo, timeout: 2m, limit: 5 } }
+execute: { type: shell, command: scripts/release.sh }
+```
+
+```yaml
+# example: err-options-from-automatic
+# extends: github
+# invalid
+# expect: workflows/nightly.yaml: parameters.branch.default: "options_from" without "default" in an automatically triggered workflow: automatic runs only receive the default
+# file: workflows/nightly.yaml
+id: nightly
+trigger: { type: schedule, cron: '0 3 * * *' }
+parameters:
+  branch: { type: enum, options_from: { github: branches, source: project_a } }
+execute: { type: shell, command: scripts/nightly.sh }
 ```
 
 ```yaml

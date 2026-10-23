@@ -155,6 +155,7 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | `PATCH /api/v1/workflows/:id/runtime` | operator | – |
 | `POST /api/v1/workflows/:id/start` | operator | – |
 | `POST /api/v1/workflows/:id/dry-run` | viewer | ja |
+| `GET /api/v1/workflows/:id/parameters/:name/options` | viewer | – |
 | `GET /api/v1/runs` | viewer | – |
 | `GET /api/v1/runs/:id` | viewer | – |
 | `GET /api/v1/runs/:id/events` | viewer | – |
@@ -190,7 +191,9 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | `GET /*` | public | – |
 
 `POST …/dry-run` und `POST /config/validate` ändern nichts und brauchen daher nur `viewer` (aber eine Anmeldung, auch mit
-`read_requires_login: false`). `admin` umfasst alles von `operator`; die `admin`-Endpunkte sind die [UI-Aktionen](#ui-aktionen-als-identity-seit-040-wi-27)
+`read_requires_login: false`). `GET …/parameters/:name/options` braucht `viewer`, bei Optionen aus einem Skript
+(`options_from.command`, WI-31) zusätzlich `operator` (sonst `403 forbidden`), damit `viewer` keine Skripte auslösen kann;
+mit `auth.mode: none` wie bisher ohne Einschränkung. `admin` umfasst alles von `operator`; die `admin`-Endpunkte sind die [UI-Aktionen](#ui-aktionen-als-identity-seit-040-wi-27)
 (`/items/…` zusätzlich nur mit echter Anmeldung, nie mit dem Steuer-Token).
 
 ## Fehlerform
@@ -209,7 +212,7 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27), `block_run_active`, `unblock_run_active` (WI-30) |
 | 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt), `github_rejected` (WI-27) |
 | 429 | `too_many_attempts` (Login, WI-26), `rate_limited` (Info-Refresh), `ui_actions_throttled`, `github_rate_limited` (WI-27) |
-| 502 | `source_unavailable`, `github_forbidden`, `github_auth_failed`, `github_unavailable`, `github_outcome_unknown` (WI-27) |
+| 502 | `source_unavailable`, `parameter_options_unavailable` (WI-31, `details: {parameter, error: {code, message}}`), `github_forbidden`, `github_auth_failed`, `github_unavailable`, `github_outcome_unknown` (WI-27) |
 | 503 | `run_controller_not_ready` (Recovery läuft), `run_controller_not_accepting` / `scheduler_not_accepting` (Drain/Shutdown) |
 | 500 | `kill_failed`, `internal_error` |
 
@@ -258,12 +261,32 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | GET | `/api/v1/workflows/:id` | – | Workflow + `diagnosis` (letzte Planungsdiagnose), `filter`, `hooks` |
 | PATCH | `/api/v1/workflows/:id/runtime` | `{"enabled"?: bool\|null, "priority"?: number\|null, "maxConcurrent"?: int≥1\|null}` (`null` = Override entfernen) | `200` Workflow |
 | POST | `/api/v1/workflows/:id/start` | `{"item"?: "https://github.com/o/r/issues/7" \| "#7" \| "7" \| "repo_a:7", "parameters"?: {…}}` | `202 {"run": RunSummary}` |
+| GET | `/api/v1/workflows/:id/parameters/:name/options?refresh=true` | – | `200 ParameterOptions` (seit 0.7.0, WI-31, siehe unten); `404 unknown_parameter`, `400 parameter_has_no_options` (kein `enum`) |
 | POST | `/api/v1/workflows/:id/dry-run` | – | `200` DryRunResult (WI-09; Shell-Prüfungen `not_evaluated`; je Kandidat optional `projectFields`: `project.*` → `{known, value}` bzw. `{known: false, reason}`, WI-14; `hooks: {onResult: [...], technical: {crashed, start_error, timed_out, cancelled → Hook}}`, WI-17; seit 0.3.0 `secrets` wie beim Workflow, WI-18; `source.sources` je Source, `capacity.perSource`, WI-20; je Kandidat optional `linkedFields` für `linked_branches` … `work_pr_url`, wenn der Workflow sie verwendet, WI-21; bei `execute.type: container` `container: {engine, image, command, args}` = Engine-Aufruf mit unaufgelösten Templates und `<run-id>`, Secrets nur als `-e NAME`, WI-19) |
 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
-`overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?}}`,
+`overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?, optionsFrom?, allowCustom?}}` (bei `enum` seit 0.7.0: `optionsFrom` = `null`, `{type: "github", github: "branches"|"tags", source, limit, timeoutMs, cacheMs}` oder `{type: "command", command, secrets: [Namen], timeoutMs, cacheMs}` – ohne `args`; `allowCustom`, WI-31),
 `execute {type, command, args, workingDirectory, timeout, secrets: [Namen], secretDelivery: {Name: env|file}, keep: [Muster], keepMaxSizeBytes, container?}` (seit 0.3.0 `secretDelivery`; nie Werte; bei `type: container` sind `command`/`args` der Engine-Aufruf mit `<run-id>`/`<data-dir>` und `container = {engine, image, command, workdir, mounts, resources, user, network, pull}`, WI-19), `secrets` (seit 0.3.0: alle deklarierten Secrets von `execute` und `shell`-Actions als `[{where, name, identity, delivery, variable}]`, nie Werte), `hasFilter`, `hasShellFilter`,
 `conditions` (seit 0.4.0, siehe unten; vorher nur Anzahlen), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
+
+**`ParameterOptions` (seit 0.7.0, WI-31)** – Auswahlliste eines `enum`-Parameters für das Startformular:
+
+```json
+{ "options": [{ "value": "main", "label": "main" }, { "value": "web-1", "label": "Web 1 (prod)" }],
+  "fetchedAt": "2026-10-23T12:00:00.000Z", "cached": false, "allowCustom": false }
+```
+
+- Mit `options_from` werden die Optionen zur Laufzeit geholt (GitHub-Branches/-Tags mit der Identity der Source bzw.
+  Ausgabe des Skripts) und `cache` lang im Speicher gehalten (nur Erfolge); `refresh=true` umgeht den Cache. Gleichzeitige
+  Abrufe desselben Parameters werden zusammengelegt; ein Parameter wird höchstens alle 2 s neu geholt – schnellere
+  Anfragen (auch mit `refresh`) erhalten das letzte Ergebnis mit `cached: true`.
+- Statische `values` kommen unverändert zurück (`fetchedAt: null`).
+- Fehler beim Abruf ergeben **200** mit `options: []` und `error: {code, message}`; `code` ist `source_unavailable`,
+  `source_error`, `rate_limited`, `timeout`, `command_failed` oder `invalid_output`, `message` kurz und ohne Secrets
+  (bei Skripten Exit-Code und erste stderr-Zeile).
+- `POST …/start` prüft Werte von `options_from`-Parametern ohne `allow_custom` gegen die aktuelle Liste (Cache erlaubt):
+  Wert nicht enthalten → `400 invalid_parameters` (`details.errors: [{parameter, message: "\"x\" is not one of the
+  current options"}]`), Liste nicht abrufbar → `502 parameter_options_unavailable`, kein Start.
 
 **`conditions` (seit 0.4.0, WI-24)** – Definition und letzter Status aller Shell-Prüfungen (nur im Speicher; ein Reload
 verwirft den Status geänderter/entfernter Workflows; nach einem Neustart `last: null`):

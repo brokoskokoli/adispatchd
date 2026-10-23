@@ -1,0 +1,29 @@
+# workflows/release.yaml – manual start with selection lists fetched at run time (options_from, WI-31).
+# The start form loads the branches/tags of project_a (with the source identity) and the hosts printed by
+# scripts/options/list-hosts.sh; POST /api/v1/workflows/release/start rejects values outside the current list
+# (except for "target", which allows custom values).
+id: release
+name: Release
+trigger: { type: manual }
+parameters:
+  branch:
+    type: enum
+    options_from: { github: branches, source: project_a }   # default branch first, then alphabetical
+    default: main
+    description: Branch to build
+  tag:
+    type: enum
+    options_from: { github: tags, source: project_a, limit: 50 }  # newest first
+    description: Version tag to deploy
+  target:
+    type: enum
+    options_from:
+      command: scripts/options/list-hosts.sh   # relative to the config dir; runs without a shell
+      args: ['--env', 'prod']
+      timeout: 10s
+      cache: 5m
+    allow_custom: true                         # other host names may be typed in
+execute:
+  type: shell
+  command: /etc/adispatchd/scripts/release.sh
+  args: ['{parameters.branch}', '{parameters.tag}', '{parameters.target}']

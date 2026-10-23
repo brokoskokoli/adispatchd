@@ -5,6 +5,21 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Auswahllisten zur Laufzeit für Parameter manueller Starts (`options_from`).** Ein `enum`-Parameter kann seine
+  Werte statt aus festen `values` aus GitHub (`github: branches|tags` einer Source, gelesen mit deren Identity;
+  Branches mit Default-Branch zuerst, Tags neueste zuerst, `limit` bis 500) oder aus einem eigenen Skript beziehen
+  (`command`, `args`, `secrets`, `timeout`, `cache`; eine Option pro Zeile oder JSON-Liste mit `value`/`label`).
+  Optional `allow_custom` (auch für statische `values`): Werte außerhalb der Liste erlaubt. Beim Start prüft der Server
+  gegen die aktuelle Liste (400 `invalid_parameters`, 502 `parameter_options_unavailable`, wenn sie nicht abrufbar
+  ist). Automatische Workflows erhalten wie bisher nur den `default` (Pflicht bei `options_from`). Referenz §3.4.7;
+  Beispiel `examples/config/workflows/release.yaml`.
+- **API:** `GET /api/v1/workflows/:id/parameters/:name/options` (`refresh=true`; Skript-Optionen nur ab Rolle
+  `operator`); die Workflow-Ansicht enthält je `enum` `optionsFrom` (ohne Skript-Argumente) und `allowCustom`.
+- **UI:** Das Startformular lädt die Listen beim Öffnen – Auswahlfeld mit Suche (ab 16 Optionen), „Reload“, Lade- und
+  Fehlerzustand, Hinweis bei fehlendem Default; mit `allow_custom` Eingabefeld mit Vorschlägen.
+
 ## [0.6.0] – 2026-10-22
 
 ### Hinzugefügt
