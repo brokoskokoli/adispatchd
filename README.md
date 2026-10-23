@@ -42,7 +42,8 @@ who picks which issue, what happens when an agent crashes, how do labels get res
 - **Dashboard info tiles** – `dashboard.yaml` defines small scripts (text, number or percent with warn/critical
   thresholds) that the daemon runs in the background on a cache schedule – e.g. disk usage, open PRs, credits.
 - **Triggers** – `source` (polling GitHub), `schedule` (cron with time zone) or `manual` (UI/API, with typed
-  parameters).
+  parameters; since 0.7.0 selection lists filled at start time from the repository's **branches or tags** or from
+  your own script, `options_from`).
 - **Multi-source workflows** – one workflow can serve several repositories (`sources: [...]`), with per-repository
   variables such as `{source.vars.base_branch}`.
 - **Lifecycle hooks** – `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { cellText, compareCells, nextSort, objectText, sortRows } from './sort.js';
 import { buildHash, parseHash } from './route.js';
-import { buildRuntimeBody, buildStartBody } from './params.js';
+import { buildRuntimeBody, buildStartBody, defaultOptionHint, filterOptions, optionsSourceText } from './params.js';
 
 describe('view sorting (browser only, Spec §17)', () => {
   const row = (...vals: unknown[]) => ({ cells: vals.map((v) => (v === undefined ? { value: null, known: false } : { value: v, known: true })) });
@@ -85,5 +85,30 @@ describe('manual start form', () => {
     const bad = buildRuntimeBody({ enabled: 'maybe', priority: 'x', maxConcurrent: '0' });
     expect(bad.ok).toBe(false);
     if (!bad.ok) expect(bad.errors).toHaveLength(3);
+  });
+});
+
+describe('dynamic parameter options in the start form (WI-31)', () => {
+  const opts = [
+    { value: 'main', label: 'main' },
+    { value: 'release-1', label: 'Release 1' },
+    { value: 'dev', label: 'dev' },
+  ];
+  it('filters by value or label and keeps the selection', () => {
+    expect(filterOptions(opts, 'REL').map((o) => o.value)).toEqual(['release-1']);
+    expect(filterOptions(opts, 'rel', 'dev').map((o) => o.value)).toEqual(['release-1', 'dev']);
+    expect(filterOptions(opts, '  ')).toHaveLength(3);
+  });
+  it('accepts any value for options_from / allow_custom (server checks), hints a missing default', () => {
+    const defs = {
+      branch: { type: 'enum', required: false, default: 'trunk', values: [], optionsFrom: { type: 'github', github: 'branches', source: 'repo_a' } },
+      env: { type: 'enum', required: false, default: null, values: ['a'], allowCustom: true },
+    };
+    expect(buildStartBody('manual', '', defs, { branch: 'feature/x', env: 'zzz' })).toEqual({ ok: true, body: { parameters: { branch: 'feature/x', env: 'zzz' } } });
+    expect(defaultOptionHint(defs.branch, opts)).toMatch(/Default "trunk" is not in the current list/);
+    expect(defaultOptionHint({ ...defs.branch, default: 'main' }, opts)).toBeNull();
+    expect(defaultOptionHint({ ...defs.branch, allowCustom: true }, opts)).toBeNull();
+    expect(optionsSourceText(defs.branch)).toBe('branches of repo_a');
+    expect(optionsSourceText({ ...defs.branch, optionsFrom: { type: 'command', command: 'scripts/x.sh' } })).toBe('script scripts/x.sh');
   });
 });

@@ -32,6 +32,8 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Unabhängige Workflows** mit Source-, Cron- oder manuellem Trigger, globalen und workflowbezogenen Limits; ein
   Workflow kann **mehrere Repositories** bedienen (`sources: [...]`, optional Limit je Source), Unterschiede je
   Repository stehen als Variablen an der Source (`{source.vars.base_branch}`).
+- **Manuelle Starts mit typisierten Parametern** aus UI oder API; seit 0.7.0 auch mit Auswahllisten, die beim Start
+  aus den **Branches oder Tags** des Repositorys oder aus einem eigenen Skript gefüllt werden (`options_from`).
 - **Deklarative Filter und Prioritäten** auf Labels, Zustand, Milestone, Issue-Typ, native Abhängigkeiten („blocked by“)
   und Felder aus **GitHub Projects** (Status, Priorität, eigene Felder; „A oder B“ per `in`) – fehlender Zugriff ergibt
   `unknown` statt eines falschen Starts. **Benannte Filter** (`filters/<id>.yaml`) einmal definieren, überall verwenden.

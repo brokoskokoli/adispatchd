@@ -207,11 +207,20 @@ export class GitHubHttpClient {
    * GET all pages of a list endpoint by following `Link: rel="next"`.
    * `per_page` defaults to {@link DEFAULT_PER_PAGE}.
    */
-  async paginate<T = unknown>(path: string, options: Omit<GitHubRequestOptions, 'body' | 'idempotent'> = {}): Promise<T[]> {
+  async paginate<T = unknown>(
+    path: string,
+    options: Omit<GitHubRequestOptions, 'body' | 'idempotent'> & {
+      /** Stop once this many items were read (WI-31); the result has at most this many. */
+      maxItems?: number;
+    } = {},
+  ): Promise<T[]> {
     const items: T[] = [];
-    let url: URL | null = this.buildUrl(path, { per_page: DEFAULT_PER_PAGE, ...options.query });
+    const maxItems = options.maxItems;
+    const perPage = maxItems !== undefined ? Math.max(1, Math.min(DEFAULT_PER_PAGE, maxItems)) : DEFAULT_PER_PAGE;
+    let url: URL | null = this.buildUrl(path, { per_page: perPage, ...options.query });
     let pages = 0;
     while (url) {
+      if (maxItems !== undefined && items.length >= maxItems) return items.slice(0, maxItems);
       if (pages >= this.maxPages) {
         throw new SourceError('invalid', `Pagination limit of ${this.maxPages} pages exceeded for GET ${describePath(url)}`, {
           retryable: false,
@@ -225,7 +234,7 @@ export class GitHubHttpClient {
       items.push(...res.data);
       url = this.nextPageUrl(res.headers.get('link'));
     }
-    return items;
+    return maxItems !== undefined ? items.slice(0, maxItems) : items;
   }
 
   private buildUrl(path: string, query?: GitHubRequestOptions['query']): URL {

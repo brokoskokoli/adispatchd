@@ -675,6 +675,25 @@ export interface SourceAdapter {
 
   /** Labels defined in the repository (WI-27 item panel, suggestions only). */
   listLabels?(options?: { signal?: AbortSignal }): Promise<string[]>;
+
+  /**
+   * Branch or tag names of the repository (WI-31, options of manual-start
+   * parameters), read with the source identity. Branches: default branch
+   * first, then alphabetical; tags: in the order of the API (newest first).
+   * At most `limit` names.
+   */
+  listRefs?(kind: SourceRefKind, options: ListRefsOptions): Promise<string[]>;
+}
+
+/** Kind of repository refs for {@link SourceAdapter.listRefs}. */
+export type SourceRefKind = 'branches' | 'tags';
+
+/** Options of {@link SourceAdapter.listRefs}. */
+export interface ListRefsOptions {
+  limit: number;
+  signal?: AbortSignal;
+  /** Longest rate-limit wait before giving up (interactive callers keep it short). */
+  maxRetryWaitMs?: number;
 }
 
 /** Options of {@link SourceAdapter.applyUpdate}. */

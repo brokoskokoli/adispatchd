@@ -86,9 +86,27 @@ function coerce(
       if (typeof raw === 'boolean') return { ok: true, value: raw };
       if (raw === 'true' || raw === 'false') return { ok: true, value: raw === 'true' };
       return { ok: false, message: 'Expected a boolean' };
-    case 'enum':
-      return typeof raw === 'string' && def.values.includes(raw)
-        ? { ok: true, value: raw }
-        : { ok: false, message: `Expected one of: ${def.values.join(', ')}` };
+    case 'enum': {
+      if (typeof raw !== 'string') return { ok: false, message: 'Expected a string' };
+      // Dynamic options (WI-31): the list check against the current options happens at the start (async);
+      // custom values only need to be a sane option value.
+      if (def.optionsFrom || def.allowCustom) {
+        const problem = optionValueProblem(raw);
+        return problem ? { ok: false, message: problem } : { ok: true, value: raw };
+      }
+      return def.values.includes(raw) ? { ok: true, value: raw } : { ok: false, message: `Expected one of: ${def.values.join(', ')}` };
+    }
   }
+}
+
+/** Max. length of an option value (WI-31). */
+export const MAX_OPTION_VALUE_LENGTH = 200;
+
+/** Problem of a (dynamic or custom) option value, `undefined` if fine: not empty, ≤ 200 characters, no control characters. */
+export function optionValueProblem(value: string): string | undefined {
+  if (value.trim() === '') return 'Value must not be empty';
+  if (value.length > MAX_OPTION_VALUE_LENGTH) return `Value is longer than ${MAX_OPTION_VALUE_LENGTH} characters`;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(value)) return 'Value contains control characters';
+  return undefined;
 }

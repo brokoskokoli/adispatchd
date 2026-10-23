@@ -32,6 +32,9 @@ export {
   MAX_VIEW_SECTION_TITLE_LENGTH,
   MAX_VIEW_SORT_KEYS,
   MAX_VIEW_SORT_ORDER_VALUES,
+  MAX_PARAMETER_OPTIONS,
+  PARAMETER_OPTIONS_DEFAULTS,
+  PARAMETER_OPTIONS_GITHUB_KINDS,
 } from './schemas.js';
 export { DASHBOARD_FILE, MAX_INFO_TIMEOUT_MS } from './dashboard.js';
 export { MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH } from './named-filters.js';
@@ -60,6 +63,8 @@ export {
 } from './snapshot.js';
 export {
   automaticParameterValues,
+  MAX_OPTION_VALUE_LENGTH,
+  optionValueProblem,
   validateParameters,
   validateWorkflowParameters,
   type ParameterIssue,

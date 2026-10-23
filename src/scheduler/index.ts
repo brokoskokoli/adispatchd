@@ -5,6 +5,7 @@
  */
 export {
   Scheduler,
+  type ManualParameterOptionsCheck,
   type ManualStartRequest,
   type ManualStartResult,
   type SchedulerOptions,

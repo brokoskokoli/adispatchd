@@ -67,7 +67,10 @@ describe('loadConfig – spec examples', () => {
     const result = await loadConfig(EXAMPLE_CONFIG_DIR, { dataDir: '/var/lib/adispatchd' });
     const config = expectOk(result);
     expect(result.warnings).toEqual([]);
-    expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'nightly-maintenance', 'reviewer-project-b']);
+    expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'nightly-maintenance', 'release', 'reviewer-project-b']);
+    // WI-31: selection lists fetched at run time.
+    expect(config.workflows.release?.parameters.branch).toMatchObject({ optionsFrom: { type: 'github', github: 'branches', source: 'project_a' } });
+    expect(config.workflows.release?.parameters.target).toMatchObject({ optionsFrom: { type: 'command', cacheMs: 300_000 }, allowCustom: true });
     expect(Object.keys(config.views)).toEqual(['needs-maintainer', 'pipeline']);
     expect(config.views.pipeline?.sections?.map((s) => s.title)).toEqual(['Braucht Maintainer', 'Review', 'In Arbeit', 'Übrige']);
     // The named filter is shared by the view and the coder workflow (WI-15).

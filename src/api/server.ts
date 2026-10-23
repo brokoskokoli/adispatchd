@@ -47,6 +47,7 @@ import type { NotificationService } from '../notifications/index.js';
 import type { Repositories, RunRecord } from '../persistence/index.js';
 import { listKeptFiles, RUN_EVENTS, type RetentionService, type RunController } from '../runs/index.js';
 import type { DashboardInfoService } from '../dashboard/index.js';
+import type { ParameterOptionsService } from '../parameter-options/index.js';
 import type { Scheduler } from '../scheduler/index.js';
 import { DEFAULT_MAX_POINTS, downsample, MAX_POINTS, type ResourceMonitor } from '../monitoring/index.js';
 import type { ViewService } from '../views/index.js';
@@ -128,12 +129,16 @@ export interface ApiDeps {
   uiActionLimits?: Partial<UiActionLimits>;
   /** Source adapters by ID (UI actions, WI-27). */
   sources?: (sourceId: string) => SourceAdapter | undefined;
+  /** Run-time options of enum parameters (WI-31); absent = only static `values`. */
+  parameterOptions?: ParameterOptionsService;
 }
 
 // ---------------------------------------------------------------------------
 // Request schemas (zod)
 
 const idParam = z.object({ id: z.string().min(1).max(200) });
+const parameterParam = z.object({ id: z.string().min(1).max(200), name: z.string().min(1).max(200) });
+const optionsQuery = z.object({ refresh: z.enum(['true', 'false']).optional() }).strict();
 const numericIdParam = z.object({ id: z.coerce.number().int().positive() });
 const nullableOverride = <T extends z.ZodType>(schema: T) => schema.nullable().optional();
 const runtimeBody = z
@@ -639,6 +644,30 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     result.done.catch((err: unknown) => logger.warn('manual run supervision failed', { runId: result.run.id, error: errorMessage(err) }));
     auditRun(req, result.run.id, 'start');
     return accepted(reply, { run: toRunSummary(repos.runs.get(result.run.id) ?? result.run) });
+  });
+  app.get('/api/v1/workflows/:id/parameters/:name/options', async (req) => {
+    const { id, name } = parse(parameterParam, req.params, 'path');
+    const q = parse(optionsQuery, req.query, 'query');
+    const wf = deps.config.getWorkflow(id);
+    if (!wf) throw new ApiError(404, 'config_unknown_workflow', `Unknown workflow "${id}"`);
+    const def = Object.hasOwn(wf.config.parameters, name) ? wf.config.parameters[name] : undefined;
+    if (!def) throw new ApiError(404, 'unknown_parameter', `Workflow "${id}" has no parameter "${name}"`);
+    if (def.type !== 'enum') throw new ApiError(400, 'parameter_has_no_options', `Parameter "${name}" is of type "${def.type}" and has no options`);
+    // A script runs for `options_from.command`: only roles that may start runs (viewers must not trigger scripts).
+    if (def.optionsFrom?.type === 'command' && authEnabled() && !roleAllows(req.principal?.role ?? null, 'operator')) {
+      const role = req.principal?.role ?? null;
+      throw new ApiError(403, 'forbidden', `Options of "${name}" come from a script and require the role "operator" (your role: "${role ?? 'none'}")`, {
+        requiredRole: 'operator',
+        role,
+      });
+    }
+    if (!def.optionsFrom || !deps.parameterOptions) {
+      if (def.optionsFrom) throw new ApiError(503, 'not_ready', 'Parameter options are not available');
+      return { options: def.values.map((v) => ({ value: v, label: v })), fetchedAt: null, cached: false, allowCustom: def.allowCustom === true };
+    }
+    // `refresh` (bypassing the cache) only for roles that may start runs: viewers get the cached result (rate limits).
+    const mayRefresh = !authEnabled() || roleAllows(req.principal?.role ?? null, 'operator');
+    return deps.parameterOptions.get(wf.config, name, { refresh: q.refresh === 'true' && mayRefresh });
   });
   app.post('/api/v1/workflows/:id/dry-run', async (req) => {
     const { id } = parse(idParam, req.params, 'path');

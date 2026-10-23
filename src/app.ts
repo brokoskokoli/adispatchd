@@ -59,6 +59,7 @@ import {
 } from './runs/index.js';
 import { Scheduler } from './scheduler/index.js';
 import { DashboardInfoService, type DashboardInfoServiceOptions } from './dashboard/index.js';
+import { ParameterOptionsService } from './parameter-options/index.js';
 import { createGitHubSourceFactory } from './sources/index.js';
 import { ViewService } from './views/index.js';
 import { AuthService, createApiServer, type UiActionLimits, EventHub, removeControlToken, writeControlToken, type AuthServiceOptions, type ReadinessReport } from './api/index.js';
@@ -436,7 +437,20 @@ export async function createApp(options: AppOptions): Promise<App> {
     maxLogBytesPerRun: () => config.current.global.retention.maxLogSizePerRunBytes,
     secretValues: () => redactor.values(),
   });
+  // WI-31: run-time options of enum parameters (GitHub branches/tags, scripts) for the start form and the start check.
+  const parameterOptions = new ParameterOptionsService({
+    sources: sourceLookup,
+    credentials: sources,
+    configDir: () => config.current.configDir,
+    workspaceBaseDir: () => config.current.global.workspace.baseDir,
+    dataDir,
+    clock,
+    timers,
+    logger,
+    redact: redactor.asRedactor,
+  });
   const scheduler = new Scheduler({
+    parameterOptions,
     config,
     repositories: repos,
     controller,
@@ -536,6 +550,7 @@ export async function createApp(options: AppOptions): Promise<App> {
         void checkContainerEngines(containers, newEngines, log);
       }
       views.invalidate();
+      parameterOptions.invalidate();
       dashboard.sync();
       auth.sweep();
       warnAuthUsers();
@@ -639,6 +654,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     ...(options.uiDir ? { uiDir: options.uiDir } : {}),
     auth,
     sources: sourceLookup,
+    parameterOptions,
   });
 
   const actualPort = (): number | null => {
@@ -701,6 +717,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       let result: ShutdownResult | null = null;
       try {
         await scheduler.stop();
+        parameterOptions.stop();
         await dashboard.stop();
         result = await controller.shutdown(controllerOpts);
       } catch (err) {

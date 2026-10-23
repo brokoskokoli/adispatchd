@@ -51,6 +51,7 @@ export const ERROR_STATUS: Readonly<Record<string, number>> = {
   unblock_run_active: 409,
   config_invalid: 422,
   source_unavailable: 502,
+  parameter_options_unavailable: 502,
   run_controller_not_ready: 503,
   run_controller_not_accepting: 503,
   scheduler_not_accepting: 503,

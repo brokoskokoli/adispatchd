@@ -143,7 +143,7 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
     const raw = parseWith(workflowSchema, parsed, parsed.file, issues);
     if (raw) {
       workflowEntries.push({
-        workflow: normalizeWorkflow(raw, parsed.file, global, dir, (node, at) => namedFilters.expandAt(node, parsed.file, at)),
+        workflow: normalizeWorkflow(raw, parsed.file, global, dir, (node, at) => namedFilters.expandAt(node, parsed.file, at), Object.keys(sources)),
         rawParameters: raw.parameters,
         rawFilter: raw.filter ?? null,
         rawPriorityRules: raw.item_priority?.rules.map((r) => r.when) ?? [],
