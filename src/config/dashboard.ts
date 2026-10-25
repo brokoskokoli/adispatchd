@@ -6,7 +6,7 @@
  */
 import { statSync } from 'node:fs';
 import type { IssueCollector, IssuePath } from './issues.js';
-import type { DashboardConfig, DashboardInfoConfig } from './model.js';
+import type { DashboardConfig, DashboardInfoConfig, DashboardRowConfig } from './model.js';
 import { resolveCommand } from './normalize.js';
 import type { RawDashboardFile } from './schemas.js';
 import { checkEnvNames, checkLiteralSecrets } from './validate.js';
@@ -18,9 +18,10 @@ export const MAX_INFO_TIMEOUT_MS = 5 * 60_000;
 export const DASHBOARD_FILE = 'dashboard.yaml';
 
 /** Normalize the parsed `dashboard.yaml`. */
-export function normalizeDashboard(raw: RawDashboardFile, configDir: string): DashboardConfig {
+export function normalizeDashboard(raw: RawDashboardFile, layout: readonly DashboardRowConfig[] | null, configDir: string): DashboardConfig {
   return {
     file: DASHBOARD_FILE,
+    layout,
     info: raw.info.map(
       (t): DashboardInfoConfig => ({
         id: t.id,

@@ -41,7 +41,7 @@ import {
   type TechnicalStatus,
 } from '../core/index.js';
 import { readFileNoFollow } from '../executors/index.js';
-import { activeExternalLinks, externalLinkFrameOrigins, loadConfig, toPublicConfig, type ConfigManager, type ReloadResult } from '../config/index.js';
+import { activeExternalLinks, DEFAULT_DASHBOARD_LAYOUT, externalLinkFrameOrigins, loadConfig, toPublicConfig, type ConfigManager, type ReloadResult } from '../config/index.js';
 import type { LifecycleEngine } from '../lifecycle/index.js';
 import type { NotificationService } from '../notifications/index.js';
 import type { Repositories, RunRecord } from '../persistence/index.js';
@@ -162,6 +162,7 @@ const emptyBody = z.object({}).strict();
 const loginBody = z.object({ name: z.string().min(1).max(64), password: z.string().min(1).max(1024) }).strict();
 const runsQuery = z
   .object({
+    /** One workflow ID or a comma-separated list (WI-32). */
     workflow: z.string().optional(),
     status: z.string().optional(),
     trigger: z.enum(TRIGGER_TYPES).optional(),
@@ -171,6 +172,14 @@ const runsQuery = z
     before: z.string().datetime({ offset: true }).optional(),
     limit: z.coerce.number().int().min(1).max(500).optional(),
     offset: z.coerce.number().int().min(0).optional(),
+  })
+  .strict();
+/** `GET /api/v1/views/:id/items` (WI-32: `sections` may repeat, `limit` = rows per section/table). */
+const viewItemsQuery = z
+  .object({
+    refresh: z.enum(['true', 'false', '1', '0']).optional(),
+    sections: z.union([z.string().min(1), z.array(z.string().min(1)).min(1).max(50)]).optional(),
+    limit: z.coerce.number().int().min(1).max(2000).optional(),
   })
   .strict();
 const eventsQuery = z
@@ -693,8 +702,9 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const limit = q.limit ?? 50;
     const offset = q.offset ?? 0;
     if (statuses && statuses.length === 0) return { runs: [], total: 0, limit, offset };
+    const workflows = q.workflow ? [...new Set(q.workflow.split(',').map((w) => w.trim()).filter((w) => w !== ''))] : [];
     const page = repos.runs.list({
-      ...(q.workflow ? { workflowId: q.workflow } : {}),
+      ...(workflows.length === 1 ? { workflowId: workflows[0] } : workflows.length > 1 ? { workflowIds: workflows } : {}),
       ...(statuses ? { statuses } : {}),
       ...(q.trigger ? { triggerType: q.trigger } : {}),
       ...(q.item ? { sourceItemKey: q.item } : {}),
@@ -922,8 +932,21 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
   });
   app.get('/api/v1/views/:id/items', async (req) => {
     const { id } = parse(idParam, req.params, 'path');
-    const q = parse(z.object({ refresh: z.enum(['true', 'false', '1', '0']).optional() }).strict(), req.query, 'query');
-    const result = await deps.views.items(id, { refresh: q.refresh === 'true' || q.refresh === '1' });
+    const q = parse(viewItemsQuery, req.query, 'query');
+    const sections = q.sections === undefined ? undefined : Array.isArray(q.sections) ? q.sections : [q.sections];
+    if (sections) {
+      const view = deps.views.get(id);
+      if (!view) throw new ApiError(404, 'view_not_found', `Unknown view "${id}"`);
+      const titles = view.sections?.map((s) => s.title) ?? null;
+      if (!titles) throw new ApiError(400, 'invalid_request', `View "${id}" has no sections`);
+      const unknown = sections.filter((s) => !titles.includes(s));
+      if (unknown.length > 0) throw new ApiError(400, 'invalid_request', `Unknown section(s) of view "${id}": ${unknown.map((s) => `"${s}"`).join(', ')}`);
+    }
+    const result = await deps.views.items(id, {
+      refresh: q.refresh === 'true' || q.refresh === '1',
+      ...(sections ? { sections } : {}),
+      ...(q.limit !== undefined ? { limit: q.limit } : {}),
+    });
     return { ...result, errors: result.errors.map((e) => ({ sourceId: e.sourceId, message: redact(e.message) })) };
   });
 
@@ -959,6 +982,11 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
 
   // --- Dashboard info tiles (WI-24) -------------------------------------------
   // Reading never starts a script; only the throttled refresh POST does (CSRF/Host/Origin rules as for every POST).
+  // WI-32: layout of the dashboard (normalized; the default layout without `layout` in dashboard.yaml).
+  app.get('/api/v1/dashboard', async () => {
+    const layout = deps.config.current.dashboard?.layout ?? null;
+    return { configured: layout !== null, layout: layout ?? DEFAULT_DASHBOARD_LAYOUT };
+  });
   app.get('/api/v1/dashboard/info', async () => {
     const configured = deps.dashboard?.configured ?? false;
     return { configured, file: configured ? 'dashboard.yaml' : null, info: deps.dashboard?.list() ?? [] };

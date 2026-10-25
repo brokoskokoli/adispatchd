@@ -15,6 +15,7 @@ import { CONFIG_ID_PATTERN, systemClock, toAbsolutePath, type Clock } from '../c
 import { formatIssuePath, IssueCollector, sortIssues, type IssuePath } from './issues.js';
 import type { ConfigIssue, DashboardConfig, GlobalConfig, LoadedConfig, ViewConfig, WorkflowConfig } from './model.js';
 import { DASHBOARD_FILE, normalizeDashboard, validateDashboard } from './dashboard.js';
+import { parseDashboardLayout } from './dashboard-layout.js';
 import { editDistance, suggestField } from './field-catalog.js';
 import { NamedFilters, type NamedFilterEntry } from './named-filters.js';
 import {
@@ -173,7 +174,15 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
   if (dashboardFile) {
     const rawDashboard = parseWith(dashboardFileSchema, dashboardFile, DASHBOARD_FILE, issues);
     if (rawDashboard) {
-      dashboard = normalizeDashboard(rawDashboard, dir);
+      const layout = parseDashboardLayout(rawDashboard.layout, (schema, data, at) => parseValueAt(schema, data, DASHBOARD_FILE, at, issues), issues, {
+        file: DASHBOARD_FILE,
+        global,
+        infoIds: rawDashboard.info.map((t) => t.id),
+        // References are only checked when every workflow/view file could be parsed (else the load fails anyway).
+        workflows: allUsersParsed ? new Set(workflowEntries.map((e) => e.workflow.id)) : null,
+        views: allUsersParsed ? new Map(viewEntries.map((e) => [e.view.id, e.view])) : null,
+      });
+      dashboard = normalizeDashboard(rawDashboard, layout ?? null, dir);
       validateDashboard(dashboard, issues);
     }
   }
@@ -315,6 +324,22 @@ function parseWith<S extends z.ZodType>(
     issues.error(file, [], 'Top level must be a mapping');
     return undefined;
   }
+  return parseValueAt(schema, data, file, [], issues);
+}
+
+/**
+ * Check one value inside a file (`data` found at `base`) against `schema` and
+ * report the problems like {@link parseWith} (paths relative to the file,
+ * "did you mean" hints). Used for parts that pick their schema by shape
+ * (dashboard layout, WI-32).
+ */
+export function parseValueAt<S extends z.ZodType>(
+  schema: S,
+  data: unknown,
+  file: string,
+  base: IssuePath,
+  issues: IssueCollector,
+): z.output<S> | undefined {
   const result = schema.safeParse(data);
   if (result.success) return result.data;
   for (const issue of result.error.issues.flatMap(unionIssues)) {
@@ -335,7 +360,7 @@ function parseWith<S extends z.ZodType>(
     } else if (issue.code === 'invalid_value') {
       message += enumSuggestion(valueAt(data, at), issue.values);
     }
-    issues.error(file, at, message);
+    issues.error(file, [...base, ...at], message);
   }
   return undefined;
 }

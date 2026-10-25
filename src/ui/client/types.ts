@@ -446,6 +446,8 @@ export interface ViewItems {
   sections?: ViewSectionData[];
   groupBy?: { field: string; label: string };
   hideEmptySections?: boolean;
+  /** WI-32: rows of a view without sections before `limit` (only with `limit`). */
+  totalRows?: number;
 }
 
 export interface ConfigIssue {

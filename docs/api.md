@@ -176,6 +176,7 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | `GET /api/v1/config/files` | viewer | – |
 | `POST /api/v1/config/validate` | viewer | – |
 | `POST /api/v1/config/reload` | operator | ja |
+| `GET /api/v1/dashboard` | viewer | – |
 | `GET /api/v1/dashboard/info` | viewer | – |
 | `POST /api/v1/dashboard/info/:id/refresh` | operator | – |
 | `GET /api/v1/notifications` | viewer | – |
@@ -341,7 +342,7 @@ ausführt → `409 unblock_run_active` (Meldung nennt den Run).
 
 | Methode | Pfad | Antwort |
 |---|---|---|
-| GET | `/api/v1/runs?workflow=&status=running,completed&trigger=source\|schedule\|manual\|unblock&item=<itemKey>&result=success\|failure&active=true\|false&before=<ISO>&limit=50&offset=0` | `{"runs":[RunSummary],"total","limit","offset"}` (neueste zuerst, `limit ≤ 500`) |
+| GET | `/api/v1/runs?workflow=<id>[,<id>…]&status=running,completed&trigger=source\|schedule\|manual\|unblock&item=<itemKey>&result=success\|failure&active=true\|false&before=<ISO>&limit=50&offset=0` | `{"runs":[RunSummary],"total","limit","offset"}` (neueste zuerst, `limit ≤ 500`; `workflow` seit 0.8.0 auch als kommagetrennte Liste = einer davon) |
 | GET | `/api/v1/runs/:id` | RunDetail |
 | GET | `/api/v1/runs/:id/events?after=<sequence>&limit=1000` | `{"events":[RunEvent],"hasMore","nextAfter"}` |
 | GET | `/api/v1/runs/:id/logs?stream=stdout\|stderr&offset=<byte>&limit=<bytes>` bzw. `&tail=<bytes>` | LogPage |
@@ -441,7 +442,7 @@ Bereits aufgehobene Blocks: `200` mit `runId: null` (idempotent). Während Recov
 |---|---|---|
 | GET | `/api/v1/views` | `{"views":[{id, title, file, sources, columns, sort, filter, groupByFirst, sections, exclusive, hideEmptySections}]}` |
 | GET | `/api/v1/views/:id` | View-Definition; `sort` ist seit 0.5.0 **immer eine Liste** `[{field, direction, order}]` (`order`: Liste oder `null`; `[]` = unsortiert), `sections` = `null` oder `[{title, rest, filter, fields, sort}]` (`fields` = Spalten wie `columns`, `sort` = wirksame Sortierung) |
-| GET | `/api/v1/views/:id/items?refresh=true` | ViewItems (Cache 30 s, `refresh` umgeht ihn) |
+| GET | `/api/v1/views/:id/items?refresh=true&sections=<Titel>&sections=<Titel>&limit=<n>` | ViewItems (Cache 30 s, `refresh` umgeht ihn). Seit 0.8.0 (WI-32, View-Widgets des Dashboards): `sections` (wiederholbar) liefert nur diese Abschnitte (in View-Reihenfolge; unbekannter Titel oder View ohne Abschnitte → `400 invalid_request`), `limit` (1–2000) kürzt jede Tabelle auf so viele Zeilen – `counts.rows` eines Abschnitts bleibt die Zahl vor dem Kürzen, eine View ohne Abschnitte erhält `totalRows`. Gekürzt wird nach dem Cache: Seite und Widgets teilen sich eine Abfrage der Quellen |
 
 ```json
 { "view": { "id": "needs-maintainer", "title": "Needs Maintainer", "sources": ["project_a","project_b"] },
@@ -509,6 +510,31 @@ Sample:
   `monitoring.top_processes` größten über `min_cpu_percent`), `rest` (übrige fremde Prozesse).
 - Nur Befehlsnamen (`ucomm`, an der ersten Leerstelle abgeschnitten, gekürzt), **nie Argumente**. Konnte die Prozessliste nicht gelesen werden, ist
   `processes` leer. Werte liegen nur im Speicher (gehen beim Neustart verloren).
+### Dashboard-Layout (seit 0.8.0, WI-32)
+
+| Methode | Pfad | Antwort |
+|---|---|---|
+| GET | `/api/v1/dashboard` | `{"configured": bool, "layout": [Row]}` – `layout` aus `dashboard.yaml` normalisiert; ohne `layout`-Schlüssel (oder ohne Datei) das Standard-Layout und `configured: false` |
+
+`Row`: `{title: String|null, columns: [{width: 1–12, widgets: [Widget]}]}` – ein Widget direkt in der Reihe ist eine
+Spalte mit genau diesem Widget. `Widget`: immer `widget` und `title` (`null` = Standardüberschrift), dazu je nach Art
+`ids` (`info`, `null` = alle), `limit`/`workflows` (`active_runs`, `recent_runs`; `workflows: null` = alle),
+`view`/`sections`/`limit`/`refreshMs` (`view`; `sections: null` = alle), `default`/`tabs: [{id, title, layout: [Row]}]`
+(`tabs`). Beispiel:
+
+```json
+{ "configured": true,
+  "layout": [
+    { "title": null, "columns": [ { "width": 1, "widgets": [ { "widget": "resources", "title": null } ] } ] },
+    { "title": "Pipeline", "columns": [
+        { "width": 3, "widgets": [ { "widget": "view", "title": null, "view": "pipeline", "sections": ["Review"], "limit": 15, "refreshMs": 60000 } ] },
+        { "width": 1, "widgets": [ { "widget": "tabs", "title": null, "default": "runs", "tabs": [
+            { "id": "runs", "title": "Runs", "layout": [ { "title": null, "columns": [ { "width": 1, "widgets": [ { "widget": "recent_runs", "title": null, "limit": 5, "workflows": null } ] } ] } ] } ] } ] } ] } ] }
+```
+
+Die UI lädt das Layout beim Öffnen des Dashboards und nach jedem `config.reloaded` neu. View-Widgets nutzen
+`GET /api/v1/views/:id/items` mit `sections`/`limit`, Run-Widgets `GET /api/v1/runs` mit `workflow=<Liste>`.
+
 ### Dashboard-Infos (seit 0.4.0, WI-24)
 
 | Methode | Pfad | Body | Antwort |

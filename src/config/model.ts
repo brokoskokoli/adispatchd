@@ -747,10 +747,50 @@ export interface DashboardInfoConfig {
   thresholds: DashboardInfoThresholds;
 }
 
+/** Widgets without options (WI-32). */
+export type DashboardSimpleWidgetName = 'resources' | 'resources_full' | 'scheduler' | 'capacity' | 'attention';
+
+/** A normalized widget of the dashboard layout (WI-32); `title: null` = default heading. */
+export type DashboardWidgetConfig =
+  | { widget: DashboardSimpleWidgetName; title: string | null }
+  /** `ids: null` = all tiles in file order. */
+  | { widget: 'info'; title: string | null; ids: readonly string[] | null }
+  /** `workflows: null` = all workflows. */
+  | { widget: 'active_runs' | 'recent_runs'; title: string | null; limit: number; workflows: readonly string[] | null }
+  /** `sections: null` = all sections (or a view without sections); `limit` = rows per section/table. */
+  | { widget: 'view'; title: string | null; view: string; sections: readonly string[] | null; limit: number; refreshMs: number }
+  /** Container: one layout per tab; `default` = ID of the tab open at first. */
+  | { widget: 'tabs'; title: string | null; default: string; tabs: readonly DashboardTabConfig[] };
+
+/** One tab of a `tabs` widget (WI-32). */
+export interface DashboardTabConfig {
+  /** Config ID (explicit or derived from the title); unique among the tabs widgets of one layout. */
+  id: string;
+  title: string;
+  layout: readonly DashboardRowConfig[];
+}
+
+/** Name of a dashboard widget. */
+export type DashboardWidgetName = DashboardWidgetConfig['widget'];
+
+/** A column of a layout row: widgets on top of each other, relative `width` (1–12). */
+export interface DashboardColumnConfig {
+  width: number;
+  widgets: readonly DashboardWidgetConfig[];
+}
+
+/** A row of the dashboard layout (WI-32). */
+export interface DashboardRowConfig {
+  title: string | null;
+  columns: readonly DashboardColumnConfig[];
+}
+
 /** Content of `dashboard.yaml`. */
 export interface DashboardConfig {
   file: string;
   info: readonly DashboardInfoConfig[];
+  /** WI-32: `null` = no `layout` key (the default layout applies). */
+  layout: readonly DashboardRowConfig[] | null;
 }
 
 // ---------------------------------------------------------------------------

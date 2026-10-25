@@ -32,7 +32,7 @@ describe('dashboard.yaml (WI-24)', () => {
     expect(a.config.dashboard).toBeNull();
     const b = await load({ ...SCRIPT, 'dashboard.yaml': 'info: []\n' });
     if (!b.ok) throw new Error(messages(b).join('\n'));
-    expect(b.config.dashboard).toEqual({ file: 'dashboard.yaml', info: [] });
+    expect(b.config.dashboard).toEqual({ file: 'dashboard.yaml', info: [], layout: null });
     expect(b.config.hash).not.toBe(a.config.hash);
   });
 

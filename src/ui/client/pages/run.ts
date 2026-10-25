@@ -12,7 +12,7 @@ import { eventSummary, formatBytes, formatDuration, stateTone } from '../../shar
 import { messageRunId, type Page, type PageContext } from '../page.js';
 import type { Action, KeptListing, LogPage, RunDetail, RunEvent } from '../types.js';
 import { act, badge, button, confirmDialog, errorBox, externalLink, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time } from '../ui.js';
-import { cancelRunButton } from './dashboard.js';
+import { cancelRunButton } from './dashboard-widgets.js';
 import { itemPanelLink } from './item.js';
 
 type Tab = 'overview' | 'logs' | 'events' | 'actions' | 'files';

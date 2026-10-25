@@ -172,6 +172,8 @@ export interface FinalizationResult {
 /** Query for {@link RunRepository.list}. */
 export interface RunListQuery {
   workflowId?: string;
+  /** Any of these workflows (WI-32); combined with `workflowId` by AND. */
+  workflowIds?: readonly string[];
   statuses?: readonly TechnicalStatus[];
   triggerType?: TriggerType;
   sourceItemKey?: string;
@@ -484,6 +486,10 @@ export class RunRepository {
     if (query.workflowId !== undefined) {
       where.push('workflow_id = ?');
       params.push(query.workflowId);
+    }
+    if (query.workflowIds && query.workflowIds.length > 0) {
+      where.push(`workflow_id IN (${placeholders(query.workflowIds.length)})`);
+      params.push(...query.workflowIds);
     }
     if (query.statuses && query.statuses.length > 0) {
       where.push(`status IN (${placeholders(query.statuses.length)})`);

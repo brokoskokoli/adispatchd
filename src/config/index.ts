@@ -26,6 +26,8 @@ export {
   MIN_MONITORING_SAMPLES,
   SECRET_DELIVERIES,
   DASHBOARD_INFO_TYPES,
+  DASHBOARD_LAYOUT_LIMITS,
+  DASHBOARD_WIDGETS,
   MAX_INFO_TILES,
   MIN_INFO_CACHE_MS,
   MAX_VIEW_SECTIONS,
@@ -37,6 +39,7 @@ export {
   PARAMETER_OPTIONS_GITHUB_KINDS,
 } from './schemas.js';
 export { DASHBOARD_FILE, MAX_INFO_TIMEOUT_MS } from './dashboard.js';
+export { DEFAULT_DASHBOARD_LAYOUT, tabSlug } from './dashboard-layout.js';
 export { MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH } from './named-filters.js';
 export {
   ConfigLoadError,

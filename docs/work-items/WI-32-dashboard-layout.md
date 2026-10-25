@@ -121,3 +121,52 @@ Beispieldaten). Keine lokalen Pfade, keine privaten Projektnamen.
 - [ ] Rollen unverändert (viewer sieht, operator steuert).
 - [ ] Im Browser geprüft (eigene Instanz, Standard-Layout und Beispiel-Layout, hell/dunkel, schmal).
 - [ ] `examples/config` und `init` validieren; Doku-Test grün; `npm run check` und `npm run test:pack` grün.
+
+## Erweiterung: Container-Widget `tabs` (Maintainer, 26. Oktober 2026)
+
+Neues Container-Widget `tabs`, überall erlaubt, wo ein Widget stehen darf (direkt in einer Reihe, in einer Spalte,
+in einem anderen Tab → Unter-Tabs):
+
+```yaml
+layout:
+  - row: [resources]
+  - row:
+      - widget: tabs
+        tabs:
+          - title: Pipeline
+            layout:                     # gleiche Reihen/Spalten/Widget-Struktur wie das oberste layout
+              - row: [{ widget: view, view: pipeline-board }]
+          - title: Runs
+            layout:
+              - row: [active_runs, recent_runs]
+          - title: Projekte
+            layout:
+              - row:
+                  - widget: tabs        # Unter-Tabs
+                    tabs:
+                      - { title: A, layout: [ { row: [ { widget: view, view: needs-maintainer } ] } ] }
+                      - { title: B, layout: [ { row: [ attention ] } ] }
+      - column: [scheduler]
+```
+
+Regeln:
+- `tabs`: 1–12 Einträge; `title` Pflicht (1–40 Zeichen, eindeutig im Tabs-Widget); optional `id` (Konfigurations-ID,
+  Default: Slug des Titels) für URL/Zustand; `layout` Pflicht (gleiches Schema, rekursiv). Optional `default` am
+  Widget = `id` des anfangs offenen Tabs (Default: erster).
+- Verschachtelungstiefe der Tabs höchstens 3; Gesamtzahl der Widgets begrenzt (100).
+- Lazy: Widgets in inaktiven Tabs werden nicht gerendert, laden nichts und pollen/abonnieren nichts (GitHub-Kosten
+  von View-Widgets); Umschalten montiert sie, Verlassen gibt sie frei.
+- Der gewählte Tab je Tabs-Widget steht im URL-Hash (teilbar, Zurück-Knopf), z. B. Query-Parameter auf `#/` mit
+  einem Pfad aus Tab-IDs; optional je Betrachter in `localStorage` gemerkt (in try/catch).
+- Tastaturbedienbare Tab-Leiste (ARIA `tablist`/`tab`/`tabpanel`, Pfeiltasten), hell/dunkel, schmale Bildschirme
+  (Tab-Leiste scrollt horizontal).
+- Validierungsfehler tragen den Pfad (z. B. `layout[1].row[0].tabs[2].layout[0]…`).
+- Doku/Beispiele/Screenshot wie für den Rest von WI-32.
+
+Zusätzliche Acceptance Criteria:
+
+- [ ] `tabs` in Reihe, Spalte und als Unter-Tab; Grenzen (1–12 Tabs, Titel 1–40 und eindeutig, `id`/Slug, `default`,
+      Tiefe ≤ 3, ≤ 100 Widgets) werden mit Pfad gemeldet.
+- [ ] Inaktive Tabs laden nichts (kein Request, kein Polling); Umschalten montiert/gibt frei.
+- [ ] Gewählte Tabs im URL-Hash (teilbar, Zurück-Knopf) und per `localStorage` gemerkt; ARIA-Tabs mit Pfeiltasten;
+      schmale Bildschirme mit horizontal scrollender Tab-Leiste.

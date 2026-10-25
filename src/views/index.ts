@@ -12,6 +12,8 @@ export {
   runFields,
   safeLink,
   compareOrdered,
+  narrowViewItems,
+  type ViewItemsOptions,
   type ViewCell,
   type ViewColumn,
   type ViewGrouping,

@@ -23,6 +23,12 @@ export interface Page {
   onLive?(msg: LiveMessage): void;
   /** Called after an SSE reconnect/reset: reload state via REST. */
   onResync?(): void;
+  /**
+   * The hash changed: return true if the page applied the new route itself
+   * (e.g. only the selected dashboard tabs changed, WI-32) instead of being
+   * rebuilt.
+   */
+  onRouteChange?(route: Route): boolean;
   /** Cleanup (timers, refreshers). */
   dispose?(): void;
 }
