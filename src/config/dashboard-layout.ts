@@ -277,6 +277,8 @@ function tabsWidget(
   }
   const tabs: DashboardTabConfig[] = [];
   const titles = new Map<string, number>();
+  /** IDs of all tabs that could be read (also when their layout has errors), for checking `default`. */
+  const knownIds = new Set<string>();
   let ok = true;
   raw.tabs.forEach((rawTab, i) => {
     const tabAt = [...at, 'tabs', i];
@@ -292,6 +294,7 @@ function tabsWidget(
       ok = false;
     } else titles.set(tab.title, i);
     const id = tab.id ?? tabSlug(tab.title);
+    if (id !== null) knownIds.add(id);
     if (duplicateTitle && tab.id === undefined) {
       // The derived ID duplicates as well; the title error says it all.
     } else if (id === null) {
@@ -316,16 +319,16 @@ function tabsWidget(
     }
     tabs.push({ id, title: tab.title, layout });
   });
-  if (!ok) return undefined;
   let initial = tabs[0]?.id ?? '';
   if (raw.default !== undefined) {
-    const ids = tabs.map((t) => t.id);
+    const ids = [...knownIds];
     if (!ids.includes(raw.default)) {
       issues.error(ctx.file, [...at, 'default'], `Unknown tab "${raw.default}" (tab IDs: ${ids.join(', ')})`);
       return undefined;
     }
     initial = raw.default;
   }
+  if (!ok) return undefined;
   return { widget: 'tabs', title: raw.title ?? null, default: initial, tabs };
 }
 

@@ -1,5 +1,5 @@
-# dashboard.yaml - info tiles on the dashboard (optional, WI-24; docs/configuration-reference.md section 3.7).
-# Scripts run in the background only (start, cache expiry, reload), never on page views.
+# dashboard.yaml - info tiles and layout of the dashboard (optional; docs/configuration-reference.md section 3.7).
+# Info scripts run in the background only (start, cache expiry, reload), never on page views.
 info:
   - id: data-disk
     title: Disk usage of the data dir
@@ -9,3 +9,29 @@ info:
     cache: 5m
     warn_above: 80
     critical_above: 95
+
+# Layout (WI-32): rows of columns of widgets; without "layout" the default dashboard applies.
+layout:
+  - row: [resources]
+  - title: Work
+    row:
+      - column: [scheduler, attention, info]   # widgets on top of each other
+        width: 1
+      - widget: tabs                           # widgets of inactive tabs load nothing
+        width: 3                               # relative width
+        tabs:
+          - title: Pipeline
+            layout:
+              - row:
+                  - { widget: view, view: pipeline, sections: [Braucht Maintainer, Review, In Arbeit], limit: 10 }
+          - title: Needs maintainer
+            id: maintainer
+            layout:
+              - row: [{ widget: view, view: needs-maintainer, refresh: 2m }]
+          - title: Capacity
+            layout:
+              - row: [capacity]
+  - row: [{ widget: active_runs, title: Running now }]
+  - row:
+      - { widget: recent_runs, limit: 5, workflows: [coder-project-a, reviewer-project-b], title: Agents }
+      - { widget: recent_runs, limit: 5, workflows: [deploy, release, nightly-maintenance], title: Operations }

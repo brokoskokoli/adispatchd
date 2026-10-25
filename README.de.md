@@ -43,6 +43,10 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Info-Kacheln im Dashboard:** `dashboard.yaml` definiert kleine Skripte (Text, Zahl oder Prozent mit Warn- und
   Kritisch-Schwellen), die der Daemon im Hintergrund nach Cache-Ablauf ausführt – z. B. Plattenbelegung, offene PRs,
   Guthaben.
+- **Eigenes Dashboard-Layout:** Seit 0.8.0 ordnet `dashboard.yaml` das Dashboard an – Reihen aus Spalten mit
+  relativer Breite, Überschriften, jedes Widget beliebig oft, **Views als Widgets** (Abschnitte wählen, Zeilenlimit,
+  eigenes Aktualisierungsintervall, Item-Panel) und **Reiter** (auch verschachtelt; inaktive Reiter laden nichts, der
+  gewählte Reiter steht in der URL). Ohne Layout sieht das Dashboard aus wie bisher.
 - **Arbeits-Branch und PR eines Issues** als Felder (`work_branch`, `work_pr`, `linked_branches`, `closing_prs`):
   filtern („hat offenen PR“), in Views mit Link auf den PR anzeigen und per `{item.work_branch}`/`{item.work_pr}`
   direkt an Worker und Actions übergeben – frisch gelesen, nie leer geraten, wenn GitHub sie nicht liefern kann.
