@@ -181,6 +181,8 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | `POST /api/v1/dashboard/info/:id/refresh` | operator | – |
 | `GET /api/v1/notifications` | viewer | – |
 | `POST /api/v1/notifications/:id/retry` | operator | – |
+| `GET /api/v1/items/:source/:item/history` | viewer | – |
+| `GET /api/v1/items/:source/:item/github-events` | viewer | – |
 | `GET /api/v1/items/resolve` | admin | – |
 | `GET /api/v1/items/:source/:item` | admin | – |
 | `POST /api/v1/items/:source/:item/comment` | admin | – |
@@ -374,7 +376,7 @@ Kette; nicht abbrechbar).
 
 `RunDetail` = RunSummary + `lockKey, parameters, command {command, args}, workingDirectory, workspacePath, pid,
 result` (geparste Ergebnisdatei), `error` (technische Diagnose), `input` (`context.json`, Worker-Input; max. 1 MiB) /
-`inputError`, `resultFile` / `resultFileError` (Rohdatei), `actions` (Journal inkl. `attemptsDetail`), `events` (max. 500,
+`inputError`, `resultFile` / `resultFileError` (Rohdatei), `actions` (Journal inkl. `attemptsDetail` und – seit 0.9.0 – `effect`, der strukturierten Wirkung wie im Item-Verlauf; ältere Einträge `null`), `events` (max. 500,
 `eventsTruncated`), `logs {stdout:{size, truncated}, stderr:{…}}`, `block` (aktiver Block des Scopes), `retryBlock`
 (ab 0.6.0: bei Trigger `unblock` der aufgehobene Block, sonst der von diesem Run erzeugte Block oder `null`),
 `kept` (`{files, bytes, skippedCount, message, error}` aus dem Event `run.kept_files`, sonst `null`), `supervised`,
@@ -556,6 +558,7 @@ bereinigt, redigiert, dann gekürzt), `stale` (Wert älter als der fehlgeschlage
 
 ![Item-Panel der Web-UI](https://raw.githubusercontent.com/brokoskokoli/adispatchd/main/docs/screenshots/item-panel.png)
 
+UI-Route des Panels: `#/items/<source>/<nr>/act` (seit 0.9.0; `#/items/<source>/<nr>` ist der Item-Verlauf).
 Ein angemeldeter Benutzer mit Rolle `admin` kommentiert ein Issue/PR, setzt/entfernt Labels oder ändert Projektfelder
 **als eine konfigurierte Identity** (z. B. eine GitHub App) – nicht als er selbst. Voraussetzungen, alle serverseitig
 geprüft (in dieser Reihenfolge nach Host/CSRF/Rolle):
@@ -605,6 +608,71 @@ geprüft (in dieser Reihenfolge nach Host/CSRF/Rolle):
   `retention.ui_actions` (Default 365 Tage), unabhängig vom Ergebnis. Zusätzlich die Log-Zeilen `api write` und `ui action`.
   Scheitert nur das Protokollieren nach einer erfolgreichen Änderung auf GitHub, antwortet die API trotzdem 2xx mit
   `"action": null, "auditWarning": "…"` (und loggt den Fehler) – nie 500 für eine ausgeführte Aktion.
+
+### Item-Verlauf (seit 0.9.0, WI-33)
+
+![Item-Verlauf der Web-UI](https://raw.githubusercontent.com/brokoskokoli/adispatchd/main/docs/screenshots/item-history.png)
+
+Der Weg eines Source-Items (Issue/PR) durch die Workflows – lesbar für jede Rolle ab `viewer` (UI-Route
+`#/items/<source>/<item>`; das Item-Panel der UI-Aktionen liegt seit 0.9.0 unter `#/items/<source>/<item>/act`).
+`:item` ist die Item-ID der Source (GitHub: Nummer); erlaubt sind `[A-Za-z0-9._-]{1,40}`, sonst `400 invalid_request`.
+Antworten passieren den Secret-Redactor; Kommentartexte werden weder gespeichert noch geliefert.
+
+| Methode | Pfad | Antwort |
+|---|---|---|
+| GET | `/api/v1/items/:source/:item/history?limit=&before=&refresh=` | `{source, itemId, item, githubEvents, itemKey, runs:[RunSummary…], runsTotal, truncated, entries:[…], entriesTotal, nextBefore, retentionGap, active:{runs, blocks}}` |
+| GET | `/api/v1/items/:source/:item/github-events?refresh=` | `{source, itemId, events:[…], hiddenOwn, truncated, limit, fetchedAt, cached, notice}` |
+
+**`…/history`**
+
+- `item` – **aktueller Stand**, frisch über die Source gelesen (Source-Identity; 10 s zwischengespeichert,
+  `refresh=true` liest neu): `{ok: true, source, itemId, key, url, type, repository, title, state, labels,
+  projectFields: [{name, kind, known, value, reason}] | null, linked: {workBranch, workPr, workPrUrl} | null}` (`linked`
+  = `work_branch`/`work_pr`, WI-21, wenn die Source sie liefert). Ist das Item nicht lesbar: `{ok: false, …, error:
+  {code, message}}` (`source_not_found` – Source nicht (mehr) konfiguriert, `item_not_found`, `github_forbidden`, …);
+  die Historie kommt trotzdem (HTTP 200). Nur die erste Seite (ohne `before`) enthält `item`, Folgeseiten `null`.
+- `runs` – der **Pfad**: die letzten 50 Runs des Items in zeitlicher Reihenfolge (`RunSummary` wie in der Run-Liste);
+  `runsTotal` = alle Runs, `truncated` = mehr als 50.
+- `entries` – die **Zeitleiste**, neueste zuerst, höchstens `limit` (Default 100, max. 500) Einträge; `nextBefore` =
+  Cursor für die nächste (ältere) Seite (`before=<nextBefore>`), `null` = keine weitere. Die Zeitleiste umfasst die
+  letzten 1 000 Runs des Items. Jeder Eintrag hat `key, kind, at, cursor, runId, workflowId, workflowName` und je
+  `kind`:
+  - `run_started` – `trigger` (`source`, `schedule`, `manual`, `unblock`), `user` (wer manuell gestartet hat – nur mit
+    Anmeldung bekannt – bzw. wer den Block eines `unblock`-Runs entfernt hat), `parameters`, `scheduledFor`,
+    `reservedAt`, `startedAt`, `active`;
+  - `run_finished` – `status` (technisch), `result`, `outcome`, `message` (`result.message`), `reason`, `durationMs`,
+    `lifecycleStatus`;
+  - `hook` – `hook` (`on_start`, `on_success`, `on_result.<outcome>`, `on_error`, `on_retry_block`,
+    `on_retry_unblock`, …) und `actions: [{id, name, type, status, attempts, effect, effectSource, error, updatedAt}]`.
+    `effect` = Wirkung: `labelsAdded`, `labelsRemoved`, `projectFields: [{name, from?, to}]` (alt → neu; `from` fehlt,
+    wenn der alte Wert unbekannt ist), `projectItemAdded`, `unchanged` (`source.update`); `comment: {id, url,
+    reconciled?}` (`source.comment`); `exitCode`/`signal` (`shell`). `effectSource`: `recorded` (seit 0.9.0 strukturiert
+    gespeichert, Schema v6) oder `journal` (ältere Einträge, aus den Journal-Events abgeleitet, alte Werte unbekannt);
+  - `block_created` – `blockId, reason, failureCount, lastStatus, active`; `block_cleared` – `blockId, clearedBy,
+    clearedRunId` (Lifecycle-Run, WI-30);
+  - `ui_action` – `actionId, actor, actorVia, identity, action` (`comment`/`labels`/`project`), `result, errorCode,
+    errorMessage, effect` (wie oben, aus dem Audit).
+- `retentionGap` – `{deletedRuns, newestDeletedAt}`, wenn die Aufbewahrung (`retention`) Runs des Items gelöscht hat
+  (gezählt seit 0.9.0); `deletedRuns: null` bei einem indirekten Hinweis (Retry-Block, dessen Run fehlt); sonst `null`.
+- `active` – aktive Runs und aktive Retry-Blocks des Items.
+- **Nicht enthalten:** Planungsentscheidungen (Filter, Limits, übersprungene Items) – sie werden nicht je Item gespeichert.
+
+**`…/github-events`** (nur Sources mit Timeline, GitHub; sonst `400 not_supported`)
+
+- Liest `GET /repos/{o}/{r}/issues/{n}/timeline` mit der Source-Identity, höchstens 300 Ereignisse (älteste zuerst;
+  `truncated: true`, wenn es mehr gibt). Geliefert werden `labeled`/`unlabeled`, `closed`/`reopened`,
+  `assigned`/`unassigned`, `renamed`, `cross-referenced`, `connected`/`disconnected`, `referenced`, `merged` mit
+  `{id, kind, at, actor, own, external, label?, assignee?, from?, to?, stateReason?, ref?: {name, title, url,
+  isPullRequest}, commit?}` – Kommentare und Reviews nicht.
+- **Keine Doppelungen:** `own` = ausgeführt von einer konfigurierten Identity (App-ID über `performed_via_github_app`,
+  Login einer `github_token`-Identity). Eigene Label-Ereignisse, die zu einer eigenen Änderung der Historie passen
+  (gleiches Label, gleiche Richtung, ±5 Minuten; Actions und UI-Aktionen), werden weggelassen und in `hiddenOwn`
+  gezählt; übrige eigene Ereignisse bleiben mit `own: true`, alle anderen sind `external: true`.
+- Projektfeld-Änderungen liefert die Timeline nicht (`notice`).
+- Nur auf Anfrage (Schalter in der UI), 60 s je Item zwischengespeichert (`cached`; `refresh=true` fragt neu), höchstens
+  30 neue Abrufe je Benutzer und Minute (`429 github_events_throttled` mit `Retry-After`). Fehler betreffen nur diesen
+  Endpunkt und werden nicht gespeichert: `502 github_forbidden`/`github_auth_failed`/`github_unavailable`,
+  `404 github_not_found`/`item_not_found`/`source_not_found`, `429 github_rate_limited`.
 
 ### Notifications
 

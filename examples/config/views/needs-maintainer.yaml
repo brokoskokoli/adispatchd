@@ -10,4 +10,5 @@ fields:
   - { field: run.last_workflow, label: Letzter Agent }
   - { field: run.last_result.message, label: Ergebnis }
   - { field: updated_at, label: Aktualisiert }
+  - { field: history, label: Verlauf }   # link to the item history page (0.9.0, WI-33)
 sort: { field: updated_at, direction: desc }

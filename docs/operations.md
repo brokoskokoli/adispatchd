@@ -238,6 +238,10 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
   `blocks.last_status`/`cleared_run_id`; `runs` und `run_actions` werden dabei neu aufgebaut, Daten bleiben erhalten).
   Einbahnstraße: 0.5.x startet mit einer v5-DB nicht mehr; zurück nur über das Backup
   `backups/adispatchd-4-<zeitstempel>.sqlite`.
+- **0.9.0 hebt das Schema auf v6** (Item-Verlauf: Spalte `run_actions.effect_json` mit der strukturierten Wirkung
+  jeder Action, Index `blocks_item`, Tabelle `item_history_gaps` für den Aufbewahrungs-Hinweis; kein Neuaufbau,
+  bestehende Daten bleiben unverändert). Einbahnstraße: 0.8.x startet mit einer v6-DB nicht mehr; zurück nur über das
+  Backup `backups/adispatchd-5-<zeitstempel>.sqlite`.
 - **Rollback:** Dienst stoppen, alte Paketversion installieren, `adispatchd.sqlite`, `adispatchd.sqlite-wal` und
   `adispatchd.sqlite-shm` beiseitelegen, das passende Backup als `adispatchd.sqlite` zurückkopieren (Eigentümer
   `adispatchd`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).
