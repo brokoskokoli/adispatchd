@@ -27,10 +27,24 @@ import {
   type PanelState,
 } from '../../shared/item-panel.js';
 import { ApiError } from '../api.js';
+import { historyHash } from '../../shared/item-history.js';
 import { confirmDialog, errorBox, externalLink, loading, routeLink, time, toast } from '../ui.js';
 
-/** Hash of the item panel. */
-export const itemHash = (source: string, itemId: string): string => `#/items/${encodeURIComponent(source)}/${encodeURIComponent(itemId)}`;
+/** Hash of the item panel (WI-33: below the item history route). */
+export const itemHash = (source: string, itemId: string): string => `${historyHash(source, itemId)}/act`;
+
+/** Link to the item history (WI-33); every viewer may open it. */
+export function historyLink(source: string | null | undefined, itemId: string | null | undefined, text = 'History →'): HTMLElement | null {
+  if (!source || !itemId) return null;
+  return h('a', { href: historyHash(source, itemId), class: 'item-history', title: 'Runs, hooks, retry blocks and UI actions of this item' }, text);
+}
+
+/** `source:id` → link to the item history. */
+export function historyLinkForKey(itemKey: string | null | undefined, text?: string): HTMLElement | null {
+  if (!itemKey) return null;
+  const i = itemKey.indexOf(':');
+  return i > 0 ? historyLink(itemKey.slice(0, i), itemKey.slice(i + 1), text) : null;
+}
 
 /** Link to the item panel, or `null` when UI actions are not available to the user. */
 export function itemPanelLink(source: string | null | undefined, itemId: string | null | undefined, text = 'Act as identity…'): HTMLElement | null {
@@ -103,7 +117,7 @@ export const uiActionsPage = (ctx: PageContext): Page => {
 export const itemPage = (ctx: PageContext, source: string, itemId: string): Page => {
   ctx.setTitle(`Item ${source}:${itemId}`);
   const body = h('div', null, loading());
-  const el = h('div', { class: 'page' }, h('p', { class: 'crumbs' }, routeLink(['ui-actions'], '← UI Actions')), body);
+  const el = h('div', { class: 'page' }, h('p', { class: 'crumbs' }, routeLink(['ui-actions'], '← UI Actions'), ' · ', historyLink(source, itemId, 'Item history →')), body);
   const unavailable = uiActionsUnavailable(currentAuth());
   if (unavailable) {
     replaceChildren(body, h('div', { class: 'alert alert-info' }, unavailable));

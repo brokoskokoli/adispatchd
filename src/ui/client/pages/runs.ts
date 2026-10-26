@@ -8,6 +8,7 @@ import { isStateChange, type Page, type PageContext } from '../page.js';
 import type { RunSummary, Workflow } from '../types.js';
 import { badge, errorBox, externalLink, loading, runLink, runOutcomeBadges, table, text, time } from '../ui.js';
 import { cancelRunButton } from './dashboard-widgets.js';
+import { historyLinkForKey } from './item.js';
 
 const PAGE_SIZE = 50;
 
@@ -68,7 +69,12 @@ export const runsPage = (ctx: PageContext): Page => {
         runLink(r.id),
         h('span', null, r.workflowName ?? r.workflowId, h('br'), h('small', { class: 'muted' }, r.workflowId)),
         triggerLabel(r.triggerType),
-        r.sourceUrl ? externalLink(r.sourceUrl, r.sourceItemKey ?? undefined) : text(r.sourceItemKey ?? (r.scheduledFor ? `slot ${r.scheduledFor}` : null)),
+        h(
+          'span',
+          null,
+          r.sourceUrl ? externalLink(r.sourceUrl, r.sourceItemKey ?? undefined) : text(r.sourceItemKey ?? (r.scheduledFor ? `slot ${r.scheduledFor}` : null)),
+          r.sourceItemKey ? [' ', historyLinkForKey(r.sourceItemKey, 'history')] : null,
+        ),
         runOutcomeBadges(r),
         time(r.startedAt ?? r.createdAt),
         formatDuration(r.durationMs),

@@ -13,7 +13,7 @@ import { messageRunId, type Page, type PageContext } from '../page.js';
 import type { Action, KeptListing, LogPage, RunDetail, RunEvent } from '../types.js';
 import { act, badge, button, confirmDialog, errorBox, externalLink, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time } from '../ui.js';
 import { cancelRunButton } from './dashboard-widgets.js';
-import { itemPanelLink } from './item.js';
+import { historyLinkForKey, itemPanelLink } from './item.js';
 
 type Tab = 'overview' | 'logs' | 'events' | 'actions' | 'files';
 const TABS: Tab[] = ['overview', 'logs', 'events', 'actions', 'files'];
@@ -142,7 +142,7 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
             ['Workflow', routeLink(['workflows', d.workflowId], d.workflowId)],
             ['Identity / role', text(d.identity)],
             ['Trigger', h('span', null, d.triggerType === 'unblock' ? 'unblock (lifecycle run of a removed retry block)' : d.triggerType, d.scheduledFor ? ` (slot ${d.scheduledFor})` : '')],
-            ['Source item', h('span', null, d.sourceUrl ? externalLink(d.sourceUrl) : text(d.sourceItemKey), d.sourceItemKey ? [' ', itemPanelLink(d.sourceId, d.sourceItemKey.slice(d.sourceItemKey.indexOf(':') + 1))] : null)],
+            ['Source item', h('span', null, d.sourceUrl ? externalLink(d.sourceUrl) : text(d.sourceItemKey), d.sourceItemKey ? [' ', historyLinkForKey(d.sourceItemKey), ' ', itemPanelLink(d.sourceId, d.sourceItemKey.slice(d.sourceItemKey.indexOf(':') + 1))] : null)],
             ['Technical state', badge(d.status, d.active ? 'info' : 'muted')],
             ['Business result', d.businessResult ? badge(d.businessResult, d.businessResult === 'success' ? 'ok' : 'warn') : text(null)],
             ['Outcome', d.resultOutcome ? badge(d.resultOutcome, 'info') : text(null)],
