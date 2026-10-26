@@ -510,6 +510,7 @@ Sample:
   `monitoring.top_processes` größten über `min_cpu_percent`), `rest` (übrige fremde Prozesse).
 - Nur Befehlsnamen (`ucomm`, an der ersten Leerstelle abgeschnitten, gekürzt), **nie Argumente**. Konnte die Prozessliste nicht gelesen werden, ist
   `processes` leer. Werte liegen nur im Speicher (gehen beim Neustart verloren).
+
 ### Dashboard-Layout (seit 0.8.0, WI-32)
 
 | Methode | Pfad | Antwort |

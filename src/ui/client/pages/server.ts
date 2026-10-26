@@ -167,8 +167,10 @@ export interface ServerSection {
   dispose(): void;
 }
 
-export function serverSection(): ServerSection {
-  const el = h('section', { class: 'card server' }, h('h2', null, 'Server'), loading());
+/** `title`: heading of the card (dashboard widget `resources_full` with `title`, WI-32). */
+export function serverSection(options: { title?: string } = {}): ServerSection {
+  const heading = options.title ?? 'Server';
+  const el = h('section', { class: 'card server' }, h('h2', null, heading), loading());
   let data: MetricsResponse | null = null;
   let error: unknown = null;
   let rangeMs = 60 * 60_000;
@@ -238,7 +240,7 @@ export function serverSection(): ServerSection {
     if (disposed) return;
     width = measure();
     charts = [];
-    const title = h('h2', null, 'Server');
+    const title = h('h2', null, heading);
     if (error) {
       replaceChildren(el, title, errorBox(error));
       return;

@@ -4,12 +4,13 @@
  * optional jump links, grouped tables, browser-only column sort (state per
  * table, kept across re-renders of the same renderer) and the item panel
  * link per row. With `moreHref`, tables that were cut by a row limit end
- * with an "N more …" link.
+ * with a note (sorting covers the shown rows only) and an "N more …" link.
  */
 import { h, replaceChildren } from './dom.js';
 import { cellText, nextSort, objectText, sortRows, type SortDirection } from '../shared/sort.js';
 import { itemPanelLink } from './pages/item.js';
 import {
+  MAX_VIEW_ROWS,
   describeSort,
   groupLabel,
   groupRows,
@@ -60,8 +61,23 @@ export function createViewRenderer(options: ViewRenderOptions): ViewRenderer {
   /** Browser-only column sort per table (view or section). */
   const sorts = new Map<string, { column: number; direction: SortDirection }>();
 
-  const more = (shown: number, total: number): HTMLElement | null =>
-    options.moreHref && total > shown ? h('p', { class: 'view-more' }, h('a', { href: options.moreHref }, `${total - shown} more …`)) : null;
+  /**
+   * Below a table the widget limit cut: the rows come trimmed from the server
+   * (first N in the configured order), so a column sort and the group counts
+   * only cover these – say so, and link to the view page for the rest. `total`
+   * is capped like the view page (`MAX_VIEW_ROWS`), so the link promises no more
+   * than the page shows.
+   */
+  const more = (shown: number, total: number): HTMLElement | null => {
+    const available = Math.min(total, MAX_VIEW_ROWS);
+    if (!options.moreHref || available <= shown) return null;
+    return h(
+      'p',
+      { class: 'view-more muted' },
+      `First ${shown} of ${available} rows in the configured order; column sort and group counts cover these only. `,
+      h('a', { href: options.moreHref }, `${available - shown} more …`),
+    );
+  };
 
   /**
    * One table (the view or a section). Column clicks sort in the browser only

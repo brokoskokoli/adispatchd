@@ -40,6 +40,11 @@ describe('main navigation (WI-29)', () => {
     // Leaving the dashboard (or a tab) ends the strip's live subscription.
     expect(widgets).toMatch(/dispose: \(\) => feed\.dispose\(\)/);
     expect(read('client/pages/dashboard.ts')).not.toContain('serverSection');
+    // resources_full keeps its `title` across re-renders (the heading is not hard-coded in render()).
+    const serverSrc = read('client/pages/server.ts');
+    expect(serverSrc).not.toContain("h('h2', null, 'Server')");
+    expect(serverSrc.match(/h\('h2', null, heading\)/g)).toHaveLength(2);
+    expect(widgets).toContain('serverSection(title !== null ? { title } : {})');
     const server = read('client/pages/server.ts');
     expect(server).toMatch(/export const resourcesPage/);
     expect(server).toMatch(/dispose: \(\) => server\.dispose\(\)/);

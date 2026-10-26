@@ -55,3 +55,11 @@ describe('views page layout (WI-28)', () => {
     ).toBe('project.Status (custom order) ↑, created_at ↓');
   });
 });
+
+describe('view row cap (WI-32)', () => {
+  it('mirrors the server limit of view rows', async () => {
+    const { MAX_VIEW_ROWS: server } = await import('../../views/index.js');
+    const { MAX_VIEW_ROWS: ui } = await import('./view-layout.js');
+    expect(ui).toBe(server);
+  });
+});

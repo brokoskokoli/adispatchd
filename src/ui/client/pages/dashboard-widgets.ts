@@ -337,9 +337,7 @@ function resourcesWidget(): Mounted {
 }
 
 function resourcesFullWidget(title: string | null): Mounted {
-  const server = serverSection();
-  const heading = server.el.querySelector('h2');
-  if (heading && title !== null) heading.textContent = title;
+  const server = serverSection(title !== null ? { title } : {});
   server.el.classList.add('widget');
   return { el: server.el, onLive: (msg) => server.onLive(msg), onResync: () => server.onResync(), dispose: () => server.dispose() };
 }

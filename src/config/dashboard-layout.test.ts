@@ -104,8 +104,8 @@ describe('dashboard.yaml layout (WI-32)', () => {
           'layout:',
           '  - row: [resorces]',
           '  - row: []',
-          '  - rows: [info]',
-          '  - row: [{ column: [] }, { column: [scheduler], widt: 2 }]',
+          '  - titel: X\n    row: [info]',
+          '  - row: [{ column: [] }, { column: [scheduler], widht: 2 }]',
           '  - row: [{ widget: active_runs, limit: 0, workflow: [coder] }, { widget: recent_runs, limit: 51 }]',
           '  - row: [view, { widget: view }, { widget: view, view: flat, refresh: 5s, limit: 201 }]',
           '  - row: [{ column: [{ widget: info, width: 2 }] }, { widget: capacity, width: 13, title: "" }, 42]',
@@ -117,9 +117,9 @@ describe('dashboard.yaml layout (WI-32)', () => {
     const has = (prefix: string, text: string): boolean => all.some((e) => e.startsWith(prefix) && e.includes(text));
     expect(has('layout[0].row[0]: Invalid option', '(did you mean "resources"?)')).toBe(true);
     expect(all).toContain('layout[1].row: A row needs at least one widget or column');
-    expect(all).toContain('layout[2]: Unknown key(s): "rows" (did you mean "row"?)');
+    expect(all).toContain('layout[2]: Unknown key(s): "titel" (did you mean "title"?)');
     expect(all).toContain('layout[3].row[0].column: A column needs at least one widget');
-    expect(all).toContain('layout[3].row[1]: Unknown key(s): "widt" (did you mean "width"?)');
+    expect(all).toContain('layout[3].row[1]: Unknown key(s): "widht" (did you mean "width"?)');
     expect(all).toContain('layout[4].row[0].limit: Must be at least 1');
     expect(all).toContain('layout[4].row[0]: Unknown key(s): "workflow" (did you mean "workflows"?)');
     expect(all).toContain('layout[4].row[1].limit: Must be at most 50');
@@ -154,6 +154,16 @@ describe('dashboard.yaml layout (WI-32)', () => {
       'layout[0].row[2].sections[0]: View "board" has no section "Reviw" (did you mean "Review"?)',
       'layout[0].row[3].ids[0]: Unknown info tile "dsk" (did you mean "disk"?)',
       'layout[0].row[4].workflows[0]: Unknown workflow "codr" (did you mean "coder"?)',
+    ]);
+  });
+
+  it('reports wrong references also when the same widget has a schema error', async () => {
+    const r = await load(INFO + 'layout:\n  - row: [{ widget: active_runs, limit: 0, workflows: [codr] }, { widget: view, view: bord, limit: 999 }]\n');
+    expect(errors(r)).toEqual([
+      'layout[0].row[0].limit: Must be at least 1',
+      'layout[0].row[0].workflows[0]: Unknown workflow "codr" (did you mean "coder"?)',
+      'layout[0].row[1].limit: Must be at most 200',
+      'layout[0].row[1].view: Unknown view "bord" (did you mean "board"?)',
     ]);
   });
 

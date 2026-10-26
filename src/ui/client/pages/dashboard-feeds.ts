@@ -6,8 +6,9 @@
  * - `status` and `runs(query)`: reloaded on live state changes (coalesced,
  *   at most one reload per second, as the 0.7.0 dashboard);
  * - `view(id)`: one query per view for all its widgets (union of their
- *   sections, largest limit), polled at the shortest `refresh` of them; no
- *   live reload (views cost source API calls).
+ *   sections, largest limit), polled at the shortest `refresh` of them
+ *   (paused while the browser tab is hidden, caught up when it is visible
+ *   again); no live reload (views cost source API calls).
  */
 import { api, qs, seg } from '../api.js';
 import { createRefresher, type Refresher } from '../../shared/throttle.js';
@@ -47,6 +48,8 @@ interface ViewFeed {
   intervalMs: number | null;
   /** Request of the load in flight. */
   pending: ViewRequest | null;
+  /** A poll was skipped while the browser tab was hidden: reload when it is visible again. */
+  missed: boolean;
   gen: number;
 }
 
@@ -136,8 +139,25 @@ export function createDashboardFeeds(): DashboardFeeds {
     if (interval === feed.intervalMs) return;
     if (feed.timer !== null) clearInterval(feed.timer);
     feed.intervalMs = interval;
-    feed.timer = interval === null ? null : setInterval(() => void loadView(viewId, feed, false), interval);
+    feed.timer =
+      interval === null
+        ? null
+        : setInterval(() => {
+            // No source queries for a hidden browser tab; catch up on `visibilitychange`.
+            if (document.hidden) feed.missed = true;
+            else void loadView(viewId, feed, false);
+          }, interval);
   };
+
+  const onVisibility = (): void => {
+    if (document.hidden || disposed) return;
+    for (const [id, f] of views) {
+      if (!f.missed) continue;
+      f.missed = false;
+      void loadView(id, f, false);
+    }
+  };
+  document.addEventListener('visibilitychange', onVisibility);
 
   const feeds: DashboardFeeds = {
     status: (listener) => subscribeLive('status', () => api.get<Status>('/api/v1/status'), listener),
@@ -150,7 +170,7 @@ export function createDashboardFeeds(): DashboardFeeds {
     view: (viewId, request, listener) => {
       let feed = views.get(viewId);
       if (!feed) {
-        feed = { state: { kind: 'loading' }, fetched: null, subscribers: new Map(), timer: null, intervalMs: null, pending: null, gen: 0 };
+        feed = { state: { kind: 'loading' }, fetched: null, subscribers: new Map(), timer: null, intervalMs: null, pending: null, missed: false, gen: 0 };
         views.set(viewId, feed);
       }
       const own = feed;
@@ -197,6 +217,7 @@ export function createDashboardFeeds(): DashboardFeeds {
 
     dispose: () => {
       disposed = true;
+      document.removeEventListener('visibilitychange', onVisibility);
       for (const f of live.values()) f.refresher.dispose();
       live.clear();
       for (const f of views.values()) if (f.timer !== null) clearInterval(f.timer);

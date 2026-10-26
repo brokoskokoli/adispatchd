@@ -77,13 +77,16 @@ export const dashboardPage = (ctx: PageContext): Page => {
       handles.add(handle);
       return () => handles.delete(handle);
     },
-    changed: () => {
+    changed: (replace) => {
       tabPaths = [...handles].map((t) => t.path());
       const { [TAB_QUERY]: _old, ...rest } = ctx.route.query;
       // `/` separates tab IDs of nested tabs; kept readable in the URL (`#/?tab=projects/a`).
       const hash = buildHash([], { ...rest, [TAB_QUERY]: formatTabParam(tabPaths) }).replace(/%2F/gi, '/');
-      // pushState: a new history entry (back button) without a hashchange (no page re-render).
-      if (location.hash !== hash) history.pushState(null, '', hash);
+      // pushState: a new history entry (back button) without a hashchange (no page re-render);
+      // arrow keys replace the entry instead of adding one per key press.
+      if (location.hash === hash) return;
+      if (replace) history.replaceState(null, '', hash);
+      else history.pushState(null, '', hash);
     },
   };
 

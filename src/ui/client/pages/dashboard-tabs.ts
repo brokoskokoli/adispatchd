@@ -15,8 +15,8 @@ import type { Mounted } from './dashboard-widgets.js';
 export interface TabsContext {
   /** Selected tab paths of the current URL. */
   paths(): string[][];
-  /** A user switched a tab: write the URL (new history entry). */
-  changed(): void;
+  /** A user switched a tab: write the URL (`replace`: no new history entry, e.g. arrow keys). */
+  changed(replace: boolean): void;
   /** Mounted tabs widgets report their selected path (for the URL). */
   register(widget: TabsHandle): () => void;
 }
@@ -68,7 +68,7 @@ export function tabsWidget(
         class: 'dash-tab',
         'aria-controls': `${prefix}-panel`,
         on: {
-          click: () => select(t.id, true),
+          click: () => select(t.id, 'click'),
           keydown: (ev: Event) => {
             const k = ev as KeyboardEvent;
             const target = tabKeyTarget(k.key, i, w.tabs.length);
@@ -76,7 +76,7 @@ export function tabsWidget(
             k.preventDefault();
             const next = w.tabs[target];
             if (!next) return;
-            select(next.id, true);
+            select(next.id, 'key');
             buttons[target]?.focus();
           },
         },
@@ -102,13 +102,14 @@ export function tabsWidget(
     panel.replaceChildren(...(mounted ? [mounted.el] : []));
   };
 
-  const select = (id: string, byUser: boolean): void => {
+  /** `click` adds a history entry, `key` (arrow keys) replaces it, `route` (back button) writes nothing. */
+  const select = (id: string, how: 'click' | 'key' | 'route'): void => {
     if (id === selected && mounted) return;
     selected = id;
     mount();
-    if (byUser) {
+    if (how !== 'route') {
       store(storageKey, id);
-      tabs.changed();
+      tabs.changed(how === 'key');
     }
   };
 
@@ -122,7 +123,7 @@ export function tabsWidget(
     onRoute: () => {
       // Back button / shared link: the URL decides, without an entry the default tab.
       const next = fromUrl() ?? w.default;
-      if (next !== selected) select(next, false);
+      if (next !== selected) select(next, 'route');
       mounted?.onRoute?.();
     },
     dispose: () => {

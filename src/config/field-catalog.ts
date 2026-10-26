@@ -158,17 +158,22 @@ export function workflowFieldContext(sources: readonly SourceConfig[]): FieldCon
   };
 }
 
-/** Levenshtein distance of two strings. */
+/** Edit distance of two strings (Levenshtein plus adjacent transpositions). */
 export function editDistance(a: string, b: string): number {
-  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  // Optimal string alignment: insert, delete, substitute and swap of two adjacent characters cost 1
+  // each (WI-32: `titel` → `title`, `widht` → `width` are one typo, not two).
+  let before: number[] = [];
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
   for (let i = 1; i <= a.length; i++) {
-    let diag = prev[0] as number;
-    prev[0] = i;
+    const cur = [i];
     for (let j = 1; j <= b.length; j++) {
-      const tmp = prev[j] as number;
-      prev[j] = Math.min((prev[j] as number) + 1, (prev[j - 1] as number) + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
-      diag = tmp;
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let d = Math.min((prev[j] as number) + 1, (cur[j - 1] as number) + 1, (prev[j - 1] as number) + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d = Math.min(d, (before[j - 2] as number) + 1);
+      cur.push(d);
     }
+    before = prev;
+    prev = cur;
   }
   return prev[b.length] as number;
 }

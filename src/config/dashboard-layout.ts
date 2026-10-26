@@ -90,6 +90,57 @@ export function tabSlug(title: string): string | null {
   return slug !== '' && CONFIG_ID_PATTERN.test(slug) ? slug : null;
 }
 
+/** References a widget may carry (`view`, `sections`, `ids`, `workflows`). */
+interface WidgetReferences {
+  widget: string;
+  view?: string;
+  sections?: readonly string[] | undefined;
+  ids?: readonly string[] | undefined;
+  workflows?: readonly string[] | undefined;
+}
+
+const stringList = (v: unknown): string[] | undefined => (Array.isArray(v) && v.every((x) => typeof x === 'string') ? v : undefined);
+
+/** The reference options of an object that failed its schema, where their types fit. */
+function readableReferences(raw: Record<string, unknown>): Omit<WidgetReferences, 'widget'> {
+  return {
+    ...(typeof raw.view === 'string' ? { view: raw.view } : {}),
+    sections: stringList(raw.sections),
+    ids: stringList(raw.ids),
+    workflows: stringList(raw.workflows),
+  };
+}
+
+/** Check that views, sections, info tiles and workflows named by a widget exist. */
+function checkReferences(walk: Walk, w: WidgetReferences, at: IssuePath): void {
+  const { ctx, issues } = walk;
+  if (w.widget === 'info') {
+    w.ids?.forEach((id, i) => {
+      if (!ctx.infoIds.includes(id)) issues.error(ctx.file, [...at, 'ids', i], `Unknown info tile "${id}"${hint(id, ctx.infoIds)}`);
+    });
+  }
+  if ((w.widget === 'active_runs' || w.widget === 'recent_runs') && ctx.workflows) {
+    const known = ctx.workflows;
+    w.workflows?.forEach((id, i) => {
+      if (!known.has(id)) issues.error(ctx.file, [...at, 'workflows', i], `Unknown workflow "${id}"${hint(id, [...known])}`);
+    });
+  }
+  if (w.widget === 'view' && ctx.views && w.view !== undefined) {
+    const view = ctx.views.get(w.view);
+    if (!view) {
+      issues.error(ctx.file, [...at, 'view'], `Unknown view "${w.view}"${hint(w.view, [...ctx.views.keys()])}`);
+    } else if (w.sections) {
+      const titles = view.sections?.map((s) => s.title) ?? null;
+      if (!titles) issues.error(ctx.file, [...at, 'sections'], `View "${w.view}" has no sections`);
+      else {
+        w.sections.forEach((s, i) => {
+          if (!titles.includes(s)) issues.error(ctx.file, [...at, 'sections', i], `View "${w.view}" has no section "${s}"${hint(s, titles)}`);
+        });
+      }
+    }
+  }
+}
+
 /** Widgets that need options (no string form). */
 const NEEDS_OPTIONS: Record<string, string> = {
   view: '{ widget: view, view: <view ID> }',
@@ -197,7 +248,11 @@ function widgetAt(
     const name = walk.parse(dashboardWidgetNameSchema, raw.widget, [...at, 'widget']);
     if (!name) return undefined;
     parsed = walk.parse(dashboardWidgetSchemas[name], raw, at);
-    if (!parsed) return undefined;
+    if (!parsed) {
+      // Still report wrong references of the readable options (all problems of a widget at once).
+      checkReferences(walk, { widget: name, ...readableReferences(raw) }, at);
+      return undefined;
+    }
   } else {
     issues.error(ctx.file, at, 'Expected a widget name, { widget: <name>, … } or { column: [...] }');
     return undefined;
@@ -225,37 +280,16 @@ function normalizeWidget(walk: Walk, raw: RawDashboardWidget, at: IssuePath, dep
       return { widget: raw.widget, title };
     case 'info': {
       if (ctx.infoIds.length === 0) issues.warning(ctx.file, at, 'Widget "info" without info tiles (define them under "info")');
-      raw.ids?.forEach((id, i) => {
-        if (!ctx.infoIds.includes(id)) issues.error(ctx.file, [...at, 'ids', i], `Unknown info tile "${id}"${hint(id, ctx.infoIds)}`);
-      });
+      checkReferences(walk, raw, at);
       return { widget: 'info', title, ids: raw.ids ? unique(raw.ids) : null };
     }
     case 'active_runs':
     case 'recent_runs': {
-      const known = ctx.workflows;
-      if (known) {
-        raw.workflows?.forEach((id, i) => {
-          if (!known.has(id)) issues.error(ctx.file, [...at, 'workflows', i], `Unknown workflow "${id}"${hint(id, [...known])}`);
-        });
-      }
+      checkReferences(walk, raw, at);
       return { widget: raw.widget, title, limit: raw.limit, workflows: raw.workflows ? unique(raw.workflows) : null };
     }
     case 'view': {
-      const views = ctx.views;
-      if (views) {
-        const view = views.get(raw.view);
-        if (!view) {
-          issues.error(ctx.file, [...at, 'view'], `Unknown view "${raw.view}"${hint(raw.view, [...views.keys()])}`);
-        } else if (raw.sections) {
-          const titles = view.sections?.map((s) => s.title) ?? null;
-          if (!titles) issues.error(ctx.file, [...at, 'sections'], `View "${raw.view}" has no sections`);
-          else {
-            raw.sections.forEach((s, i) => {
-              if (!titles.includes(s)) issues.error(ctx.file, [...at, 'sections', i], `View "${raw.view}" has no section "${s}"${hint(s, titles)}`);
-            });
-          }
-        }
-      }
+      checkReferences(walk, raw, at);
       return { widget: 'view', title, view: raw.view, sections: raw.sections ? unique(raw.sections) : null, limit: raw.limit, refreshMs: raw.refresh };
     }
     case 'tabs':
