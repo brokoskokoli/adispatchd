@@ -34,6 +34,7 @@ import type { Repositories, RunActionRecord, RunRecord } from '../persistence/in
 import { parseRunSnapshot, resolveActionIdentity, type HookBlockInfo } from './context.js';
 import { LifecycleBusyError, LifecycleError, describeActionError, type ActionErrorInfo } from './errors.js';
 import {
+  failureEffect,
   performShell,
   performSourceComment,
   performSourceUpdate,
@@ -451,7 +452,8 @@ export class LifecycleEngine {
         current = this.repos.transaction(() => {
           this.repos.actions.finishAttempt(attempt.id, 'failed', { error: info });
           if (giveUp) {
-            const failed = this.repos.actions.setStatus(current.id, 'failed', { error: info });
+            const effect = failureEffect(current.type, info.details);
+            const failed = this.repos.actions.setStatus(current.id, 'failed', { error: info, ...(effect ? { effect } : {}) });
             this.appendActionEvent(failed, { attempt: attempt.attempt, error: info });
             if (!config.continueOnError) this.queueFailureNotification(failed, info);
             return failed;
@@ -482,6 +484,7 @@ export class LifecycleEngine {
         this.repos.actions.finishAttempt(attempt.id, 'succeeded', { externalKey: result.externalKey });
         const done = this.repos.actions.setStatus(current.id, 'succeeded', {
           ...(result.externalKey !== null ? { externalKey: result.externalKey } : {}),
+          ...(result.effect ? { effect: result.effect } : {}),
         });
         this.appendActionEvent(done, { attempt: attempt.attempt, details: result.details });
       });
@@ -526,7 +529,10 @@ export class LifecycleEngine {
         if (found) {
           this.repos.transaction(() => {
             this.repos.actions.finishAttempt(open.id, 'succeeded', { externalKey: found.id });
-            const done = this.repos.actions.setStatus(action.id, 'succeeded', { externalKey: found.id });
+            const done = this.repos.actions.setStatus(action.id, 'succeeded', {
+              externalKey: found.id,
+              effect: { comment: { id: found.id, url: found.url ?? null, reconciled: true } },
+            });
             this.appendActionEvent(done, { attempt: open.attempt, details: { reconciled: true, recovery: true } });
           });
           this.publishChange(action.id);

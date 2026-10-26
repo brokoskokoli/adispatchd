@@ -45,8 +45,9 @@ describe('schema v5 – retry-block hooks (WI-30)', () => {
     clock.set('2026-10-22T11:00:00.000Z');
     const p = openPersistence(tmp.dir, { clock });
     try {
-      expect(schemaVersion(p.db)).toBe(5);
-      expect(p.migration.applied).toEqual([5]);
+      // Later migrations (v6, WI-33) run in the same open.
+      expect(schemaVersion(p.db)).toBe(MIGRATIONS.at(-1)!.version);
+      expect(p.migration.applied[0]).toBe(5);
       expect(p.migration.backupPath).not.toBeNull();
       expect(existsSync(p.migration.backupPath!)).toBe(true);
       expect(p.db.prepare('PRAGMA foreign_keys').get()).toEqual({ foreign_keys: 1 });
@@ -96,10 +97,11 @@ describe('schema v5 – retry-block hooks (WI-30)', () => {
     backup.close();
   });
 
-  it('a fresh database is created at v5', () => {
+  it('a fresh database is created at the latest version (≥ 5)', () => {
     const opened = openDatabase(tmp.dir);
     try {
-      expect(schemaVersion(opened.db)).toBe(5);
+      expect(schemaVersion(opened.db)).toBe(MIGRATIONS.at(-1)!.version);
+      expect(schemaVersion(opened.db)).toBeGreaterThanOrEqual(5);
     } finally {
       opened.close();
     }

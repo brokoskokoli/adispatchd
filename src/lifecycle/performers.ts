@@ -7,6 +7,8 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   LINKED_ITEM_FIELDS,
+  type ActionEffect,
+  type SourceUpdateApplied,
   commentMarker,
   dataPaths,
   linkedFieldsUsed,
@@ -69,6 +71,42 @@ export interface AttemptResult {
   externalKey: string | null;
   /** Journal/event details, e.g. applied labels, comment URL, `reconciled: true`. */
   details: Record<string, unknown>;
+  /** Structured effect for the item history (WI-33, `run_actions.effect_json`). */
+  effect?: ActionEffect;
+}
+
+/** Effect of a (possibly partial) `source.update` from what the adapter applied (WI-33). */
+export function updateEffect(applied: SourceUpdateApplied | undefined | null): ActionEffect {
+  const effect: ActionEffect = {};
+  if (applied?.labelsAdded && applied.labelsAdded.length > 0) effect.labelsAdded = [...applied.labelsAdded];
+  if (applied?.labelsRemoved && applied.labelsRemoved.length > 0) effect.labelsRemoved = [...applied.labelsRemoved];
+  const fields = Object.entries(applied?.projectFields ?? {});
+  if (fields.length > 0) {
+    const previous = applied?.projectFieldsPrevious ?? {};
+    effect.projectFields = fields.map(([name, to]) => ({ name, ...(Object.hasOwn(previous, name) ? { from: previous[name] ?? null } : {}), to }));
+  }
+  if (applied?.projectItemAdded) effect.projectItemAdded = true;
+  if (Object.keys(effect).length === 0) effect.unchanged = true;
+  return effect;
+}
+
+/**
+ * Effect of a failed attempt (WI-33): what a `source.update` applied before it
+ * failed, the exit status of a `shell` action; `null` if nothing is known.
+ */
+export function failureEffect(type: string, details: Record<string, unknown> | undefined): ActionEffect | null {
+  if (type === 'source.update') {
+    const applied = details?.applied as SourceUpdateApplied | undefined;
+    if (!applied || typeof applied !== 'object') return null;
+    const effect = updateEffect(applied);
+    return effect.unchanged ? null : effect;
+  }
+  if (type === 'shell' && details && ('exitCode' in details || 'signal' in details)) {
+    const exitCode = typeof details.exitCode === 'number' ? details.exitCode : null;
+    const signal = typeof details.signal === 'string' ? details.signal : null;
+    return { exitCode, signal };
+  }
+  return null;
 }
 
 /** Dependencies of the performers. */
@@ -170,7 +208,11 @@ export async function performSourceUpdate(
     { labels: { add: config.labels.add, remove: config.labels.remove }, ...(config.project ? { project: config.project } : {}) },
     identity,
   );
-  return { externalKey: null, details: { changed: result.changed, ...(result.applied ? { applied: result.applied } : {}) } };
+  return {
+    externalKey: null,
+    details: { changed: result.changed, ...(result.applied ? { applied: result.applied } : {}) },
+    effect: updateEffect(result.changed ? result.applied : null),
+  };
 }
 
 /**
@@ -200,6 +242,7 @@ export async function performSourceComment(
       return {
         externalKey: existing.id,
         details: { reconciled: true, marker, ...(existing.url ? { url: existing.url } : {}) },
+        effect: { comment: { id: existing.id, url: existing.url ?? null, reconciled: true } },
       };
     }
   }
@@ -211,7 +254,7 @@ export async function performSourceComment(
   });
   const body = neutralizeHtmlComments(renderHookText(config.message, values, scope));
   const ref = await adapter.postComment(item, body, marker, identity);
-  return { externalKey: ref.id, details: { marker, ...(ref.url ? { url: ref.url } : {}) } };
+  return { externalKey: ref.id, details: { marker, ...(ref.url ? { url: ref.url } : {}) }, effect: { comment: { id: ref.id, url: ref.url ?? null } } };
 }
 
 /**
@@ -380,5 +423,5 @@ function shellAttemptResult(
       details: base,
     });
   }
-  return { externalKey: null, details: { exitCode: 0, logs } };
+  return { externalKey: null, details: { exitCode: 0, logs }, effect: { exitCode: 0 } };
 }

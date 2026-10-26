@@ -130,8 +130,8 @@ describe('project field updates end-to-end', () => {
       .filter((e) => e.type === 'lifecycle.action' && e.payload.status === 'succeeded')
       .map((e) => [e.payload.hook, e.payload.details?.applied]);
     expect(applied).toEqual([
-      ['on_start', { projectFields: { Status: 'In Progress' } }],
-      ['on_success', { projectFields: { Status: 'Review' } }],
+      ['on_start', { projectFields: { Status: 'In Progress' }, projectFieldsPrevious: { Status: 'Ready' } }],
+      ['on_success', { projectFields: { Status: 'Review' }, projectFieldsPrevious: { Status: 'In Progress' } }],
     ]);
 
     // Second pass: the journaled hook runs nothing, and re-applying its update changes nothing.

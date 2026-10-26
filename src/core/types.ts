@@ -454,6 +454,29 @@ export const VIEW_RUN_FIELDS: readonly FieldDefinition[] = Object.freeze([
 ] satisfies FieldDefinition[]);
 
 /**
+ * View-only item field `history` (WI-33): link to the item history page of
+ * the web UI (`#/items/<source>/<id>`). A column only: not usable in filters
+ * and not as a sort key.
+ */
+export const VIEW_HISTORY_FIELD = 'history';
+
+/** Definition of {@link VIEW_HISTORY_FIELD} (part of the view field context, no operators). */
+export const VIEW_ITEM_FIELDS: readonly FieldDefinition[] = Object.freeze([
+  {
+    name: VIEW_HISTORY_FIELD,
+    type: 'string',
+    description: 'Link to the item history page of the web UI',
+    operators: [],
+    filterHint: 'it is a link column for views (fields) only, not a value to filter or sort by',
+  },
+] satisfies FieldDefinition[]);
+
+/** UI route of the item history (WI-33). */
+export function itemHistoryRoute(sourceId: string, itemId: string): string {
+  return `#/items/${encodeURIComponent(sourceId)}/${encodeURIComponent(itemId)}`;
+}
+
+/**
  * Result of resolving a field. `known: false` means the value could not be
  * determined (e.g. missing API permission) and MUST evaluate to `unknown` —
  * never to 0/empty (Spec §6, §20.7).
@@ -566,6 +589,34 @@ export interface SourceUpdateApplied {
   projectFields?: Record<string, ProjectFieldUpdateValue>;
   /** True if the item had to be added to the project first. */
   projectItemAdded?: boolean;
+  /**
+   * Values of the changed project fields before the change (WI-33, item
+   * history): declared name → old value (`null` = was empty). Present for every
+   * name in `projectFields` whose old value was read.
+   */
+  projectFieldsPrevious?: Record<string, ProjectFieldUpdateValue>;
+}
+
+/**
+ * Structured effect of a journaled lifecycle action (WI-33, `run_actions.effect_json`,
+ * schema v6): what the action changed, for the item history. Never contains
+ * secrets or comment texts.
+ */
+export interface ActionEffect {
+  /** `source.update`: labels added / removed. */
+  labelsAdded?: string[];
+  labelsRemoved?: string[];
+  /** `source.update`: changed project fields; `from` absent = old value unknown. */
+  projectFields?: Array<{ name: string; from?: ProjectFieldUpdateValue; to: ProjectFieldUpdateValue }>;
+  /** `source.update`: the item was added to the project first. */
+  projectItemAdded?: boolean;
+  /** `source.update`: the item already had the desired state. */
+  unchanged?: boolean;
+  /** `source.comment`: the comment written (or found again by its marker). */
+  comment?: { id: string | null; url: string | null; reconciled?: boolean };
+  /** `shell`: exit status (`null` when terminated by a signal / not started). */
+  exitCode?: number | null;
+  signal?: string | null;
 }
 
 /** Outcome of {@link SourceAdapter.applyUpdate}. */
@@ -683,6 +734,71 @@ export interface SourceAdapter {
    * At most `limit` names.
    */
   listRefs?(kind: SourceRefKind, options: ListRefsOptions): Promise<string[]>;
+
+  /**
+   * Events of the item's timeline (WI-33, item history: label changes, close/
+   * reopen, assignment, rename, cross references), oldest first, at most
+   * `limit`, read with the source identity. `own` marks events performed by
+   * one of `ownIdentities` (GitHub: app ID via `performed_via_github_app`, or
+   * the login of a token identity).
+   */
+  listItemEvents?(item: SourceItem, options: ListItemEventsOptions): Promise<ItemEventsPage>;
+}
+
+/** Options of {@link SourceAdapter.listItemEvents}. */
+export interface ListItemEventsOptions {
+  limit: number;
+  /** Identities whose events count as "own" (orchestrator / UI actions). */
+  ownIdentities: readonly IdentityRef[];
+  signal?: AbortSignal;
+}
+
+/** Kind of an external item event (WI-33). */
+export type ItemEventKind =
+  | 'labeled'
+  | 'unlabeled'
+  | 'closed'
+  | 'reopened'
+  | 'assigned'
+  | 'unassigned'
+  | 'renamed'
+  | 'cross-referenced'
+  | 'connected'
+  | 'disconnected'
+  | 'referenced'
+  | 'merged';
+
+/** One event of an item's external timeline (WI-33). */
+export interface ItemEvent {
+  /** Adapter-specific event ID (stable), if any. */
+  id: string | null;
+  kind: ItemEventKind;
+  /** ISO time. */
+  at: string;
+  /** Login of the actor, if known. */
+  actor: string | null;
+  /** Performed by one of the own identities (see {@link ListItemEventsOptions.ownIdentities}). */
+  own: boolean;
+  /** `labeled` / `unlabeled`. */
+  label?: string;
+  /** `assigned` / `unassigned`. */
+  assignee?: string;
+  /** `renamed`. */
+  from?: string;
+  to?: string;
+  /** `closed`: state reason (e.g. `completed`, `not_planned`). */
+  stateReason?: string | null;
+  /** Cross references / connected items: `owner/repo#n`, title, URL, PR flag. */
+  ref?: { name: string; title: string | null; url: string | null; isPullRequest: boolean } | null;
+  /** `referenced` / `merged`: commit SHA (short). */
+  commit?: string | null;
+}
+
+/** Result of {@link SourceAdapter.listItemEvents}. */
+export interface ItemEventsPage {
+  events: ItemEvent[];
+  /** More events exist than `limit`. */
+  truncated: boolean;
 }
 
 /** Kind of repository refs for {@link SourceAdapter.listRefs}. */

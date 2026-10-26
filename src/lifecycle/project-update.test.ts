@@ -89,7 +89,21 @@ describe('lifecycle: source.update with project fields', () => {
       .find((e) => e.type === 'lifecycle.action' && e.payload.status === 'succeeded' && e.payload.type === 'source.update');
     expect(event?.payload.details).toEqual({
       changed: true,
-      applied: { labelsAdded: ['ready-for-review'], labelsRemoved: ['coding'], projectFields: { Status: 'Review', Notes: null } },
+      applied: {
+        labelsAdded: ['ready-for-review'],
+        labelsRemoved: ['coding'],
+        projectFields: { Status: 'Review', Notes: null },
+        projectFieldsPrevious: { Status: 'In Progress', Notes: 'wip' },
+      },
+    });
+    // WI-33: the structured effect with old → new values.
+    expect(env.p.actions.listForRun(run.id).find((a) => a.type === 'source.update')?.effect).toEqual({
+      labelsAdded: ['ready-for-review'],
+      labelsRemoved: ['coding'],
+      projectFields: [
+        { name: 'Status', from: 'In Progress', to: 'Review' },
+        { name: 'Notes', from: 'wip', to: null },
+      ],
     });
     expect(result.actions[0]?.config).toMatchObject({ project: { Status: 'Review', Notes: null } });
     // Workflow identity `coder` for labels and project fields.

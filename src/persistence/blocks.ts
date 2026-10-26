@@ -171,6 +171,14 @@ export class BlockRepository {
     ]).map(toBlock);
   }
 
+  /** Blocks of one item across workflows (item history, WI-33), oldest first. */
+  listForItem(itemKey: string, options: { limit?: number } = {}): BlockRecord[] {
+    return all(this.db, 'SELECT * FROM blocks WHERE source_item_key = ? ORDER BY created_at ASC, id ASC LIMIT ?', [
+      itemKey,
+      options.limit ?? 1000,
+    ]).map(toBlock);
+  }
+
   /** IDs of runs whose technical failures were counted in the block's period (for the GUI). */
   affectedRunIds(blockId: number): string[] {
     const block = this.require(blockId);

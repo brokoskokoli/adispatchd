@@ -15,10 +15,15 @@ import {
   type FieldResolution,
   type FieldValue,
   type IdentityRef,
+  type ItemEvent,
+  type ItemEventKind,
+  type ItemEventsPage,
+  type ListItemEventsOptions,
   type ListCandidatesOptions,
   type ListRefsOptions,
   type Logger,
   type ProjectFieldOption,
+  type ProjectFieldUpdateValue,
   type SourceAdapter,
   type SourceAdapterDeps,
   type SourceAdapterFactory,
@@ -103,6 +108,87 @@ interface GitHubCommentJson {
   body?: string | null;
   user?: { login?: string; type?: string } | null;
   performed_via_github_app?: { id?: number | string; slug?: string } | null;
+}
+
+/** Subset of a GitHub timeline event (`GET …/issues/{n}/timeline`). */
+interface GitHubTimelineJson {
+  id?: unknown;
+  node_id?: unknown;
+  event?: unknown;
+  created_at?: unknown;
+  actor?: { login?: string; type?: string } | null;
+  performed_via_github_app?: { id?: number | string; slug?: string } | null;
+  label?: { name?: unknown } | null;
+  assignee?: { login?: unknown } | null;
+  rename?: { from?: unknown; to?: unknown } | null;
+  state_reason?: unknown;
+  commit_id?: unknown;
+  source?: {
+    type?: unknown;
+    issue?: {
+      number?: unknown;
+      title?: unknown;
+      html_url?: unknown;
+      pull_request?: unknown;
+      repository?: { full_name?: unknown } | null;
+    } | null;
+  } | null;
+}
+
+const ITEM_EVENT_KINDS: ReadonlySet<string> = new Set<ItemEventKind>([
+  'labeled',
+  'unlabeled',
+  'closed',
+  'reopened',
+  'assigned',
+  'unassigned',
+  'renamed',
+  'cross-referenced',
+  'connected',
+  'disconnected',
+  'referenced',
+  'merged',
+]);
+
+const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
+
+/** Timeline JSON → {@link ItemEvent}; `null` for kinds the history does not show. */
+function toItemEvent(e: GitHubTimelineJson, isOwn: (c: GitHubCommentJson) => boolean): ItemEvent | null {
+  const kind = typeof e.event === 'string' ? e.event : '';
+  const at = text(e.created_at);
+  if (!ITEM_EVENT_KINDS.has(kind) || !at) return null;
+  const actor = e.actor && typeof e.actor.login === 'string' ? e.actor.login : null;
+  const id = typeof e.id === 'number' || typeof e.id === 'string' ? String(e.id) : text(e.node_id);
+  const event: ItemEvent = {
+    id,
+    kind: kind as ItemEventKind,
+    at,
+    actor,
+    own: isOwn({ user: e.actor ?? null, performed_via_github_app: e.performed_via_github_app ?? null }),
+  };
+  const label = text(e.label?.name);
+  if (label) event.label = label;
+  const assignee = text(e.assignee?.login);
+  if (assignee) event.assignee = assignee;
+  if (kind === 'renamed') {
+    event.from = typeof e.rename?.from === 'string' ? e.rename.from : '';
+    event.to = typeof e.rename?.to === 'string' ? e.rename.to : '';
+  }
+  if (kind === 'closed') event.stateReason = text(e.state_reason);
+  const commit = text(e.commit_id);
+  if (commit) event.commit = commit.slice(0, 12);
+  const issue = e.source?.issue;
+  if (issue && typeof issue.number === 'number') {
+    const repo = text(issue.repository?.full_name);
+    const url = text(issue.html_url);
+    event.ref = {
+      name: `${repo ?? ''}#${issue.number}`,
+      title: text(issue.title),
+      url: url && /^https?:\/\//i.test(url) ? url : null,
+      isPullRequest: issue.pull_request !== undefined && issue.pull_request !== null,
+    };
+  }
+  return event;
 }
 
 /** Options beyond {@link SourceAdapterDeps}. */
@@ -304,7 +390,12 @@ export class GitHubSourceAdapter implements SourceAdapter {
         const result = await this.projectWriter.apply({ contentId: issue.node_id, key: item.key }, project, identity, {
           ...(options.exactIdentity === true ? { exactIdentity: true } : {}),
         });
-        if (Object.keys(result.changed).length > 0) applied.projectFields = result.changed;
+        if (Object.keys(result.changed).length > 0) {
+          applied.projectFields = result.changed;
+          const previous: Record<string, ProjectFieldUpdateValue> = {};
+          for (const name of Object.keys(result.changed)) if (Object.hasOwn(result.previous, name)) previous[name] = result.previous[name] ?? null;
+          applied.projectFieldsPrevious = previous;
+        }
         if (result.itemAdded) applied.projectItemAdded = true;
       } catch (err) {
         throw withApplied(err, applied);
@@ -449,6 +540,43 @@ export class GitHubSourceAdapter implements SourceAdapter {
       if (defaultBranch === null) return sorted.slice(0, limit);
       return [defaultBranch, ...sorted.filter((b) => b !== defaultBranch)].slice(0, limit);
     });
+  }
+
+  /**
+   * Timeline of an issue/PR (WI-33, `GET /repos/{o}/{r}/issues/{n}/timeline`,
+   * oldest first, up to `limit` events) with the source identity. Only the
+   * kinds of {@link ItemEventKind} are returned (comments, reviews, commits
+   * etc. are skipped). `own`: performed by one of `ownIdentities` (app ID via
+   * `performed_via_github_app`, login of a token identity; identities whose
+   * login cannot be read or that cannot be recognised exactly are ignored).
+   */
+  async listItemEvents(item: SourceItem, options: ListItemEventsOptions): Promise<ItemEventsPage> {
+    this.assertOwnItem(item);
+    const limit = Math.max(1, Math.floor(options.limit));
+    const raw = await this.withToken(this.config.identity, options.signal, (token) =>
+      this.http.paginate<GitHubTimelineJson>(`${this.repoPath}/issues/${item.itemId}/timeline`, {
+        token,
+        maxItems: limit + 1,
+        ...(options.signal ? { signal: options.signal } : {}),
+      }),
+    );
+    const predicates: Array<(c: GitHubCommentJson) => boolean> = [];
+    for (const identity of new Set(options.ownIdentities)) {
+      // Only identities that can be recognised exactly (app ID, token login); "some bot" is not enough here.
+      const description = this.credentials.describe?.(identity);
+      if (description?.appId === undefined && description?.kind !== 'github_token') continue;
+      try {
+        predicates.push(await this.authorPredicate(identity));
+      } catch (err) {
+        this.logger.debug('item events: own identity not resolvable', { identity, error: err });
+      }
+    }
+    const events: ItemEvent[] = [];
+    for (const e of raw.slice(0, limit)) {
+      const event = toItemEvent(e, (c) => predicates.some((p) => p(c)));
+      if (event) events.push(event);
+    }
+    return { events, truncated: raw.length > limit };
   }
 
   async findCommentByMarker(item: SourceItem, marker: string, identity: IdentityRef): Promise<CommentRef | null> {

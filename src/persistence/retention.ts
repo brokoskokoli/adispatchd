@@ -9,6 +9,7 @@
  * - an active (uncleared) retry block exists for its workflow and block scope.
  */
 import type { DatabaseSync } from 'node:sqlite';
+import { systemClock, type Clock } from '../core/index.js';
 import { all, get, iso, run, str, transaction, type Params, type Row } from './sqlite.js';
 
 /**
@@ -48,7 +49,10 @@ const CATEGORY_SQL: Record<RunRetentionCategory, string> = {
 
 /** Retention queries and deletions. */
 export class RetentionRepository {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly clock: Clock = systemClock,
+  ) {}
 
   /** Runs of a category finished before `olderThan`, oldest first, excluding protected runs. */
   runCandidates(category: RunRetentionCategory, olderThan: Date | string, limit = 500): RunRetentionCandidate[] {
@@ -79,9 +83,31 @@ export class RetentionRepository {
    */
   deleteRun(runId: string): boolean {
     return transaction(this.db, () => {
-      if (!get(this.db, `SELECT 1 FROM runs r WHERE r.id = ? AND ${PROTECTION_SQL}`, [runId])) return false;
-      return run(this.db, 'DELETE FROM runs WHERE id = ?', [runId]).changes === 1;
+      const row = get(this.db, `SELECT r.source_item_key, r.created_at FROM runs r WHERE r.id = ? AND ${PROTECTION_SQL}`, [runId]);
+      if (!row) return false;
+      const deleted = run(this.db, 'DELETE FROM runs WHERE id = ?', [runId]).changes === 1;
+      const itemKey = str(row.source_item_key);
+      if (deleted && itemKey !== null) {
+        // WI-33: the item history says that older entries were deleted by retention.
+        run(
+          this.db,
+          `INSERT INTO item_history_gaps (item_key, deleted_runs, newest_deleted_at, updated_at) VALUES (?, 1, ?, ?)
+           ON CONFLICT (item_key) DO UPDATE SET deleted_runs = deleted_runs + 1,
+             newest_deleted_at = MAX(COALESCE(newest_deleted_at, ''), excluded.newest_deleted_at), updated_at = excluded.updated_at`,
+          [itemKey, String(row.created_at), this.clock.now().toISOString()],
+        );
+      }
+      return deleted;
     });
+  }
+
+  /**
+   * Retention gap of an item (WI-33): number of its runs deleted by retention
+   * (since 0.9.0) and the creation time of the newest deleted one; `null` if none.
+   */
+  itemGap(itemKey: string): { deletedRuns: number; newestDeletedAt: string | null } | null {
+    const row = get(this.db, 'SELECT deleted_runs, newest_deleted_at FROM item_history_gaps WHERE item_key = ?', [itemKey]);
+    return row ? { deletedRuns: Number(row.deleted_runs), newestDeletedAt: str(row.newest_deleted_at) } : null;
   }
 
   /** Delete cleared blocks cleared before `olderThan`. Active blocks are never deleted. Returns count. */
