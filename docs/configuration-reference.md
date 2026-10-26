@@ -695,6 +695,10 @@ kann überall verwendet werden, wo Identities erlaubt sind (Source, `project.ide
 Schreib-Actions). **Kommentar-Marker** (`source.comment`-Idempotenz, §3.4.11) erkennt der Adapter bei
 `github_token` am **Autor-Login**: beim ersten Gebrauch fragt er `GET /user` ab und cacht den Login; ein Kommentar
 mit Marker zählt nur, wenn `user.login` gleich diesem Login ist (bei Apps: `performed_via_github_app.id`).
+**Item-Verlauf** (seit 0.9.0): Ereignisse der GitHub-Timeline gelten ebenso am Login als „eigen“. Mit einem
+persönlichen Token (PAT) sind das **alle** Änderungen dieses GitHub-Benutzers – auch die, die er selbst von Hand macht:
+passen sie zu einer Änderung der Historie, werden sie zusammengeführt (ausgeblendet), sonst als „own identity“ statt
+„external“ markiert. Für eine klare Trennung einen eigenen Bot-Account oder eine GitHub App verwenden.
 
 **`ui_actions`** (seit 0.4.0): Freischaltung einer Identity für das **Item-Panel** der Web-UI (Menü „UI Actions“, Link
 „Act as identity…“ im Run-Detail und in Views). Ein angemeldeter `admin` kann dort auf ein Issue/PR als diese Identity

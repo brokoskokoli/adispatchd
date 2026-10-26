@@ -631,6 +631,10 @@ Antworten passieren den Secret-Redactor; Kommentartexte werden weder gespeichert
   = `work_branch`/`work_pr`, WI-21, wenn die Source sie liefert). Ist das Item nicht lesbar: `{ok: false, …, error:
   {code, message}}` (`source_not_found` – Source nicht (mehr) konfiguriert, `item_not_found`, `github_forbidden`, …);
   die Historie kommt trotzdem (HTTP 200). Nur die erste Seite (ohne `before`) enthält `item`, Folgeseiten `null`.
+- Der frisch gelesene Kopf (`item`) zählt gegen ein Limit von 60 echten Abrufen je Benutzer und Minute (Cache-Treffer
+  zählen nicht); ist es erreicht, kommt der zwischengespeicherte Kopf oder `item: {ok: false, error: {code:
+  "item_reads_throttled"}}` – die Historie kommt trotzdem. Fehlgeschlagene Lesevorgänge werden ebenfalls 10 s
+  zwischengespeichert.
 - `runs` – der **Pfad**: die letzten 50 Runs des Items in zeitlicher Reihenfolge (`RunSummary` wie in der Run-Liste);
   `runsTotal` = alle Runs, `truncated` = mehr als 50.
 - `entries` – die **Zeitleiste**, neueste zuerst, höchstens `limit` (Default 100, max. 500) Einträge; `nextBefore` =
@@ -668,6 +672,9 @@ Antworten passieren den Secret-Redactor; Kommentartexte werden weder gespeichert
   Login einer `github_token`-Identity). Eigene Label-Ereignisse, die zu einer eigenen Änderung der Historie passen
   (gleiches Label, gleiche Richtung, ±5 Minuten; Actions und UI-Aktionen), werden weggelassen und in `hiddenOwn`
   gezählt; übrige eigene Ereignisse bleiben mit `own: true`, alle anderen sind `external: true`.
+  **Achtung bei `github_token`-Identities (PAT):** Erkannt wird am Login – dann gelten **alle** Änderungen dieses
+  GitHub-Benutzers als eigen, auch seine manuellen; sie werden zusammengeführt/ausgeblendet oder als „own identity“
+  statt „external“ gezeigt. Empfehlung: ein eigener Bot-Account oder eine GitHub App.
 - Projektfeld-Änderungen liefert die Timeline nicht (`notice`).
 - Nur auf Anfrage (Schalter in der UI), 60 s je Item zwischengespeichert (`cached`; `refresh=true` fragt neu), höchstens
   30 neue Abrufe je Benutzer und Minute (`429 github_events_throttled` mit `Retry-After`). Fehler betreffen nur diesen
