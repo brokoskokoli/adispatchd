@@ -130,6 +130,35 @@ export interface ViewItemsResult {
   groupBy?: ViewGrouping;
   /** Only for views with sections (WI-28): the UI hides sections without rows. */
   hideEmptySections?: boolean;
+  /** WI-32: rows of a view without sections before `limit` (only set when narrowed). */
+  totalRows?: number;
+}
+
+/** Options of {@link ViewService.items}. */
+export interface ViewItemsOptions {
+  /** Bypass the cache. */
+  refresh?: boolean;
+  /** WI-32: only these sections (by title, in view order); ignored for views without sections. */
+  sections?: readonly string[];
+  /** WI-32: at most this many rows per section (or of the view). */
+  limit?: number;
+}
+
+/**
+ * Narrow a (cached) result to some sections and/or a row limit (WI-32,
+ * dashboard view widgets). `counts.rows` of a section keeps the number of rows
+ * before the limit; a view without sections gets `totalRows`. The cache keeps
+ * the full result, so widgets and the view page share one source query.
+ */
+export function narrowViewItems(result: ViewItemsResult, options: Pick<ViewItemsOptions, 'sections' | 'limit'>): ViewItemsResult {
+  const limit = options.limit;
+  const cut = <T>(rows: T[]): T[] => (limit === undefined ? rows : rows.slice(0, limit));
+  if (!result.sections) {
+    return { ...result, rows: cut(result.rows), totalRows: result.rows.length };
+  }
+  const wanted = options.sections ? new Set(options.sections) : null;
+  const sections = result.sections.filter((s) => !wanted || wanted.has(s.title)).map((s) => ({ ...s, rows: cut(s.rows) }));
+  return { ...result, sections };
 }
 
 /** Section definition as exposed by the API (WI-28). */
@@ -237,7 +266,13 @@ export class ViewService {
    * requests for the same view share one load.
    * @throws UnknownViewError
    */
-  async items(viewId: string, options: { refresh?: boolean } = {}): Promise<ViewItemsResult> {
+  async items(viewId: string, options: ViewItemsOptions = {}): Promise<ViewItemsResult> {
+    const result = await this.fullItems(viewId, options.refresh ?? false);
+    return options.sections !== undefined || options.limit !== undefined ? narrowViewItems(result, options) : result;
+  }
+
+  private async fullItems(viewId: string, refresh: boolean): Promise<ViewItemsResult> {
+    const options = { refresh };
     const view = this.view(viewId);
     if (!view) throw new UnknownViewError(viewId);
     const version = this.options.config.current.version;

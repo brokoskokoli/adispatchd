@@ -82,3 +82,6 @@ export function describeSort(keys: readonly SortKeyLike[]): string {
   if (keys.length === 0) return 'item key';
   return keys.map((k) => `${k.field}${k.order ? ' (custom order)' : ''} ${k.direction === 'desc' ? '↓' : '↑'}`).join(', ');
 }
+
+/** Max. rows of a view table delivered by the server (mirror of `MAX_VIEW_ROWS` in src/views, checked by a test). */
+export const MAX_VIEW_ROWS = 2_000;

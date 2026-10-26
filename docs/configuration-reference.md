@@ -41,7 +41,7 @@ config-dir/
   workflows/*.yaml     ein Workflow pro Datei                     optional (fehlt → keine Workflows)
   views/*.yaml         eine View pro Datei                        optional
   filters/*.yaml       ein benannter Filter pro Datei             optional (fehlt → keine benannten Filter)
-  dashboard.yaml       Info-Kacheln im Dashboard (§3.7)           optional (fehlt → kein Bereich „Information“)
+  dashboard.yaml       Info-Kacheln und Layout des Dashboards (§3.7) optional (fehlt → Standard-Layout, keine Info-Kacheln)
   scripts/…            frei; Skripte werden über Pfade referenziert (siehe §2.4)
 ```
 
@@ -1654,9 +1654,9 @@ erscheinen in `GET /api/v1/config/files` (UI: Configuration).
 
 ### 3.7 dashboard.yaml
 
-Optionale Datei mit **Info-Kacheln** für den Dashboard-Bereich „Information“ (seit 0.4.0). Jede Kachel ist ein
-vertrauenswürdiges Skript wie eine Condition; seine erste Ausgabezeile ist der angezeigte Wert. Fehlt die Datei,
-gibt es keinen Info-Bereich.
+Optionale Datei mit **Info-Kacheln** für den Dashboard-Bereich „Information“ (seit 0.4.0) und dem **Layout** des
+Dashboards (`layout`, seit 0.8.0, §3.7.1). Jede Kachel ist ein vertrauenswürdiges Skript wie eine Condition; seine
+erste Ausgabezeile ist der angezeigte Wert. Fehlt die Datei, gibt es keinen Info-Bereich und das Standard-Layout gilt.
 
 ```yaml
 # example: dashboard
@@ -1702,6 +1702,7 @@ gh pr list --repo "$REPOSITORY" "$1" "$2" --json number --jq length
 | Schlüssel | Typ | Pflicht | Default | Regeln | Bedeutung |
 |---|---|---|---|---|---|
 | `info` | Liste | nein | `[]` | höchstens 50 Kacheln | Kacheln in Anzeigereihenfolge |
+| `layout` | Liste | nein | Standard-Layout | §3.7.1 | Anordnung des Dashboards (seit 0.8.0) |
 | `info[].id` | Konfigurations-ID | ja | | eindeutig in der Datei | ID (API, Refresh) |
 | `info[].title` | String | nein | `id` | 1–80 Zeichen | Überschrift der Kachel |
 | `info[].type` | `text` \| `number` \| `percent` | ja | | | wie die Ausgabe gelesen wird (unten) |
@@ -1737,6 +1738,150 @@ Arbeitsverzeichnis = config-dir, Timeout mit Beenden der Prozessgruppe, Ausgabe 
 ≤ `cache`, reservierte
 Env-Namen, Existenz des Skripts (Pfade relativ zum config-dir). Die Datei ist Teil des Konfigurations-Hashs und der
 Dateiliste (`GET /api/v1/config/files`, UI: Configuration); `config reload` lädt sie mit (§1.5).
+
+#### 3.7.1 `layout`: Dashboard frei anordnen (seit 0.8.0)
+
+Optionaler Schlüssel `layout`: **was** in **welcher Anordnung** auf dem Dashboard erscheint – Reihen aus Spalten aus
+Widgets, dazu Views (§3.5) und Reiter (`tabs`) als Bausteine. Fehlt `layout` (oder die ganze Datei), gilt das
+**Standard-Layout**, das genau dem Dashboard bis 0.7.0 entspricht:
+
+```yaml
+# Standard-Layout (gilt ohne „layout“)
+layout:
+  - row: [resources]
+  - row: [info]                      # nur sichtbar, wenn dashboard.yaml existiert
+  - row: [scheduler, capacity, attention]
+  - row: [active_runs]
+  - row: [recent_runs]
+```
+
+Beispiel mit Spalten, Breiten, Titeln, View-Widgets und Reitern:
+
+```yaml
+# example: dashboard-layout
+# extends: view-pipeline
+# file: dashboard.yaml
+info:
+  - { id: data-disk, title: Plattenbelegung, type: percent, command: echo, args: ["42"] }
+  - { id: open-prs, title: Offene PRs, type: number, command: echo, args: ["7"] }
+
+layout:
+  - row: [resources]
+  - title: Arbeit                               # optionale Überschrift über der Reihe
+    row:
+      - column: [scheduler, attention]          # Spalte: Widgets untereinander
+        width: 1
+      - column:
+          - { widget: view, view: pipeline, sections: [Braucht Maintainer, Review], limit: 15 }
+        width: 3                                # relative Breite
+  - row:
+      - { widget: info, ids: [open-prs] }
+      - { widget: recent_runs, limit: 5, title: Zuletzt fertig, workflows: [coder, reviewer] }
+  - row:
+      - widget: tabs                            # Reiter; Unter-Reiter bis Tiefe 3
+        default: runs                           # anfangs offener Reiter (Default: der erste)
+        tabs:
+          - title: Pipeline                     # ID aus dem Titel: „pipeline“
+            layout:
+              - row: [{ widget: view, view: board, refresh: 2m }]
+          - { title: Runs, layout: [{ row: [active_runs, recent_runs] }] }
+          - title: Projekte
+            layout:
+              - row:
+                  - widget: tabs
+                    tabs:
+                      - { title: Maintainer, id: maint, layout: [{ row: [{ widget: view, view: needs-maintainer }] }] }
+                      - { title: Kapazität, layout: [{ row: [capacity] }] }
+```
+
+![Dashboard mit eigenem Layout: Spalten, Reiter und View-Widget](https://raw.githubusercontent.com/brokoskokoli/adispatchd/main/docs/screenshots/dashboard-layout.png)
+
+**Struktur**
+
+| Schlüssel | Typ | Regeln | Bedeutung |
+|---|---|---|---|
+| `layout` | Liste von Reihen | 1–30 Reihen | ohne Schlüssel: Standard-Layout |
+| `layout[].row` | Liste von Elementen | 1–6 Elemente | ein Element ist ein **Widget** oder eine **Spalte** |
+| `layout[].title` | String | 1–80 Zeichen | Überschrift über der Reihe |
+| `…row[].column` | Liste von Widgets | 1–20 Widgets | Widgets untereinander |
+| `…row[].width` | Integer | 1–12, Default 1 | relative Breite der Spalte (CSS-Grid `fr`); auch an einem Widget direkt in der Reihe erlaubt, nicht an Widgets in einer Spalte |
+| Widget | String oder `{ widget: <Name>, title?, …Optionen }` | | `title` (1–80 Zeichen) ersetzt die Überschrift; ohne: die bisherige Überschrift bzw. der Name der View |
+
+Ein Widget direkt in der Reihe ist eine Spalte mit genau diesem Widget. Auf schmalen Bildschirmen (< 900 px) stehen
+alle Spalten untereinander. Jedes Widget darf mehrfach vorkommen; insgesamt höchstens **100 Widgets** (inklusive
+der Widgets in Reitern und der `tabs`-Widgets selbst). `scheduler`, `capacity`, `attention`, `active_runs` und
+`recent_runs` dürfen fehlen – die Funktionen bleiben über die anderen Seiten erreichbar. Hinweise (Drain läuft,
+nicht bereit, ungeschützte Bindung) erscheinen **immer** oben, unabhängig vom Layout.
+
+**Widgets**
+
+| Name | Inhalt | Optionen |
+|---|---|---|
+| `resources` | kompakte Ressourcenleiste, Klick → Reiter „Resources“ | – |
+| `resources_full` | große Ressourcenansicht wie im Reiter „Resources“ (Verlauf, Prozesse) | – |
+| `info` | Info-Kacheln aus `info` | `ids`: Liste von Kachel-IDs (Default: alle, in Dateireihenfolge) |
+| `scheduler` | Zustand, Pause/Resume, Drain, Cancel All | – |
+| `capacity` | Kapazität, Limit-Override, Auslastung je Workflow | – |
+| `attention` | Retry-Blocks, gescheiterte Actions/Notifications | – |
+| `active_runs` | laufende Runs | `limit` (1–100, Default 100), `workflows` (Liste von Workflow-IDs; Default: alle) |
+| `recent_runs` | zuletzt beendete Runs | `limit` (1–50, Default 10), `workflows` |
+| `view` | eine View (§3.5) mit voller Funktion: Abschnitte, Sortierung im Browser, Gruppenzeilen, „act…“ öffnet das Item-Panel mit allen Aktionen, „Refresh“, Link „Open view →“; gekürzte Tabellen enden mit „N more …“ | `view` (Pflicht, View-ID), `sections` (Abschnitts-Titel; Default: alle), `limit` (Zeilen je Abschnitt bzw. Tabelle, 1–200, Default 50), `refresh` (Dauer ≥ 15s, Default 60s) |
+| `tabs` | Reiter, jeder mit eigenem Layout | `tabs` (Pflicht, 1–12 Einträge), `default` (ID des anfangs offenen Reiters) |
+
+Ein Reiter ist `{ title, id?, layout }`: `title` Pflicht (1–40 Zeichen, eindeutig im `tabs`-Widget), `id`
+optional (Konfigurations-ID; Default: Slug des Titels – klein, Umlaute als `ae`/`oe`/`ue`/`ss`, andere Zeichen als
+`-`), `layout` Pflicht mit derselben Struktur wie oben (rekursiv). Reiter-IDs müssen unter allen `tabs`-Widgets
+**desselben Layouts** eindeutig sein (die URL adressiert einen Reiter über seinen Pfad aus IDs); `tabs` lassen sich
+höchstens 3 Ebenen tief schachteln. `view` und `tabs` brauchen Optionen und haben keine Kurzform als String.
+
+**Verhalten**
+
+- **Views** laden wie die View-Seite (`GET /api/v1/views/:id/items` mit `sections`/`limit`, gleicher 30-s-Cache
+  und gleiche GitHub-Kosten); mehrere Widgets derselben View teilen sich **eine** Abfrage (Vereinigung der
+  Abschnitte, größtes `limit`), die im kürzesten `refresh` der Widgets wiederholt wird. Views folgen keinen
+  Live-Ereignissen.
+- **Reiter sind lazy:** Widgets inaktiver Reiter werden nicht gerendert, laden nichts, pollen nicht und abonnieren
+  nichts; Umschalten montiert den neuen Reiter und gibt den alten frei. Der gewählte Reiter steht im URL-Hash
+  (`#/?tab=projekte/maint` – Pfad aus Reiter-IDs, mehrere Reiter-Widgets durch Komma getrennt; teilbar, Zurück-Knopf)
+  und wird je Betrachter im `localStorage` des Browsers gemerkt (URL vor gemerktem Wert vor `default`). Die
+  Reiterleiste ist per Tastatur bedienbar (←/→, Pos1/Ende) und scrollt auf schmalen Bildschirmen horizontal.
+- Ein Widget mit Fehler (z. B. View nicht ladbar) zeigt den Fehler nur in seiner Karte. Rollen wie bisher: viewer
+  sieht alles, Steuerknöpfe brauchen operator.
+- Nach `config reload` lädt das Dashboard das Layout neu.
+
+**Prüfung beim Laden** (auch `config validate`, Reload): Schema mit Pfad (z. B.
+`layout[1].row[0].tabs[2].layout[0].row[0]`) und „did you mean …“ für unbekannte Schlüssel und Widget-Namen; leere
+`layout`/`row`/`column`/`tabs` sind Fehler; Grenzen wie oben; `view` muss existieren, `sections` nur bei Views mit
+Abschnitten und jeder Titel muss existieren; `info.ids` und `workflows` müssen existieren; `default` muss eine
+Reiter-ID des Widgets sein. **Warnungen:** `info` im Layout ohne Info-Kacheln; `resources`/`resources_full` bei
+`monitoring.enabled: false`.
+
+```yaml
+# example: dashboard-layout-invalid
+# extends: view-pipeline
+# file: dashboard.yaml
+# invalid
+# expect: dashboard.yaml: layout[0].row[0]: Invalid option
+# expect: dashboard.yaml: layout[0].row[1].view: Unknown view "pipline" (did you mean "pipeline"?)
+# expect: dashboard.yaml: layout[0].row[2].sections[0]: View "pipeline" has no section "Reveiw" (did you mean "Review"?)
+# expect: dashboard.yaml: layout[0].row[3].workflows[0]: Unknown workflow "codr" (did you mean "coder"?)
+# expect: dashboard.yaml: layout[1].row: A row needs at least one widget or column
+# expect: dashboard.yaml: layout[2].row[0].tabs[1].title: Duplicate tab title "A" (also used by tabs[0])
+# expect: dashboard.yaml: layout[2].row[0].default: Unknown tab "c" (tab IDs: a)
+layout:
+  - row:
+      - schedulr                                    # Tippfehler → did you mean "scheduler"
+      - { widget: view, view: pipline }
+      - { widget: view, view: pipeline, sections: [Reveiw] }
+      - { widget: active_runs, workflows: [codr] }
+  - row: []
+  - row:
+      - widget: tabs
+        default: c
+        tabs:
+          - { title: A, layout: [{ row: [scheduler] }] }
+          - { title: A, layout: [{ row: [capacity] }] }
+```
 
 ### 3.8 Bekannte Grenzen (V1)
 

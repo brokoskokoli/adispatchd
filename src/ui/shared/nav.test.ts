@@ -30,22 +30,21 @@ describe('main navigation (WI-29)', () => {
     expect(isNavActive('views/v1', r('#/views/v1'), true)).toBe(true);
   });
 
-  it('the router maps #/resources to the Resources page; the dashboard no longer mounts the full section', () => {
+  it('the router maps #/resources to the Resources page; the dashboard mounts the strip (full section only as widget resources_full)', () => {
     const app = read('client/app.ts');
     expect(app).toMatch(/case RESOURCES_ROUTE:\s*return resourcesPage\(ctx\);/);
     expect(app).toContain('NAV_ENTRIES.map(');
-    const dashboard = read('client/pages/dashboard.ts');
-    expect(dashboard).not.toContain('serverSection');
-    expect(dashboard).toContain('createStripFeed');
-    // Order on the dashboard: strip, info tiles, scheduler/capacity/attention grid.
-    const iStrip = dashboard.indexOf('el.appendChild(strip)');
-    const iInfo = dashboard.indexOf('el.appendChild(info.el)');
-    const iBody = dashboard.indexOf('el.appendChild(body)');
-    expect(iStrip).toBeGreaterThan(0);
-    expect(iStrip).toBeLessThan(iInfo);
-    expect(iInfo).toBeLessThan(iBody);
-    // Leaving the dashboard ends the strip's live subscription.
-    expect(dashboard).toMatch(/dispose: \(\) => \{\s*feed\.dispose\(\);/);
+    // WI-32: the order of the default dashboard is the server's default layout (src/config/dashboard-layout.test.ts).
+    const widgets = read('client/pages/dashboard-widgets.ts');
+    expect(widgets).toContain('createStripFeed');
+    // Leaving the dashboard (or a tab) ends the strip's live subscription.
+    expect(widgets).toMatch(/dispose: \(\) => feed\.dispose\(\)/);
+    expect(read('client/pages/dashboard.ts')).not.toContain('serverSection');
+    // resources_full keeps its `title` across re-renders (the heading is not hard-coded in render()).
+    const serverSrc = read('client/pages/server.ts');
+    expect(serverSrc).not.toContain("h('h2', null, 'Server')");
+    expect(serverSrc.match(/h\('h2', null, heading\)/g)).toHaveLength(2);
+    expect(widgets).toContain('serverSection(title !== null ? { title } : {})');
     const server = read('client/pages/server.ts');
     expect(server).toMatch(/export const resourcesPage/);
     expect(server).toMatch(/dispose: \(\) => server\.dispose\(\)/);

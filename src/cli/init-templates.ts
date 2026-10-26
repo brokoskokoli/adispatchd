@@ -355,8 +355,9 @@ const CHECK_CREDITS_SH = `#!/bin/sh
 exit 0
 `;
 
-const DASHBOARD_YAML = `# dashboard.yaml – info tiles in the "Information" section of the dashboard (optional file;
-# without it the section is not shown). Each tile runs a trusted script like a condition:
+const DASHBOARD_YAML = `# dashboard.yaml – info tiles in the "Information" section of the dashboard and (since 0.8.0)
+# the layout of the dashboard (optional file; without it there are no tiles and the default
+# layout applies). Each tile runs a trusted script like a condition:
 # no shell, minimal environment (+ env), working directory = this config dir, timeout, output
 # limit. Scripts run only in the BACKGROUND – once at start, when a value expired (cache) and
 # after config reload for new/changed tiles – never because somebody opens the page; the
@@ -381,6 +382,25 @@ info:
   #   env: { REPO: owner/repo }
   #   unit: PRs
   #   cache: 10m
+
+# Layout (optional, docs/configuration-reference.md section 3.7.1): rows of columns of widgets.
+# Without "layout" the default below applies. Widgets: resources, resources_full, info,
+# scheduler, capacity, attention, active_runs, recent_runs, view, tabs.
+# layout:
+#   - row: [resources]
+#   - row: [info]
+#   - row: [scheduler, capacity, attention]
+#   - row: [active_runs]
+#   - row: [recent_runs]
+# More: columns with relative width, titles, views and tabs (widgets of hidden tabs load nothing):
+#   - title: Work
+#     row:
+#       - { column: [scheduler, attention], width: 1 }
+#       - widget: tabs
+#         width: 3
+#         tabs:
+#           - { title: Board, layout: [{ row: [{ widget: view, view: my-view, limit: 20 }] }] }
+#           - { title: Runs, layout: [{ row: [active_runs, { widget: recent_runs, limit: 5 }] }] }
 `;
 
 const DATA_DISK_SH = `#!/bin/sh

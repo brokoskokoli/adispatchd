@@ -67,6 +67,7 @@ export const ROUTE_ROLES: Readonly<Record<string, RouteRule>> = {
   'POST /api/v1/config/validate': 'viewer',
   'POST /api/v1/config/reload': { role: 'operator', controlToken: true },
   // Dashboard info tiles (WI-24)
+  'GET /api/v1/dashboard': 'viewer',
   'GET /api/v1/dashboard/info': 'viewer',
   'POST /api/v1/dashboard/info/:id/refresh': 'operator',
   // Notifications

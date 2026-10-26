@@ -5,6 +5,22 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Dashboard frei anordnen (`dashboard.yaml` → `layout`).** Reihen aus Spalten aus Widgets mit relativer Breite
+  (`width`), optionalen Überschriften für Reihen und Widgets (`title`) und mehrfach verwendbaren Widgets:
+  `resources`, `resources_full`, `info` (`ids`), `scheduler`, `capacity`, `attention`, `active_runs`/`recent_runs`
+  (`limit`, `workflows`). Ohne `layout` sieht das Dashboard aus wie bisher. Referenz §3.7.1; Beispiel
+  `examples/config/dashboard.yaml`.
+- **Views als Dashboard-Widgets (`widget: view`).** Mit Abschnitten, Auswahl per `sections`, `limit` je Tabelle („N more
+  …“), eigenem `refresh`-Intervall, Gruppenzeilen, Sortierung im Browser, Item-Panel und Link zur View; mehrere Widgets
+  derselben View teilen sich eine Abfrage. Die View-Seite und das Widget nutzen denselben Renderer.
+- **Reiter auf dem Dashboard (`widget: tabs`).** Bis zu 12 Reiter mit eigenem Layout, Unter-Reiter bis Tiefe 3,
+  `default`; inaktive Reiter laden nichts. Der gewählte Reiter steht im URL-Hash (`#/?tab=projekte/a`, teilbar,
+  Zurück-Knopf) und wird im Browser gemerkt; Tastaturbedienung (←/→, Pos1/Ende).
+- **API:** `GET /api/v1/dashboard` (normalisiertes Layout); `GET /api/v1/views/:id/items` mit `sections` (wiederholbar)
+  und `limit`; `GET /api/v1/runs?workflow=` nimmt eine kommagetrennte Liste.
+
 ## [0.7.0] – 2026-10-23
 
 ### Hinzugefügt

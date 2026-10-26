@@ -290,7 +290,14 @@ function startApp(): void {
     $('ul.menu', nav).insertBefore(navItem('ui-actions', '#/ui-actions', 'UI Actions'), config);
   }
   nav.hidden = false;
-  window.addEventListener('hashchange', render);
+  window.addEventListener('hashchange', () => {
+    // Pages may apply query changes of their own route (dashboard tabs, WI-32) without a rebuild.
+    if (current?.onRouteChange?.(parseHash(location.hash))) {
+      markActiveNav();
+      return;
+    }
+    render();
+  });
   live = createLive();
   void reloadExternalLinks();
   render();

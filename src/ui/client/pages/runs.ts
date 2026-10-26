@@ -7,7 +7,7 @@ import { formatDuration } from '../../shared/format.js';
 import { isStateChange, type Page, type PageContext } from '../page.js';
 import type { RunSummary, Workflow } from '../types.js';
 import { badge, errorBox, externalLink, loading, runLink, runOutcomeBadges, table, text, time } from '../ui.js';
-import { cancelRunButton } from './dashboard.js';
+import { cancelRunButton } from './dashboard-widgets.js';
 
 const PAGE_SIZE = 50;
 

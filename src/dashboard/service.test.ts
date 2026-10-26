@@ -88,7 +88,7 @@ describe('DashboardInfoService (WI-24)', () => {
   }
 
   it('never runs anything before start; at start fetches all tiles with at most 2 in parallel', async () => {
-    const cfg = { current: { file: 'dashboard.yaml', info: [tile('a'), tile('b'), tile('c')] } };
+    const cfg = { current: { file: 'dashboard.yaml', layout: null, info: [tile('a'), tile('b'), tile('c')] } };
     const { service, calls } = create(cfg);
     expect(service.list().map((t) => t.status)).toEqual(['pending', 'pending', 'pending']);
     expect(calls).toHaveLength(0);
@@ -106,7 +106,7 @@ describe('DashboardInfoService (WI-24)', () => {
   });
 
   it('refetches in the background when the cache expires, never twice at the same time', async () => {
-    const cfg = { current: { file: 'dashboard.yaml', info: [tile('a', { cacheMs: 30_000 })] } };
+    const cfg = { current: { file: 'dashboard.yaml', layout: null, info: [tile('a', { cacheMs: 30_000 })] } };
     const { service, clock, calls } = create(cfg);
     service.start();
     calls[0]?.resolve(ok('5'));
@@ -126,7 +126,7 @@ describe('DashboardInfoService (WI-24)', () => {
   });
 
   it('keeps the last valid value on errors (stale), with a short redacted message, and retries after min(cache, 60s)', async () => {
-    const cfg = { current: { file: 'dashboard.yaml', info: [tile('a', { cacheMs: 600_000, thresholds: { warnAbove: 80, criticalAbove: 95, warnBelow: null, criticalBelow: null } })] } };
+    const cfg = { current: { file: 'dashboard.yaml', layout: null, info: [tile('a', { cacheMs: 600_000, thresholds: { warnAbove: 80, criticalAbove: 95, warnBelow: null, criticalBelow: null } })] } };
     const { service, clock, calls } = create(cfg, { redact: (s) => s.replaceAll('hunter2', '[REDACTED]') });
     service.start();
     calls[0]?.resolve(ok('85'));
@@ -155,7 +155,7 @@ describe('DashboardInfoService (WI-24)', () => {
   });
 
   it('treats exit 1, timeouts and unparsable output as errors', async () => {
-    const cfg = { current: { file: 'dashboard.yaml', info: [tile('a'), tile('b'), tile('c', { type: 'percent' })] } };
+    const cfg = { current: { file: 'dashboard.yaml', layout: null, info: [tile('a'), tile('b'), tile('c', { type: 'percent' })] } };
     const { service, calls } = create(cfg, { maxParallel: 3 });
     service.start();
     calls[0]?.resolve(ok('', { value: false, exitCode: 1 }));
@@ -171,7 +171,7 @@ describe('DashboardInfoService (WI-24)', () => {
   });
 
   it('redacts text values', async () => {
-    const cfg = { current: { file: 'dashboard.yaml', info: [tile('t', { type: 'text' })] } };
+    const cfg = { current: { file: 'dashboard.yaml', layout: null, info: [tile('t', { type: 'text' })] } };
     const { service, calls } = create(cfg, { redact: (s) => s.replaceAll('hunter2', '[REDACTED]') });
     service.start();
     calls[0]?.resolve(ok('deployed with hunter2'));
@@ -180,7 +180,7 @@ describe('DashboardInfoService (WI-24)', () => {
   });
 
   it('throttles manual refreshes per tile and globally', async () => {
-    const cfg = { current: { file: 'dashboard.yaml', info: [tile('a'), tile('b')] } };
+    const cfg = { current: { file: 'dashboard.yaml', layout: null, info: [tile('a'), tile('b')] } };
     const { service, clock, calls } = create(cfg, { manualMinIntervalMs: 10_000, manualPerMinute: 2 });
     service.start();
     calls[0]?.resolve(ok('1'));
@@ -204,12 +204,12 @@ describe('DashboardInfoService (WI-24)', () => {
   });
 
   it('on reload keeps unchanged tiles, refetches changed and new ones, drops removed ones', async () => {
-    const cfg: { current: DashboardConfig | null } = { current: { file: 'dashboard.yaml', info: [tile('a'), tile('b'), tile('c')] } };
+    const cfg: { current: DashboardConfig | null } = { current: { file: 'dashboard.yaml', layout: null, info: [tile('a'), tile('b'), tile('c')] } };
     const { service, calls } = create(cfg, { maxParallel: 3 });
     service.start();
     for (const [i, c] of calls.entries()) c.resolve(ok(String(i + 1)));
     await flush();
-    cfg.current = { file: 'dashboard.yaml', info: [tile('a'), tile('b', { cacheMs: 120_000 }), tile('d')] };
+    cfg.current = { file: 'dashboard.yaml', layout: null, info: [tile('a'), tile('b', { cacheMs: 120_000 }), tile('d')] };
     service.sync();
     expect(service.list().map((t) => [t.id, t.value, t.refreshing])).toEqual([
       ['a', 1, false],
@@ -218,7 +218,7 @@ describe('DashboardInfoService (WI-24)', () => {
     ]);
     expect(calls.slice(3).map((c) => c.context.info.id)).toEqual(['b', 'd']);
     // A result of a replaced tile's old execution is discarded.
-    cfg.current = { file: 'dashboard.yaml', info: [tile('a')] };
+    cfg.current = { file: 'dashboard.yaml', layout: null, info: [tile('a')] };
     service.sync();
     calls[3]?.resolve(ok('42'));
     await flush();
@@ -231,7 +231,7 @@ describe('DashboardInfoService (WI-24)', () => {
   });
 
   it('a changed tile waits until the old (killed) execution settled – no overlapping processes', async () => {
-    const cfg: { current: DashboardConfig | null } = { current: { file: 'dashboard.yaml', info: [tile('a')] } };
+    const cfg: { current: DashboardConfig | null } = { current: { file: 'dashboard.yaml', layout: null, info: [tile('a')] } };
     // Executor that ignores the abort for a while (like a process in its kill grace period).
     const calls: Array<{ id: string; resolve(r: ShellCheckResult): void; signal: AbortSignal }> = [];
     const { service } = create(cfg, {
@@ -239,7 +239,7 @@ describe('DashboardInfoService (WI-24)', () => {
     });
     service.start();
     expect(calls).toHaveLength(1);
-    cfg.current = { file: 'dashboard.yaml', info: [tile('a', { cacheMs: 120_000 })] };
+    cfg.current = { file: 'dashboard.yaml', layout: null, info: [tile('a', { cacheMs: 120_000 })] };
     service.sync();
     expect(calls[0]?.signal.aborted).toBe(true);
     // Old process still finishing: the new definition is not started yet, but shown as refreshing.
@@ -257,7 +257,7 @@ describe('DashboardInfoService (WI-24)', () => {
   });
 
   it('refuses manual refreshes after stop', async () => {
-    const cfg = { current: { file: 'dashboard.yaml', info: [tile('a')] } };
+    const cfg = { current: { file: 'dashboard.yaml', layout: null, info: [tile('a')] } };
     const { service, calls } = create(cfg);
     service.start();
     calls[0]?.resolve(ok('1'));
@@ -267,7 +267,7 @@ describe('DashboardInfoService (WI-24)', () => {
   });
 
   it('reports changes (SSE) and stops cleanly', async () => {
-    const cfg = { current: { file: 'dashboard.yaml', info: [tile('a')] } };
+    const cfg = { current: { file: 'dashboard.yaml', layout: null, info: [tile('a')] } };
     const { service, calls, changes } = create(cfg);
     service.start();
     expect(changes.map((c) => [c.id, c.refreshing])).toEqual([['a', true]]);
@@ -298,6 +298,7 @@ describe('DashboardInfoService – real scripts (WI-24)', () => {
     const slow = script('slow.sh', 'sleep 30');
     const config: DashboardConfig = {
       file: 'dashboard.yaml',
+      layout: null,
       info: [
         tile('env', { type: 'text', command: env, args: ['$(not expanded)'], env: { EXTRA: 'x1' } }),
         tile('slow', { command: slow, timeoutMs: 300 }),

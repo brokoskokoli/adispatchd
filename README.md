@@ -41,6 +41,10 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   how many items passed the item checks.
 - **Dashboard info tiles** – `dashboard.yaml` defines small scripts (text, number or percent with warn/critical
   thresholds) that the daemon runs in the background on a cache schedule – e.g. disk usage, open PRs, credits.
+- **Your own dashboard layout** – since 0.8.0 `dashboard.yaml` can arrange the dashboard: rows of columns with relative
+  widths, titles, any widget several times, **views as widgets** (pick sections, row limit, own refresh interval, item
+  panel) and **tabs** (also nested; inactive tabs load nothing, the selected tab is part of the URL). Without a layout
+  the dashboard looks as before.
 - **Triggers** – `source` (polling GitHub), `schedule` (cron with time zone) or `manual` (UI/API, with typed
   parameters; since 0.7.0 selection lists filled at start time from the repository's **branches or tags** or from
   your own script, `options_from`).

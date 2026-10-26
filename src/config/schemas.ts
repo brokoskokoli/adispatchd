@@ -846,9 +846,127 @@ const infoTileSchema = z.strictObject({
   critical_below: threshold,
 });
 
+// --- dashboard.yaml `layout` (WI-32) ----------------------------------------
+// The layout is walked by `dashboard-layout.ts`: a row element is a widget name,
+// a widget object or a column, picked by its shape, then checked with the
+// matching schema below (so unknown keys get "did you mean" hints per variant).
+
+/** Widgets of a dashboard layout. */
+export const DASHBOARD_WIDGETS = ['resources', 'resources_full', 'info', 'scheduler', 'capacity', 'attention', 'active_runs', 'recent_runs', 'view', 'tabs'] as const;
+
+/** Bounds of a dashboard layout. */
+export const DASHBOARD_LAYOUT_LIMITS = {
+  rows: 30,
+  columnsPerRow: 6,
+  widgetsPerColumn: 20,
+  maxWidth: 12,
+  activeRunsLimit: { max: 100, default: 100 },
+  recentRunsLimit: { max: 50, default: 10 },
+  viewLimit: { max: 200, default: 50 },
+  /** `refresh` of a view widget: minimum and default (ms). */
+  viewRefreshMs: { min: 15_000, default: 60_000 },
+  /** Tabs per `tabs` widget. */
+  tabs: 12,
+  tabTitle: 40,
+  /** Nesting depth of `tabs` widgets (a tabs widget inside a tab inside a tab: 3). */
+  tabsDepth: 3,
+  /** All widgets of the layout, including those in tabs and the tabs widgets themselves. */
+  widgets: 100,
+} as const;
+
+const L = DASHBOARD_LAYOUT_LIMITS;
+const widgetTitle = nonEmpty.max(80, 'At most 80 characters').optional();
+const layoutWidth = z
+  .number()
+  .int('Must be an integer')
+  .min(1, 'Must be at least 1')
+  .max(L.maxWidth, `Must be at most ${L.maxWidth}`)
+  .optional();
+const intRange = (max: number, fallback: number) =>
+  z.number().int('Must be an integer').min(1, 'Must be at least 1').max(max, `Must be at most ${max}`).default(fallback);
+const idList = (what: string) => z.array(configId).min(1, `List at least one ${what} (or omit the key)`).optional();
+
+/** Top-level `layout`: rows, checked element by element. */
+export const dashboardLayoutSchema = z
+  .array(z.unknown())
+  .min(1, 'List at least one row (or omit "layout" for the default layout)')
+  .max(L.rows, `At most ${L.rows} rows`);
+
+/** One row: `{ row: [...], title? }`. */
+export const dashboardRowSchema = z.strictObject({
+  row: z
+    .array(z.unknown(), 'Expected a list of widgets and columns')
+    .min(1, 'A row needs at least one widget or column')
+    .max(L.columnsPerRow, `At most ${L.columnsPerRow} columns per row`),
+  title: widgetTitle,
+});
+
+/** A column: `{ column: [...], width? }`. */
+export const dashboardColumnSchema = z.strictObject({
+  column: z
+    .array(z.unknown(), 'Expected a list of widgets')
+    .min(1, 'A column needs at least one widget')
+    .max(L.widgetsPerColumn, `At most ${L.widgetsPerColumn} widgets per column`),
+  width: layoutWidth,
+});
+
+/** Name of a widget (string form or the `widget` key of the object form). */
+export const dashboardWidgetNameSchema = z.enum(DASHBOARD_WIDGETS);
+
+const widgetBase = <N extends (typeof DASHBOARD_WIDGETS)[number]>(name: N) => ({
+  widget: z.literal(name),
+  title: widgetTitle,
+  /** Only for a widget directly in a row (checked by the layout walker). */
+  width: layoutWidth,
+});
+
+/** Object form of every widget, by name. */
+export const dashboardWidgetSchemas = {
+  resources: z.strictObject(widgetBase('resources')),
+  resources_full: z.strictObject(widgetBase('resources_full')),
+  info: z.strictObject({ ...widgetBase('info'), ids: idList('info tile ID') }),
+  scheduler: z.strictObject(widgetBase('scheduler')),
+  capacity: z.strictObject(widgetBase('capacity')),
+  attention: z.strictObject(widgetBase('attention')),
+  active_runs: z.strictObject({ ...widgetBase('active_runs'), limit: intRange(L.activeRunsLimit.max, L.activeRunsLimit.default), workflows: idList('workflow ID') }),
+  recent_runs: z.strictObject({ ...widgetBase('recent_runs'), limit: intRange(L.recentRunsLimit.max, L.recentRunsLimit.default), workflows: idList('workflow ID') }),
+  view: z.strictObject({
+    ...widgetBase('view'),
+    view: configId,
+    sections: z.array(nonEmpty).min(1, 'List at least one section title (or omit the key for all sections)').optional(),
+    limit: intRange(L.viewLimit.max, L.viewLimit.default),
+    refresh: durationSchema
+      .default(L.viewRefreshMs.default)
+      .refine((ms) => ms >= L.viewRefreshMs.min, `Duration must be at least ${L.viewRefreshMs.min / 1000}s`),
+  }),
+  tabs: z.strictObject({
+    ...widgetBase('tabs'),
+    tabs: z
+      .array(z.unknown(), 'Expected a list of tabs')
+      .min(1, 'List at least one tab')
+      .max(L.tabs, `At most ${L.tabs} tabs`),
+    default: configId.optional(),
+  }),
+} as const;
+
+/** One tab of a `tabs` widget; `layout` has the structure of the top-level layout. */
+export const dashboardTabSchema = z.strictObject({
+  title: nonEmpty.max(L.tabTitle, `At most ${L.tabTitle} characters`),
+  id: configId.optional(),
+  layout: z
+    .array(z.unknown(), 'Expected a list of rows')
+    .min(1, 'List at least one row')
+    .max(L.rows, `At most ${L.rows} rows`),
+});
+
+/** Parsed object form of a widget. */
+export type RawDashboardWidget = z.output<(typeof dashboardWidgetSchemas)[keyof typeof dashboardWidgetSchemas]>;
+
 /** Schema of `dashboard.yaml`. */
 export const dashboardFileSchema = z.strictObject({
   info: z.array(infoTileSchema).max(MAX_INFO_TILES, `At most ${MAX_INFO_TILES} info tiles`).default([]),
+  /** WI-32: rows of widgets; absent = default layout. Elements are checked by `dashboard-layout.ts`. */
+  layout: dashboardLayoutSchema.optional(),
 });
 
 /** Parsed `dashboard.yaml`. */

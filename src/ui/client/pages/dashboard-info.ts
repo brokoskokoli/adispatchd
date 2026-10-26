@@ -1,9 +1,9 @@
 /**
- * Dashboard section "Information" (WI-24): info tiles from `dashboard.yaml`.
- * Values are fetched by the daemon in the background; this section only reads
+ * Dashboard widget `info` (WI-24, WI-32): info tiles from `dashboard.yaml`.
+ * Values are fetched by the daemon in the background; this widget only reads
  * them (`GET /api/v1/dashboard/info`), follows `dashboard.info` live events and
  * offers a throttled per-tile refresh button. Without `dashboard.yaml` the
- * section stays empty (hidden).
+ * widget stays empty (hidden). `ids` limits it to some tiles (layout option).
  */
 import { api, seg } from '../api.js';
 import { h, replaceChildren } from '../dom.js';
@@ -20,9 +20,20 @@ export interface InfoSection {
   onLive(msg: LiveMessage): void;
 }
 
-function tileElement(t: InfoTile, onRefresh: (btn: HTMLButtonElement) => void): HTMLElement {
+/** Options of {@link createInfoSection}. */
+export interface InfoSectionOptions {
+  /** Heading (default "Information"). */
+  title?: string;
+  /** Only these tiles, in this order (`null`: all in file order). */
+  ids?: readonly string[] | null;
+}
+
+/** Element IDs must stay unique when the widget is used several times. */
+let instances = 0;
+
+function tileElement(t: InfoTile, prefix: string, onRefresh: (btn: HTMLButtonElement) => void): HTMLElement {
   const tone = infoStatusTone(t.status);
-  const titleId = `info-title-${t.id}`;
+  const titleId = `${prefix}-title-${t.id}`;
   const value = formatInfoValue(t.value, t.unit);
   const refresh: HTMLButtonElement = button(t.refreshing ? 'Refreshing…' : 'Refresh', () => onRefresh(refresh), {
     disabled: t.refreshing,
@@ -55,10 +66,18 @@ function tileElement(t: InfoTile, onRefresh: (btn: HTMLButtonElement) => void): 
 }
 
 /** Create the section; call `load()` once and forward live messages. */
-export function createInfoSection(): InfoSection {
+export function createInfoSection(options: InfoSectionOptions = {}): InfoSection {
+  const prefix = `info${++instances}`;
+  const ids = options.ids ?? null;
   const list = h('ul', { class: 'info-tiles' });
   const status = h('div');
-  const el = h('section', { class: 'card span-all info-section', hidden: true, 'aria-labelledby': 'info-heading' }, h('h2', { id: 'info-heading' }, 'Information'), status, list);
+  const el = h(
+    'section',
+    { class: 'card span-all info-section', hidden: true, 'aria-labelledby': `${prefix}-heading` },
+    h('h2', { id: `${prefix}-heading` }, options.title ?? 'Information'),
+    status,
+    list,
+  );
   const tiles = new Map<string, InfoTile>();
   const items = new Map<string, HTMLElement>();
 
@@ -68,7 +87,7 @@ export function createInfoSection(): InfoSection {
     });
   };
 
-  const render = (t: InfoTile): HTMLElement => tileElement(t, (btn) => refresh(t.id, btn));
+  const render = (t: InfoTile): HTMLElement => tileElement(t, prefix, (btn) => refresh(t.id, btn));
 
   const update = (t: InfoTile): void => {
     if (!tiles.has(t.id)) return; // unknown tile (e.g. before the reload event): wait for the next load
@@ -88,11 +107,13 @@ export function createInfoSection(): InfoSection {
       el.hidden = !res.configured;
       tiles.clear();
       items.clear();
-      for (const t of res.info) {
+      const byId = new Map(res.info.map((t) => [t.id, t]));
+      const shown = ids ? ids.map((id) => byId.get(id)).filter((t): t is InfoTile => t !== undefined) : res.info;
+      for (const t of shown) {
         tiles.set(t.id, t);
         items.set(t.id, render(t));
       }
-      replaceChildren(status, res.configured && res.info.length === 0 ? h('p', { class: 'muted' }, 'dashboard.yaml defines no info tiles.') : null);
+      replaceChildren(status, res.configured && shown.length === 0 ? h('p', { class: 'muted' }, ids ? 'None of the selected info tiles is defined.' : 'dashboard.yaml defines no info tiles.') : null);
       replaceChildren(list, [...items.values()]);
     } catch (err) {
       el.hidden = false;
