@@ -19,7 +19,10 @@ import {
   errorMessage,
   noopLogger,
   OrchestratorError,
+  itemHistoryRoute,
   systemClock,
+  VIEW_HISTORY_FIELD,
+  VIEW_ITEM_FIELDS,
   VIEW_RUN_FIELDS,
   type Clock,
   type FieldDefinition,
@@ -328,7 +331,7 @@ export class ViewService {
       const adapter = this.options.sources(sourceId);
       for (const d of adapter?.fieldDefinitions() ?? []) if (!defs.has(d.name)) defs.set(d.name, d);
     }
-    for (const d of VIEW_RUN_FIELDS) defs.set(d.name, d);
+    for (const d of [...VIEW_RUN_FIELDS, ...VIEW_ITEM_FIELDS]) defs.set(d.name, d);
     return defs;
   }
 
@@ -410,10 +413,11 @@ export class ViewService {
         const run = lastRuns.get(item.key) ?? null;
         const fields = createItemFieldSource(item, {
           // Run fields are declared too, so that their types apply (dates compare as instants).
-          definitions: [...adapter.fieldDefinitions(), ...VIEW_RUN_FIELDS],
+          definitions: [...adapter.fieldDefinitions(), ...VIEW_RUN_FIELDS, ...VIEW_ITEM_FIELDS],
           resolveFields: (i, f) => adapter.resolveFields(i, f),
           wantedFields: [...wanted],
-          extraFields: runFields(run),
+          // WI-33: `history` = UI route of the item history page.
+          extraFields: { ...runFields(run), [VIEW_HISTORY_FIELD]: itemHistoryRoute(item.sourceId, item.itemId) },
         });
         const verdict = (await evaluateFilter(view.filter, fields)).value;
         if (verdict !== true) {

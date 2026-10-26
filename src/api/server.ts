@@ -59,6 +59,7 @@ import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile 
 import { readLogPage } from './logs.js';
 import { runDetailFields, toBlockView, toRunSummary, toWorkflowView, type ActionView } from './serialize.js';
 import type { EventHub } from './sse.js';
+import { registerItemHistoryRoutes } from './item-history.js';
 import { registerUiActionRoutes, type UiActionLimits } from './ui-actions.js';
 
 declare module 'fastify' {
@@ -1041,6 +1042,16 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     clock,
     ...(deps.uiActionLimits ? { limits: deps.uiActionLimits } : {}),
     authEnabled,
+  });
+
+  // --- Item history (WI-33) --------------------------------------------------
+  registerItemHistoryRoutes(app, {
+    config: deps.config,
+    repositories: repos,
+    ...(deps.sources ? { sources: deps.sources } : {}),
+    redact,
+    logger,
+    clock,
   });
 
   // --- System resources (WI-23) ---------------------------------------------
