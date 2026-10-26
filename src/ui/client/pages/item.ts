@@ -113,7 +113,7 @@ export const uiActionsPage = (ctx: PageContext): Page => {
   return { el, onResync: load };
 };
 
-/** `#/items/<source>/<item>`: the item panel. */
+/** `#/items/<source>/<item>/act`: the item panel (WI-33: below the item history route). */
 export const itemPage = (ctx: PageContext, source: string, itemId: string): Page => {
   ctx.setTitle(`Item ${source}:${itemId}`);
   const body = h('div', null, loading());

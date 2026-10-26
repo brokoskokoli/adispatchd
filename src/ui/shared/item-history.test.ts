@@ -13,6 +13,7 @@ import {
   parseHistory,
   pathBadge,
   pathSection,
+  refreshEntries,
   timelineControls,
   timelineEntries,
   triggerText,
@@ -226,5 +227,16 @@ describe('item history (WI-33, shared UI)', () => {
     expect(head.textContent).toContain('The stored history is shown anyway.');
     expect(head.textContent).toContain('coder: 2 failures');
     expect(head.find('img')).toEqual([]);
+  });
+
+  it('a live refresh keeps already loaded older entries', () => {
+    const e = (key: string, cursor: string) => ({ key, kind: 'run_started' as const, at: cursor, cursor, runId: null, workflowId: null, workflowName: null });
+    const loaded = [e('c', '3'), e('b', '2'), e('a', '1')];
+    // Fresh first page (limit 2) with a new entry on top.
+    expect(refreshEntries(loaded, null, [e('d', '4'), e('c', '3')], 'cur-3')).toEqual({ entries: [e('d', '4'), e('c', '3'), e('b', '2'), e('a', '1')], nextBefore: null });
+    expect(refreshEntries(loaded, 'old', [e('d', '4'), e('c', '3')], 'cur-3').nextBefore).toBe('old');
+    // Everything fits in the fresh page.
+    expect(refreshEntries(loaded, null, [e('c', '3'), e('b', '2'), e('a', '1')], null)).toEqual({ entries: loaded, nextBefore: null });
+    expect(refreshEntries([], null, [], null)).toEqual({ entries: [], nextBefore: null });
   });
 });

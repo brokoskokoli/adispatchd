@@ -18,6 +18,7 @@ import {
   parseGitHubEvents,
   parseHistory,
   pathSection,
+  refreshEntries,
   timelineControls,
   timelineEntries,
   type Entry,
@@ -163,8 +164,8 @@ export const historyPage = (ctx: PageContext, source: string, itemId: string): P
       const parsed = parseHistory(await api.get<unknown>(`${path}/history?limit=${limit}`));
       if (!parsed) throw new Error('Unexpected answer from the server');
       data = parsed;
-      entries = parsed.entries;
-      nextBefore = parsed.nextBefore;
+      // Live refresh never shrinks the list: older pages already loaded stay.
+      ({ entries, nextBefore } = refreshEntries(entries, nextBefore, parsed.entries, parsed.nextBefore));
       const it = parsed.item;
       if (it?.ok) ctx.setTitle(`History ${it.repository ?? source}#${itemId}`);
       rerender(head, headSection(h, parsed, render), h('p', { class: 'history-links' }, it?.ok && it.url ? externalLink(it.url, 'Open on GitHub') : null, ' ', itemPanelLink(source, itemId)));

@@ -297,7 +297,16 @@ export function auditTable<E extends ElementLike>(h: HFn<E>, actions: readonly P
             h('td', null, opts.time(a.createdAt)),
             h('td', null, a.actor),
             h('td', null, h('code', null, a.identity)),
-            opts.showItem ? h('td', null, h('a', { href: `#/items/${a.itemKey.split(':').map(encodeURIComponent).join('/')}` }, a.itemKey)) : null,
+            // Item → its history (WI-33); "act" → the item panel (the audit list is shown to admins only).
+            opts.showItem
+              ? h(
+                  'td',
+                  null,
+                  h('a', { href: `#/items/${a.itemKey.split(':').map(encodeURIComponent).join('/')}` }, a.itemKey),
+                  ' ',
+                  h('a', { href: `#/items/${a.itemKey.split(':').map(encodeURIComponent).join('/')}/act`, class: 'item-act' }, 'act'),
+                )
+              : null,
             h('td', null, KIND_LABEL[a.kind] ?? a.kind),
             h(
               'td',

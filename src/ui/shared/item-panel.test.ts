@@ -212,8 +212,10 @@ describe('panel rendering', () => {
     expect(panel.find('select').some((sel) => sel.attrs.name === 'identity')).toBe(false);
   });
 
-  it('audit table links items to their panel', () => {
+  it('audit table links items to their history and their panel', () => {
     const table = auditTable(h, item().recentActions, { time: handlers.time, link: handlers.link, showItem: true });
+    // WI-33: item → history, plus "act" → item panel.
+    expect(table.find('a').map((x) => x.attrs.href).filter((x) => x?.startsWith('#/items/'))).toEqual(expect.arrayContaining([expect.stringMatching(/^#\/items\/[^/]+\/[^/]+$/), expect.stringMatching(/\/act$/)]));
     expect(table.find('a')[0]?.attrs.href).toBe('#/items/repo_a/7');
     expect(auditTable(h, [], { time: handlers.time, link: handlers.link, showItem: true }).textContent).toBe('No UI actions yet.');
   });

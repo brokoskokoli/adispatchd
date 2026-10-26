@@ -68,6 +68,8 @@ export interface Entry {
   key: string;
   kind: EntryKind;
   at: string;
+  /** Pagination cursor (entries sort by it, newest = largest); empty for GitHub events. */
+  cursor: string;
   runId: string | null;
   workflowId: string | null;
   workflowName: string | null;
@@ -215,6 +217,7 @@ function parseEntry(v: unknown): Entry | null {
     key: s(e.key, 300),
     kind: e.kind as EntryKind,
     at: s(e.at, 40),
+    cursor: s(e.cursor, 400),
     runId: sn(e.runId, 100),
     workflowId: sn(e.workflowId, 200),
     workflowName: sn(e.workflowName, 200),
@@ -437,7 +440,20 @@ export function githubEventText(e: GitHubEvent): string {
 
 /** Timeline entries of external GitHub events. */
 export function githubEntries(events: readonly GitHubEvent[]): Entry[] {
-  return events.map((e, i) => ({ key: `gh:${i}:${e.at}`, kind: 'github' as const, at: e.at, runId: null, workflowId: null, workflowName: null, github: e }));
+  return events.map((e, i) => ({ key: `gh:${i}:${e.at}`, kind: 'github' as const, at: e.at, cursor: '', runId: null, workflowId: null, workflowName: null, github: e }));
+}
+
+/**
+ * Live refresh (WI-33): the freshly loaded first page replaces the entries it
+ * covers; already loaded older entries ("load older" pages) are kept, so the
+ * list never shrinks. Returns the entries and the cursor for further paging.
+ */
+export function refreshEntries(loaded: readonly Entry[], loadedNext: string | null, fresh: readonly Entry[], freshNext: string | null): { entries: Entry[]; nextBefore: string | null } {
+  const last = fresh.at(-1);
+  if (!last || freshNext === null) return { entries: [...fresh], nextBefore: freshNext };
+  const keys = new Set(fresh.map((e) => e.key));
+  const older = loaded.filter((e) => e.cursor < last.cursor && !keys.has(e.key));
+  return older.length > 0 ? { entries: [...fresh, ...older], nextBefore: loadedNext } : { entries: [...fresh], nextBefore: freshNext };
 }
 
 /** Merge entries (newest first, or oldest first with `ascending`), keeping only the enabled kinds. */

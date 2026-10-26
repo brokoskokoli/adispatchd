@@ -465,6 +465,8 @@ export interface ItemHistoryDeps {
   clock?: Clock;
   /** GitHub timeline requests per user and minute (default 30). */
   githubEventsPerMinute?: number;
+  /** Fresh item reads (history head) per user and minute (default 60). */
+  itemReadsPerMinute?: number;
 }
 
 const itemParams = z.object({ source: z.string().min(1).max(200), item: z.string().min(1).max(40).regex(/^[A-Za-z0-9._-]+$/) }).strict();
@@ -515,6 +517,8 @@ export function registerItemHistoryRoutes(app: FastifyInstance, deps: ItemHistor
   const headCache = new Map<string, { at: number; head: Promise<ItemHead> }>();
   const eventsCache = new Map<string, { at: number; value: Promise<{ events: ItemEvent[]; truncated: boolean; fetchedAt: string }> }>();
   const eventsLimiter = new RateLimiter(deps.githubEventsPerMinute ?? 30, clock);
+  const headLimiter = new RateLimiter(deps.itemReadsPerMinute ?? 60, clock);
+  const principalKey = (req: FastifyRequest): string => (req.principal?.name ?? 'anonymous').toLowerCase();
 
   const adapterOf = (sourceId: string): SourceAdapter | undefined =>
     Object.hasOwn(deps.config.current.sources, sourceId) ? deps.sources?.(sourceId) : undefined;
@@ -577,17 +581,33 @@ export function registerItemHistoryRoutes(app: FastifyInstance, deps: ItemHistor
     };
   };
 
-  const head = (sourceId: string, ref: string, refresh: boolean): Promise<ItemHead> => {
+  /**
+   * Item head with a short cache. Failed reads (item not found, GitHub errors)
+   * are cached as well, so reloading a broken item does not hit GitHub every
+   * time. Every actual read (cache miss or `refresh=true`) takes a token from
+   * the caller's rate limit; when it is used up the cached head is returned,
+   * or – without one – a head with the error `item_reads_throttled`.
+   */
+  const head = (sourceId: string, ref: string, refresh: boolean, principal: string): Promise<ItemHead> => {
     const key = sourceItemKey(sourceId, ref);
     const now = clock.now().getTime();
     for (const [k, v] of headCache) if (now - v.at >= ITEM_HEAD_CACHE_MS) headCache.delete(k);
     const cached = headCache.get(key);
     if (cached && !refresh) return cached.head;
+    const slot = headLimiter.take(principal);
+    if (!slot.ok) {
+      if (cached) return cached.head;
+      return Promise.resolve({
+        ok: false,
+        source: sourceId,
+        itemId: ref,
+        key,
+        error: { code: 'item_reads_throttled', message: `Too many item reads; the current state is shown again in ${Math.ceil(slot.retryAfterMs / 1000)}s` },
+      });
+    }
     const pending = readHead(sourceId, ref);
     headCache.set(key, { at: now, head: pending });
-    pending.then((h) => {
-      if (!h.ok) headCache.delete(key);
-    }, () => headCache.delete(key));
+    pending.catch(() => headCache.delete(key));
     return pending;
   };
 
@@ -597,7 +617,7 @@ export function registerItemHistoryRoutes(app: FastifyInstance, deps: ItemHistor
     const key = sourceItemKey(source, item);
     const data = buildItemHistory(repos, key, { ...(q.before ? { before: q.before } : {}), ...(q.limit ? { limit: q.limit } : {}) });
     // Only the first page carries the item head (later pages only extend the timeline).
-    const itemHead = q.before ? null : await head(source, item, q.refresh === 'true');
+    const itemHead = q.before ? null : await head(source, item, q.refresh === 'true', principalKey(req));
     return redactValue(
       {
         source,
@@ -609,8 +629,6 @@ export function registerItemHistoryRoutes(app: FastifyInstance, deps: ItemHistor
       deps.redact,
     );
   });
-
-  const principalKey = (req: FastifyRequest): string => (req.principal?.name ?? 'anonymous').toLowerCase();
 
   app.get('/api/v1/items/:source/:item/github-events', async (req, reply) => {
     const { source, item: ref } = parse(itemParams, req.params, 'path');
