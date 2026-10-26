@@ -8,6 +8,7 @@ import path from 'node:path';
 import {
   LINKED_ITEM_FIELDS,
   type ActionEffect,
+  type ProjectFieldUpdateValue,
   type SourceUpdateApplied,
   commentMarker,
   dataPaths,
@@ -88,6 +89,56 @@ export function updateEffect(applied: SourceUpdateApplied | undefined | null): A
   if (applied?.projectItemAdded) effect.projectItemAdded = true;
   if (Object.keys(effect).length === 0) effect.unchanged = true;
   return effect;
+}
+
+/**
+ * Combine the effects of several attempts of one action (WI-33): labels as the
+ * net change (added then removed again = no change), project fields with the
+ * first known old value and the last new value (dropped when back at the old
+ * value), the item counts as added to the project once it was, the latest
+ * comment reference and shell exit status win. `null` = nothing known.
+ */
+export function mergeEffects(previous: ActionEffect | null | undefined, next: ActionEffect | null | undefined): ActionEffect | null {
+  if (!previous) return next ?? null;
+  if (!next) return previous;
+  const labels = new Map<string, { name: string; state: 'added' | 'removed' }>();
+  const apply = (names: readonly string[] | undefined, state: 'added' | 'removed'): void => {
+    for (const name of names ?? []) {
+      const key = name.toLowerCase();
+      const current = labels.get(key);
+      if (current && current.state !== state) labels.delete(key);
+      else labels.set(key, { name, state });
+    }
+  };
+  apply(previous.labelsAdded, 'added');
+  apply(previous.labelsRemoved, 'removed');
+  apply(next.labelsAdded, 'added');
+  apply(next.labelsRemoved, 'removed');
+  const fields = new Map<string, { name: string; from?: ProjectFieldUpdateValue; to: ProjectFieldUpdateValue }>();
+  for (const f of [...(previous.projectFields ?? []), ...(next.projectFields ?? [])]) {
+    const known = fields.get(f.name);
+    if (!known) fields.set(f.name, { ...f });
+    else fields.set(f.name, { name: f.name, ...('from' in known ? { from: known.from } : 'from' in f ? { from: f.from } : {}), to: f.to });
+  }
+  const effect: ActionEffect = {};
+  const added = [...labels.values()].filter((l) => l.state === 'added').map((l) => l.name);
+  const removed = [...labels.values()].filter((l) => l.state === 'removed').map((l) => l.name);
+  if (added.length > 0) effect.labelsAdded = added;
+  if (removed.length > 0) effect.labelsRemoved = removed;
+  const changedFields = [...fields.values()].filter((f) => !('from' in f) || f.from !== f.to);
+  if (changedFields.length > 0) effect.projectFields = changedFields;
+  if (previous.projectItemAdded || next.projectItemAdded) effect.projectItemAdded = true;
+  const comment = next.comment ?? previous.comment;
+  if (comment) effect.comment = comment;
+  if ('exitCode' in next || 'signal' in next) {
+    effect.exitCode = next.exitCode ?? null;
+    effect.signal = next.signal ?? null;
+  } else if ('exitCode' in previous || 'signal' in previous) {
+    effect.exitCode = previous.exitCode ?? null;
+    effect.signal = previous.signal ?? null;
+  }
+  if (Object.keys(effect).length === 0 && (previous.unchanged || next.unchanged)) effect.unchanged = true;
+  return Object.keys(effect).length > 0 ? effect : null;
 }
 
 /**

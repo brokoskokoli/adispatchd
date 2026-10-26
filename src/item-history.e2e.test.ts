@@ -283,6 +283,34 @@ describe('end-to-end: item history (WI-33)', () => {
     expect(res.json.error.code).toBe('control_token_not_allowed');
   });
 
+  it('keeps the effect of a failed attempt across a manual retry (labels + project field)', async () => {
+    env.github.createIssue(REPO_A, { number: 11, title: 'Partial update', labels: ['ready'] });
+    env.github.addProjectItem(project, REPO_A, 11, { Status: 'Todo' });
+    env.github.denyProjectWrites(project);
+    const start = await env.request('POST', '/api/v1/workflows/coder/start', { item: '11' }, as('olga'));
+    expect(start.status).toBe(202);
+    const runId = start.json.run.id as string;
+    await env.waitRun(runId, (r) => r.status === 'completed' && r.lifecycleStatus === 'failed');
+    const failed = env.app.persistence.actions.listForRun(runId).find((a) => a.name === 'mark-done')!;
+    expect(failed.status).toBe('failed');
+    // The labels were applied before the project write failed.
+    expect(failed.effect).toEqual({ labelsAdded: ['done'], labelsRemoved: ['coding'] });
+
+    env.github.allowProject(project);
+    expect((await env.request('POST', `/api/v1/actions/${failed.id}/retry`, {}, as('olga'))).status).toBe(202);
+    await env.waitRun(runId, (r) => r.lifecycleStatus === 'succeeded');
+    const h = (await env.request('GET', '/api/v1/items/repo_a/11/history', undefined, as('victor'))).json;
+    const hook = (h.entries as Array<Record<string, any>>).find((e) => e.kind === 'hook' && e.hook === 'on_result.approved');
+    expect(hook?.actions[0]).toMatchObject({
+      status: 'succeeded',
+      attempts: 2,
+      effect: { labelsAdded: ['done'], labelsRemoved: ['coding'], projectFields: [{ name: 'Status', from: 'Todo', to: 'Review' }] },
+    });
+    // The GitHub `labeled done` event of the first attempt is merged, not shown as an unmatched own event.
+    const events = (await env.request('GET', '/api/v1/items/repo_a/11/github-events', undefined, as('victor'))).json.events as Array<{ kind: string; label?: string; own: boolean }>;
+    expect(events.filter((e) => e.own && e.label === 'done')).toEqual([]);
+  });
+
   it('says when retention deleted older runs', async () => {
     expect(env.app.persistence.retention.deleteRun(runs[0]!)).toBe(true);
     const res = await history();

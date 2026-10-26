@@ -183,6 +183,16 @@ export class ActionRepository {
     });
   }
 
+  /** Replace the structured effect of an action without changing its status (WI-33: partial effects across attempts). */
+  setEffect(id: number, effect: ActionEffect | null): RunActionRecord {
+    run(this.db, 'UPDATE run_actions SET effect_json = ?, updated_at = ? WHERE id = ?', [
+      effect === null ? null : JSON.stringify(effect),
+      this.clock.now().toISOString(),
+      id,
+    ]);
+    return this.require(id);
+  }
+
   /**
    * Start a new attempt: inserts `action_attempts` row (attempt = previous + 1),
    * increments `attempts` and sets the action `running`.

@@ -3,10 +3,13 @@
  * database (older journal entries without structured effect, paging,
  * retention hints) and merging GitHub events with own changes.
  */
+import Fastify from 'fastify';
 import { afterEach, describe, expect, it } from 'vitest';
 import { CRASH, SUCCESS, completeRun, openTestPersistence, reserveSource } from '../persistence/testing/helpers.js';
-import { buildItemHistory, mergeGitHubEvents } from './item-history.js';
-import type { ItemEvent } from '../core/index.js';
+import { buildItemHistory, mergeGitHubEvents, registerItemHistoryRoutes } from './item-history.js';
+import { mergeEffects } from '../lifecycle/index.js';
+import type { ConfigManager } from '../config/index.js';
+import type { ItemEvent, SourceAdapter } from '../core/index.js';
 
 describe('buildItemHistory (WI-33)', () => {
   let env: ReturnType<typeof openTestPersistence>;
@@ -91,5 +94,76 @@ describe('mergeGitHubEvents (WI-33)', () => {
       ['labeled', 'coding', false, true],
       ['closed', null, true, false],
     ]);
+  });
+});
+
+describe('mergeEffects (WI-33)', () => {
+  it('merges attempts: net labels, first old and last new project value, latest comment and exit status', () => {
+    expect(mergeEffects(null, { labelsAdded: ['a'] })).toEqual({ labelsAdded: ['a'] });
+    expect(mergeEffects({ labelsAdded: ['a'] }, null)).toEqual({ labelsAdded: ['a'] });
+    expect(
+      mergeEffects(
+        { labelsAdded: ['done', 'tmp'], labelsRemoved: ['coding'], projectFields: [{ name: 'Status', from: 'Todo', to: 'Doing' }] },
+        { labelsRemoved: ['TMP'], projectFields: [{ name: 'Status', from: 'Doing', to: 'Review' }, { name: 'Notes', to: 'x' }] },
+      ),
+    ).toEqual({
+      labelsAdded: ['done'],
+      labelsRemoved: ['coding'],
+      projectFields: [
+        { name: 'Status', from: 'Todo', to: 'Review' },
+        { name: 'Notes', to: 'x' },
+      ],
+    });
+    // Back at the old value: no change left.
+    expect(mergeEffects({ projectFields: [{ name: 'S', from: 'a', to: 'b' }] }, { projectFields: [{ name: 'S', from: 'b', to: 'a' }] })).toBeNull();
+    expect(mergeEffects({ labelsAdded: ['x'] }, { unchanged: true })).toEqual({ labelsAdded: ['x'] });
+    expect(mergeEffects({ unchanged: true }, { unchanged: true })).toEqual({ unchanged: true });
+    expect(mergeEffects({ exitCode: 2, signal: null }, { exitCode: 0 })).toEqual({ exitCode: 0, signal: null });
+    expect(mergeEffects({ comment: { id: '1', url: null } }, { comment: { id: '1', url: 'https://x/1', reconciled: true } })).toEqual({
+      comment: { id: '1', url: 'https://x/1', reconciled: true },
+    });
+  });
+});
+
+describe('history head reads (WI-33)', () => {
+  let env: ReturnType<typeof openTestPersistence>;
+  afterEach(() => env.cleanup());
+
+  it('caches failed reads briefly and applies the per-user rate limit to real reads', async () => {
+    env = openTestPersistence();
+    let reads = 0;
+    const adapter = {
+      type: 'github',
+      sourceId: 's',
+      fieldDefinitions: () => [],
+      parseItemRef: (ref: string) => (/^\d+$/.test(ref) ? ref : null),
+      getItem: async () => {
+        reads++;
+        return null;
+      },
+    } as unknown as SourceAdapter;
+    const config = { current: { sources: { s: { identity: 'bot', project: null } }, identities: {} } } as unknown as ConfigManager;
+    const app = Fastify();
+    registerItemHistoryRoutes(app, { config, repositories: env.p, sources: () => adapter, redact: (x) => x, clock: env.clock, itemReadsPerMinute: 2 });
+    const get = async (q = '') => (await app.inject({ method: 'GET', url: `/api/v1/items/s/5/history${q}` })).json();
+
+    expect((await get()).item).toMatchObject({ ok: false, error: { code: 'item_not_found' } });
+    expect((await get()).item.error.code).toBe('item_not_found');
+    expect(reads).toBe(1); // negative cache
+    await get('?refresh=true');
+    expect(reads).toBe(2);
+    // Limit used up: refresh serves the cached head.
+    expect((await get('?refresh=true')).item.error.code).toBe('item_not_found');
+    expect(reads).toBe(2);
+    // Cache expired, still no token: the history comes with a throttled head.
+    env.clock.advance(11_000);
+    const throttled = await get();
+    expect(throttled.item).toMatchObject({ ok: false, error: { code: 'item_reads_throttled' } });
+    expect(throttled.entries).toEqual([]);
+    expect(reads).toBe(2);
+    env.clock.advance(60_000);
+    await get();
+    expect(reads).toBe(3);
+    await app.close();
   });
 });
