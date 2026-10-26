@@ -73,6 +73,9 @@ export const ROUTE_ROLES: Readonly<Record<string, RouteRule>> = {
   // Notifications
   'GET /api/v1/notifications': 'viewer',
   'POST /api/v1/notifications/:id/retry': 'operator',
+  // Item history (WI-33): readable by every viewer
+  'GET /api/v1/items/:source/:item/history': 'viewer',
+  'GET /api/v1/items/:source/:item/github-events': 'viewer',
   // UI actions as an identity (WI-27): admin with a real login (never the control token, checked in ui-actions.ts)
   'GET /api/v1/items/resolve': 'admin',
   'GET /api/v1/items/:source/:item': 'admin',

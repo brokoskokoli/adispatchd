@@ -55,6 +55,8 @@ export interface ProjectWriteResult {
   changed: Record<string, ProjectFieldUpdateValue>;
   /** True if the item was added to the project first. */
   itemAdded: boolean;
+  /** Old values of the changed fields as read before writing (WI-33); `null` = was empty. */
+  previous: Record<string, ProjectFieldUpdateValue>;
 }
 
 interface FieldMeta {
@@ -199,11 +201,11 @@ export class GitHubProjectWriter {
     options: { exactIdentity?: boolean } = {},
   ): Promise<ProjectWriteResult> {
     const names = Object.keys(desired);
-    if (names.length === 0) return { changed: {}, itemAdded: false };
+    if (names.length === 0) return { changed: {}, itemAdded: false, previous: {} };
     this.checkDesired(desired);
     // UI actions (WI-27) write strictly as the chosen identity, never as `project.identity`.
     const writer = options.exactIdentity === true ? identity : (this.settings.writeIdentity ?? identity);
-    const progress: ProjectWriteResult = { changed: {}, itemAdded: false };
+    const progress: ProjectWriteResult = { changed: {}, itemAdded: false, previous: {} };
     try {
       // A NOT_FOUND for an ID from cached metadata (e.g. a deleted and re-created option): reload once and redo.
       if (await this.pass(content, desired, writer, false, progress)) await this.pass(content, desired, writer, true, progress);
@@ -282,6 +284,8 @@ export class GitHubProjectWriter {
       for (const [index, write] of writes.entries()) {
         if (sameValue(item.values[index], write.target)) continue;
         await this.writeField(writer, projectId, item.itemId, write);
+        // The first pass that changed the field knows its old value (a retried pass sees the new one).
+        if (!Object.hasOwn(progress.previous, write.name)) progress.previous[write.name] = currentValue(item.values[index]);
         progress.changed[write.name] = targetValue(write.target);
       }
       return false;
@@ -507,6 +511,7 @@ export function withApplied(err: unknown, applied: SourceUpdateApplied | Project
     'changed' in applied
       ? {
           ...(Object.keys(applied.changed).length > 0 ? { projectFields: { ...applied.changed } } : {}),
+          ...(Object.keys(applied.changed).length > 0 ? { projectFieldsPrevious: pick(applied.previous, Object.keys(applied.changed)) } : {}),
           ...(applied.itemAdded ? { projectItemAdded: true } : {}),
         }
       : applied;
@@ -521,6 +526,12 @@ export function withApplied(err: unknown, applied: SourceUpdateApplied | Project
     ...(err.retryAfterMs !== undefined ? { retryAfterMs: err.retryAfterMs } : {}),
     ...(err.status !== undefined ? { status: err.status } : {}),
   });
+}
+
+function pick(values: Readonly<Record<string, ProjectFieldUpdateValue>>, names: readonly string[]): Record<string, ProjectFieldUpdateValue> {
+  const out: Record<string, ProjectFieldUpdateValue> = {};
+  for (const n of names) if (Object.hasOwn(values, n)) out[n] = values[n] ?? null;
+  return out;
 }
 
 /** Problem of a value for a field of `kind`, or `undefined` if valid. */
@@ -608,6 +619,26 @@ function targetValue(target: Target): ProjectFieldUpdateValue {
       return target.number;
     case 'date':
       return target.date;
+  }
+}
+
+/** Display value of a `fieldValueByName` result (WI-33: old value in the item history); `null` = empty. */
+function currentValue(current: unknown): ProjectFieldUpdateValue {
+  if (current === null || current === undefined || typeof current !== 'object') return null;
+  const v = current as Record<string, unknown>;
+  switch (v.__typename) {
+    case 'ProjectV2ItemFieldSingleSelectValue':
+      return typeof v.name === 'string' ? v.name : null;
+    case 'ProjectV2ItemFieldIterationValue':
+      return typeof v.title === 'string' ? v.title : null;
+    case 'ProjectV2ItemFieldTextValue':
+      return typeof v.text === 'string' ? v.text : null;
+    case 'ProjectV2ItemFieldNumberValue':
+      return typeof v.number === 'number' ? v.number : null;
+    case 'ProjectV2ItemFieldDateValue':
+      return typeof v.date === 'string' ? v.date.slice(0, 10) : null;
+    default:
+      return null;
   }
 }
 

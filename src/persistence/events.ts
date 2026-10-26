@@ -117,6 +117,23 @@ export class EventRepository {
     ]).map(toEvent);
   }
 
+  /** Events of the given types of several runs (item history, WI-33), in ID order. */
+  listTypesForRuns(runIds: readonly string[], types: readonly string[]): RunEventRecord[] {
+    if (runIds.length === 0 || types.length === 0) return [];
+    const out: RunEventRecord[] = [];
+    for (let i = 0; i < runIds.length; i += 400) {
+      const chunk = runIds.slice(i, i + 400);
+      out.push(
+        ...all(
+          this.db,
+          `SELECT * FROM run_events WHERE run_id IN (${chunk.map(() => '?').join(', ')}) AND type IN (${types.map(() => '?').join(', ')}) ORDER BY id ASC`,
+          [...chunk, ...types],
+        ).map(toEvent),
+      );
+    }
+    return out;
+  }
+
   /** Highest event ID ever assigned (0 if none); does not decrease when events are deleted. */
   latestId(): number {
     return Number(get(this.db, `SELECT seq FROM sqlite_sequence WHERE name = 'run_events'`)?.seq ?? 0);

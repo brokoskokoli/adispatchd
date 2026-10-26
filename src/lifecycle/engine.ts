@@ -17,6 +17,7 @@ import {
   sleep,
   systemClock,
   systemTimers,
+  type ActionEffect,
   type Clock,
   type CredentialProvider,
   type Executor,
@@ -34,6 +35,8 @@ import type { Repositories, RunActionRecord, RunRecord } from '../persistence/in
 import { parseRunSnapshot, resolveActionIdentity, type HookBlockInfo } from './context.js';
 import { LifecycleBusyError, LifecycleError, describeActionError, type ActionErrorInfo } from './errors.js';
 import {
+  failureEffect,
+  mergeEffects,
   performShell,
   performSourceComment,
   performSourceUpdate,
@@ -441,6 +444,7 @@ export class LifecycleEngine {
           // Shutdown/abort is not a failure of the action: close the attempt, keep the action resumable.
           this.repos.transaction(() => {
             this.repos.actions.finishAttempt(attempt.id, 'failed', { error: info });
+            this.accumulateEffect(current.id, failureEffect(current.type, info.details));
             const reset = this.repos.actions.setStatus(current.id, 'pending');
             this.appendActionEvent(reset, { attempt: attempt.attempt, error: info, interrupted: true });
           });
@@ -450,6 +454,8 @@ export class LifecycleEngine {
         const giveUp = !info.retryable || roundAttempts >= policy.maxAttempts;
         current = this.repos.transaction(() => {
           this.repos.actions.finishAttempt(attempt.id, 'failed', { error: info });
+          // WI-33: what this attempt changed before failing stays visible across retries.
+          this.accumulateEffect(current.id, failureEffect(current.type, info.details));
           if (giveUp) {
             const failed = this.repos.actions.setStatus(current.id, 'failed', { error: info });
             this.appendActionEvent(failed, { attempt: attempt.attempt, error: info });
@@ -480,8 +486,10 @@ export class LifecycleEngine {
       }
       this.repos.transaction(() => {
         this.repos.actions.finishAttempt(attempt.id, 'succeeded', { externalKey: result.externalKey });
+        const effect = mergeEffects(this.repos.actions.require(current.id).effect, result.effect);
         const done = this.repos.actions.setStatus(current.id, 'succeeded', {
           ...(result.externalKey !== null ? { externalKey: result.externalKey } : {}),
+          ...(effect ? { effect } : {}),
         });
         this.appendActionEvent(done, { attempt: attempt.attempt, details: result.details });
       });
@@ -526,7 +534,10 @@ export class LifecycleEngine {
         if (found) {
           this.repos.transaction(() => {
             this.repos.actions.finishAttempt(open.id, 'succeeded', { externalKey: found.id });
-            const done = this.repos.actions.setStatus(action.id, 'succeeded', { externalKey: found.id });
+            const done = this.repos.actions.setStatus(action.id, 'succeeded', {
+              externalKey: found.id,
+              effect: mergeEffects(this.repos.actions.require(action.id).effect, { comment: { id: found.id, url: found.url ?? null, reconciled: true } }),
+            });
             this.appendActionEvent(done, { attempt: open.attempt, details: { reconciled: true, recovery: true } });
           });
           this.publishChange(action.id);
@@ -568,6 +579,12 @@ export class LifecycleEngine {
       this.refreshLifecycleStatus(action.runId);
     });
     this.publishChange(action.id);
+  }
+
+  /** Merge a (partial) effect into the action's stored effect (WI-33); no-op without one. */
+  private accumulateEffect(actionId: number, effect: ActionEffect | null): void {
+    if (!effect) return;
+    this.repos.actions.setEffect(actionId, mergeEffects(this.repos.actions.require(actionId).effect, effect));
   }
 
   private appendActionEvent(action: RunActionRecord, extra: Record<string, unknown>): void {

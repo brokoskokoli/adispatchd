@@ -7,6 +7,7 @@ import { h, replaceChildren, rerender } from '../dom.js';
 import { createRefresher } from '../../shared/throttle.js';
 import type { Page, PageContext } from '../page.js';
 import type { Block } from '../types.js';
+import { historyLinkForKey } from './item.js';
 import { act, button, confirmDialog, errorBox, externalLink, loading, routeLink, runLink, table, time } from '../ui.js';
 
 export const blockedPage = (ctx: PageContext): Page => {
@@ -64,7 +65,7 @@ export const blockedPage = (ctx: PageContext): Page => {
             const btn: HTMLButtonElement = button('Remove Block', () => void clear(b, btn), { kind: 'danger', requires: 'operator' });
             const runs = [...new Set([...(b.runId ? [b.runId] : []), ...b.affectedRunIds])];
             return [
-              h('span', null, routeLink(['workflows', b.workflowId], b.workflowName ?? b.workflowId), h('br'), h('code', null, b.itemKey ?? '(workflow scope)')),
+              h('span', null, routeLink(['workflows', b.workflowId], b.workflowName ?? b.workflowId), h('br'), h('code', null, b.itemKey ?? '(workflow scope)'), b.itemKey ? [' ', historyLinkForKey(b.itemKey)] : null),
               b.reason,
               String(b.failureCount),
               time(b.createdAt),

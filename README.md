@@ -68,6 +68,12 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   streamed via Server-Sent Events; plus a JSON HTTP API. Optional toolbar links to other local tools
   (e.g. the [claude-inspect](https://github.com/brokoskokoli/claude_inspect) dashboard), opened in a new tab or embedded
   (`ui.external_links`).
+- **Item history** – since 0.9.0 one page per issue/PR shows its way through the workflows: the current state (read
+  fresh from GitHub), the **path** of all runs with their results and a filterable **timeline** of run starts and
+  ends, hook chains with what each action changed (labels added/removed, project field `old → new`, comment link,
+  exit status), retry blocks and UI actions; optionally merged with the issue's GitHub timeline (external changes
+  marked, own changes not shown twice). Linked from runs, the item panel, the Blocked page and views (field
+  `history`).
 - **Server resources** – a compact strip at the top of the dashboard (CPU with a 15-minute sparkline, memory, the
   fullest disk, load and the busiest process groups, own runs first); the **Resources** tab shows CPU over time stacked
   by the daemon, each run (click through to the run), hooks/checks and the busiest foreign processes, plus memory and

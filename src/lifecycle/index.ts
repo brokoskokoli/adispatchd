@@ -28,4 +28,4 @@ export {
   type ShellActionContext,
 } from './context.js';
 export type { SourceResolver } from './performers.js';
-export { neutralizeHtmlComments } from './performers.js';
+export { failureEffect, mergeEffects, neutralizeHtmlComments, updateEffect } from './performers.js';

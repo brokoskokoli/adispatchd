@@ -23,6 +23,7 @@ import { viewPage, viewsListPage } from './pages/views.js';
 import { configPage } from './pages/config.js';
 import { toolPage } from './pages/tools.js';
 import { itemPage, uiActionsPage } from './pages/item.js';
+import { historyPage } from './pages/history.js';
 import { externalLinks, reloadExternalLinks } from './external-links.js';
 import { externalNavItem, TOOLS_ROUTE } from '../shared/external-links.js';
 import { isNavActive, NAV_ENTRIES } from '../shared/nav.js';
@@ -208,7 +209,8 @@ function pageFor(route: Route, ctx: PageContext): Page {
     case 'config':
       return configPage(ctx);
     case 'items':
-      return itemPage(ctx, b ?? '', route.segments[2] ?? '');
+      // WI-33: `#/items/<source>/<item>` = item history (viewer); `…/act` = item panel (WI-27, admin).
+      return route.segments[3] === 'act' ? itemPage(ctx, b ?? '', route.segments[2] ?? '') : historyPage(ctx, b ?? '', route.segments[2] ?? '');
     case 'ui-actions':
       return uiActionsPage(ctx);
     case TOOLS_ROUTE:

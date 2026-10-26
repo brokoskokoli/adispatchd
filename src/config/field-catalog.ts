@@ -11,6 +11,7 @@
  * its sources declare with the same kind.
  */
 import {
+  VIEW_ITEM_FIELDS,
   VIEW_RUN_FIELDS,
   isFilterAll,
   isFilterAny,
@@ -80,7 +81,7 @@ export interface FieldContext {
 function definitions(ctx: FieldContext): readonly FieldDefinition[] | undefined {
   const base = FIELD_CATALOG[ctx.sourceType];
   if (!base) return undefined;
-  return [...base, ...(ctx.extra ?? []), ...(ctx.view ? VIEW_RUN_FIELDS : [])];
+  return [...base, ...(ctx.extra ?? []), ...(ctx.view ? [...VIEW_RUN_FIELDS, ...VIEW_ITEM_FIELDS] : [])];
 }
 
 /** Field context of a workflow triggered by `source`. */

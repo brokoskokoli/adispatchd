@@ -5,6 +5,31 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Item-Verlauf (`#/items/<source>/<id>`).** Eine Seite je Issue/PR zeigt den Weg durch die Workflows: aktueller Stand
+  (frisch von GitHub gelesen: Titel, Typ, Zustand, Labels, Projektfelder, Arbeits-Branch/-PR, aktiver Run, aktive
+  Retry-Blocks), den **Pfad** aller Runs als Kette mit Ergebnis-Badges und eine **Zeitleiste** (neueste oben,
+  umschaltbar, Filter je Eintragsart, „Load older entries“) mit Run-Start (Trigger, Benutzer, Parameter), Run-Ende,
+  Hook-Ketten mit der **Wirkung** jeder Action (Labels +/−, Projektfeld `alt → neu`, Kommentar-Link, Exit-Status),
+  Retry-Block entstanden/aufgehoben und UI-Aktionen. Optional „Show GitHub events“: die Issue-Timeline (Labels,
+  Schließen/Öffnen, Zuweisung, Umbenennen, Verweise) ohne Doppelungen eigener Änderungen, externe als „external“
+  markiert, 60 s gecacht. Hinweis, wenn die Aufbewahrung ältere Runs gelöscht hat. Lesbar ab Rolle `viewer`. Links
+  aus Run-Detail, Item-Panel, Blocked-Seite und Run-Liste.
+- **View-Feld `history`:** Link-Spalte „History →“ auf den Item-Verlauf, in Views, Abschnitten und
+  Dashboard-View-Widgets (nicht filter- oder sortierbar). Referenz §3.5, §4.8.
+- **API:** `GET /api/v1/items/:source/:item/history` (`limit`, `before`, `refresh`) und
+  `GET /api/v1/items/:source/:item/github-events` (`refresh`); Run-Detail-Actions enthalten `effect`.
+
+### Geändert
+
+- **DB-Schema v6** (Migration mit Backup, Einbahnstraße): `run_actions.effect_json` speichert die Wirkung jeder Action
+  strukturiert (bei `source.update` auch den alten Wert geänderter Projektfelder; nie Kommentartexte oder Secrets),
+  Index `blocks_item`, Tabelle `item_history_gaps`. Ältere Journal-Einträge erscheinen mit der vorhandenen
+  Zusammenfassung.
+- Das Item-Panel der UI-Aktionen liegt jetzt unter `#/items/<source>/<id>/act`; `#/items/<source>/<id>` öffnet den
+  Item-Verlauf (mit Link zum Panel).
+
 ## [0.8.0] – 2026-10-26
 
 ### Hinzugefügt

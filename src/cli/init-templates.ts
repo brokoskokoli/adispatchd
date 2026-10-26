@@ -297,6 +297,7 @@ fields:
   - { field: run.last_workflow, label: Last agent }
   - { field: run.last_result.message, label: Result }
   - { field: updated_at, label: Updated }
+  - { field: history, label: History }   # link to the item history page in the web UI
 sort: { field: updated_at, direction: desc }
 `;
 

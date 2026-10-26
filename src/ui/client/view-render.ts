@@ -42,6 +42,8 @@ function cellNode(c: ViewRowData['cells'][number], field: string): Node {
   if (!c.known) return h('span', { class: 'unknown', title: 'Field not available for this item' }, '—');
   const t = cellText(c);
   if (field === 'run.last_id' && typeof c.value === 'string') return runLink(c.value);
+  // WI-33: link column to the item history (value = UI route).
+  if (field === 'history' && typeof c.value === 'string' && c.value.startsWith('#/items/')) return h('a', { href: c.value, class: 'item-history' }, 'History →');
   if (Array.isArray(c.value) && c.value.some((x) => typeof x === 'object' && x !== null)) {
     // object[] (e.g. closing_prs): one entry per object, linked to its `url` if it is http(s).
     const parts: Array<Node | string> = [];

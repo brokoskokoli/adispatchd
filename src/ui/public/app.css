@@ -267,6 +267,36 @@ a.item-act { font-size: 12.5px; white-space: nowrap; }
 .item-panel .check, .item-panel .field-kind { white-space: nowrap; }
 .item-panel .spacer { height: 14px; }
 
+/* ---------- item history (WI-33) ---------- */
+a.item-history { font-size: 12.5px; white-space: nowrap; }
+.history-head h1 { margin: 0 0 4px; overflow-wrap: anywhere; }
+.history-head .kv { margin-top: 10px; }
+.history-links { display: flex; flex-wrap: wrap; gap: 12px; margin: 0 0 10px; }
+.history-path { list-style: none; display: flex; flex-wrap: wrap; gap: 6px 4px; padding: 0; margin: 0; }
+.history-path li { display: inline-flex; align-items: center; }
+.history-path li + li::before { content: '→'; color: var(--muted); margin: 0 4px; }
+.history-path .path-step { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--muted-bg); color: var(--text); text-decoration: none; font-size: 12.5px; }
+.history-path .path-step:hover, .history-path .path-step:focus-visible { border-color: var(--accent); }
+.history-controls { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+.history-filter { display: flex; flex-wrap: wrap; gap: 4px 14px; border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; margin: 0; }
+.history-filter legend { color: var(--muted); font-size: 12.5px; padding: 0 4px; }
+.history-github { margin: 4px 0 8px; }
+.history-timeline { list-style: none; padding: 0; margin: 8px 0 0; border-left: 2px solid var(--border); }
+.history-timeline .entry { position: relative; padding: 6px 0 10px 16px; overflow-wrap: anywhere; }
+.history-timeline .entry::before { content: ''; position: absolute; left: -6px; top: 11px; width: 10px; height: 10px; border-radius: 50%; background: var(--surface); border: 2px solid var(--muted); }
+.history-timeline .entry-run::before { border-color: var(--accent); }
+.history-timeline .entry-hook::before { border-color: var(--ok); }
+.history-timeline .entry-block::before { border-color: var(--warn); }
+.history-timeline .entry-ui::before { border-color: var(--info); }
+.history-timeline .entry-github::before { border-style: dashed; }
+.entry-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.entry-head time { color: var(--muted); font-size: 12.5px; }
+.history-actions { list-style: none; padding: 0; margin: 4px 0 0; }
+.history-action { padding: 3px 0; }
+.history-action code { font-size: 12.5px; }
+ul.effect { margin: 2px 0 0 18px; padding: 0; font-size: 13px; }
+.history-notes .muted { font-size: 12.5px; }
+
 /* ---------- dialog ---------- */
 .dialog {
   border: 1px solid var(--border); border-radius: 10px; padding: 18px; width: min(520px, calc(100vw - 24px));

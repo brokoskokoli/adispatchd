@@ -16,6 +16,7 @@ import {
   keepPatternError,
   outcomeOfHook,
   TECHNICAL_OUTCOME_HOOKS,
+  VIEW_HISTORY_FIELD,
   isRetryBlockHook,
   validateTemplate,
   type HookName,
@@ -919,6 +920,10 @@ function validateView(entry: ViewEntry, input: SemanticInput, issues: IssueColle
         if (!checkName(key.field, [...keyAt, 'field'])) return;
         const type = fieldType(key.field, ctx);
         if (type === 'object[]') issues.error(file, [...keyAt, 'field'], `Views cannot be sorted by "${key.field}" (type object[])`);
+        if (key.field === VIEW_HISTORY_FIELD) {
+          issues.error(file, [...keyAt, 'field'], `Views cannot be sorted by "${VIEW_HISTORY_FIELD}": it is a link column to the item history (use it in "fields" only)`);
+          return;
+        }
         if (key.order) {
           if (type !== undefined && type !== 'string') {
             issues.error(

@@ -350,6 +350,25 @@ ALTER TABLE blocks ADD COLUMN cleared_run_id TEXT REFERENCES runs (id) ON DELETE
 UPDATE blocks SET last_status = (SELECT final_status FROM runs WHERE runs.id = blocks.run_id) WHERE run_id IS NOT NULL;
 `;
 
+/**
+ * v6 (WI-33): item history. `run_actions.effect_json` holds the structured
+ * effect of an action (labels added/removed, project field old → new, comment
+ * reference, shell exit status; never comment texts or secrets); older rows
+ * keep `NULL` (the history falls back to the journal events). Blocks get an
+ * index by item key, and `item_history_gaps` remembers per item that the
+ * retention deleted runs (count, newest deleted run).
+ */
+const V6_DDL = `
+ALTER TABLE run_actions ADD COLUMN effect_json TEXT;
+CREATE INDEX blocks_item ON blocks (source_item_key, created_at);
+CREATE TABLE item_history_gaps (
+  item_key           TEXT PRIMARY KEY,
+  deleted_runs       INTEGER NOT NULL DEFAULT 0 CHECK (deleted_runs >= 0),
+  newest_deleted_at  TEXT,
+  updated_at         TEXT NOT NULL
+);
+`;
+
 /** All built-in migrations, in order. */
 export const MIGRATIONS: readonly Migration[] = [
   {
@@ -387,6 +406,13 @@ export const MIGRATIONS: readonly Migration[] = [
     disableForeignKeys: true,
     up(db) {
       db.exec(V5_DDL);
+    },
+  },
+  {
+    version: 6,
+    name: 'item_history',
+    up(db) {
+      db.exec(V6_DDL);
     },
   },
 ];

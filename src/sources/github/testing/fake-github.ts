@@ -15,6 +15,8 @@
  * - `GET  /repos/{o}/{r}` (`default_branch`), `GET /repos/{o}/{r}/branches` (alphabetical) and
  *   `GET /repos/{o}/{r}/tags` (as set) of {@link FakeGitHub.setRepoRefs} (WI-31; pagination)
  * - `GET  /user` (user tokens from {@link FakeGitHub.createUserToken})
+ * - `GET  /repos/{o}/{r}/issues/{n}/timeline` (WI-33; label changes and state changes through the API
+ *   and the setup helpers are recorded with their actor, plus {@link FakeGitHub.addTimelineEvent}; pagination)
  * - `POST /graphql` (GHES: `/api/graphql`): the GitHub Projects (v2)
  *   queries of the adapter – `repositoryOwner { projectV2 }` metadata (field
  *   IDs, single-select options, iterations), `nodes(ids:) { projectItems {
@@ -34,6 +36,17 @@
  */
 import { createPublicKey, generateKeyPairSync, randomBytes, verify, type KeyObject } from 'node:crypto';
 import { systemClock, type AccessToken, type Clock, type CredentialProvider, type FetchLike } from '../../../core/index.js';
+
+/** Actor of a recorded timeline event (WI-33). */
+export interface FakeTimelineActor {
+  login: string;
+  type: 'User' | 'Bot';
+  /** App ID if performed through a GitHub App (`performed_via_github_app`). */
+  viaAppId?: string;
+}
+
+/** A recorded timeline event (raw JSON as GitHub returns it, WI-33). */
+export type FakeTimelineEvent = Record<string, unknown> & { event: string; created_at: string };
 
 /** Initial values for {@link FakeGitHub.createIssue}. */
 export interface FakeIssueInit {
@@ -242,6 +255,9 @@ export class FakeGitHub {
   private readonly requireAuthOption: boolean | undefined;
   private readonly repos = new Map<string, Map<number, FakeIssue>>();
   private readonly commentsByIssue = new Map<number, FakeComment[]>();
+  /** Timeline per issue ID (WI-33). */
+  private readonly timelines = new Map<number, FakeTimelineEvent[]>();
+  private nextEventId = 90_000;
   private readonly apps = new Map<string, FakeApp>();
   private readonly tokens = new Map<string, IssuedToken>();
   private readonly restricted = new Set<string>();
@@ -316,19 +332,41 @@ export class FakeGitHub {
     return issue;
   }
 
-  /** Close an issue. */
-  closeIssue(repo: string, number: number): void {
-    this.touch(this.issue(repo, number)).state = 'closed';
+  /** Close an issue (timeline: `closed` by `actor`). */
+  closeIssue(repo: string, number: number, actor: FakeTimelineActor = MANUAL_ACTOR): void {
+    const issue = this.touch(this.issue(repo, number));
+    if (issue.state !== 'closed') this.recordEvent(issue, 'closed', actor, { state_reason: 'completed' });
+    issue.state = 'closed';
   }
 
-  /** Reopen an issue. */
-  reopenIssue(repo: string, number: number): void {
-    this.touch(this.issue(repo, number)).state = 'open';
+  /** Reopen an issue (timeline: `reopened` by `actor`). */
+  reopenIssue(repo: string, number: number, actor: FakeTimelineActor = MANUAL_ACTOR): void {
+    const issue = this.touch(this.issue(repo, number));
+    if (issue.state !== 'open') this.recordEvent(issue, 'reopened', actor);
+    issue.state = 'open';
   }
 
-  /** Replace the labels of an issue (simulates manual changes). */
-  setLabels(repo: string, number: number, labels: string[]): void {
-    this.touch(this.issue(repo, number)).labels = [...labels];
+  /** Replace the labels of an issue (simulates manual changes; timeline: `labeled`/`unlabeled` by `actor`). */
+  setLabels(repo: string, number: number, labels: string[], actor: FakeTimelineActor = MANUAL_ACTOR): void {
+    const issue = this.touch(this.issue(repo, number));
+    const lower = (xs: readonly string[]) => new Set(xs.map((l) => l.toLowerCase()));
+    const before = lower(issue.labels);
+    const after = lower(labels);
+    for (const l of issue.labels) if (!after.has(l.toLowerCase())) this.recordEvent(issue, 'unlabeled', actor, { label: { name: l } });
+    for (const l of labels) if (!before.has(l.toLowerCase())) this.recordEvent(issue, 'labeled', actor, { label: { name: l } });
+    issue.labels = [...labels];
+  }
+
+  /** Append a raw timeline event (WI-33), e.g. `{ event: 'cross-referenced', source: {…} }`; `created_at` defaults to now. */
+  addTimelineEvent(repo: string, number: number, event: Omit<FakeTimelineEvent, 'created_at'> & { created_at?: string }, actor: FakeTimelineActor = MANUAL_ACTOR): FakeTimelineEvent {
+    const issue = this.issue(repo, number);
+    const { event: kind, ...rest } = event;
+    return this.recordEvent(issue, String(kind), actor, rest);
+  }
+
+  /** Recorded timeline of an issue (WI-33). */
+  timeline(repo: string, number: number): FakeTimelineEvent[] {
+    return [...(this.timelines.get(this.issue(repo, number).id) ?? [])];
   }
 
   /** Label names of an issue. */
@@ -710,7 +748,10 @@ export class FakeGitHub {
       if (method === 'GET') return json(200, this.issueJson(issue));
       if (method === 'PATCH') {
         const patch = body as { state?: unknown; title?: unknown };
-        if (patch.state === 'open' || patch.state === 'closed') issue.state = patch.state;
+        if ((patch.state === 'open' || patch.state === 'closed') && patch.state !== issue.state) {
+          this.recordEvent(issue, patch.state === 'closed' ? 'closed' : 'reopened', actorOf(auth));
+          issue.state = patch.state;
+        }
         if (typeof patch.title === 'string') issue.title = patch.title;
         this.touch(issue);
         return json(200, this.issueJson(issue));
@@ -731,7 +772,10 @@ export class FakeGitHub {
       const labels = (body as { labels?: unknown }).labels;
       if (!Array.isArray(labels) || !labels.every((l) => typeof l === 'string')) return json(422, { message: 'Validation Failed' });
       for (const label of labels as string[]) {
-        if (!issue.labels.some((l) => l.toLowerCase() === label.toLowerCase())) issue.labels.push(label);
+        if (!issue.labels.some((l) => l.toLowerCase() === label.toLowerCase())) {
+          issue.labels.push(label);
+          this.recordEvent(issue, 'labeled', actorOf(auth), { label: { name: label } });
+        }
       }
       this.touch(issue);
       return json(200, issue.labels.map((name) => ({ name })));
@@ -741,9 +785,13 @@ export class FakeGitHub {
       const name = decodeURIComponent(labelMatch[1] as string);
       const idx = issue.labels.findIndex((l) => l.toLowerCase() === name.toLowerCase());
       if (idx < 0) return json(404, { message: 'Label does not exist' });
-      issue.labels.splice(idx, 1);
+      const [removed] = issue.labels.splice(idx, 1);
+      this.recordEvent(issue, 'unlabeled', actorOf(auth), { label: { name: removed } });
       this.touch(issue);
       return json(200, issue.labels.map((n) => ({ name: n })));
+    }
+    if (rest === '/timeline' && method === 'GET') {
+      return this.page(this.timelines.get(issue.id) ?? [], url);
     }
     if (rest === '/comments') {
       if (method === 'GET') {
@@ -1154,6 +1202,22 @@ export class FakeGitHub {
     return issues;
   }
 
+  private recordEvent(issue: FakeIssue, kind: string, actor: FakeTimelineActor, extra: Record<string, unknown> = {}): FakeTimelineEvent {
+    const list = this.timelines.get(issue.id) ?? [];
+    const event: FakeTimelineEvent = {
+      id: this.nextEventId++,
+      node_id: `E_${this.nextEventId}`,
+      event: kind,
+      actor: { login: actor.login, type: actor.type },
+      performed_via_github_app: actor.viaAppId !== undefined ? { id: Number(actor.viaAppId), slug: actor.login.replace(/\[bot\]$/, '') } : null,
+      created_at: this.nowIso(),
+      ...extra,
+    };
+    list.push(event);
+    this.timelines.set(issue.id, list);
+    return event;
+  }
+
   private touch(issue: FakeIssue): FakeIssue {
     issue.updatedAt = this.nowIso();
     return issue;
@@ -1162,6 +1226,16 @@ export class FakeGitHub {
   private nowIso(): string {
     return this.clock.now().toISOString();
   }
+}
+
+/** Default actor of setup helpers (a person changing the issue on GitHub). */
+const MANUAL_ACTOR: FakeTimelineActor = { login: 'octocat', type: 'User' };
+
+/** Timeline actor of an API request. */
+function actorOf(auth: IssuedToken | undefined): FakeTimelineActor {
+  if (auth?.app) return { login: auth.app.login, type: 'Bot', viaAppId: auth.app.appId };
+  if (auth?.userLogin) return { login: auth.userLogin, type: 'User' };
+  return { login: 'test-bot[bot]', type: 'Bot' };
 }
 
 /**

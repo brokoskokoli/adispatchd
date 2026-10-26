@@ -3,7 +3,7 @@
  * `succeeded` and `skipped` are final – a succeeded action is never executed again.
  */
 import type { DatabaseSync } from 'node:sqlite';
-import type { ActionStatus, Clock, HookName } from '../core/index.js';
+import type { ActionEffect, ActionStatus, Clock, HookName } from '../core/index.js';
 import { InvalidTransitionError, NotFoundError } from './errors.js';
 import { all, fromJson, get, run, str, toJson, transaction, type Row } from './sqlite.js';
 
@@ -43,6 +43,11 @@ export interface RunActionRecord {
   /** Number of attempts started. */
   attempts: number;
   lastError: unknown;
+  /**
+   * Structured effect (WI-33, schema v6): what the action changed; `null` for
+   * actions without a recorded effect (not done yet, or journaled before 0.9.0).
+   */
+  effect: ActionEffect | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -114,6 +119,19 @@ export class ActionRepository {
     return all(this.db, 'SELECT * FROM run_actions WHERE run_id = ? ORDER BY id ASC', [runId]).map(toAction);
   }
 
+  /** All actions of several runs (item history, WI-33), by run then journal order. */
+  listForRuns(runIds: readonly string[]): RunActionRecord[] {
+    const out: RunActionRecord[] = [];
+    // SQLite limits bound parameters: query in chunks.
+    for (let i = 0; i < runIds.length; i += 500) {
+      const chunk = runIds.slice(i, i + 500);
+      out.push(
+        ...all(this.db, `SELECT * FROM run_actions WHERE run_id IN (${chunk.map(() => '?').join(', ')}) ORDER BY run_id ASC, id ASC`, chunk).map(toAction),
+      );
+    }
+    return out;
+  }
+
   /** Actions of one hook in ordinal order. */
   listForHook(runId: string, hook: HookName): RunActionRecord[] {
     return all(this.db, 'SELECT * FROM run_actions WHERE run_id = ? AND hook = ? ORDER BY ordinal ASC', [runId, hook]).map(
@@ -128,7 +146,7 @@ export class ActionRepository {
   setStatus(
     id: number,
     status: ActionStatus,
-    options: { externalKey?: string | null; error?: unknown; expectedFrom?: ActionStatus } = {},
+    options: { externalKey?: string | null; error?: unknown; expectedFrom?: ActionStatus; effect?: ActionEffect | null } = {},
   ): RunActionRecord {
     return transaction(this.db, () => {
       const current = this.require(id);
@@ -156,9 +174,23 @@ export class ActionRepository {
         sets.push('last_error_json = ?');
         params.push(toJson(options.error ?? undefined));
       }
+      if (options.effect !== undefined) {
+        sets.push('effect_json = ?');
+        params.push(options.effect === null ? null : JSON.stringify(options.effect));
+      }
       run(this.db, `UPDATE run_actions SET ${sets.join(', ')} WHERE id = ?`, [...params, id]);
       return this.require(id);
     });
+  }
+
+  /** Replace the structured effect of an action without changing its status (WI-33: partial effects across attempts). */
+  setEffect(id: number, effect: ActionEffect | null): RunActionRecord {
+    run(this.db, 'UPDATE run_actions SET effect_json = ?, updated_at = ? WHERE id = ?', [
+      effect === null ? null : JSON.stringify(effect),
+      this.clock.now().toISOString(),
+      id,
+    ]);
+    return this.require(id);
   }
 
   /**
@@ -261,6 +293,7 @@ function toAction(row: Row): RunActionRecord {
     externalKey: str(row.external_key),
     attempts: Number(row.attempts),
     lastError: fromJson(row.last_error_json),
+    effect: (fromJson(row.effect_json) as ActionEffect | undefined) ?? null,
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };

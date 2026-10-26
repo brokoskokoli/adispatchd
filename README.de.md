@@ -71,6 +71,11 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
   Sortierschlüssel, Abschnitte mit Überschriften); dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools in der Toolbar
   (z. B. das Dashboard [claude-inspect](https://github.com/brokoskokoli/claude_inspect)), im neuen Tab oder eingebettet
   (`ui.external_links`).
+- **Item-Verlauf:** Seit 0.9.0 zeigt eine Seite je Issue/PR den Weg durch die Workflows: aktueller Stand (frisch von
+  GitHub gelesen), der **Pfad** aller Runs mit Ergebnis und eine filterbare **Zeitleiste** mit Run-Start und -Ende,
+  Hook-Ketten mit der Wirkung jeder Action (Labels +/−, Projektfeld `alt → neu`, Kommentar-Link, Exit-Status),
+  Retry-Blocks und UI-Aktionen; optional zusammen mit der GitHub-Timeline des Issues (externe Änderungen markiert,
+  eigene nicht doppelt). Verlinkt aus Runs, Item-Panel, Blocked-Seite und Views (Feld `history`).
 - **Server-Ressourcen:** oben im Dashboard eine kompakte Leiste (CPU mit Verlauf der letzten 15 Minuten, RAM, die am
   stärksten belegte Platte, Load und die größten Prozessgruppen, eigene Runs zuerst); der Reiter **Resources** zeigt die
   CPU über die Zeit, gestapelt nach Daemon, jedem Run (Klick → Run), Hooks/Checks und den größten fremden Prozessen,

@@ -7,6 +7,9 @@ import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   LINKED_ITEM_FIELDS,
+  type ActionEffect,
+  type ProjectFieldUpdateValue,
+  type SourceUpdateApplied,
   commentMarker,
   dataPaths,
   linkedFieldsUsed,
@@ -69,6 +72,92 @@ export interface AttemptResult {
   externalKey: string | null;
   /** Journal/event details, e.g. applied labels, comment URL, `reconciled: true`. */
   details: Record<string, unknown>;
+  /** Structured effect for the item history (WI-33, `run_actions.effect_json`). */
+  effect?: ActionEffect;
+}
+
+/** Effect of a (possibly partial) `source.update` from what the adapter applied (WI-33). */
+export function updateEffect(applied: SourceUpdateApplied | undefined | null): ActionEffect {
+  const effect: ActionEffect = {};
+  if (applied?.labelsAdded && applied.labelsAdded.length > 0) effect.labelsAdded = [...applied.labelsAdded];
+  if (applied?.labelsRemoved && applied.labelsRemoved.length > 0) effect.labelsRemoved = [...applied.labelsRemoved];
+  const fields = Object.entries(applied?.projectFields ?? {});
+  if (fields.length > 0) {
+    const previous = applied?.projectFieldsPrevious ?? {};
+    effect.projectFields = fields.map(([name, to]) => ({ name, ...(Object.hasOwn(previous, name) ? { from: previous[name] ?? null } : {}), to }));
+  }
+  if (applied?.projectItemAdded) effect.projectItemAdded = true;
+  if (Object.keys(effect).length === 0) effect.unchanged = true;
+  return effect;
+}
+
+/**
+ * Combine the effects of several attempts of one action (WI-33): labels as the
+ * net change (added then removed again = no change), project fields with the
+ * first known old value and the last new value (dropped when back at the old
+ * value), the item counts as added to the project once it was, the latest
+ * comment reference and shell exit status win. `null` = nothing known.
+ */
+export function mergeEffects(previous: ActionEffect | null | undefined, next: ActionEffect | null | undefined): ActionEffect | null {
+  if (!previous) return next ?? null;
+  if (!next) return previous;
+  const labels = new Map<string, { name: string; state: 'added' | 'removed' }>();
+  const apply = (names: readonly string[] | undefined, state: 'added' | 'removed'): void => {
+    for (const name of names ?? []) {
+      const key = name.toLowerCase();
+      const current = labels.get(key);
+      if (current && current.state !== state) labels.delete(key);
+      else labels.set(key, { name, state });
+    }
+  };
+  apply(previous.labelsAdded, 'added');
+  apply(previous.labelsRemoved, 'removed');
+  apply(next.labelsAdded, 'added');
+  apply(next.labelsRemoved, 'removed');
+  const fields = new Map<string, { name: string; from?: ProjectFieldUpdateValue; to: ProjectFieldUpdateValue }>();
+  for (const f of [...(previous.projectFields ?? []), ...(next.projectFields ?? [])]) {
+    const known = fields.get(f.name);
+    if (!known) fields.set(f.name, { ...f });
+    else fields.set(f.name, { name: f.name, ...('from' in known ? { from: known.from } : 'from' in f ? { from: f.from } : {}), to: f.to });
+  }
+  const effect: ActionEffect = {};
+  const added = [...labels.values()].filter((l) => l.state === 'added').map((l) => l.name);
+  const removed = [...labels.values()].filter((l) => l.state === 'removed').map((l) => l.name);
+  if (added.length > 0) effect.labelsAdded = added;
+  if (removed.length > 0) effect.labelsRemoved = removed;
+  const changedFields = [...fields.values()].filter((f) => !('from' in f) || f.from !== f.to);
+  if (changedFields.length > 0) effect.projectFields = changedFields;
+  if (previous.projectItemAdded || next.projectItemAdded) effect.projectItemAdded = true;
+  const comment = next.comment ?? previous.comment;
+  if (comment) effect.comment = comment;
+  if ('exitCode' in next || 'signal' in next) {
+    effect.exitCode = next.exitCode ?? null;
+    effect.signal = next.signal ?? null;
+  } else if ('exitCode' in previous || 'signal' in previous) {
+    effect.exitCode = previous.exitCode ?? null;
+    effect.signal = previous.signal ?? null;
+  }
+  if (Object.keys(effect).length === 0 && (previous.unchanged || next.unchanged)) effect.unchanged = true;
+  return Object.keys(effect).length > 0 ? effect : null;
+}
+
+/**
+ * Effect of a failed attempt (WI-33): what a `source.update` applied before it
+ * failed, the exit status of a `shell` action; `null` if nothing is known.
+ */
+export function failureEffect(type: string, details: Record<string, unknown> | undefined): ActionEffect | null {
+  if (type === 'source.update') {
+    const applied = details?.applied as SourceUpdateApplied | undefined;
+    if (!applied || typeof applied !== 'object') return null;
+    const effect = updateEffect(applied);
+    return effect.unchanged ? null : effect;
+  }
+  if (type === 'shell' && details && ('exitCode' in details || 'signal' in details)) {
+    const exitCode = typeof details.exitCode === 'number' ? details.exitCode : null;
+    const signal = typeof details.signal === 'string' ? details.signal : null;
+    return { exitCode, signal };
+  }
+  return null;
 }
 
 /** Dependencies of the performers. */
@@ -170,7 +259,11 @@ export async function performSourceUpdate(
     { labels: { add: config.labels.add, remove: config.labels.remove }, ...(config.project ? { project: config.project } : {}) },
     identity,
   );
-  return { externalKey: null, details: { changed: result.changed, ...(result.applied ? { applied: result.applied } : {}) } };
+  return {
+    externalKey: null,
+    details: { changed: result.changed, ...(result.applied ? { applied: result.applied } : {}) },
+    effect: updateEffect(result.changed ? result.applied : null),
+  };
 }
 
 /**
@@ -200,6 +293,7 @@ export async function performSourceComment(
       return {
         externalKey: existing.id,
         details: { reconciled: true, marker, ...(existing.url ? { url: existing.url } : {}) },
+        effect: { comment: { id: existing.id, url: existing.url ?? null, reconciled: true } },
       };
     }
   }
@@ -211,7 +305,7 @@ export async function performSourceComment(
   });
   const body = neutralizeHtmlComments(renderHookText(config.message, values, scope));
   const ref = await adapter.postComment(item, body, marker, identity);
-  return { externalKey: ref.id, details: { marker, ...(ref.url ? { url: ref.url } : {}) } };
+  return { externalKey: ref.id, details: { marker, ...(ref.url ? { url: ref.url } : {}) }, effect: { comment: { id: ref.id, url: ref.url ?? null } } };
 }
 
 /**
@@ -380,5 +474,5 @@ function shellAttemptResult(
       details: base,
     });
   }
-  return { externalKey: null, details: { exitCode: 0, logs } };
+  return { externalKey: null, details: { exitCode: 0, logs }, effect: { exitCode: 0 } };
 }

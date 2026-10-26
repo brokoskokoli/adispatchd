@@ -9,6 +9,7 @@ fields:
   - { field: project.Status, label: Status }
   - { field: run.last_status, label: Letzter Run }
   - { field: created_at, label: Erstellt }
+  - { field: history, label: Verlauf }     # link to the item history page (0.9.0, WI-33)
 sort:
   - field: project.Status          # stages in this order, other values after them, empty last
     order: [Todo, Ready, In Progress, Ready for Review, In Review, Done]

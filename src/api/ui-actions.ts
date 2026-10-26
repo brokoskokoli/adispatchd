@@ -103,7 +103,7 @@ export function commentSecrets(text: string, redact: Redactor): SecretFinding[] 
 // Rate limits
 
 /** Token bucket per key (refills `capacity` tokens per minute). */
-class RateLimiter {
+export class RateLimiter {
   private readonly buckets = new Map<string, { tokens: number; at: number }>();
   constructor(
     private readonly capacity: number,

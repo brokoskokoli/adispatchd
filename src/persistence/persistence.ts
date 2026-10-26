@@ -46,7 +46,7 @@ export function createRepositories(db: DatabaseSync, options: { clock?: Clock } 
     blocks,
     notifications: new NotificationRepository(db, clock),
     cronFirings: new CronFiringRepository(db, clock),
-    retention: new RetentionRepository(db),
+    retention: new RetentionRepository(db, clock),
     uiActions: new UiActionRepository(db, clock),
     transaction: (fn) => transaction(db, fn),
     afterCommit: (cb) => afterCommit(db, cb),

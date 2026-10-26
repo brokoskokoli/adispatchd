@@ -84,7 +84,11 @@ describe('source.update with project fields', () => {
     );
     expect(result).toEqual({
       changed: true,
-      applied: { projectFields: { Status: 'In Progress', Estimate: 3.5, Due: '2026-11-01', Sprint: 'Sprint 12', Notes: 'see "spec" {x}' } },
+      applied: {
+        projectFields: { Status: 'In Progress', Estimate: 3.5, Due: '2026-11-01', Sprint: 'Sprint 12', Notes: 'see "spec" {x}' },
+        // WI-33: old values as read before writing.
+        projectFieldsPrevious: { Status: 'Todo', Estimate: null, Due: null, Sprint: null, Notes: null },
+      },
     });
     expect(github.projectValues(project, REPO, 1)).toMatchObject({
       Status: 'In Progress',
@@ -126,7 +130,7 @@ describe('source.update with project fields', () => {
     expect(mutations()).toEqual([]);
 
     const cleared = await adapter.applyUpdate(itemOf(1), { project: { Notes: null, Estimate: null } }, 'maintainer');
-    expect(cleared).toEqual({ changed: true, applied: { projectFields: { Notes: null, Estimate: null } } });
+    expect(cleared).toEqual({ changed: true, applied: { projectFields: { Notes: null, Estimate: null }, projectFieldsPrevious: { Notes: 'x', Estimate: 2 } } });
     expect(mutations().map((m) => [m.name, m.variables.fieldId])).toEqual([
       ['clearProjectV2ItemFieldValue', field('Notes').id],
       ['clearProjectV2ItemFieldValue', field('Estimate').id],
@@ -140,7 +144,7 @@ describe('source.update with project fields', () => {
 
   it('adds the item to the project when it is not in it yet', async () => {
     const result = await source().applyUpdate(itemOf(1), { project: { Status: 'In Progress', Notes: null } }, 'maintainer');
-    expect(result).toEqual({ changed: true, applied: { projectFields: { Status: 'In Progress' }, projectItemAdded: true } });
+    expect(result).toEqual({ changed: true, applied: { projectFields: { Status: 'In Progress' }, projectFieldsPrevious: { Status: null }, projectItemAdded: true } });
     expect(mutations().map((m) => m.name)).toEqual(['addProjectV2ItemById', 'updateProjectV2ItemFieldValue']);
     expect(mutations()[0]?.variables).toEqual({ projectId: project.id, contentId: github.issue(REPO, 1).nodeId });
     expect(github.projectValues(project, REPO, 1)).toMatchObject({ Status: 'In Progress' });
@@ -273,7 +277,7 @@ describe('source.update with project fields', () => {
     const ok = await source().applyUpdate(itemOf(1), { labels: { add: ['in-progress'], remove: ['ready'] }, project: { Status: 'In Progress' } }, 'maintainer');
     expect(ok).toEqual({
       changed: true,
-      applied: { labelsAdded: ['in-progress'], labelsRemoved: ['ready'], projectFields: { Status: 'In Progress' } },
+      applied: { labelsAdded: ['in-progress'], labelsRemoved: ['ready'], projectFields: { Status: 'In Progress' }, projectFieldsPrevious: { Status: null } },
     });
     const order = github.requests.map((r) => (r.graphql ? (r.graphql.query.trimStart().startsWith('mutation') ? 'mutation' : 'query') : `${r.method} ${r.path}`));
     expect(order.indexOf('mutation')).toBeGreaterThan(order.lastIndexOf('DELETE /repos/example/project-a/issues/1/labels/ready'));
@@ -335,7 +339,7 @@ describe('source.update with project fields', () => {
     // The field was re-created on GitHub with a new ID.
     field('Notes').id = 'PVTF_recreated';
     const result = await adapter.applyUpdate(itemOf(1), { project: { Notes: 'b' } }, 'maintainer');
-    expect(result).toEqual({ changed: true, applied: { projectFields: { Notes: 'b' } } });
+    expect(result).toEqual({ changed: true, applied: { projectFields: { Notes: 'b' }, projectFieldsPrevious: { Notes: 'a' } } });
     expect(github.projectValues(project, REPO, 1)).toMatchObject({ Notes: 'b' });
     expect(github.projectMutations().map((m) => [m.variables.fieldId, m.status])).toEqual([
       [expect.stringMatching(/^PVTF_kw/), 200],
@@ -355,7 +359,12 @@ describe('source.update with project fields', () => {
       adapter.applyUpdate(itemOf(1), { labels: { add: ['in-progress'], remove: ['ready'] }, project: { Status: 'Review', Sprint: 'Sprint 13' } }, 'maintainer'),
     );
     expect(err.kind).toBe('transient');
-    expect(err.details?.applied).toEqual({ labelsAdded: ['in-progress'], labelsRemoved: ['ready'], projectFields: { Status: 'Review' } });
+    expect(err.details?.applied).toEqual({
+      labelsAdded: ['in-progress'],
+      labelsRemoved: ['ready'],
+      projectFields: { Status: 'Review' },
+      projectFieldsPrevious: { Status: null },
+    });
 
     // The item was added before the failure: reported as well (metadata cached again, Done's option ID now stale).
     await adapter.applyUpdate(itemOf(1), { project: { Status: 'Todo' } }, 'maintainer');
@@ -374,13 +383,13 @@ describe('source.update with project fields', () => {
     const late = github.createProject('example', { number: 40, fields: [{ name: 'Status', dataType: 'SINGLE_SELECT', options: ['Todo', 'Done'] }] });
     github.addProjectItem(late, REPO, 1, { Status: 'Todo' });
     const result = await source({ number: 40, fields: { Status: 'single_select' } }).applyUpdate(itemOf(1), { project: { Status: 'Done' } }, 'maintainer');
-    expect(result).toEqual({ changed: true, applied: { projectFields: { Status: 'Done' } } });
+    expect(result).toEqual({ changed: true, applied: { projectFields: { Status: 'Done' }, projectFieldsPrevious: { Status: 'Todo' } } });
     expect(github.projectMutations().map((m) => m.name)).toEqual(['addProjectV2ItemById', 'updateProjectV2ItemFieldValue']);
 
     // Proven absence (all memberships read) → reported as added.
     github.createIssue(REPO, { number: 2 });
     const fresh = await source({ number: 40, fields: { Status: 'single_select' } }).applyUpdate(itemOf(2), { project: { Status: 'Done' } }, 'maintainer');
-    expect(fresh.applied).toEqual({ projectFields: { Status: 'Done' }, projectItemAdded: true });
+    expect(fresh.applied).toEqual({ projectFields: { Status: 'Done' }, projectFieldsPrevious: { Status: null }, projectItemAdded: true });
   });
 
   it('the item query uses only generated identifiers', () => {

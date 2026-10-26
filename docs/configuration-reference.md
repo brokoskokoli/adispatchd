@@ -695,6 +695,10 @@ kann überall verwendet werden, wo Identities erlaubt sind (Source, `project.ide
 Schreib-Actions). **Kommentar-Marker** (`source.comment`-Idempotenz, §3.4.11) erkennt der Adapter bei
 `github_token` am **Autor-Login**: beim ersten Gebrauch fragt er `GET /user` ab und cacht den Login; ein Kommentar
 mit Marker zählt nur, wenn `user.login` gleich diesem Login ist (bei Apps: `performed_via_github_app.id`).
+**Item-Verlauf** (seit 0.9.0): Ereignisse der GitHub-Timeline gelten ebenso am Login als „eigen“. Mit einem
+persönlichen Token (PAT) sind das **alle** Änderungen dieses GitHub-Benutzers – auch die, die er selbst von Hand macht:
+passen sie zu einer Änderung der Historie, werden sie zusammengeführt (ausgeblendet), sonst als „own identity“ statt
+„external“ markiert. Für eine klare Trennung einen eigenen Bot-Account oder eine GitHub App verwenden.
 
 **`ui_actions`** (seit 0.4.0): Freischaltung einer Identity für das **Item-Panel** der Web-UI (Menü „UI Actions“, Link
 „Act as identity…“ im Run-Detail und in Views). Ein angemeldeter `admin` kann dort auf ein Issue/PR als diese Identity
@@ -1483,6 +1487,7 @@ fields:
   - { field: run.last_status, label: Status }
   - { field: run.last_result.message, label: Ergebnis }
   - { field: updated_at, label: Aktualisiert }
+  - { field: history, label: Verlauf }         # Link auf die Seite „Item-Verlauf“ (seit 0.9.0, §4.8)
 sort: { field: updated_at, direction: desc }
 ```
 
@@ -1494,11 +1499,11 @@ sort: { field: updated_at, direction: desc }
 | `filter` | Filter-AST oder ID eines benannten Filters (§3.6) | nein | alles | §4; inkl. `run.last_*` | nur Items mit Ergebnis `true` werden gezeigt |
 | `shell_filter` | – | – | | **verboten** (Fehler) | Views führen nie Skripte aus |
 | `fields` | Liste | ja | | ≥ 1 | Spalten in Reihenfolge |
-| `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen; `project.*` nur, wenn **alle** Sources der View es mit gleicher Art deklarieren (§4.7.1) | Feldname (§4.7, §4.8); `object[]`-Felder (`closing_prs`) erscheinen als Liste, z. B. `#12 open, #9 merged`, jeder Eintrag als Link auf seine `url` |
+| `fields[].field` | String | ja | | muss im Feldkatalog des Adaptertyps oder in §4.8 stehen; `project.*` nur, wenn **alle** Sources der View es mit gleicher Art deklarieren (§4.7.1) | Feldname (§4.7, §4.8); `object[]`-Felder (`closing_prs`) erscheinen als Liste, z. B. `#12 open, #9 merged`, jeder Eintrag als Link auf seine `url`; `history` (seit 0.9.0) erscheint als Link „History →“ auf den Item-Verlauf, auch in Abschnitten und Dashboard-View-Widgets |
 | `fields[].label` | String | nein | Feldname | | Spaltenüberschrift |
 | `fields[].link` | String (Feldname, geprüft wie `field`) | nein | `link` der Felddefinition (`number`, `title` → `url`; `work_pr` → `work_pr_url`, also der PR) | | Feld, dessen Wert (nur absolute `http(s)`-URL) als Link dient |
 | `sort` | Sortierschlüssel oder Liste von 1–5 Sortierschlüsseln (seit 0.5.0) | nein | Item-Schlüssel | | erster Schlüssel entscheidet, bei Gleichstand der nächste, zuletzt der Item-Schlüssel (natürlich) |
-| `sort[].field` | String | ja (je Schlüssel) | | geprüft wie `fields[].field`; kein `object[]`-Feld (`Views cannot be sorted by "closing_prs" (type object[])`) | Sortierfeld |
+| `sort[].field` | String | ja (je Schlüssel) | | geprüft wie `fields[].field`; kein `object[]`-Feld (`Views cannot be sorted by "closing_prs" (type object[])`), nicht `history` (`Views cannot be sorted by "history": it is a link column …`) | Sortierfeld |
 | `sort[].direction` | Enum | nein | `asc` | `asc`, `desc` | leere Werte immer zuletzt; mit `order` kehrt `desc` die Liste um |
 | `sort[].order` | Liste String (seit 0.5.0) | nein | | 1–100 Werte, eindeutig; nur Felder vom Typ `string` (§3.5.1) | eigene Wertereihenfolge |
 | `group_by_first` | Boolean (seit 0.5.0) | nein | `false` | erster Sortierschlüssel (der View oder eines Abschnitts) braucht `order` | Gruppenzeile je Wert des ersten Schlüssels |
@@ -2171,6 +2176,15 @@ greater_than, less_than – als Zeitpunkt verglichen).
 | `run.last_started_at` | date | Start |
 | `run.last_finished_at` | date | Ende |
 
+**Feld `history` (seit 0.9.0).** Reine Link-Spalte für `fields` (Views, Abschnitte, Dashboard-View-Widgets): Wert
+ist die UI-Route des Item-Verlaufs `#/items/<source>/<id>`, angezeigt als „History →“. Das Feld ist in Views
+**nicht** filter- und nicht sortierbar (`Field "history" (type string) cannot be used in filters; it is a link column
+for views (fields) only, …` bzw. `Views cannot be sorted by "history": …`) und in Workflows unbekannt.
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `history` | string | Link auf die Seite „Item-Verlauf“ (Runs, Hooks mit Wirkung, Retry-Blocks, UI-Aktionen des Items) |
+
 ---
 
 ## 5. Platzhalter-Referenz
@@ -2686,6 +2700,7 @@ fields:
   - { field: run.last_workflow, label: Letzter Agent }
   - { field: run.last_result.message, label: Ergebnis }
   - { field: updated_at, label: Aktualisiert }
+  - { field: history, label: Verlauf }    # Link „History →“ auf den Item-Verlauf (seit 0.9.0)
 sort: { field: updated_at, direction: desc }
 ```
 
@@ -3352,6 +3367,24 @@ filter:
     - { field: labels, operator: contains, value: [a, b] }     # Liste nur mit "in"
     - { field: author, operator: equals, value: [alice, bob] }
 execute: { type: shell, command: scripts/coder.sh }
+```
+
+**Link-Spalte `history` als Filter oder Sortierung** (seit 0.9.0) – `history` ist nur eine Spalte (§4.8).
+
+```yaml
+# example: err-history
+# extends: github
+# invalid
+# expect: views/history.yaml: filter.field: Field "history" (type string) cannot be used in filters; it is a link column for views (fields) only, not a value to filter or sort by
+# expect: views/history.yaml: sort[0].field: Views cannot be sorted by "history": it is a link column to the item history (use it in "fields" only)
+# file: views/history.yaml
+id: history
+sources: [project_a]
+filter: { field: history, operator: contains, value: "#/items" }
+fields:
+  - { field: title }
+  - { field: history }
+sort: [ { field: history } ]
 ```
 
 **Relatives `working_directory` / Wurzel nicht am Anfang**
