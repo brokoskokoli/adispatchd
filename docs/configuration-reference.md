@@ -1828,8 +1828,8 @@ nicht bereit, ungeschützte Bindung) erscheinen **immer** oben, unabhängig vom 
 | `scheduler` | Zustand, Pause/Resume, Drain, Cancel All | – |
 | `capacity` | Kapazität, Limit-Override, Auslastung je Workflow | – |
 | `attention` | Retry-Blocks, gescheiterte Actions/Notifications | – |
-| `active_runs` | laufende Runs | `limit` (1–100, Default 100), `workflows` (Liste von Workflow-IDs; Default: alle) |
-| `recent_runs` | zuletzt beendete Runs | `limit` (1–50, Default 10), `workflows` |
+| `active_runs` | laufende Runs; Spalte „Item“ mit Link zum Item und „history“ zum Item-Verlauf | `limit` (1–100, Default 100), `workflows` (Liste von Workflow-IDs; Default: alle) |
+| `recent_runs` | zuletzt beendete Runs, Spalte „Item“ wie bei `active_runs` | `limit` (1–50, Default 10), `workflows` |
 | `view` | eine View (§3.5) mit voller Funktion: Abschnitte, Sortierung im Browser, Gruppenzeilen, „act…“ öffnet das Item-Panel mit allen Aktionen, „Refresh“, Link „Open view →“; gekürzte Tabellen enden mit „N more …“ | `view` (Pflicht, View-ID), `sections` (Abschnitts-Titel; Default: alle), `limit` (Zeilen je Abschnitt bzw. Tabelle, 1–200, Default 50), `refresh` (Dauer ≥ 15s, Default 60s) |
 | `tabs` | Reiter, jeder mit eigenem Layout | `tabs` (Pflicht, 1–12 Einträge), `default` (ID des anfangs offenen Reiters) |
 

@@ -5,6 +5,11 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+### Geändert
+
+- **Dashboard-Widgets `active_runs` und `recent_runs` verlinken den Item-Verlauf** (WI-34): hinter dem Item steht
+  „history“ wie in der Run-Liste; `recent_runs` hat dafür eine neue Spalte „Item“.
+
 ## [0.9.0] – 2026-10-26
 
 ### Hinzugefügt
