@@ -33,6 +33,7 @@ import {
 } from '../ui.js';
 import { createViewRenderer } from '../view-render.js';
 import { createInfoSection } from './dashboard-info.js';
+import { historyLinkForKey } from './item.js';
 import type { DashboardFeeds, FeedState } from './dashboard-feeds.js';
 import { serverSection } from './server.js';
 
@@ -276,6 +277,16 @@ function attentionWidget(feeds: DashboardFeeds, title: string | null): Mounted {
   });
 }
 
+/** Item of a run: link to the item (or its key, else the trigger) and to its history (WI-34, as on the runs page). */
+function itemCell(r: RunSummary): HTMLElement {
+  return h(
+    'span',
+    null,
+    r.sourceUrl ? externalLink(r.sourceUrl, r.sourceItemKey ?? r.sourceUrl) : text(r.sourceItemKey ?? r.triggerType),
+    r.sourceItemKey ? [' ', historyLinkForKey(r.sourceItemKey, 'history')] : null,
+  );
+}
+
 function runsWidget(feeds: DashboardFeeds, w: Extract<DashboardWidget, { widget: 'active_runs' | 'recent_runs' }>): Mounted {
   const active = w.widget === 'active_runs';
   const base = w.title ?? (active ? 'Active runs' : 'Recently finished');
@@ -297,7 +308,7 @@ function runsWidget(feeds: DashboardFeeds, w: Extract<DashboardWidget, { widget:
             page.runs.map((r) => [
               runLink(r.id),
               r.workflowName ?? r.workflowId,
-              r.sourceUrl ? externalLink(r.sourceUrl, r.sourceItemKey ?? r.sourceUrl) : text(r.sourceItemKey ?? r.triggerType),
+              itemCell(r),
               runOutcomeBadges(r),
               r.startedAt ? h('span', { title: r.startedAt }, formatRelative(r.startedAt, Date.now())) : text(null),
               text(r.statusMessage),
@@ -311,8 +322,8 @@ function runsWidget(feeds: DashboardFeeds, w: Extract<DashboardWidget, { widget:
         rerender(
           body,
           table(
-            ['Run', 'Workflow', 'Outcome', 'Finished', 'Duration', 'Message'],
-            page.runs.map((r) => [runLink(r.id), r.workflowName ?? r.workflowId, runOutcomeBadges(r), time(r.finishedAt), formatDuration(r.durationMs), text(r.resultMessage ?? r.finalReason)]),
+            ['Run', 'Workflow', 'Item', 'Outcome', 'Finished', 'Duration', 'Message'],
+            page.runs.map((r) => [runLink(r.id), r.workflowName ?? r.workflowId, itemCell(r), runOutcomeBadges(r), time(r.finishedAt), formatDuration(r.durationMs), text(r.resultMessage ?? r.finalReason)]),
             { empty: 'No finished runs yet.' },
           ),
           h('p', null, routeLink(['runs'], 'All runs →', allQuery)),
