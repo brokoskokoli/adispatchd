@@ -72,8 +72,8 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   fresh from GitHub), the **path** of all runs with their results and a filterable **timeline** of run starts and
   ends, hook chains with what each action changed (labels added/removed, project field `old → new`, comment link,
   exit status), retry blocks and UI actions; optionally merged with the issue's GitHub timeline (external changes
-  marked, own changes not shown twice). Linked from runs, the item panel, the Blocked page and views (field
-  `history`).
+  marked, own changes not shown twice). Linked from runs, the dashboard run widgets, the item panel, the Blocked
+  page and views (field `history`).
 - **Server resources** – a compact strip at the top of the dashboard (CPU with a 15-minute sparkline, memory, the
   fullest disk, load and the busiest process groups, own runs first); the **Resources** tab shows CPU over time stacked
   by the daemon, each run (click through to the run), hooks/checks and the busiest foreign processes, plus memory and

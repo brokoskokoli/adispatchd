@@ -75,7 +75,8 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
   GitHub gelesen), der **Pfad** aller Runs mit Ergebnis und eine filterbare **Zeitleiste** mit Run-Start und -Ende,
   Hook-Ketten mit der Wirkung jeder Action (Labels +/−, Projektfeld `alt → neu`, Kommentar-Link, Exit-Status),
   Retry-Blocks und UI-Aktionen; optional zusammen mit der GitHub-Timeline des Issues (externe Änderungen markiert,
-  eigene nicht doppelt). Verlinkt aus Runs, Item-Panel, Blocked-Seite und Views (Feld `history`).
+  eigene nicht doppelt). Verlinkt aus Runs, den Run-Widgets des Dashboards, Item-Panel, Blocked-Seite und Views
+  (Feld `history`).
 - **Server-Ressourcen:** oben im Dashboard eine kompakte Leiste (CPU mit Verlauf der letzten 15 Minuten, RAM, die am
   stärksten belegte Platte, Load und die größten Prozessgruppen, eigene Runs zuerst); der Reiter **Resources** zeigt die
   CPU über die Zeit, gestapelt nach Daemon, jedem Run (Klick → Run), Hooks/Checks und den größten fremden Prozessen,

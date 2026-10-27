@@ -287,7 +287,7 @@ function itemCell(r: RunSummary): HTMLElement {
   );
 }
 
-function runsWidget(feeds: DashboardFeeds,w: Extract<DashboardWidget, { widget: 'active_runs' | 'recent_runs' }>): Mounted {
+function runsWidget(feeds: DashboardFeeds, w: Extract<DashboardWidget, { widget: 'active_runs' | 'recent_runs' }>): Mounted {
   const active = w.widget === 'active_runs';
   const base = w.title ?? (active ? 'Active runs' : 'Recently finished');
   const filtered = w.workflows !== null;
