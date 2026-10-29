@@ -128,4 +128,86 @@ describe('Scheduler with a hub (WI-35)', () => {
     expect(result.capacity.hub).toBeUndefined();
     expect(result.candidates[0]?.decision).toBe('would_start');
   });
+
+  describe('the slot is given back on every path that does not start a run', () => {
+    /** A controller whose `startRun` fails (the real one finalizes a refused run itself). */
+    function failingController(get: () => { status: any; canStartAutomatically(): boolean; canStartManually(): boolean }) {
+      return {
+        get status() {
+          return get().status;
+        },
+        canStartAutomatically: () => get().canStartAutomatically(),
+        canStartManually: () => get().canStartManually(),
+        startRun: () => {
+          throw new Error('boom');
+        },
+      };
+    }
+
+    it('source: workflow disabled meanwhile (workflow_unavailable)', async () => {
+      s.workflow('coder', sourceWorkflow('coder', s.env.script('ok.sh', 'exit 0'), READY));
+      const b = await s.build({ hubSlots: hub });
+      hub.beforeGrant = () => b.config.setWorkflowOverrides('coder', { enabled: false });
+      await b.scheduler.planOnce();
+      expect(b.scheduler.lastDiagnosis('coder')?.candidates[0]?.decision).toBe('workflow_unavailable');
+      expect([hub.held, hub.released]).toEqual([0, 1]);
+    });
+
+    it('source: item lock taken meanwhile (locked)', async () => {
+      s.workflow('coder', sourceWorkflow('coder', s.env.script('ok.sh', 'exit 0'), `max_concurrent: 5\n${READY}`));
+      const b = await s.build({ hubSlots: hub });
+      hub.beforeGrant = () => {
+        s.env.p.runs.reserve({ workflowId: 'coder', triggerType: 'source', sourceId: 'repo_a', sourceItemKey: ITEM_KEY, configSnapshot: b.config.snapshotWorkflow('coder') });
+        hub.beforeGrant = null;
+      };
+      await b.scheduler.planOnce();
+      expect(b.scheduler.lastDiagnosis('coder')?.candidates[0]?.decision).toBe('locked');
+      expect([hub.held, hub.released]).toEqual([0, 1]);
+    });
+
+    it('source: the controller refuses the start (start_failed)', async () => {
+      s.workflow('coder', sourceWorkflow('coder', s.env.script('ok.sh', 'exit 0'), READY));
+      let real!: Awaited<ReturnType<typeof s.build>>['h']['controller'];
+      const b = await s.build({ hubSlots: hub, controller: failingController(() => real) });
+      real = b.h.controller;
+      await b.scheduler.planOnce();
+      expect(b.scheduler.lastDiagnosis('coder')?.candidates[0]?.decision).toBe('start_failed');
+      expect([hub.held, hub.released]).toEqual([0, 1]);
+    });
+
+    async function cronTick(b: Awaited<ReturnType<typeof s.build>>): Promise<void> {
+      b.scheduler.start();
+      await b.scheduler.whenIdle();
+      s.clock.advance(60_000);
+      await b.scheduler.whenIdle();
+    }
+
+    it('cron: gate closed, block created, start refused', async () => {
+      s.workflow('nightly', scheduleWorkflow('nightly', s.env.script('ok.sh', 'exit 0'), '* * * * *', 'max_concurrent: 5'));
+      const b = await s.build({ hubSlots: hub });
+      hub.beforeGrant = () => b.h.controller.pause();
+      await cronTick(b);
+      expect(s.env.p.cronFirings.listForWorkflow('nightly')[0]?.decision).toBe('skipped_paused');
+      expect([hub.held, hub.released]).toEqual([0, 1]);
+      b.h.controller.resume();
+      hub.beforeGrant = () => {
+        s.env.p.blocks.create({ workflowId: 'nightly', itemKey: null, reason: 'x' });
+        hub.beforeGrant = null;
+      };
+      s.clock.advance(60_000);
+      await b.scheduler.whenIdle();
+      expect(s.env.p.cronFirings.listForWorkflow('nightly')[0]?.decision).toBe('skipped_blocked');
+      expect([hub.held, hub.released]).toEqual([0, 2]);
+    });
+
+    it('cron: the controller refuses the start (start_failed)', async () => {
+      s.workflow('nightly', scheduleWorkflow('nightly', s.env.script('ok.sh', 'exit 0'), '* * * * *', 'max_concurrent: 5'));
+      let real!: Awaited<ReturnType<typeof s.build>>['h']['controller'];
+      const b = await s.build({ hubSlots: hub, controller: failingController(() => real) });
+      real = b.h.controller;
+      await cronTick(b);
+      expect(s.env.p.cronFirings.listForWorkflow('nightly')[0]?.decision).toBe('start_failed');
+      expect([hub.held, hub.released]).toEqual([0, 1]);
+    });
+  });
 });
