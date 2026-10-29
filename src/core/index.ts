@@ -8,6 +8,7 @@ export * from './display-text.js';
 export * from './duration.js';
 export * from './errors.js';
 export * from './glob.js';
+export * from './hub-slots.js';
 export * from './ids.js';
 export * from './logger.js';
 export * from './paths.js';

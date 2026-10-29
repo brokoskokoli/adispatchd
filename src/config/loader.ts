@@ -67,7 +67,8 @@ export type LoadConfigResult =
   | { ok: true; config: LoadedConfig; warnings: ConfigIssue[] }
   | { ok: false; errors: ConfigIssue[]; warnings: ConfigIssue[] };
 
-interface ParsedFile {
+/** Parsed YAML file (shared with the hub loader). */
+export interface ParsedFile {
   file: string;
   doc: Document | undefined;
   lineCounter: LineCounter;
@@ -213,7 +214,7 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
   return { ok: true, config: deepFreeze(config), warnings: result.warnings };
 }
 
-function finish(
+export function finish(
   issues: IssueCollector,
   files: Map<string, ParsedFile>,
 ): { ok: false; errors: ConfigIssue[]; warnings: ConfigIssue[] } {
@@ -239,7 +240,7 @@ function finish(
  * Read and parse one YAML file. Returns `null` if the file does not exist,
  * `undefined` if it exists but is unusable (issue recorded).
  */
-async function readYaml(dir: string, file: string, issues: IssueCollector): Promise<ParsedFile | null | undefined> {
+export async function readYaml(dir: string, file: string, issues: IssueCollector): Promise<ParsedFile | null | undefined> {
   const full = path.join(dir, file);
   let text: string;
   try {
@@ -313,7 +314,7 @@ function fileStem(file: string): string {
   return path.basename(file, path.extname(file));
 }
 
-function parseWith<S extends z.ZodType>(
+export function parseWith<S extends z.ZodType>(
   schema: S,
   parsed: ParsedFile | undefined,
   file: string,
