@@ -1,0 +1,35 @@
+# hub.yaml – example of a hub with two workspaces in the recommended server layout
+# (docs/operations.md, "Hub"). Copy it to /etc/adispatchd-hub/hub.yaml, or let
+# "adispatch hub init --workspaces-data-dir …" create it together with the workspace directories.
+#
+#   /etc/adispatchd-hub/hub.yaml                         this file
+#   /etc/adispatchd-hub/workspaces/<id>/config/          complete configuration of a workspace (like examples/config)
+#   /var/lib/adispatchd-hub/hub/                         data dir of the hub (--data-dir of "hub start")
+#   /var/lib/adispatchd-hub/workspaces/<id>/             data dir of a workspace (database, logs, runs)
+#
+# Validate: adispatch hub validate --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
+# Service:  adispatch service install --hub --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
+
+hub:
+  # Limit of simultaneously running automatic runs across ALL workspaces (manual starts are not limited).
+  max_concurrent: 5
+  # Overview page, hub API and the workspace UIs below /w/<id>/. Behind a reverse proxy add its host name.
+  server: { host: 127.0.0.1, port: 8090, allowed_hosts: [] }
+
+# Login of the hub (optional, same section as in config.yaml). Without it keep the server on 127.0.0.1
+# or put an authenticating proxy in front. Hash: adispatch auth hash-password
+# auth:
+#   mode: password
+#   users:
+#     - { name: admin, password_hash_env: HUB_PW_ADMIN, role: admin }
+
+workspaces:
+  - id: coder
+    config_dir: workspaces/coder/config                  # relative paths are relative to this file's directory
+    data_dir: /var/lib/adispatchd-hub/workspaces/coder   # outside every config dir
+    port: 8091                                           # loopback port of the instance (unique)
+  - id: docs
+    config_dir: workspaces/docs/config
+    data_dir: /var/lib/adispatchd-hub/workspaces/docs
+    port: 8092
+    enabled: true

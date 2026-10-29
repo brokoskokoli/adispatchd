@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadHubConfig, DEFAULT_HUB_MAX_CONCURRENT, DEFAULT_HUB_PORT, type LoadHubConfigResult } from './hub.js';
 
@@ -177,5 +178,20 @@ describe('loadHubConfig', () => {
   it('refuses the reserved hub headers as identity header', async () => {
     const { result } = await load(['auth:', '  mode: trusted_header', '  trusted_header: { header: X-Adispatch-Hub-User }', 'workspaces: []', ''].join('\n'));
     expect(errors(result).join('\n')).toContain('This header cannot carry the user');
+  });
+});
+
+describe('examples/hub', () => {
+  it('is a valid hub configuration in the documented server layout', async () => {
+    const dir = fileURLToPath(new URL('../../examples/hub', import.meta.url));
+    const result = await loadHubConfig(dir, { dataDir: '/var/lib/adispatchd-hub/hub' });
+    expect(errors(result)).toEqual([]);
+    expect(result.ok && result.warnings).toEqual([]);
+    if (!result.ok) return;
+    expect(result.config.workspaces.map((w) => [w.id, w.port, w.dataDir])).toEqual([
+      ['coder', 8091, '/var/lib/adispatchd-hub/workspaces/coder'],
+      ['docs', 8092, '/var/lib/adispatchd-hub/workspaces/docs'],
+    ]);
+    expect(result.config.workspaces[0]?.configDir).toBe(path.join(dir, 'workspaces/coder/config'));
   });
 });

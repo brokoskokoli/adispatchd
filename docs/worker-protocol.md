@@ -197,7 +197,7 @@ mv "$tmp" "$ADISPATCH_RESULT_FILE"
   Container selbst (Cancel, Timeout, Recovery nach Neustart über das Label `adispatch.instance`).
 - Nach einem Absturz des Orchestrators beendet die Recovery verwaiste Worker nur bei sicher verifizierter Identität
   (PID + Startzeit/Boot-ID); sonst `recovery_pending` (sichtbar, kein Doppelstart). Unter systemd beendet systemd die
-  Worker beim Absturz ohnehin mit der cgroup (siehe [operations.md](operations.md#systemd)).
+  Worker beim Absturz ohnehin mit der cgroup (siehe [operations.md](operations.md#hub-als-systemd-dienst-seit-0100-wi-37)).
 
 ## Slot-Protokoll (Hub, seit 0.10.0)
 
