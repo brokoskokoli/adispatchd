@@ -573,7 +573,8 @@ export function registerItemHistoryRoutes(app: FastifyInstance, deps: ItemHistor
       url: /^https?:\/\//i.test(item.url) ? item.url : '',
       type: item.type,
       repository: adapter.repository ?? null,
-      title: typeof f.title === 'string' ? f.title : '',
+      // Artifact items (WI-35) have a name instead of a title.
+      title: typeof f.title === 'string' ? f.title : typeof f.name === 'string' ? f.name : '',
       state: typeof f.state === 'string' ? f.state : null,
       labels: Array.isArray(f.labels) ? f.labels.filter((l): l is string => typeof l === 'string') : [],
       projectFields,

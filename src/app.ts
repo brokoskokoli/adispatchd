@@ -24,6 +24,7 @@ import {
   systemClock,
   systemTimers,
   type AccessToken,
+  type ArtifactCatalog,
   type Clock,
   type ContainerEngine,
   type CredentialProvider,
@@ -34,8 +35,10 @@ import {
   type Logger,
   type LogLevel,
   type SourceAdapter,
+  type SourceAdapterDeps,
   type Timers,
 } from './core/index.js';
+import { ArtifactService } from './artifacts/index.js';
 import { ConfigManager, isIdentityForgeableLocally, type IdentityConfig, type LoadedConfig, type ReloadResult } from './config/index.js';
 import {
   CompositeCredentialProvider,
@@ -60,7 +63,7 @@ import {
 import { Scheduler } from './scheduler/index.js';
 import { DashboardInfoService, type DashboardInfoServiceOptions } from './dashboard/index.js';
 import { ParameterOptionsService } from './parameter-options/index.js';
-import { createGitHubSourceFactory } from './sources/index.js';
+import { createArtifactSourceFactory, createGitHubSourceFactory } from './sources/index.js';
 import { ViewService } from './views/index.js';
 import { AuthService, createApiServer, type UiActionLimits, EventHub, removeControlToken, writeControlToken, type AuthServiceOptions, type ReadinessReport } from './api/index.js';
 import { createSystemProbe, ResourceMonitor, type SystemProbe } from './monitoring/index.js';
@@ -76,6 +79,8 @@ export const DEFAULT_CANCEL_TIMEOUT_MS = 2 * 60_000;
 // ---------------------------------------------------------------------------
 // Source adapters and credentials (shared with `workflow dry-run`)
 
+const EMPTY_ARTIFACT_CATALOG: ArtifactCatalog = { list: () => [], get: () => null };
+
 /** Dependencies for {@link SourceRegistry}. */
 export interface SourceRegistryDeps {
   clock?: Clock;
@@ -86,6 +91,8 @@ export interface SourceRegistryDeps {
   /** Shared redactor: keys and tokens are registered here (Logger uses the same instance). */
   redactor?: SecretRedactor;
   logger?: Logger;
+  /** Artifact catalogue of the artifacts source (WI-35); default: empty (e.g. offline dry-run). */
+  artifacts?: ArtifactCatalog;
 }
 
 /**
@@ -135,6 +142,10 @@ export class SourceRegistry implements CredentialProvider {
     const factory = createGitHubSourceFactory();
     const next = new Map(this.adapters);
     for (const source of Object.values(config.sources)) {
+      if (source.type === 'artifacts') {
+        next.set(source.id, createArtifactSourceFactory(this.deps.artifacts ?? EMPTY_ARTIFACT_CATALOG).create(source.id, {}, this.adapterDeps()));
+        continue;
+      }
       next.set(
         source.id,
         factory.create(
@@ -155,16 +166,20 @@ export class SourceRegistry implements CredentialProvider {
                 }
               : {}),
           },
-          {
-            credentials: this,
-            logger: this.deps.logger?.child({ component: 'source', sourceId: source.id }) ?? noopLogger,
-            clock: this.clock,
-            ...(this.deps.fetch ? { fetch: this.deps.fetch } : {}),
-          },
+          this.adapterDeps(source.id),
         ),
       );
     }
     this.adapters = next;
+  }
+
+  private adapterDeps(sourceId?: string): SourceAdapterDeps {
+    return {
+      credentials: this,
+      logger: this.deps.logger?.child({ component: 'source', ...(sourceId ? { sourceId } : {}) }) ?? noopLogger,
+      clock: this.clock,
+      ...(this.deps.fetch ? { fetch: this.deps.fetch } : {}),
+    };
   }
 
   getToken(identity: IdentityRef, options?: TokenRequestOptions): Promise<AccessToken> {
@@ -310,6 +325,8 @@ export interface App {
   readonly notifications: NotificationService;
   readonly views: ViewService;
   readonly retention: RetentionService;
+  /** Artifacts (WI-35). */
+  readonly artifacts: ArtifactService;
   /** Dashboard info tiles (WI-24). */
   readonly dashboard: DashboardInfoService;
   readonly events: EventHub;
@@ -374,16 +391,26 @@ export async function createApp(options: AppOptions): Promise<App> {
   }
   const repos = persistence;
 
+  const bus = new RunEventBus(logger);
+  // Artifacts (WI-35): metadata in SQLite, contents below data-dir/artifacts; also the catalogue of the artifacts source.
+  const artifacts = new ArtifactService({
+    repositories: repos,
+    dataDir,
+    clock,
+    logger,
+    onCreated: (artifact) => bus.publish({ type: 'artifact.created', artifact }),
+    onDeleted: (artifact) => bus.publish({ type: 'artifact.deleted', artifact }),
+  });
   const sources = new SourceRegistry(config.current, {
     clock,
     redactor,
     logger,
+    artifacts,
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.env ? { env: options.env } : {}),
   });
   const sourceLookup = (id: string): SourceAdapter | undefined => sources.get(id);
 
-  const bus = new RunEventBus(logger);
   const publisher = new PersistedEventPublisher(repos, bus);
   const events = new EventHub({
     bus,
@@ -436,6 +463,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     notifier: notifications,
     maxLogBytesPerRun: () => config.current.global.retention.maxLogSizePerRunBytes,
     secretValues: () => redactor.values(),
+    artifacts,
   });
   // WI-31: run-time options of enum parameters (GitHub branches/tags, scripts) for the start form and the start check.
   const parameterOptions = new ParameterOptionsService({
@@ -479,6 +507,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     repositories: repos,
     dataDir,
     settings: () => config.current.global.retention,
+    artifacts,
     clock,
     timers,
     logger,
@@ -627,6 +656,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     views,
     notifications,
     retention,
+    artifacts,
     dashboard,
     events,
     monitor,
@@ -797,6 +827,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     notifications,
     views,
     retention,
+    artifacts,
     dashboard,
     events,
     auth,

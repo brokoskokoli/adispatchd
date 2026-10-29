@@ -106,6 +106,12 @@ sources:
     #     Status: single_select
     #     Priority: single_select
     #     Estimate: number    # kinds: single_select, text, number, date, iteration
+  # Artifacts (files/folders that workflows produce with execute.artifacts) as items of their own source,
+  # so that another workflow can process them (trigger: { type: source, source: artifacts }). No identity.
+  # Such a workflow must exclude itself in its filter, e.g. not: { field: attempted_by, operator: contains, value: <id> }
+  # (attempted_by = completed runs, consumed_by = successful runs only).
+  # artifacts:
+  #   type: artifacts
 `;
 
 const IDENTITIES_YAML = `# identities.yaml – GitHub App identities, one per role (Spec §5.3).
@@ -225,6 +231,9 @@ execute:
   #   - .agent/transcript.jsonl
   #   - .agent/gate/*.log     # relative globs: *, ?, ** (no "..", no absolute paths, symlinks are never followed)
   # keep_max_size: 100MB      # total per run (default 100MB)
+  # Files or folders stored as artifacts after the run (see sources.yaml: type artifacts); a missing path is a warning:
+  # artifacts:
+  #   - { name: 'Report {run.id}', type: report, path: out/report.pdf }   # required: true = technical failure
 
 retry:
   max_technical_failures: 3 # consecutive crashes/timeouts/start errors → retry block (remove in UI)

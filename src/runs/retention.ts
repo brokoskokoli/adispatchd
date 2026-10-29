@@ -1,8 +1,8 @@
 /**
  * Periodic retention (Spec §5.1, §21): deletes old runs (DB rows incl.
  * events/actions, `runs/<id>/` incl. kept files, `logs/<id>/`, the workspace below
- * `workspace.base_dir`), cleared blocks, finished notifications and old cron
- * firings according to `retention.*`.
+ * `workspace.base_dir`), cleared blocks, finished notifications, old cron
+ * firings and old artifacts (WI-35, `retention.artifacts`) according to `retention.*`.
  *
  * Protection rules are enforced by the persistence layer and re-checked in
  * the deleting transaction: active runs / lock holders, unfinished or failed
@@ -31,6 +31,7 @@ import {
   type Timers,
 } from '../core/index.js';
 import type { RetentionConfig } from '../config/index.js';
+import type { ArtifactService } from '../artifacts/index.js';
 import { removeTokenDirs } from '../executors/index.js';
 import { INSTANCE_LOCK_FILES, type Repositories, type RunRetentionCategory } from '../persistence/index.js';
 import { removeWorkspace } from './workspace.js';
@@ -53,6 +54,10 @@ export interface RetentionReport {
   deletedCronFirings: number;
   /** Audit entries of UI actions (WI-27) older than `retention.ui_actions`. */
   deletedUiActions: number;
+  /** Artifacts (WI-35) older than `retention.artifacts`. */
+  deletedArtifacts: number;
+  /** Orphaned artifact directories (WI-35) removed. */
+  artifactOrphansRemoved: number;
   orphanDirsRemoved: number;
   /** Left-over token directories (WI-18) removed. */
   tokenDirsRemoved: number;
@@ -66,6 +71,8 @@ export interface RetentionServiceOptions {
   dataDir: string;
   /** Live retention settings (`config.global.retention`). */
   settings: () => RetentionConfig;
+  /** Artifacts (WI-35): expiry by `retention.artifacts` and removal of orphaned directories. */
+  artifacts?: Pick<ArtifactService, 'expire' | 'sweepOrphans'>;
   clock?: Clock;
   timers?: Timers;
   logger?: Logger;
@@ -150,6 +157,8 @@ export class RetentionService {
       deletedNotifications: 0,
       deletedCronFirings: 0,
       deletedUiActions: 0,
+      deletedArtifacts: 0,
+      artifactOrphansRemoved: 0,
       orphanDirsRemoved: 0,
       tokenDirsRemoved: 0,
       errors: [],
@@ -172,6 +181,16 @@ export class RetentionService {
     const firingsBefore = cutoff(settings.completedRunsMs ?? CRON_FIRINGS_FALLBACK_MS);
     if (firingsBefore) report.deletedCronFirings = retention.deleteCronFirings(firingsBefore);
     report.deletedUiActions = this.options.repositories.uiActions?.deleteOlderThan(cutoff(settings.uiActionsMs)) ?? 0;
+    const artifacts = this.options.artifacts;
+    const artifactsBefore = cutoff(settings.artifactsMs);
+    if (artifacts && !this.stopped) {
+      if (artifactsBefore) {
+        const res = await artifacts.expire(artifactsBefore);
+        report.deletedArtifacts = res.deleted;
+        for (const message of res.errors) report.errors.push({ message: `artifacts: ${message}` });
+      }
+      report.artifactOrphansRemoved = await artifacts.sweepOrphans();
+    }
     const runDirNames = await readdir(dataPaths(this.options.dataDir).runsDir).catch(() => [] as string[]);
     if (!this.stopped) await this.removeOrphans(report, runDirNames);
     if (!this.stopped) await this.removeTokenFiles(report, runDirNames);
@@ -184,6 +203,8 @@ export class RetentionService {
       deletedNotifications: report.deletedNotifications,
       deletedCronFirings: report.deletedCronFirings,
       deletedUiActions: report.deletedUiActions,
+      deletedArtifacts: report.deletedArtifacts,
+      artifactOrphansRemoved: report.artifactOrphansRemoved,
       orphanDirsRemoved: report.orphanDirsRemoved,
       tokenDirsRemoved: report.tokenDirsRemoved,
       errors: report.errors.length,

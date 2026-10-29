@@ -324,6 +324,11 @@
           <p data-l="de" lang="de">Items wandern beim Start und Ende eines Runs über das Board. Idempotent (erst lesen, dann schreiben), mit Journal und Retries; Items werden bei Bedarf dem Projekt hinzugefügt.</p>
         </article>
         <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg></span><span data-l="en">Artifacts</span><span data-l="de" lang="de">Artefakte</span></h3>
+          <p data-l="en">Workflows produce files or folders (<code>execute.artifacts</code>); they get an Artifacts page with file tree, download and delete, and are the items of their own source – so the next workflow processes each artifact exactly once (<code>consumed_by</code>), with a read-only copy in its workspace. No pipeline engine.</p>
+          <p data-l="de" lang="de">Workflows erzeugen Dateien oder Ordner (<code>execute.artifacts</code>); sie erscheinen auf einer Artifacts-Seite mit Dateibaum, Download und Löschen und sind die Items einer eigenen Source – der nächste Workflow verarbeitet jedes Artefakt genau einmal (<code>consumed_by</code>), mit einer schreibgeschützten Kopie im Workspace. Ohne Pipeline-Engine.</p>
+        </article>
+        <article class="card">
           <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 8v4l3 2"/><path d="M3.05 11a9 9 0 1 1 .5 4M3 4v7h7"/></svg></span><span data-l="en">Item history</span><span data-l="de" lang="de">Item-Verlauf</span></h3>
           <p data-l="en">One page per issue or PR: its current state, the path of all runs with their results and a timeline of hooks with what each action changed (labels, project field old → new, comments), retry blocks and UI actions – optionally merged with the GitHub timeline.</p>
           <p data-l="de" lang="de">Eine Seite je Issue oder PR: aktueller Stand, der Pfad aller Runs mit Ergebnis und eine Zeitleiste der Hooks mit der Wirkung jeder Action (Labels, Projektfeld alt → neu, Kommentare), Retry-Blocks und UI-Aktionen – optional zusammen mit der GitHub-Timeline.</p>

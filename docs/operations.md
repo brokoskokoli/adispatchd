@@ -242,6 +242,10 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
   jeder Action, Index `blocks_item`, Tabelle `item_history_gaps` für den Aufbewahrungs-Hinweis; kein Neuaufbau,
   bestehende Daten bleiben unverändert). Einbahnstraße: 0.8.x startet mit einer v6-DB nicht mehr; zurück nur über das
   Backup `backups/adispatchd-5-<zeitstempel>.sqlite`.
+- **0.10.0 hebt das Schema auf v7** (Artefakte: Tabelle `artifacts`; kein Neuaufbau, bestehende Daten bleiben
+  unverändert). Einbahnstraße: 0.9.x startet mit einer v7-DB nicht mehr; zurück nur über das Backup
+  `backups/adispatchd-6-<zeitstempel>.sqlite`. Die Inhalte der Artefakte liegen unter `artifacts/<id>/` im data-dir und
+  gehören zum Datenbestand (Backups unten).
 - **Rollback:** Dienst stoppen, alte Paketversion installieren, `adispatchd.sqlite`, `adispatchd.sqlite-wal` und
   `adispatchd.sqlite-shm` beiseitelegen, das passende Backup als `adispatchd.sqlite` zurückkopieren (Eigentümer
   `adispatchd`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).
@@ -255,6 +259,7 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 | Env-Datei | sicher (verschlüsselt) aufbewahren – enthält Private Keys |
 | `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
 | `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal; `runs/<id>/kept/` enthält die per `execute.keep` gesicherten Dateien); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien; nur diese, nicht jedes `secrets/`-Verzeichnis, z. B. in Workspaces) |
+| `artifacts/` | normale Dateikopie, zusammen mit `adispatchd.sqlite` (die Tabelle `artifacts` kennt die Verzeichnisse `artifacts/<id>/content`); Verzeichnisse ohne Datenbankeintrag und älter als 24 h räumt die Retention weg |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
 **`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre

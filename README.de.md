@@ -71,6 +71,12 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
   Sortierschlüssel, Abschnitte mit Überschriften); dazu eine JSON-HTTP-API. Optional Links zu weiteren lokalen Tools in der Toolbar
   (z. B. das Dashboard [claude-inspect](https://github.com/brokoskokoli/claude_inspect)), im neuen Tab oder eingebettet
   (`ui.external_links`).
+- **Artefakte:** Ein Workflow nennt Dateien oder Ordner unter `execute.artifacts`; nach dem Run werden sie als
+  unveränderliche Artefakte gespeichert (ohne Symlinks, mit Größenlimit, Secrets redigiert) und auf der Seite
+  **Artifacts** mit Dateibaum, Download (Ordner als `.zip`) und Löschen angezeigt. Zugleich sind sie die Items der Source
+  `type: artifacts`: Ein anderer Workflow verarbeitet sie automatisch – über die eingebauten Felder `consumed_by` / `attempted_by` genau
+  einmal je Artefakt – oder per manuellem Start und sieht eine schreibgeschützte Kopie unter `inputs/` (`{item.path}`).
+  Ketten *erzeugen → verarbeiten* brauchen keine Pipeline-Engine (`retention.artifacts`, API `/api/v1/artifacts`; seit 0.10.0).
 - **Item-Verlauf:** Seit 0.9.0 zeigt eine Seite je Issue/PR den Weg durch die Workflows: aktueller Stand (frisch von
   GitHub gelesen), der **Pfad** aller Runs mit Ergebnis und eine filterbare **Zeitleiste** mit Run-Start und -Ende,
   Hook-Ketten mit der Wirkung jeder Action (Labels +/−, Projektfeld `alt → neu`, Kommentar-Link, Exit-Status),
@@ -302,6 +308,9 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **Events:** Zeilen `@@ADISPATCH_EVENT {"type":"status","message":"Tests laufen"}` auf stdout/stderr – nur informativ.
 - **Dateien behalten:** Was im Workspace unter `execute.keep` passt (z. B. `.agent/transcript.jsonl`, `.agent/gate/*.log`),
   sichert der Daemon nach dem Run – auch wenn der Workspace danach gelöscht wird.
+- **Artefakte:** Dateien/Ordner, die der Worker in den Workspace schreibt und der Workflow unter `execute.artifacts` nennt,
+  speichert der Daemon als Artefakte; ein Worker auf einem Artefakt findet es schreibgeschützt unter `inputs/<Name>`
+  (`source.input.path` in `context.json`).
 - **Cancel/Timeout:** SIGTERM an die Prozessgruppe, nach `cancel_grace` (30 s) SIGKILL. Eigene Sessions/Container räumt das
   Skript selbst auf – außer bei `execute.type: container`: dann `<engine> stop -t <cancel_grace>`; im Container zeigen
   `ADISPATCH_CONTEXT_FILE`/`ADISPATCH_RESULT_FILE` auf `/adispatch/context.json` bzw. `/adispatch/out/result.json`.

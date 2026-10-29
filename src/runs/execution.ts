@@ -6,9 +6,12 @@
  */
 import path from 'node:path';
 import {
+  ARTIFACT_SOURCE_TYPE,
   CONTAINER_LABELS,
   CONTAINER_PATHS,
   WORKER_PROTOCOL_VERSION,
+  artifactInputRelPath,
+  artifactTemplateItem,
   containerInstanceId,
   containerName,
   defaultContainerUser,
@@ -28,7 +31,7 @@ import {
   type TemplateValues,
   type WorkerContext,
 } from '../core/index.js';
-import { linkedFieldUsage as workflowLinkedFieldUsage, type ContainerExecuteConfig, type WorkflowSnapshot } from '../config/index.js';
+import { linkedFieldUsage as workflowLinkedFieldUsage, sourceLocation, type ContainerExecuteConfig, type WorkflowSnapshot } from '../config/index.js';
 import type { TokenFileRequest } from '../executors/index.js';
 import type { RunRecord } from '../persistence/index.js';
 import { RunControllerError } from './errors.js';
@@ -116,7 +119,7 @@ export function executionTemplateValues(input: ExecutionInput, workspacePath?: s
           source: {
             id: source.id,
             type: source.type,
-            repository: input.repository ?? `${source.owner}/${source.repository}`,
+            repository: input.repository ?? sourceLocation(source),
             // `vars` is missing in snapshots written before 0.3.0 (WI-20).
             vars: source.vars ?? {},
           },
@@ -131,6 +134,7 @@ export function executionTemplateValues(input: ExecutionInput, workspacePath?: s
             ...(item.url ? { url: item.url } : {}),
             ...(typeof title === 'string' ? { title } : {}),
             ...linkedTemplateItem(input.linked),
+            ...(source.type === ARTIFACT_SOURCE_TYPE ? artifactTemplateItem(item.fields, workspacePath) : {}),
           },
         }
       : {}),
@@ -166,7 +170,8 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
   const pathParams = Object.entries(workflow.parameters)
     .filter(([, def]) => def.required || def.default !== null)
     .map(([name]) => name);
-  const pathScope: TemplateScope = { run: true, source: sourceBound, linked: sourceBound, parameters: pathParams };
+  const artifactItem = sourceBound && snapshot.source?.type === ARTIFACT_SOURCE_TYPE;
+  const pathScope: TemplateScope = { run: true, source: sourceBound, linked: sourceBound, artifact: artifactItem, parameters: pathParams };
   const baseValues = executionTemplateValues(input);
   const rendered = renderTemplate(execute.workingDirectory, baseValues, { mode: 'path', scope: pathScope });
   if (!path.isAbsolute(rendered)) {
@@ -184,6 +189,8 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
     workspace: true,
     source: sourceBound,
     linked: sourceBound,
+    artifact: artifactItem,
+    artifactInput: artifactItem,
     parameters: Object.keys(workflow.parameters),
   };
   // Container (WI-19): `{workspace.path}` in `command`/`env` is the path inside the container.
@@ -232,6 +239,8 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
             item_key: item.key,
             url: item.url,
             attributes: { ...item.fields, ...knownLinkedAttributes(input.linked) },
+            // Artifact items (WI-35): the read-only input staged in the workspace.
+            ...(artifactItem ? { input: artifactInputInfo(item, workspaceTarget ?? rendered) } : {}),
           },
         }
       : {}),
@@ -277,6 +286,15 @@ export async function buildExecutionSpec(input: ExecutionInput): Promise<Prepare
     ...(container ? { container } : {}),
   };
   return { spec, workspaceBaseDir, tokenFiles };
+}
+
+/** The staged input of an artifact item as written to `context.json` (`source.input`). */
+function artifactInputInfo(item: SourceItem, workspace: string): { path: string; kind: 'file' | 'folder'; name: string } {
+  const fields = item.fields;
+  const kind = fields.kind === 'folder' ? 'folder' : 'file';
+  const name = typeof fields.name === 'string' ? fields.name : item.itemId;
+  const fileName = typeof fields.file_name === 'string' ? fields.file_name : '';
+  return { path: `${workspace.replace(/\/+$/, '')}/${artifactInputRelPath({ name, kind, fileName })}`, kind, name };
 }
 
 /** Mount source that is the workspace itself (`{workspace.path}`, optionally with a trailing `/`). */

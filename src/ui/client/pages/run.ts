@@ -11,6 +11,7 @@ import { EventList, type EventListChange } from '../../shared/events.js';
 import { eventSummary, formatBytes, formatDuration, stateTone } from '../../shared/format.js';
 import { messageRunId, type Page, type PageContext } from '../page.js';
 import type { Action, KeptListing, LogPage, RunDetail, RunEvent } from '../types.js';
+import { artifactHref } from '../../shared/artifacts.js';
 import { act, badge, button, confirmDialog, errorBox, externalLink, jsonBlock, kv, loading, routeLink, runLink, runOutcomeBadges, section, table, text, time } from '../ui.js';
 import { cancelRunButton } from './dashboard-widgets.js';
 import { historyLinkForKey, itemPanelLink } from './item.js';
@@ -166,6 +167,20 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
             ['PID', text(d.pid)],
             ['Lock', text(d.lockKey)],
             ['Config', d.configVersion !== null ? `v${d.configVersion}${d.configHash ? ` (${d.configHash.slice(0, 12)})` : ''}` : text(null)],
+            ['Input artifact', d.artifacts?.input ? (d.artifacts.input.artifact ? h('a', { href: artifactHref(d.artifacts.input.id) }, d.artifacts.input.artifact.name) : h('span', null, h('code', null, d.artifacts.input.id), h('small', { class: 'muted' }, ' (deleted)'))) : text(null)],
+            [
+              'Artifacts',
+              d.artifacts && (d.artifacts.created.length || d.artifacts.report?.warnings?.length)
+                ? h(
+                    'span',
+                    null,
+                    d.artifacts.created.map((a) => [h('a', { href: artifactHref(a.id) }, a.name), ' ']),
+                    d.artifacts.report?.warnings?.length
+                      ? badge(`${d.artifacts.report.warnings.length} not stored`, 'warn', d.artifacts.report.warnings.map((w) => `${w.path}: ${w.reason} – ${w.message}`).join('\n'))
+                      : null,
+                  )
+                : text(null),
+            ],
             ['Kept files', d.kept ? routeLink(['runs', d.id], `${d.kept.files} file(s), ${formatBytes(d.kept.bytes)}${d.kept.skippedCount ? `, ${d.kept.skippedCount} skipped` : ''}`, { tab: 'files' }) : text(null)],
             ['Logs', `stdout ${formatBytes(d.logs.stdout.size)}${d.logs.stdout.truncated ? ' (truncated)' : ''}, stderr ${formatBytes(d.logs.stderr.size)}${d.logs.stderr.truncated ? ' (truncated)' : ''}`],
           ]),

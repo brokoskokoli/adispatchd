@@ -9,7 +9,8 @@
  *   replayed from SQLite before live events continue (no gaps, no
  *   duplicates). Too many missed events → `stream.reset` (client reloads via REST).
  * - Live-only events (`run.output` log chunks, `run.action`, `block.*`,
- *   `system.status`, `notification`, `config.reloaded`, ...) have no `id`.
+ *   `artifact.created`, `artifact.deleted`, `system.status`, `notification`,
+ *   `config.reloaded`, ...) have no `id`.
  * - Heartbeat comments keep proxies from closing idle streams.
  * - Slow clients: the socket buffer per client is bounded; a client whose
  *   unsent data exceeds the limit is disconnected (it reconnects with
@@ -290,6 +291,10 @@ function fromBus(event: BusEvent, clock: Clock): StreamEvent {
     case 'block.created':
     case 'block.cleared':
       return { type: event.type, time: clock.now().toISOString(), runId: event.block.runId, payload: event.block };
+    case 'artifact.created':
+    case 'artifact.deleted':
+      // System-wide (no run filter); the producing run is part of the payload.
+      return { type: event.type, time: clock.now().toISOString(), runId: null, payload: event.artifact };
     case 'system.status':
       return { type: 'system.status', time: clock.now().toISOString(), runId: null, payload: event.status };
   }

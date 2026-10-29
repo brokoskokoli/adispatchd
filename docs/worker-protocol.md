@@ -14,6 +14,13 @@ Implementierung: `src/core/worker-protocol.ts`, `src/executors/`.
   und der Workflow nennt sie unter `execute.keep` (relative Glob-Muster). Der Daemon kopiert sie nach dem Abschluss-Hook
   und vor dem Cleanup nach `data-dir/runs/<run-id>/kept/` – nur reguläre Dateien, keine Symlinks, bis `keep_max_size`
   ([Konfigurationsreferenz](configuration-reference.md) §3.4.8).
+- **Artefakte (seit 0.10.0):** Dateien oder Ordner, die andere Workflows verarbeiten sollen (oder die man run-übergreifend
+  herunterladen will), schreibt der Worker ebenfalls in den Workspace; der Workflow nennt sie unter `execute.artifacts`
+  (`name`, `type`, `path`, `required`). Der Daemon speichert sie nach dem Abschluss-Hook und vor dem Cleanup als
+  unveränderliche Artefakte – nur bei Runs, die `completed` enden, ohne Symlinks, mit Secret-Redaktion; ein fehlender
+  Pfad ist eine Warnung (mit `required: true` ein technischer Fehler, der Run endet als `crashed`). Läuft der Worker
+  selbst auf einem Artefakt (Source `type: artifacts`), liegt es **schreibgeschützt** unter `<workspace>/inputs/<Name>`;
+  der Pfad steht in `context.json` (`source.input`) und als `{item.path}` ([Konfigurationsreferenz](configuration-reference.md) §3.2.1, §3.4.8).
 
 ### Container-Worker (`execute.type: container`, seit 0.3.0)
 
@@ -99,7 +106,10 @@ Datei bereitstellen und erneuern:
 }
 ```
 
-`source.attributes` enthält die billigen Item-Felder; bei GitHub-Items zusätzlich `linked_branches`, `closing_prs`
+`source.attributes` enthält die billigen Item-Felder; bei Artefakt-Items (seit 0.10.0) die Artefaktfelder (`id`, `name`,
+`type`, `kind`, `size`, `file_count`, `workflow`, `run_id`, `parent`, `consumed_by`, …) und zusätzlich
+`source.input = { "path": "<workspace>/inputs/<Name>", "kind": "file"|"folder", "name": "<Artefaktname>" }`
+(bei Containern der Pfad im Container); bei GitHub-Items zusätzlich `linked_branches`, `closing_prs`
 (`[{ "number": 12, "state": "open", "head_ref": "feature/12", "is_draft": false, "url": "…" }]`), `work_branch`,
 `work_pr` und `work_pr_url`, **wenn der Workflow sie verwendet** (`{item.work_branch}`/`{item.work_pr}` in `execute`
 oder eines der Felder in `filter`/`item_priority`; Konfigurationsreferenz §5.3) – frisch beim Start gelesen,

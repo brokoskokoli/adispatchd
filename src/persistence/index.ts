@@ -75,6 +75,7 @@ export {
   type UiActionResult,
   type RecordUiActionInput,
 } from './ui-actions.js';
+export { ArtifactRepository, type ArtifactPage, type ArtifactQuery, type NewArtifact } from './artifacts.js';
 export { RetentionRepository, type RunRetentionCategory, type RunRetentionCandidate } from './retention.js';
 export {
   LockConflictError,

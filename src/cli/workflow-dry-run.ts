@@ -103,6 +103,9 @@ export function createWorkflowDryRunHandler(io: Pick<CliIo, 'stdout' | 'stderr'>
       return 1;
     }
     const notes: string[] = [...fallbackNotes];
+    if (Object.values(config.current.sources).some((s) => s.type === 'artifacts')) {
+      notes.push('artifacts source: a local dry-run has no artifact catalogue (no candidates); run it against the running instance to see artifacts');
+    }
     const { state, close } = openState(opts.dataDir, notes);
     try {
       const sources = new SourceRegistry(config.current, {

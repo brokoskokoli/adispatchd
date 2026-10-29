@@ -23,6 +23,7 @@ export const NAV_ENTRIES: readonly NavEntry[] = [
   { key: '', href: '#/', label: 'Dashboard' },
   { key: 'runs', href: '#/runs', label: 'Runs' },
   { key: 'workflows', href: '#/workflows', label: 'Workflows' },
+  { key: 'artifacts', href: '#/artifacts', label: 'Artifacts' },
   { key: 'blocked', href: '#/blocked', label: 'Blocked', counter: 'blocks' },
   { key: 'actions', href: '#/actions', label: 'Failed Actions', counter: 'actions' },
   { key: 'views', href: '#/views', label: 'Views', submenu: true },

@@ -142,6 +142,8 @@ export interface DataPaths {
   logsDir: string;
   /** `runs/` */
   runsDir: string;
+  /** `artifacts/` (WI-35): `artifacts/<artifact-id>/content` holds the stored file or folder */
+  artifactsDir: string;
   /** Default `workspace.base_dir`: `workspaces/` */
   defaultWorkspacesDir: string;
   /** `backups/` */
@@ -161,6 +163,7 @@ export function dataPaths(dataDir: string): DataPaths {
     instanceLock: path.join(root, 'adispatchd.lock'),
     logsDir,
     runsDir,
+    artifactsDir: path.join(root, 'artifacts'),
     defaultWorkspacesDir: path.join(root, 'workspaces'),
     backupsDir: path.join(root, 'backups'),
     run(runId: string): RunPaths {

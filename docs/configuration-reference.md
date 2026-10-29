@@ -19,7 +19,8 @@
 2. [Gemeinsame Datentypen](#2-gemeinsame-datentypen)
 3. [Die Dateien](#3-die-dateien) – [config.yaml](#31-configyaml), [sources.yaml](#32-sourcesyaml),
    [identities.yaml](#33-identitiesyaml), [workflows/*.yaml](#34-workflowsyaml), [views/*.yaml](#35-viewsyaml),
-   [filters/*.yaml](#36-filtersyaml), [dashboard.yaml](#37-dashboardyaml), [Grenzen](#38-bekannte-grenzen-v1)
+   [filters/*.yaml](#36-filtersyaml), [dashboard.yaml](#37-dashboardyaml), [Grenzen](#38-bekannte-grenzen-v1);
+   Artefakte: [Source `artifacts`](#321-source-artifacts-seit-0100), [`execute.artifacts`](#348-execute), [Felder](#49-feldkatalog-der-source-artifacts-seit-0100)
 4. [Filter-Sprache](#4-filter-sprache)
 5. [Platzhalter-Referenz](#5-platzhalter-referenz)
 6. [Auswertungsablauf](#6-auswertungsablauf)
@@ -262,6 +263,7 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `retention.max_log_size_per_run` | Größe | `100MB` | | Log-Limit des Haupt-Workers pro Run (stdout+stderr); Überlauf wird markiert. |
 | `retention.cleanup_interval` | Dauer | `24h` | ≥ 1 s | Abstand der Retention-Durchläufe (erster Lauf 60 s nach Bereitschaft). |
 | `retention.ui_actions` | Dauer \| `never` | `365d` | | seit 0.4.0: Audit-Einträge der UI-Aktionen (§3.3 `ui_actions`), unabhängig vom Ergebnis. |
+| `retention.artifacts` | Dauer \| `never` | `never` | | seit 0.10.0: Artefakte (§3.4.8 `artifacts`) werden gelöscht, wenn sie älter sind. Der Default `never` behält sie, bis sie in der UI/API gelöscht werden. Artefakte, die ein aktiver Run als Item nutzt, bleiben bestehen (der nächste Durchlauf löscht sie). |
 | `notifications.on` | Liste Enum | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | dazu (seit 0.6.0) `retry_block_cleared` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. `retry_block_cleared` ist nicht im Default (bestehende Konfigurationen bekommen nicht mehr Meldungen) und muss ausdrücklich eingetragen werden. |
 | `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
 | `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
@@ -283,6 +285,9 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 
 Retention löscht nie aktive Runs, Runs mit unfertiger oder gescheiterter Lifecycle-Kette und Runs eines **aktiven**
 Retry-Blocks. Gelöscht werden DB-Zeilen, `runs/<id>/`, `logs/<id>/` und der Workspace (nur unter `base_dir`).
+Artefakte (seit 0.10.0) unterliegen **nicht** der Run-Retention, sondern `retention.artifacts`; jeder Durchlauf entfernt
+außerdem Verzeichnisse unter `artifacts/`, die keinen Datenbankeintrag haben und älter als 24 Stunden sind (Reste eines
+Absturzes zwischen Kopieren und Eintragen).
 
 **Kanal `type: webhook`:**
 
@@ -487,6 +492,7 @@ retention:
   max_log_size_per_run: 100MB
   cleanup_interval: 24h
   ui_actions: 365d                                   # Audit der UI-Aktionen (WI-27)
+  artifacts: never                                   # Artefakte (WI-35): Dauer oder never
 notifications:
   on: [retry_block_created, lifecycle_action_failed, recovery_failed]
   channels:
@@ -582,7 +588,7 @@ sources:
 | Schlüssel | Typ | Pflicht | Regeln | Bedeutung |
 |---|---|---|---|---|
 | `sources` | Map Source-ID → Source | nein (Default `{}`) | Schlüssel = Konfigurations-ID | alle Sources |
-| `<id>.type` | `github` | ja | einziger Adapter in V1 | |
+| `<id>.type` | `github` \| `artifacts` | ja | `artifacts` seit 0.10.0, höchstens eine Source dieses Typs (§3.2.1) | Adapter |
 | `<id>.owner` | String | ja | nicht leer (Format nicht geprüft) | Owner/Organisation |
 | `<id>.repository` | String | ja | nicht leer | Repository-Name; `{source.repository}` und Feld `repository` = `owner/repository` in der hier geschriebenen Schreibweise |
 | `<id>.identity` | Identity-ID | ja | muss in `identities.yaml` existieren | liest Issues/PRs/Dependencies; Fallback für Schreibaktionen (§6.10) |
@@ -640,6 +646,99 @@ sie an der Source **ausdrücklich** gesetzt ist, sonst mit der Identity der Acti
   **`repo`** (private Repositories; zum Hinzufügen des Items muss der Token das Issue/den PR lesen können).
   Fine-grained Tokens (*Projects: Read and write*) sind **nicht verifiziert**.
 - Fehlt das Schreibrecht, scheitert die Action mit `forbidden` (nicht wiederholbar).
+
+#### 3.2.1 Source `artifacts` (seit 0.10.0)
+
+Artefakte – Dateien oder Ordner, die ein Workflow mit `execute.artifacts` erzeugt (§3.4.8) – sind zugleich die Items
+einer eigenen Source. Dadurch gelten für sie alle Regeln der Items: `trigger: { type: source, source: artifacts }` mit
+`filter`, `item_priority`, Conditions und `max_concurrent`, manueller Start auf einem Item, Views, Item-Verlauf. Die
+Source hat **keine** Einstellungen außer `vars` – keine Identity, kein Repository, keine Credentials; ihr Item-Schlüssel
+ist `<source-id>:<artifact-id>` (`artifacts:art-20261029T100000123Z-3fa2c91b`). Höchstens **eine** Source dieses Typs
+(`Only one source of type "artifacts" is allowed`).
+
+```yaml
+# example: artifacts
+# extends: minimal
+# file: sources.yaml
+sources:
+  artifacts:
+    type: artifacts
+```
+
+Ein Workflow, der ein Artefakt erzeugt, und einer, der es automatisch genau einmal verarbeitet (Beispiel mit
+Ordner-Artefakt in `examples/config`):
+
+```yaml
+# example: artifacts
+# file: workflows/make-report.yaml
+id: make-report
+name: Report erzeugen
+trigger: { type: manual }
+execute:
+  type: shell
+  command: scripts/make-report.sh
+  artifacts:
+    - name: 'Report {timestamp}'      # Platzhalter erlaubt (§5)
+      type: report                    # frei wählbar, zum Filtern
+      path: out/report.pdf            # Datei ODER Ordner, relativ zum Workspace
+    - name: Seiten
+      type: site
+      path: out/site
+      required: true                  # fehlt der Pfad: technischer Fehler des Runs
+```
+
+```yaml
+# example: artifacts
+# file: workflows/summarize.yaml
+id: summarize
+name: Report zusammenfassen
+trigger: { type: source, source: artifacts }
+filter:
+  all:
+    - { field: type, operator: equals, value: report }
+    - not: { field: attempted_by, operator: contains, value: summarize }   # genau ein Versuch je Artefakt
+execute:
+  type: shell
+  command: scripts/summarize.sh
+  args: ['{item.path}']               # schreibgeschützte Kopie im Workspace: inputs/<Name>
+  artifacts:
+    - { name: 'Zusammenfassung von {item.name}', type: summary, path: out/summary.txt }
+```
+
+- **Felder** (Filter, Views, `context.json`): siehe §4.9. Zwei eingebaute Listen von Workflow-IDs, beide eingetragen
+  **mit dem Ende des Runs** (nicht beim Start), idempotent und in derselben Transaktion, die die Sperre des Runs freigibt:
+  - `consumed_by`: Workflows, die das Artefakt **mit Erfolg** verarbeitet haben (Run `completed` mit Ergebnis `success`).
+  - `attempted_by`: Workflows, deren Run auf dem Artefakt **abgeschlossen** wurde (`completed`, Ergebnis `success`
+    **oder** `failure`) – der Retry-Schutz.
+
+  Ein Workflow, der ein Artefakt nur einmal bearbeiten soll, schließt sich selbst im Filter aus. Mit
+  `not: { field: attempted_by, operator: contains, value: <workflow-id> }` genau **ein** Versuch je Artefakt: auch bei
+  fachlichem `failure` startet er nicht in jedem Planungsschritt neu. Mit `consumed_by` statt `attempted_by` wird nach
+  einem fachlichen `failure` erneut versucht (gewollt, wenn sich etwas ändern kann; dann endlos, solange es scheitert –
+  Retry-Blocks gelten nur für technische Fehler, §6.4). Ohne eine der beiden Bedingungen startet der Workflow für ein
+  Artefakt wieder und wieder; die Konfigurationsprüfung warnt dann (`The workflow processes artifacts but its filter does
+  not look at "consumed_by" or "attempted_by"`). Technische Fehlschläge (`crashed`, `timed_out`, `start_error`,
+  `cancelled`) tragen nichts ein; sie zählen wie immer in den Retry-Block.
+- **Eingabe:** Läuft ein Workflow auf einem Artefakt-Item, kopiert der Daemon den Inhalt nach `on_start` und vor dem
+  Start des Workers **schreibgeschützt** (Dateien `0444`, Verzeichnisse `0555`, auch `inputs/` selbst) nach
+  `<workspace>/inputs/<Name>`. `<Name>` ist der Artefaktname als sicheres Pfadsegment (jedes Zeichen außer
+  `[A-Za-z0-9._@+=,-]` wird `_`); bei einer **Datei** wird die Endung der ursprünglichen Datei angehängt, wenn der Name
+  keine hat (`Weekly report` aus `report.pdf` → `inputs/Weekly_report.pdf`). Den Pfad liefern `{item.path}` (§5)
+  und `source.input` in `context.json` (`{path, kind, name}`). Eine frühere Kopie im selben Workspace (festes
+  `working_directory`) wird ersetzt; scheitert das Kopieren, endet der Run als `start_error`. Solange ein aktiver Run
+  das Artefakt als Item nutzt, kann es nicht gelöscht werden (`409 artifact_in_use`). Beim Aufräumen des Workspaces
+  (und der Retention) werden die Schreibrechte der Verzeichnisse vorher wiederhergestellt.
+- **Verschwundenes Artefakt:** Wird das Artefakt zwischen Planung und Kopieren der Eingabe gelöscht, endet der Run als
+  `cancelled` (`artifact no longer available`, kein Retry-Block-Zähler) statt als `start_error`.
+- **Keine Aktionen am Item:** `source.update` und `source.comment` gibt es für Artefakt-Items nicht
+  (Konfigurationsfehler `"source.comment" is not supported for artifact items …`); `shell`-Actions gehen. Eine
+  Workflow-Source muss einheitlich sein: `sources: [repo_a, artifacts]` ist ein Fehler (alle Sources eines Workflows
+  haben denselben Typ).
+- **Beziehungen:** `parent` ist die ID des Artefakts, das der erzeugende Run selbst als Item hatte (Kette
+  erzeugen → verarbeiten → …); sie bleibt als Text erhalten, auch wenn das Eltern-Artefakt gelöscht wird. Artefakte
+  sind unveränderlich; weder Upload noch Versionierung noch Tags gehören dazu.
+- **Anzeige und API:** Seite „Artifacts“ der Web-UI (Liste, Filter, Dateibaum, Download, Löschen, Workflow starten),
+  Verlinkung im Run, `GET /api/v1/artifacts` & Co. ([api.md](api.md)), SSE `artifact.created`/`artifact.deleted`.
 
 ### 3.3 identities.yaml
 
@@ -1130,6 +1229,12 @@ echo web-2
 | `cancel_grace` | Dauer | nein | `30s` | | Wartezeit zwischen `SIGTERM` und `SIGKILL` an die Prozessgruppe bei Cancel/Timeout |
 | `keep` | Liste String | nein | `[]` | relative Glob-Muster (`*`, `?`, `**`); nicht leer, nicht absolut, kein `..`, keine leeren Segmente, nicht auf `**` endend | Dateien, die nach dem Run nach `data-dir/runs/<run-id>/kept/` gesichert werden (s. u.) |
 | `keep_max_size` | Größe | nein | `100MB` | > 0 (§2.2) | Obergrenze für die Summe der gesicherten Dateien pro Run |
+| `artifacts` | Liste Objekt | nein | `[]` | je Eintrag `name`, `type`, `path`, `required` (s. u.) | Dateien/Ordner, die nach dem Run als Artefakte gespeichert werden (seit 0.10.0, s. u. „Artefakte erzeugen“) |
+| `artifacts.[].name` | String | ja | | nicht leer; Platzhalter (Modus `text`, §5.2); gerendert höchstens 200 Zeichen | Anzeigename des Artefakts |
+| `artifacts.[].type` | String | ja | | nicht leer, höchstens 64 Zeichen, keine Steuerzeichen | frei wählbarer Typ zum Filtern (Feld `type`) |
+| `artifacts.[].path` | String | ja | | **literaler**, relativer Pfad: nicht absolut, kein `..`, keine leeren Segmente, keine `*`/`?`, kein `\`; führendes `./` wird entfernt | Datei **oder** Ordner im Workspace |
+| `artifacts.[].required` | Boolean | nein | `false` | | `true`: fehlt der Pfad (oder ist er nicht sammelbar), endet ein sonst erfolgreich abgeschlossener Run als `crashed` (technischer Fehler) |
+| `artifacts_max_size` | Größe | nein | `100MB` | > 0 (§2.2) | Obergrenze für die Summe der Artefakte pro Run (gezählt werden die geschriebenen Bytes nach dem Redigieren) |
 
 Workspace-Regeln: Liegt der gerenderte Pfad strikt unter `workspace.base_dir`, wird er sicher angelegt
 (Symlink-geprüft) und gemäß `workspace.cleanup` gelöscht. Liegt er außerhalb, wird er wie konfiguriert angelegt,
@@ -1186,12 +1291,33 @@ gelöscht. Grenzen: höchstens 10 000 Dateien und 100 000 untersuchte Verzeichni
 Wildcards werden zuerst und ohne Verzeichnisauflistung geprüft und zählen nicht zur Grenze. Wildcard-Muster, die
 nach Erreichen der Grenze nichts gefunden haben, gelten als „nicht durchsucht“ (`notSearched`), nicht als ohne Treffer.
 
+**Artefakte erzeugen (`artifacts`, seit 0.10.0):** Nach dem Abschluss-Hook und **vor** dem Workspace-Cleanup (nach
+`keep` nicht, davor: Artefakte zuerst) speichert der Daemon jeden Eintrag als Artefakt unter
+`data-dir/artifacts/<artifact-id>/content` und legt einen Eintrag in der Tabelle `artifacts` an (§3.2.1, API in
+[api.md](api.md)). Es gelten dieselben Sicherheitsregeln wie für `keep`: kein Pfadbestandteil darf ein Symlink sein
+(`symlink`), der aufgelöste Pfad muss im Workspace liegen (`outside_workspace`), nur reguläre Dateien werden kopiert –
+Symlinks, Sonderdateien, **Dateien mit mehreren Hardlinks** (`nlink > 1`, Grund `hardlink`: sie könnten ein weiterer Name einer Datei außerhalb des Workspaces sein) und Namen mit `\`, NUL oder Steuerzeichen (`unsafe_name`) **in** einem Ordner werden übersprungen und im Event vermerkt – jede Datei wird vor dem
+Kopieren mit `O_NOFOLLOW` und über ihre Inode geprüft, und **Secrets werden beim Kopieren redigiert** – best effort,
+wie Logs (gleiche Ersetzung wie bei `keep`). Gespeichert wird nur bei Runs, die `completed` enden (Ergebnis `success`
+**oder** `failure`); ein abgestürzter, abgebrochener oder zeitüberschrittener Run speichert keine Artefakte. Überschreiten
+die Artefakte eines Runs zusammen `artifacts_max_size`, wird das betreffende nicht gespeichert (kein Teilartefakt); weitere
+Grenzen je Ordner: höchstens 10 000 Dateien und 100 000 untersuchte Verzeichniseinträge, ein Ordner ohne reguläre Datei
+wird nicht gespeichert. Probleme sind **Warnungen**, kein Fehlschlag des Runs: das Event `run.artifacts` (sichtbar im Run
+unter „Artifacts“ und in `GET /api/v1/runs/:id`) nennt je nicht gespeichertem Eintrag Position, Pfad, Grund
+(`missing`, `symlink`, `hardlink`, `outside_workspace`, `not_regular_file`, `empty`, `size_limit`, `file_limit`, `entry_limit`,
+`invalid_name`, `error`) und Meldung. Mit **`required: true`** prüft der Daemon den Pfad schon beim Ende des Workers:
+fehlt er, wird der Run – statt `completed` – als `crashed` beendet (Grund `required artifact "<pfad>" is not available:
+…`, Fehlercode `run_required_artifact_missing`), `on_crash` bzw. `on_error` läuft, der Fehler zählt für den Retry-Block
+(§6.4), und es wird nichts gespeichert. Artefakte sind danach unveränderlich und unabhängig vom Run (Retention des Runs
+löscht sie nicht, `retention.artifacts` schon, §3.1). Wird die Finalisierung nach einem Neustart fortgesetzt, speichert
+sie nichts doppelt (Schlüssel: Run und Position in der Liste).
+
 **Container (`type: container`, seit 0.3.0):** Der Worker läuft in einem Wegwerf-Container. Der Daemon ruft die
 Engine-CLI im Vordergrund auf (`<engine> run --rm …`) und überwacht diesen Prozess wie einen Shell-Worker: stdout/stderr,
 Events (`@@ADISPATCH_EVENT`), Log-Limit, Timeouts, Ergebnisdatei und Klassifikation (§6.8) sind identisch, der
 Exit-Code des Containers ist der Exit-Code. `working_directory`, `create_directory`, `env`, `secrets`, `timeout`,
-`cancel_grace`, `keep` und `keep_max_size` gelten wie oben – der Workspace liegt weiterhin **auf dem Host** und wird in
-den Container gemountet (Cleanup und `keep` arbeiten auf dem Host-Pfad). Zusätzliche Schlüssel:
+`cancel_grace`, `keep`, `keep_max_size`, `artifacts` und `artifacts_max_size` gelten wie oben – der Workspace liegt weiterhin **auf dem Host** und wird in
+den Container gemountet (Cleanup, `keep` und Artefakte arbeiten auf dem Host-Pfad; die Artefakt-Eingabe `inputs/` liegt im gemounteten Workspace). Zusätzliche Schlüssel:
 
 | Schlüssel | Typ | Pflicht | Default | Regeln | Bedeutung |
 |---|---|---|---|---|---|
@@ -2185,6 +2311,29 @@ for views (fields) only, …` bzw. `Views cannot be sorted by "history": …`) u
 |---|---|---|
 | `history` | string | Link auf die Seite „Item-Verlauf“ (Runs, Hooks mit Wirkung, Retry-Blocks, UI-Aktionen des Items) |
 
+### 4.9 Feldkatalog der Source `artifacts` (seit 0.10.0)
+
+Die Felder eines Artefakt-Items (§3.2.1) – alle billig, keine Pushdown-Operatoren, keine Projektfelder. Die
+Operatoren je Typ gelten wie in §4.2; `consumed_by` ist wie `labels` eine Liste (`contains`, `in`), ein fehlender
+Wert (`parent` ohne Eltern-Artefakt) ist `null`.
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `id` | string | Artefakt-ID `art-YYYYMMDDTHHMMSSmmmZ-xxxxxxxx` |
+| `name` | string | Anzeigename (gerenderter `execute.artifacts[].name`) |
+| `type` | string | frei gewählter Typ (`execute.artifacts[].type`) |
+| `kind` | string | `file` oder `folder` |
+| `file_name` | string | Basisname der gesammelten Datei bzw. des Ordners |
+| `size` | number | Gesamtgröße in Bytes (nach dem Redigieren) |
+| `file_count` | number | Anzahl der Dateien (1 bei einer Datei) |
+| `created_at` | date | Erzeugungszeit |
+| `workflow` | string | ID des erzeugenden Workflows |
+| `run_id` | string | ID des erzeugenden Runs (der Run kann durch die Retention gelöscht sein) |
+| `parent` | string | ID des Artefakts, das der erzeugende Run als Item hatte; `null` ohne |
+| `consumed_by` | string[] | IDs der Workflows, die das Artefakt mit Erfolg verarbeitet haben (Run `completed` + `success`, §3.2.1) |
+| `attempted_by` | string[] | IDs der Workflows, deren Run auf dem Artefakt abgeschlossen wurde (`completed`, Erfolg oder fachliches `failure`) – Retry-Schutz (§3.2.1) |
+| `url` | string | UI-Route `#/artifacts/<id>` (Link-Ziel von `name` in Views) |
+
 ---
 
 ## 5. Platzhalter-Referenz
@@ -2212,6 +2361,9 @@ for views (fields) only, …` bzw. `Views cannot be sorted by "history": …`) u
 | `{item.title}` | Titel (frisch gelesen bzw. aus der Planung) | Run ohne Item |
 | `{item.work_branch}` | Feld `work_branch` (§4.7.2), direkt vor dem Rendern frisch gelesen | `null` (kein Branch) → leer; **unknown → kein Rendern** (§5.3) |
 | `{item.work_pr}` | Feld `work_pr` (§4.7.2), direkt vor dem Rendern frisch gelesen | `null` (kein offener PR) → leer; **unknown → kein Rendern** (§5.3) |
+| `{item.name}` | Name des Artefakts (nur Source `artifacts`, seit 0.10.0, §3.2.1) | Run ohne Item |
+| `{item.type}` | Typ des Artefakts (nur Source `artifacts`) | Run ohne Item |
+| `{item.path}` | absoluter Pfad der schreibgeschützten Eingabe `inputs/<Name>` im Workspace, wie ihn der Worker sieht (nur Source `artifacts`; bei Containern der Pfad im Container) | Run ohne Item; nicht in `working_directory` und `on_start` erlaubt (die Eingabe liegt dort noch nicht) |
 | `{result.status}` | technischer Endstatus (`completed`, `crashed`, `start_error`, `timed_out`, `cancelled`) | – |
 | `{result.result}` | `success` \| `failure` | bei technischem Fehler/Cancel |
 | `{result.message}` | `message` der Ergebnisdatei | keine/ungültige Ergebnisdatei oder ohne `message` |
@@ -2239,6 +2391,8 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 | `source.*` (inkl. `source.vars.<name>`), `item.*` | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s) | ✓ (s, Item frisch gelesen) | – | ✓ |
 | `result.*` | – | – | – | ✓ | – | – | – |
 | `parameters.<name>` | ✓ nur `required` oder mit `default` | ✓ | ✓ | ✓ | ✓ (leer) | – | – |
+| `item.name`, `item.type` | ✓ (s, `artifacts`) | ✓ (s, `artifacts`) | ✓ (s, `artifacts`) | ✓ (s, `artifacts`) | ✓ (s, `artifacts`) | – | ✓ (s, `artifacts`) |
+| `item.path` | – | ✓ (s, `artifacts`) | – | ✓ (s, `artifacts`) | – | – | – |
 | `item.work_branch`, `item.work_pr` | ✓ (s, GitHub; `null` → Fehler) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | – | – |
 | `block.id`, `block.failures`, `block.created_at`, `block.last_status` | – | – | – | nur `on_retry_block` | ✓ | – | – |
 | `block.cleared_at`, `block.cleared_by` | – | – | – | – | ✓ | – | – |
@@ -2246,6 +2400,11 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 `{source.vars.<name>}` muss zusätzlich in `vars` **jeder** Source des Workflows stehen (sonst Fehler mit der Liste
 der Sources, in denen sie fehlt); im Pfadmodus wird der Wert wie jeder Platzhalter zu genau einem sicheren
 Pfadsegment.
+
+`{item.name}`, `{item.type}` und `{item.path}` gibt es nur in Workflows, deren Trigger-Source den Typ `artifacts` hat
+(sonst `Placeholder "{item.name}" is only available in workflows triggered by the artifacts source`); `{item.path}`
+zusätzlich nicht dort, wo die Eingabe noch nicht im Workspace liegt. Auch `execute.artifacts[].name` ist ein Template
+(Modus `text`, Scope wie `execute`: `run.*`, `workspace.*`, `source.*`, `item.*`, `parameters.*`, `timestamp`; kein `result.*`).
 
 Nicht als Template ausgewertet (Platzhalter bleiben wörtlich stehen): alle `command`, `source.update.labels`,
 `source.update.project`, `shell_filter`, Filterwerte, `secrets`, alle anderen Felder.
@@ -4012,6 +4171,41 @@ execute:
 ```
 
 Lösung: Die Datei im Worker in den Workspace schreiben (bzw. dorthin kopieren) und relativ angeben.
+
+**Artefakt-Pfade** (§3.4.8): `execute.artifacts[].path` ist ein literaler, relativer Workspace-Pfad.
+
+```yaml
+# example: err-artifacts
+# extends: minimal
+# invalid
+# expect: workflows/hello.yaml: execute.artifacts[0].path: Path must be a literal file or folder (no "*" or "?")
+# expect: workflows/hello.yaml: execute.artifacts[1].path: Path must not contain ".." (only paths inside the workspace can be collected)
+# expect: workflows/hello.yaml: execute.artifacts[2].name: Unknown placeholder "{workflow.nope}"
+# expect: workflows/hello.yaml: on_success[0].type: "source.comment" is not supported for artifact items
+# file: sources.yaml
+sources:
+  artifacts: { type: artifacts }
+```
+
+```yaml
+# example: err-artifacts
+# file: workflows/hello.yaml
+id: hello
+trigger: { type: source, source: artifacts }
+execute:
+  type: shell
+  command: scripts/hello.sh
+  artifacts:
+    - { name: Report, type: report, path: 'out/*.pdf' }
+    - { name: Secret, type: report, path: ../shared/report.pdf }
+    - { name: '{workflow.nope}', type: report, path: out/log.txt }
+on_success:
+  - { type: source.comment, message: fertig }
+```
+
+Lösung: den Pfad der Datei bzw. des Ordners ausschreiben (der Worker legt feste Namen an), nur Platzhalter aus §5
+verwenden (`{item.path}` nur in `execute.args`/`env` und in Hooks nach `on_start`, nie in `working_directory`), bei
+Artefakt-Items statt `source.comment` eine `shell`-Action.
 
 **Container-Mounts** (§3.4.8): Ziele müssen absolute, normalisierte Container-Pfade außerhalb von `/adispatch`
 sein; als Platzhalter in Quellen ist nur `{workspace.path}` erlaubt; statische Quellen müssen existieren.

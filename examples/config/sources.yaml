@@ -23,3 +23,9 @@ sources:
         Estimate: number
     # A user-owned project needs a github_token identity (see identities.yaml), e.g.:
     #   project: { owner: some-user, number: 1, identity: project_reader, fields: { Status: single_select } }
+
+  # Artifacts (files or folders that workflows produce with execute.artifacts) are items of their own
+  # source, so another workflow can process them automatically or by a manual start (workflows/make-report.yaml
+  # and workflows/summarize-report.yaml). No identity or credentials; at most one source of this type.
+  artifacts:
+    type: artifacts
