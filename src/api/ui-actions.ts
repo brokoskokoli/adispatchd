@@ -225,7 +225,7 @@ export function registerUiActionRoutes(app: FastifyInstance, deps: UiActionDeps)
   const requireUser = (req: FastifyRequest, reply: FastifyReply, limiter: RateLimiter): Principal => {
     requireEnabled();
     const p = req.principal;
-    if (!p || p.via === 'anonymous') throw new ApiError(401, 'authentication_required', 'Login required');
+    if (!p || p.via === 'anonymous' || p.via === 'hub_open') throw new ApiError(401, 'authentication_required', 'Login required');
     if (!isInteractive(p)) {
       throw new ApiError(403, 'user_login_required', 'UI actions need a logged-in user; the local control token is not accepted');
     }

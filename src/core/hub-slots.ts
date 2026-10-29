@@ -8,6 +8,12 @@
 export const HUB_SOCKET_ENV = 'ADISPATCH_HUB_SOCKET';
 /** Environment variable carrying the workspace ID into a workspace instance. */
 export const HUB_WORKSPACE_ENV = 'ADISPATCH_HUB_WORKSPACE';
+/**
+ * Set to `stdin` by the hub (WI-36): the instance reads the hub's secret (one line)
+ * from its standard input before it starts. The secret itself never appears in
+ * the environment or in arguments (same-user processes can read both).
+ */
+export const HUB_TRUST_ENV = 'ADISPATCH_HUB_TRUST';
 
 /** Synchronous view on the hub as last reported (never blocks). */
 export interface HubSlotsSnapshot {

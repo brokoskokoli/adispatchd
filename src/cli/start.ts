@@ -11,7 +11,8 @@
  * `RestartPreventExitStatus=78`), 1 on other startup errors or a fatal error.
  */
 import path from 'node:path';
-import { errorMessage, formatDuration, isOrchestratorError, parseDuration } from '../core/index.js';
+import { errorMessage, formatDuration, HUB_TRUST_ENV, isOrchestratorError, parseDuration } from '../core/index.js';
+import { readHubToken, type TokenInput } from '../hub/trust.js';
 import { ConfigLoadError, formatConfigIssue } from '../config/index.js';
 import {
   DEFAULT_CANCEL_TIMEOUT_MS,
@@ -63,6 +64,10 @@ export interface StartDeps {
   exit?: (code: number) => void;
   /** Called once the app listens (tests). */
   onStarted?: (app: App) => void;
+  /** Environment (default `process.env`): `ADISPATCH_HUB_TRUST=stdin` makes the instance read its hub's secret (WI-36). */
+  env?: Readonly<Record<string, string | undefined>>;
+  /** Standard input for the hub secret (default `process.stdin`). */
+  stdin?: TokenInput;
 }
 
 /** Create the `start` handler. */
@@ -83,12 +88,23 @@ export function createStartHandler(io: Pick<CliIo, 'stdout' | 'stderr'>, deps: S
     const dataDir = path.resolve(opts.dataDir ?? 'data');
     // Static web UI (WI-11): built assets from `dist/ui/public`; the API also runs without them.
     const uiDir = deps.appOptions && 'uiDir' in deps.appOptions ? deps.appOptions.uiDir : (resolveUiDir() ?? undefined);
+    // Started by a hub (WI-36): its secret arrives on standard input; without it the instance must not run (it would be open on its port).
+    let hubToken: string | undefined;
+    if ((deps.env ?? process.env)[HUB_TRUST_ENV] === 'stdin') {
+      try {
+        hubToken = await readHubToken(deps.stdin ?? process.stdin);
+      } catch (err) {
+        io.stderr(`start: ${errorMessage(err)}\n`);
+        return EXIT_CONFIG;
+      }
+    }
     const appOptions: AppOptions = {
       configDir,
       dataDir,
       ...flags,
       ...(deps.appOptions ?? {}),
       ...(uiDir ? { uiDir } : {}),
+      ...(hubToken ? { auth: { ...(deps.appOptions?.auth ?? {}), hubToken } } : {}),
     };
     let app: App;
     try {

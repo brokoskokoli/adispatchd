@@ -21,6 +21,7 @@ import {
   systemClock,
   systemTimers,
   HUB_SOCKET_ENV,
+  HUB_TRUST_ENV,
   HUB_WORKSPACE_ENV,
   type Clock,
   type Logger,
@@ -31,6 +32,7 @@ import type { HubWorkspaceConfig } from '../config/index.js';
 import { EXIT_CONFIG } from '../service/index.js';
 import { HubError } from './errors.js';
 import type { ChildHandle, WorkspaceSpawner } from './spawner.js';
+import { newHubToken } from './trust.js';
 
 export type WorkspaceState = 'starting' | 'running' | 'backoff' | 'stopped' | 'failed';
 export type WorkspaceTransition = 'draining' | 'stopping' | 'restarting' | null;
@@ -111,6 +113,8 @@ interface Managed {
   state: WorkspaceState;
   transition: WorkspaceTransition;
   child: ChildHandle | null;
+  /** Secret handed to the current child on its standard input (WI-36); the hub's identity channel to it. */
+  trustToken: string | null;
   startedAt: Date | null;
   restarts: number;
   crashes: number;
@@ -145,6 +149,7 @@ export class WorkspaceSupervisor {
         state: 'stopped',
         transition: null,
         child: null,
+        trustToken: null,
         startedAt: null,
         restarts: 0,
         crashes: 0,
@@ -171,6 +176,11 @@ export class WorkspaceSupervisor {
 
   has(id: string): boolean {
     return this.managed.has(id);
+  }
+
+  /** Secret of the workspace's current child process (WI-36); `null` without a child. Never part of a status. */
+  trustTokenOf(id: string): string | null {
+    return this.managed.get(id)?.trustToken ?? null;
   }
 
   /** Workspaces with a live child process. */
@@ -353,10 +363,11 @@ export class WorkspaceSupervisor {
       '--cancel-timeout',
       formatDuration(options.cancelTimeoutMs),
     ];
-    const env = { ...(options.baseEnv ?? process.env), [HUB_SOCKET_ENV]: options.slotSocketPath, [HUB_WORKSPACE_ENV]: id };
+    const env = { ...(options.baseEnv ?? process.env), [HUB_SOCKET_ENV]: options.slotSocketPath, [HUB_WORKSPACE_ENV]: id, [HUB_TRUST_ENV]: 'stdin' };
+    const trustToken = newHubToken();
     let child: ChildHandle;
     try {
-      child = options.spawner.spawn({ workspaceId: id, args, env });
+      child = options.spawner.spawn({ workspaceId: id, args, env, input: `${trustToken}\n` });
     } catch (err) {
       m.state = 'failed';
       m.message = `cannot start the process: ${errorMessage(err)}`;
@@ -365,6 +376,7 @@ export class WorkspaceSupervisor {
       return;
     }
     m.child = child;
+    m.trustToken = trustToken;
     m.state = 'starting';
     m.startedAt = this.clock.now();
     m.nextRestartAt = null;
@@ -418,6 +430,7 @@ export class WorkspaceSupervisor {
     this.clearTimer(m, 'stable');
     this.clearTimer(m, 'kill');
     m.child = null;
+    m.trustToken = null;
     m.lastExit = { code, signal, at: this.clock.now().toISOString() };
     const transition = m.transition;
     m.transition = null;

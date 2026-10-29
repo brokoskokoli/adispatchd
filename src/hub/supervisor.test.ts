@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { FakeClock, HUB_SOCKET_ENV, HUB_WORKSPACE_ENV } from '../core/index.js';
+import { FakeClock, HUB_SOCKET_ENV, HUB_TRUST_ENV, HUB_WORKSPACE_ENV } from '../core/index.js';
 import type { HubWorkspaceConfig } from '../config/index.js';
 import { HubError } from './errors.js';
 import { WorkspaceSupervisor, type SupervisorOptions } from './supervisor.js';
@@ -63,6 +63,26 @@ describe('WorkspaceSupervisor', () => {
     await clock.advanceAsync(100);
     expect(states(s)).toEqual({ coder: 'running', docs: 'running', off: 'stopped' });
     expect(s.statusOfWorkspace('coder')).toMatchObject({ pid: 1000, port: 8091, restarts: 0, crashes: 0, startedAt: '2026-01-01T00:00:00.000Z' });
+  });
+
+  it('hands every child a fresh secret on standard input, keeps it out of env, args and status, and forgets it on exit (WI-36)', () => {
+    const s = make();
+    s.startEnabled();
+    const first = spawner.last('coder');
+    const token = s.trustTokenOf('coder');
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(first.spec.input).toBe(`${token}\n`);
+    expect(first.spec.env[HUB_TRUST_ENV]).toBe('stdin');
+    expect(JSON.stringify(first.spec.env)).not.toContain(token as string);
+    expect(first.spec.args.join(' ')).not.toContain(token as string);
+    expect(JSON.stringify(s.status())).not.toContain(token as string);
+    expect(s.trustTokenOf('docs')).not.toBe(token);
+    expect(s.trustTokenOf('off')).toBeNull();
+    first.exit(1);
+    expect(s.trustTokenOf('coder')).toBeNull();
+    clock.advance(1_000);
+    expect(s.trustTokenOf('coder')).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(s.trustTokenOf('coder')).not.toBe(token);
   });
 
   it('forwards complete output lines per workspace and stream', () => {

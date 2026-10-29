@@ -277,8 +277,8 @@ export interface AppOptions {
   allowedOrigins?: readonly string[];
   /** Static web UI directory (WI-11). */
   uiDir?: string;
-  /** Authentication tuning (WI-26; tests: fake scrypt, no failure delay, fixed control token). */
-  auth?: Partial<Pick<AuthServiceOptions, 'scrypt' | 'sleep' | 'controlToken'>>;
+  /** Authentication tuning (WI-26; tests: fake scrypt, no failure delay, fixed control token); `hubToken` = secret of the hub that started this instance (WI-36). */
+  auth?: Partial<Pick<AuthServiceOptions, 'scrypt' | 'sleep' | 'controlToken' | 'hubToken'>>;
   /** Per-user limits of UI actions (WI-27; tests). */
   uiActionLimits?: Partial<UiActionLimits>;
   /** Resource monitor (WI-23); tests inject a fake OS probe. */

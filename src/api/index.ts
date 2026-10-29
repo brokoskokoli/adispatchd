@@ -4,7 +4,7 @@
  * Other components import from this module only.
  */
 export { UI_ACTION_LIMITS, type UiActionLimits } from './ui-actions.js';
-export { createApiServer, CSRF_HEADER, isAllowedHost, type ApiDeps, type ReadinessReport } from './server.js';
+export { createApiServer, CSRF_HEADER, allowedHostList, isAllowedHost, originMatchesHost, type ApiDeps, type ReadinessReport } from './server.js';
 export { ApiError, ERROR_STATUS, toErrorResponse, type ApiErrorBody } from './errors.js';
 export {
   EventHub,
@@ -20,10 +20,19 @@ export {
   AuthService,
   CONTROL_TOKEN_FILE,
   CONTROL_TOKEN_HEADER,
+  HUB_ROLE_HEADER,
+  HUB_TOKEN_HEADER,
+  HUB_TOKEN_PATTERN,
+  HUB_USER_HEADER,
   LOGIN_LIMITS,
   SESSION_COOKIE,
   controlTokenPath,
+  isInteractive,
   isLoopbackAddress,
+  type AuthRequest,
+  type AuthVia,
+  type LoginResult,
+  type ResolveResult,
   readControlToken,
   removeControlToken,
   writeControlToken,
