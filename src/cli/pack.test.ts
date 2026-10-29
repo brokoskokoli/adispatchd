@@ -17,7 +17,7 @@
  * and takes ~10–60 s, so it is not part of the per-commit gate.
  */
 import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -286,7 +286,8 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     expect(unit.stdout).toContain('# /etc/systemd/system/adispatchd-hub.service');
     expect(unit.stdout).toMatch(/ExecStart=\S*node\S* \S*dist\/cli\/main\.js hub start --config-dir /);
     expect(unit.stdout).toContain('KillMode=mixed');
-    expect(unit.stdout).toContain(`install -d -m 0750 -o adispatchd -g adispatchd ${path.join(wsData, 'beta')}`);
+    // The plan names the real locations (on macOS the temp dir lies below /var -> /private/var).
+    expect(unit.stdout).toContain(`install -d -m 0750 -o adispatchd -g adispatchd ${path.join(realpathSync(wsData), 'beta')}`);
     expect(unit.stdout).toContain('nothing was changed');
 
     // 3. hub start: overview, pass-through, one run in each workspace.

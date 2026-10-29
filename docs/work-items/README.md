@@ -33,7 +33,15 @@ Zerlegung der Spec v0.1 in umsetzbare Pakete. **Status: alle Work-Items umgesetz
 | [27](WI-27-act-as-identity.md) | In der UI als App-Identität handeln (Kommentar, Labels, Projektfelder) | §10, §16, §20 | 26 | 14 |
 | [28](WI-28-view-sort-sections.md) | Views: Wertereihenfolge, mehrere Sortierschlüssel, Abschnitte | §17 | 27 | 15 (0.5.0) |
 | [29](WI-29-dashboard-resources-tab.md) | Dashboard: kompakte Ressourcenleiste, Reiter „Resources“ | §16 | 27 | 15 (0.5.0) |
+| [30](WI-30-retry-block-hooks.md) | Hooks beim Entstehen und Aufheben eines Retry-Blocks | §10, §11 | 29 | 0.6.0 |
+| [31](WI-31-dynamic-parameter-options.md) | Parameter manueller Starts: Auswahllisten zur Laufzeit (`options_from`) | §5.5, §15, §16 | 30 | 0.7.0 |
+| [32](WI-32-dashboard-layout.md) | Dashboard frei anordnen (`dashboard.yaml` → `layout`), Views als Widgets | §16, §17 | 31 | 0.8.0 |
+| [33](WI-33-item-history.md) | Item-Verlauf: Weg eines Source-Items durch die Workflows | §12, §15, §16 | 32 | 0.9.0 |
+| [34](WI-34-dashboard-run-history-links.md) | Item-Verlauf aus den Run-Widgets des Dashboards | §16 | 33 | 0.9.1 |
 | [35](WI-35-artifacts.md) | Artefakte: Workflows erzeugen Dateien/Ordner, Artefakt-Seite, Artefakte als Workflow-Eingabe (Source `artifacts`) | §5, §9, §12, §15, §16 | 22, 33 | 0.10.0 |
+| [36](WI-36-hub-core.md) | Hub-Kern: mehrere Workspaces als Kindprozesse mit gemeinsamem Slot-Limit | §7, §14 | 34 | 0.10.0 |
+| [37](WI-37-hub-api-ui.md) | Hub-API und Übersicht: Workspaces, Verwaltung, Durchreichen der Workspace-UIs | §15, §16, §20 | 36 | 0.10.0 |
+| [38](WI-38-hub-operations.md) | Hub im Betrieb: systemd, `init`, Doku und Website | §14, §19 | 36, 37 | 0.10.0 |
 
 Ablauf je Work-Item: Coder-Agent (eigener Branch/Worktree) → Reviewer-Agent (prüft gegen Acceptance Criteria + Spec) → ggf. Fix-Runde → Merge nach `main`.
 

@@ -7,6 +7,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { makeTreeWritable } from '../../artifacts/index.js';
 import { isTerminalStatus, MemoryLogger, type FetchLike } from '../../core/index.js';
 import { FakeGitHub } from '../../sources/github/testing/index.js';
 import { createApp, type App, type AppOptions } from '../../app.js';
@@ -191,6 +192,8 @@ export async function createAppEnv(options: AppEnvOptions = {}): Promise<AppEnv>
       for (const app of apps) {
         await app.shutdown({ mode: 'cancel', cancelTimeoutMs: 3_000 }).catch(() => undefined);
       }
+      // Kept workspaces may hold a read-only artifact input (WI-35), which a non-root user cannot empty.
+      await makeTreeWritable(root);
       rmSync(root, { recursive: true, force: true });
     },
   };

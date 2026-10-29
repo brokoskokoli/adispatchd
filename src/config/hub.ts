@@ -157,36 +157,37 @@ function realish(p: string): string {
 }
 
 function validateHub(config: HubConfig, hubDataDirRaw: string, issues: IssueCollector): void {
-  const ws = config.workspaces.map((w) => ({ ...w, configDir: realish(w.configDir), dataDir: realish(w.dataDir) }));
+  // Compared on real locations, reported as configured (on macOS /etc resolves to /private/etc).
+  const ws = config.workspaces.map((w) => ({ ...w, realConfigDir: realish(w.configDir), realDataDir: realish(w.dataDir) }));
   const hubDataDir = realish(hubDataDirRaw);
-  const first = <K extends 'id' | 'configDir' | 'dataDir' | 'port'>(key: K, label: string, yamlKey: string): void => {
+  const first = (key: (w: (typeof ws)[number]) => unknown, shown: (w: (typeof ws)[number]) => unknown, label: string, yamlKey: string): void => {
     const seen = new Map<unknown, number>();
     ws.forEach((w, i) => {
-      const earlier = seen.get(w[key]);
-      if (earlier !== undefined) issues.error(HUB_FILE, ['workspaces', i, yamlKey], `Duplicate ${label} "${String(w[key])}" (already used by workspaces[${earlier}])`);
-      else seen.set(w[key], i);
+      const earlier = seen.get(key(w));
+      if (earlier !== undefined) issues.error(HUB_FILE, ['workspaces', i, yamlKey], `Duplicate ${label} "${String(shown(w))}" (already used by workspaces[${earlier}])`);
+      else seen.set(key(w), i);
     });
   };
-  first('id', 'workspace ID', 'id');
-  first('configDir', 'config_dir', 'config_dir');
-  first('dataDir', 'data_dir', 'data_dir');
-  first('port', 'port', 'port');
+  first((w) => w.id, (w) => w.id, 'workspace ID', 'id');
+  first((w) => w.realConfigDir, (w) => w.configDir, 'config_dir', 'config_dir');
+  first((w) => w.realDataDir, (w) => w.dataDir, 'data_dir', 'data_dir');
+  first((w) => w.port, (w) => w.port, 'port', 'port');
   ws.forEach((w, i) => {
     if (w.port === config.server.port) {
       issues.error(HUB_FILE, ['workspaces', i, 'port'], `Port ${w.port} is also used by hub.server.port`);
     }
-    if (isWithin(hubDataDir, w.dataDir) || isWithin(w.dataDir, hubDataDir)) {
-      issues.error(HUB_FILE, ['workspaces', i, 'data_dir'], `data_dir "${w.dataDir}" overlaps with the hub's own data dir "${hubDataDir}"`);
+    if (isWithin(hubDataDir, w.realDataDir) || isWithin(w.realDataDir, hubDataDir)) {
+      issues.error(HUB_FILE, ['workspaces', i, 'data_dir'], `data_dir "${w.dataDir}" overlaps with the hub's own data dir "${hubDataDirRaw}"`);
     }
-    if (isWithin(w.dataDir, w.configDir) || isWithin(w.configDir, w.dataDir)) {
+    if (isWithin(w.realDataDir, w.realConfigDir) || isWithin(w.realConfigDir, w.realDataDir)) {
       issues.error(HUB_FILE, ['workspaces', i, 'data_dir'], `data_dir and config_dir of workspace "${w.id}" must not be nested`);
     }
     for (let j = i + 1; j < ws.length; j++) {
-      const other = ws[j] as HubWorkspaceConfig;
-      if (w.dataDir !== other.dataDir && (isWithin(other.dataDir, w.dataDir) || isWithin(w.dataDir, other.dataDir))) {
+      const other = ws[j]!;
+      if (w.realDataDir !== other.realDataDir && (isWithin(other.realDataDir, w.realDataDir) || isWithin(w.realDataDir, other.realDataDir))) {
         issues.error(HUB_FILE, ['workspaces', j, 'data_dir'], `data_dir "${other.dataDir}" is nested with the data_dir of workspaces[${i}] ("${w.dataDir}")`);
       }
-      if (other.dataDir === w.configDir || other.configDir === w.dataDir) {
+      if (other.realDataDir === w.realConfigDir || other.realConfigDir === w.realDataDir) {
         issues.error(HUB_FILE, ['workspaces', j, 'config_dir'], `config_dir/data_dir of workspace "${other.id}" is also used by workspaces[${i}] as its data_dir/config_dir`);
       }
     }

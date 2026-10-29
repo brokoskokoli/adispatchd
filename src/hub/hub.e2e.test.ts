@@ -268,7 +268,8 @@ describe('hub with real workspace processes (WI-36)', () => {
     expect(s0.workspaces.map((w) => w.id)).toEqual(['w1', 'w2']);
 
     // 6 ready issues, polling every second in both workspaces, gate closed: exactly 2 runs at the same time.
-    await until('2 slots in use', async () => (await status()).slots.active === 2 || undefined);
+    // A slot is taken before the run starts its worker (workspace, on_start): wait for both.
+    await until('2 slots in use, 2 workers running', async () => ((await status()).slots.active === 2 && runningWorkers().length === 2) || undefined);
     await new Promise((r) => setTimeout(r, 3_000)); // several more polling cycles
     const held = await status();
     expect(held.slots.active).toBe(2);
@@ -317,7 +318,8 @@ describe('hub with real workspace processes (WI-36)', () => {
 
   it('SIGTERM drains and a second signal cancels; no processes are left behind', { timeout: 240_000 }, async () => {
     await boot();
-    await until('2 slots in use', async () => (await status()).slots.active === 2 || undefined);
+    // A slot is taken before the run starts its worker (workspace, on_start): wait for both.
+    await until('2 slots in use, 2 workers running', async () => ((await status()).slots.active === 2 && runningWorkers().length === 2) || undefined);
     const before = await status();
     const childPids = before.workspaces.map((w) => w.pid!).filter(Boolean);
     const busy = before.workspaces.filter((w) => w.slots > 0).map((w) => w.pid!);
@@ -342,9 +344,11 @@ describe('hub with real workspace processes (WI-36)', () => {
     expect(existsSync(path.join(hubData, 'slots.sock'))).toBe(false);
   });
 
+  // Known flaky (0.10.0 gate): failed once in the Linux container node:24 under the full parallel suite, green alone and in three further full runs; cause not yet analysed.
   it('a crashed hub leaves the workspaces and their runs alone, nothing new starts, and the slots are counted again after the hub is back', { timeout: 240_000 }, async () => {
     await boot();
-    await until('2 slots in use', async () => (await status()).slots.active === 2 || undefined);
+    // A slot is taken before the run starts its worker (workspace, on_start): wait for both.
+    await until('2 slots in use, 2 workers running', async () => ((await status()).slots.active === 2 && runningWorkers().length === 2) || undefined);
     const before = await status();
     const childPids = before.workspaces.map((w) => w.pid!);
     const workers = runningWorkers();
@@ -384,11 +388,13 @@ describe('hub with real workspace processes (WI-36)', () => {
     // Clean up our own processes: stop the orphans (SIGTERM = drain; the gate is closed, so cancel with a second signal).
     for (const pid of childPids) process.kill(pid, 'SIGTERM');
     await new Promise((r) => setTimeout(r, 300));
-    for (const pid of childPids) process.kill(pid, 'SIGTERM');
+    // A workspace without a run (both slots may sit in the other one) has already stopped after the first signal.
+    for (const pid of childPids) if (alive(pid)) process.kill(pid, 'SIGTERM');
     await until('orphans gone', () => (childPids.every((p) => !alive(p)) && workers.every((p) => !alive(p))) || undefined, 30_000);
     hubProc!.kill('SIGTERM');
   });
 
+  // Known flaky (0.10.0 gate): failed once in the Linux container node:24 under the full parallel suite, green alone and in three further full runs; cause not yet analysed.
   it('serves the hub API and the workspace UIs/APIs of two real processes under one port, with roles, audit and drain/stop/pause end to end (WI-37)', { timeout: 300_000 }, async () => {
     await boot();
     const base = `http://127.0.0.1:${ports.hub}`;
@@ -485,7 +491,7 @@ describe('hub with real workspace processes (WI-36)', () => {
     await until('both running and connected again', async () => ((await status()).workspaces.every((w) => w.state === 'running' && w.connected) ? true : undefined));
     for (const repo of ['example/a', 'example/b']) github.createIssue(repo, { number: nextIssue, labels: ['ready-for-coding'] });
     nextIssue += 1;
-    await until('a run is active again', async () => ((await status()).slots.active > 0 ? true : undefined));
+    await until('a run is active again', async () => ((await status()).slots.active > 0 && runningWorkers().length > 0 ? true : undefined));
     const workers = runningWorkers();
     expect(workers.length).toBeGreaterThan(0);
     const pids = (await status()).workspaces.map((w) => w.pid!).filter(Boolean);

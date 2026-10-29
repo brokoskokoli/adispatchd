@@ -65,6 +65,7 @@ describe('hub membership of an instance (WI-36)', () => {
 
     // Hub outage: the running run is untouched, nothing new starts.
     const [running] = env.app.persistence.runs.listActive();
+    await env.waitRun(running!.id, (r) => r.status === 'running'); // its worker is up (the slot was taken before the start)
     await hubServer.close();
     await vi.waitFor(async () => expect(((await env.request('GET', '/api/v1/status')).json as any).hub.reachable).toBe(false));
     await env.app.scheduler.planOnce();

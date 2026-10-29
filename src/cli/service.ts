@@ -97,6 +97,11 @@ interface ConfigTarget {
   dataDir: string;
 }
 
+/** A workspace of a hub: its directories with symlinks resolved, plus as given in `hub.yaml` (absolute). */
+interface HubWorkspaceTarget extends ConfigTarget {
+  given: { configDir: string; dataDir: string };
+}
+
 /**
  * Largest `execute.cancel_grace` of the configurations. Outside dry runs every
  * configuration must exist (`config.yaml`) and be valid – `install` changes
@@ -127,7 +132,7 @@ async function maxCancelGrace(targets: readonly ConfigTarget[], io: Io, dryRun: 
  * Directories of the workspaces of a hub, read from `hub.yaml` (all workspaces, also disabled ones).
  * Outside dry runs a missing or invalid `hub.yaml` is an error; in dry runs it only warns.
  */
-async function hubWorkspaces(configDir: string, dataDir: string, io: Io, dryRun: boolean): Promise<ConfigTarget[]> {
+async function hubWorkspaces(configDir: string, dataDir: string, io: Io, dryRun: boolean): Promise<HubWorkspaceTarget[]> {
   const loaded = existsSync(path.join(configDir, HUB_FILE)) ? await loadHubConfig(configDir, { dataDir }) : null;
   if (!loaded || !loaded.ok) {
     const why = !loaded
@@ -143,7 +148,12 @@ async function hubWorkspaces(configDir: string, dataDir: string, io: Io, dryRun:
     if (!dryRun) throw new ServiceError('service_config_invalid', why);
     io.stderr(`warning: ${why}\n`);
   }
-  return loaded.config.workspaces.map((w) => ({ label: w.id, configDir: realOrResolved(w.configDir), dataDir: realOrResolved(w.dataDir) }));
+  return loaded.config.workspaces.map((w) => ({
+    label: w.id,
+    configDir: realOrResolved(w.configDir),
+    dataDir: realOrResolved(w.dataDir),
+    given: { configDir: path.resolve(w.configDir), dataDir: path.resolve(w.dataDir) },
+  }));
 }
 
 /** Resolve symlinks of existing paths (so `/srv/x -> /etc` cannot bypass the system-path check). */
@@ -185,7 +195,7 @@ export async function unitOptionsFromCli(opts: ServiceCliOptions, deps: ServiceD
   const configDir = realOrResolved(opts.configDir);
   const dataDir = realOrResolved(opts.dataDir);
   assertSafeServicePaths({ configDir, dataDir });
-  let workspaces: ConfigTarget[] = [];
+  let workspaces: HubWorkspaceTarget[] = [];
   if (hub) {
     workspaces = await hubWorkspaces(configDir, dataDir, io, dryRun);
     // Unix sockets of the hub (slot protocol, control) have a path length limit.
@@ -195,6 +205,12 @@ export async function unitOptionsFromCli(opts: ServiceCliOptions, deps: ServiceD
         throw new ServiceError('service_unsafe_path', `socket path ${p} is too long (${Buffer.byteLength(p)} > ${MAX_SOCKET_PATH_BYTES} bytes) – use a shorter hub data dir`);
       }
     }
+    // Like the hub's own directories: as given and with symlinks resolved.
+    assertSafeServicePaths({
+      configDir: path.resolve(opts.configDir),
+      dataDir: path.resolve(opts.dataDir),
+      hub: { workspaceConfigDirs: workspaces.map((w) => w.given.configDir), workspaceDataDirs: workspaces.map((w) => w.given.dataDir) },
+    });
     assertSafeServicePaths({
       configDir,
       dataDir,
