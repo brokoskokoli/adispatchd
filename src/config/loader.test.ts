@@ -67,7 +67,11 @@ describe('loadConfig – spec examples', () => {
     const result = await loadConfig(EXAMPLE_CONFIG_DIR, { dataDir: '/var/lib/adispatchd' });
     const config = expectOk(result);
     expect(result.warnings).toEqual([]);
-    expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'nightly-maintenance', 'release', 'reviewer-project-b']);
+    expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'make-report', 'nightly-maintenance', 'release', 'reviewer-project-b', 'summarize-report']);
+    // WI-35: artifacts as a source; the chain make-report → summarize-report.
+    expect(config.sources.artifacts).toMatchObject({ type: 'artifacts', identity: null });
+    expect(config.workflows['make-report']?.execute.artifacts.map((a) => a.type)).toEqual(['report', 'site']);
+    expect(config.workflows['summarize-report']?.trigger).toEqual({ type: 'source', source: 'artifacts' });
     // WI-31: selection lists fetched at run time.
     expect(config.workflows.release?.parameters.branch).toMatchObject({ optionsFrom: { type: 'github', github: 'branches', source: 'project_a' } });
     expect(config.workflows.release?.parameters.target).toMatchObject({ optionsFrom: { type: 'command', cacheMs: 300_000 }, allowCustom: true });
@@ -120,6 +124,7 @@ describe('loadConfig – spec examples', () => {
       retention: {
         completedRunsMs: 30 * 86_400_000,
         uiActionsMs: 365 * 86_400_000,
+        artifactsMs: null,
         failedRunsMs: 90 * 86_400_000,
         blockedRunsMs: null,
         maxLogSizePerRunBytes: 100 * 1024 * 1024,

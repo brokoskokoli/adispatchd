@@ -12,7 +12,7 @@ const read = (rel: string): string => readFileSync(path.join(here, '..', rel), '
 describe('main navigation (WI-29)', () => {
   it('has the "Resources" tab after Views and before Configuration', () => {
     const labels = NAV_ENTRIES.map((e) => e.label);
-    expect(labels).toEqual(['Dashboard', 'Runs', 'Workflows', 'Blocked', 'Failed Actions', 'Views', 'Resources', 'Configuration']);
+    expect(labels).toEqual(['Dashboard', 'Runs', 'Workflows', 'Artifacts', 'Blocked', 'Failed Actions', 'Views', 'Resources', 'Configuration']);
     const res = NAV_ENTRIES.find((e) => e.label === 'Resources')!;
     expect(res.href).toBe(RESOURCES_HASH);
     expect(parseHash(res.href).segments).toEqual([RESOURCES_ROUTE]);

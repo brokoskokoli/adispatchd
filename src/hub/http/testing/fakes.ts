@@ -86,6 +86,16 @@ export class FakeInstance {
     } else if (url === '/big') {
       res.writeHead(200, { 'content-type': 'application/octet-stream' });
       res.end(Buffer.alloc(300_000, 97));
+    } else if (/^\/api\/v1\/artifacts\/[^/]+\/download$/.test(url)) {
+      // Like the artifact routes of an instance (WI-35): a folder as a chunked `.zip` without Content-Length ...
+      res.writeHead(200, { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="report.zip"', 'content-security-policy': "default-src 'none'; sandbox" });
+      res.write(Buffer.alloc(100_000, 1));
+      setTimeout(() => res.end(Buffer.alloc(100_000, 2)), 20);
+    } else if (url.startsWith('/api/v1/artifacts/') && url.includes('/files/')) {
+      // ... and a single file with Content-Length and a Content-Disposition that names it.
+      const body = Buffer.from('hello artifact');
+      res.writeHead(200, { 'content-type': 'text/plain', 'content-disposition': "attachment; filename=\"a b.txt\"; filename*=UTF-8''a%20b.txt", 'content-length': String(body.length) });
+      res.end(req.method === 'HEAD' ? undefined : body);
     } else {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { code: 'not_found', message: url } }));

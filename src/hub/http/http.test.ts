@@ -475,6 +475,35 @@ describe('pass-through /w/<id>/', () => {
     await until(() => a.closedStreams === 1);
   });
 
+  it('passes artifact downloads (WI-35) through unchanged: streamed .zip, file downloads with Content-Disposition, roles from the hub login', async () => {
+    const { base } = await start(PASSWORD_AUTH);
+    // Not a public request: the artifact API needs a login even for GET.
+    expect((await send(base, 'GET', '/w/a/api/v1/artifacts/art-1/download')).status).toBe(401);
+    const cookie = await login(base, 'victor');
+    const zip = await send(base, 'GET', '/w/a/api/v1/artifacts/art-1/download', { headers: { cookie } });
+    expect(zip.status).toBe(200);
+    expect(zip.headers['content-type']).toBe('application/zip');
+    expect(zip.headers['content-disposition']).toBe('attachment; filename="report.zip"');
+    expect(zip.headers['content-security-policy']).toBe("default-src 'none'; sandbox");
+    expect(zip.text.length).toBe(200_000);
+    const file = await send(base, 'GET', '/w/a/api/v1/artifacts/art-1/files/sub%20dir/a%20b.txt', { headers: { cookie } });
+    expect(file.status).toBe(200);
+    expect(file.text).toBe('hello artifact');
+    expect(file.headers['content-length']).toBe('14');
+    expect(String(file.headers['content-disposition'])).toContain("filename*=UTF-8''a%20b.txt");
+    const head = await send(base, 'HEAD', '/w/a/api/v1/artifacts/art-1/files/x.txt', { headers: { cookie } });
+    expect(head.status).toBe(200);
+    expect(head.headers['content-length']).toBe('14');
+    // The workspace saw the request path verbatim (encoding kept) and the viewer identity of the hub login.
+    const seen = a.seen.filter((r) => r.url.startsWith('/api/v1/artifacts/'));
+    expect(seen.map((r) => r.url)).toContain('/api/v1/artifacts/art-1/files/sub%20dir/a%20b.txt');
+    expect(a.identity(a.seen.indexOf(seen[0]!))).toEqual({ token: TOKEN_A, role: 'viewer', user: 'victor' });
+    // A download of the .zip ends early when the client goes away.
+    const s = await stream(base, '/w/a/api/v1/artifacts/art-1/download', { cookie });
+    s.close();
+    await s.ended;
+  });
+
   it('ends a proxied stream when the session ends (logout)', async () => {
     const { base } = await start(PASSWORD_AUTH);
     const cookie = await login(base, 'victor');

@@ -4,3 +4,4 @@
  * `src/sources/github/testing/` (not part of the build).
  */
 export * from './github/index.js';
+export * from './artifacts/index.js';

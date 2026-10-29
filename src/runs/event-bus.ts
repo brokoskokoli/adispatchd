@@ -13,7 +13,7 @@
  *   logged. Listeners must therefore return quickly (e.g. push into a bounded
  *   per-client buffer, Spec §15 "slow clients").
  */
-import { noopLogger, type Logger, type Unsubscribe } from '../core/index.js';
+import { noopLogger, type ArtifactRecord, type Logger, type Unsubscribe } from '../core/index.js';
 import type { BlockRecord, Repositories, RunActionRecord, RunEventRecord } from '../persistence/index.js';
 
 /** Snapshot of the controller state (readiness, pause/drain). */
@@ -42,6 +42,10 @@ export type BusEvent =
   | { type: 'block.created'; block: BlockRecord }
   /** A retry block was cleared (after commit). */
   | { type: 'block.cleared'; block: BlockRecord }
+  /** An artifact was stored (WI-35, after commit). */
+  | { type: 'artifact.created'; artifact: ArtifactRecord }
+  /** An artifact was deleted (WI-35). */
+  | { type: 'artifact.deleted'; artifact: ArtifactRecord }
   /** Controller status changed (ready, paused, draining, stopping, active run count). */
   | { type: 'system.status'; status: ControllerStatus };
 

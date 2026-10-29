@@ -235,6 +235,9 @@ export function toWorkflowView(
       secretDelivery: Object.fromEntries(Object.entries(c.execute.secrets).map(([name, ref]) => [name, ref.delivery ?? 'env'])),
       keep: c.execute.keep,
       keepMaxSizeBytes: c.execute.keepMaxSizeBytes,
+      // WI-35: artifacts the workflow produces (absent in configurations of older versions).
+      artifacts: c.execute.artifacts ?? [],
+      artifactsMaxSizeBytes: c.execute.artifactsMaxSizeBytes ?? null,
     },
     // WI-18: every declared secret (execute + shell actions) with identity and delivery; never values.
     secrets: workflowSecrets(c),

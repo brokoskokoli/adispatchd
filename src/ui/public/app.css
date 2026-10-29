@@ -462,3 +462,9 @@ meter.strip-meter { display: block; width: 72px; height: 8px; flex: none; }
 .dash-tabpanel:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 4px; }
 .dash-tabpanel .dash-tabs .dash-tablist { margin-bottom: 10px; }
 .dash-col > .strip-slot > .card { margin-bottom: 0; }
+
+/* Artifacts (WI-35): file tree of an artifact */
+.file-tree { list-style: none; margin: 0; padding-left: 18px; }
+.file-tree:first-child { padding-left: 0; }
+.file-tree li { margin: 3px 0; }
+.file-tree summary { cursor: pointer; }

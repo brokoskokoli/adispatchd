@@ -22,12 +22,13 @@ import {
   type FilterPredicate,
 } from '../core/index.js';
 import { parseIsoDate } from '../filters/index.js';
-import { GITHUB_FIELD_DEFINITIONS, PROJECT_FIELD_PREFIX, projectFieldDefinitions } from '../sources/index.js';
+import { ARTIFACT_FIELD_DEFINITIONS, GITHUB_FIELD_DEFINITIONS, PROJECT_FIELD_PREFIX, projectFieldDefinitions } from '../sources/index.js';
 import type { SourceConfig } from './model.js';
 
 /** Static field catalogue per source adapter type. */
 export const FIELD_CATALOG: Readonly<Record<string, readonly FieldDefinition[]>> = {
   github: GITHUB_FIELD_DEFINITIONS,
+  artifacts: ARTIFACT_FIELD_DEFINITIONS,
 };
 
 /**

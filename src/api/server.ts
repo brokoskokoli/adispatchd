@@ -20,6 +20,7 @@ import { isMap, isPair, isScalar, isSeq, parseDocument, visit } from 'yaml';
 import { z } from 'zod';
 import {
   ACTIVE_STATUSES,
+  ARTIFACT_SOURCE_TYPE,
   TECHNICAL_STATUSES,
   TRIGGER_TYPES,
   dataPaths,
@@ -46,6 +47,7 @@ import type { LifecycleEngine } from '../lifecycle/index.js';
 import type { NotificationService } from '../notifications/index.js';
 import type { Repositories, RunRecord } from '../persistence/index.js';
 import { listKeptFiles, RUN_EVENTS, type RetentionService, type RunController } from '../runs/index.js';
+import type { ArtifactService } from '../artifacts/index.js';
 import type { DashboardInfoService } from '../dashboard/index.js';
 import type { ParameterOptionsService } from '../parameter-options/index.js';
 import type { Scheduler } from '../scheduler/index.js';
@@ -59,6 +61,7 @@ import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile 
 import { readLogPage } from './logs.js';
 import { runDetailFields, toBlockView, toRunSummary, toWorkflowView, type ActionView } from './serialize.js';
 import type { EventHub } from './sse.js';
+import { registerArtifactRoutes, toArtifactView } from './artifacts.js';
 import { registerItemHistoryRoutes } from './item-history.js';
 import { registerUiActionRoutes, type UiActionLimits } from './ui-actions.js';
 
@@ -101,6 +104,8 @@ export interface ApiDeps {
   views: ViewService;
   notifications: NotificationService;
   retention?: RetentionService;
+  /** Artifacts (WI-35); absent = the artifact routes answer 503. */
+  artifacts?: ArtifactService;
   /** Dashboard info tiles (WI-24); absent = endpoint reports "not configured". */
   dashboard?: DashboardInfoService;
   events: EventHub;
@@ -756,6 +761,10 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const block = repos.blocks.activeFor(run.workflowId, run.sourceItemKey);
     const retryBlock = run.triggerType === 'unblock' ? repos.blocks.clearedByRun(id) : repos.blocks.createdByRun(id);
     const keptEvent = allEvents.findLast((e) => e.type === RUN_EVENTS.keptFiles);
+    // Artifacts (WI-35): what the run produced, and the artifact it processed as its item.
+    const artifactsEvent = allEvents.findLast((e) => e.type === RUN_EVENTS.artifacts);
+    const inputId = (run.configSnapshot as { source?: { type?: unknown } } | null)?.source?.type === ARTIFACT_SOURCE_TYPE && run.sourceItemKey ? parseSourceItemKey(run.sourceItemKey).itemId : null;
+    const inputArtifact = inputId ? (deps.artifacts?.get(inputId) ?? null) : null;
     return redactValue(
       {
         ...toRunSummary(run),
@@ -775,6 +784,11 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
         // WI-30: the block whose removal started this lifecycle run, or the block this run created.
         retryBlock: retryBlock ? toBlockView(retryBlock, { affectedRunIds: repos.blocks.affectedRunIds(retryBlock.id), sourceUrl: run.sourceUrl, workflowName: null }) : null,
         kept: keptEvent ? keptSummary(keptEvent.payload) : null,
+        artifacts: {
+          created: repos.artifacts.query({ runId: id, limit: 100 }).artifacts.map(toArtifactView),
+          report: artifactsEvent ? artifactsEvent.payload : null,
+          input: inputId ? { id: inputId, exists: inputArtifact !== null, artifact: inputArtifact ? toArtifactView(inputArtifact) : null } : null,
+        },
         supervised: deps.controller.activeRunIds().includes(id),
       },
       redact,
@@ -1068,6 +1082,17 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     redact,
     logger,
     clock,
+  });
+
+  // --- Artifacts (WI-35) -----------------------------------------------------
+  registerArtifactRoutes(app, {
+    config: deps.config,
+    repositories: repos,
+    scheduler: deps.scheduler,
+    artifacts: deps.artifacts,
+    redact,
+    logger,
+    auditRun,
   });
 
   // --- System resources (WI-23) ---------------------------------------------

@@ -189,6 +189,12 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | `POST /api/v1/items/:source/:item/labels` | admin | – |
 | `POST /api/v1/items/:source/:item/project` | admin | – |
 | `GET /api/v1/ui-actions` | admin | – |
+| `GET /api/v1/artifacts` | viewer | – |
+| `GET /api/v1/artifacts/:id` | viewer | – |
+| `GET /api/v1/artifacts/:id/files/*` | viewer | – |
+| `GET /api/v1/artifacts/:id/download` | viewer | – |
+| `POST /api/v1/artifacts/:id/start` | operator | – |
+| `DELETE /api/v1/artifacts/:id` | admin | – |
 | `GET /api/v1/system/metrics` | viewer | – |
 | `GET /api/v1/events` | viewer | – |
 | `GET /*` | public | – |
@@ -197,7 +203,7 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 `read_requires_login: false`). `GET …/parameters/:name/options` braucht `viewer`, bei Optionen aus einem Skript
 (`options_from.command`, WI-31) zusätzlich `operator` (sonst `403 forbidden`), damit `viewer` keine Skripte auslösen kann;
 mit `auth.mode: none` wie bisher ohne Einschränkung. `admin` umfasst alles von `operator`; die `admin`-Endpunkte sind die [UI-Aktionen](#ui-aktionen-als-identity-seit-040-wi-27)
-(`/items/…` zusätzlich nur mit echter Anmeldung, nie mit dem Steuer-Token).
+(`/items/…` zusätzlich nur mit echter Anmeldung, nie mit dem Steuer-Token) und – seit 0.10.0 – das Löschen von Artefakten.
 
 ## Fehlerform
 
@@ -207,12 +213,13 @@ mit `auth.mode: none` wie bisher ohne Einschränkung. `admin` umfasst alles von 
 
 | HTTP | Codes (Auswahl) |
 |---|---|
-| 400 | `invalid_request` (Schema-Validierung, `details.issues`), `invalid_json`, `manual_item_required`, `manual_item_not_supported`, `manual_item_invalid_ref`, `invalid_parameters` (`details.errors`), `lifecycle_not_skippable`, `validation_error`, `comment_contains_secret`, `comment_too_long`, `label_not_found`, `project_not_configured`, `invalid_project_fields`, `ambiguous_item_ref` (WI-27) |
+| 400 | `invalid_request` (Schema-Validierung, `details.issues`), `invalid_json`, `manual_item_required`, `manual_item_not_supported`, `manual_item_invalid_ref`, `invalid_parameters` (`details.errors`), `lifecycle_not_skippable`, `validation_error`, `comment_contains_secret`, `comment_too_long`, `label_not_found`, `project_not_configured`, `invalid_project_fields`, `ambiguous_item_ref` (WI-27), `artifact_invalid_path`, `workflow_not_applicable` (WI-35) |
 | 401 | `authentication_required`, `invalid_credentials`, `untrusted_proxy`, `invalid_proxy_secret`, `invalid_identity_header`, `control_token_not_local`, `invalid_control_token` (WI-26) |
 | 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed`, `control_token_not_allowed` (WI-26), `ui_actions_disabled`, `user_login_required`, `identity_not_allowed` (WI-27) |
 | 421 | `host_not_allowed` (Host-Allowlist) |
-| 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found`, `source_not_found`, `item_not_found`, `github_not_found` (WI-27) |
-| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27), `block_run_active`, `unblock_run_active` (WI-30) |
+| 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found`, `source_not_found`, `item_not_found`, `github_not_found` (WI-27), `artifact_not_found`, `artifact_file_not_found` (WI-35) |
+| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27), `block_run_active`, `unblock_run_active` (WI-30), `artifact_in_use` (WI-35) |
+| 413 | `artifact_too_large` (Ordner zu groß für einen `.zip`-Download, WI-35) |
 | 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt), `github_rejected` (WI-27) |
 | 429 | `too_many_attempts` (Login, WI-26), `rate_limited` (Info-Refresh), `ui_actions_throttled`, `github_rate_limited` (WI-27) |
 | 502 | `source_unavailable`, `parameter_options_unavailable` (WI-31, `details: {parameter, error: {code, message}}`), `github_forbidden`, `github_auth_failed`, `github_unavailable`, `github_outcome_unknown` (WI-27) |
@@ -276,7 +283,7 @@ Dry-Run) bedeutet: Hub-Limit erreicht, Hub pausiert oder nicht erreichbar; `capa
 
 `Workflow`: `id, name, file, enabled, priority, maxConcurrent` (effektiv), `configured {enabled, priority, maxConcurrent}`,
 `overrides`, `trigger`, `identity`, `activeRuns`, `activeBlocks`, `parameters {name: {type, required, default, description, values?, optionsFrom?, allowCustom?}}` (bei `enum` seit 0.7.0: `optionsFrom` = `null`, `{type: "github", github: "branches"|"tags", source, limit, timeoutMs, cacheMs}` oder `{type: "command", command, secrets: [Namen], timeoutMs, cacheMs}` – ohne `args`; `allowCustom`, WI-31),
-`execute {type, command, args, workingDirectory, timeout, secrets: [Namen], secretDelivery: {Name: env|file}, keep: [Muster], keepMaxSizeBytes, container?}` (seit 0.3.0 `secretDelivery`; nie Werte; bei `type: container` sind `command`/`args` der Engine-Aufruf mit `<run-id>`/`<data-dir>` und `container = {engine, image, command, workdir, mounts, resources, user, network, pull}`, WI-19), `secrets` (seit 0.3.0: alle deklarierten Secrets von `execute` und `shell`-Actions als `[{where, name, identity, delivery, variable}]`, nie Werte), `hasFilter`, `hasShellFilter`,
+`execute {type, command, args, workingDirectory, timeout, secrets: [Namen], secretDelivery: {Name: env|file}, keep: [Muster], keepMaxSizeBytes, artifacts: [{name, type, path, required}], artifactsMaxSizeBytes, container?}` (seit 0.3.0 `secretDelivery`; nie Werte; bei `type: container` sind `command`/`args` der Engine-Aufruf mit `<run-id>`/`<data-dir>` und `container = {engine, image, command, workdir, mounts, resources, user, network, pull}`, WI-19), `secrets` (seit 0.3.0: alle deklarierten Secrets von `execute` und `shell`-Actions als `[{where, name, identity, delivery, variable}]`, nie Werte), `hasFilter`, `hasShellFilter`,
 `conditions` (seit 0.4.0, siehe unten; vorher nur Anzahlen), `maxTechnicalFailures`, `cron` (Schedule: `nextSlot`, `lastFiring`, …), `lastPlanning`.
 
 **`ParameterOptions` (seit 0.7.0, WI-31)** – Auswahlliste eines `enum`-Parameters für das Startformular:
@@ -386,7 +393,9 @@ result` (geparste Ergebnisdatei), `error` (technische Diagnose), `input` (`conte
 `inputError`, `resultFile` / `resultFileError` (Rohdatei), `actions` (Journal inkl. `attemptsDetail` und – seit 0.9.0 – `effect`, der strukturierten Wirkung wie im Item-Verlauf; ältere Einträge `null`), `events` (max. 500,
 `eventsTruncated`), `logs {stdout:{size, truncated}, stderr:{…}}`, `block` (aktiver Block des Scopes), `retryBlock`
 (ab 0.6.0: bei Trigger `unblock` der aufgehobene Block, sonst der von diesem Run erzeugte Block oder `null`),
-`kept` (`{files, bytes, skippedCount, message, error}` aus dem Event `run.kept_files`, sonst `null`), `supervised`,
+`kept` (`{files, bytes, skippedCount, message, error}` aus dem Event `run.kept_files`, sonst `null`),
+`artifacts` (ab 0.10.0: `{created: [Artifact], report, input}` – `created` = vom Run erzeugte Artefakte, `report` = Payload des Events
+`run.artifacts` (`message, created, warnings, bytes`) oder `null`, `input` = bei einem Artefakt-Item `{id, exists, artifact}`, sonst `null`), `supervised`,
 `blockGeneration, countedTechnicalFailure, configVersion, configHash, finalizingAt, updatedAt`.
 
 `LogPage`: `{"runId","active","stream","offset","length","nextOffset","size","eof","exists","data"}` – Seiten max. 1 MiB
@@ -688,6 +697,47 @@ Antworten passieren den Secret-Redactor; Kommentartexte werden weder gespeichert
   Endpunkt und werden nicht gespeichert: `502 github_forbidden`/`github_auth_failed`/`github_unavailable`,
   `404 github_not_found`/`item_not_found`/`source_not_found`, `429 github_rate_limited`.
 
+### Artefakte (seit 0.10.0, WI-35)
+
+Artefakte sind Dateien oder Ordner, die ein Workflow mit `execute.artifacts` erzeugt, und zugleich die Items der Source
+`type: artifacts` (siehe Konfigurationsreferenz). Metadaten liegen in SQLite, Inhalte unter `data-dir/artifacts/<id>/`;
+Artefakte sind unveränderlich. Ohne konfigurierte Source `artifacts` funktionieren die Endpunkte trotzdem (nur ohne
+`sourceId` und ohne startbare Workflows).
+
+| Methode | Pfad | Body | Antwort |
+|---|---|---|---|
+| GET | `/api/v1/artifacts?type=&workflow=&kind=file\|folder&run=&parent=&q=&limit=50&offset=0` | – | `{"artifacts":[Artifact],"total","limit","offset","facets":{"types":[…],"workflows":[…]},"sourceId"}` (neueste zuerst, `limit ≤ 200`; `q` = Teilstring von Name oder ID, ohne Beachtung der Groß-/Kleinschreibung) |
+| GET | `/api/v1/artifacts/:id` | – | ArtifactDetail; `404 artifact_not_found` |
+| GET | `/api/v1/artifacts/:id/files/<pfad>` | – | Download einer Datei (`<pfad>` relativ zum Artefakt, Segmente URL-kodiert; bei einer Datei der Dateiname); `400 artifact_invalid_path`, `404 artifact_file_not_found` |
+| GET | `/api/v1/artifacts/:id/download` | – | eine Datei als Anhang, ein Ordner als `.zip` (`Content-Type: application/zip`, gestreamt, ohne `Content-Length`); `413 artifact_too_large` ohne ZIP64-Möglichkeit |
+| POST | `/api/v1/artifacts/:id/start` | `{"workflow": "<id>", "parameters"?: {…}}` | `202 {"run": RunSummary}` – manueller Start des Workflows auf diesem Artefakt (wie `POST /workflows/:id/start` mit `item`; Filter, Retry-Blocks und Limits gelten nicht); `400 workflow_not_applicable`, wenn der Workflow nicht von der Source `artifacts` ausgelöst wird, `404 config_unknown_workflow`/`artifact_not_found`, `409 lock_conflict` |
+| DELETE | `/api/v1/artifacts/:id` | – | `200 {"deleted":true,"artifact":Artifact}`; `409 artifact_in_use` (`details.runIds`) solange ein aktiver Run das Artefakt als Item nutzt; `404` |
+
+`Artifact`:
+```json
+{ "id": "art-20261029T100000123Z-3fa2c91b", "name": "Report run-…", "type": "report", "kind": "file|folder",
+  "fileName": "report.pdf", "size": 12345, "fileCount": 1, "workflow": "make-report", "runId": "run-…",
+  "parent": null, "consumedBy": ["summarize"], "attemptedBy": ["summarize"], "createdAt": "…", "url": "#/artifacts/art-…" }
+```
+`size` sind die gespeicherten Bytes (nach dem Redigieren von Secrets), `fileName` der Basisname der gesammelten Datei bzw.
+des Ordners (Download-Name), `parent` die ID des Artefakts, das der erzeugende Run selbst als Item hatte (bleibt als Text
+erhalten, auch wenn das Eltern-Artefakt gelöscht wird), `consumedBy` die Workflows, die das Artefakt mit Erfolg
+verarbeitet haben (Run `completed` mit Ergebnis `success`, eingetragen mit dem Ende des Runs), `attemptedBy` die Workflows,
+deren Run auf dem Artefakt abgeschlossen wurde (`completed`, Erfolg oder fachliches `failure`; Retry-Schutz im Filter).
+
+`ArtifactDetail`: `{artifact, files: [{path, size}], filesTruncated, producer: {runId, workflow, run: RunSummary|null},
+parent: {id, exists, name}|null, children: [Artifact], runs: [RunSummary], workflows: [{id, name, enabled}], itemKey, sourceId}`.
+`files` ist der Dateibaum (sortiert, höchstens 10 000, `/`-getrennte Pfade), `runs` sind die Runs, die das Artefakt als Item
+nutzen oder genutzt haben (neueste zuerst, höchstens 50), `workflows` die Workflows, die darauf gestartet werden können
+(Trigger: die Source `artifacts`).
+
+Downloads wie die gesicherten Dateien eines Runs: Pfad segmentweise geprüft, keine Symlinks, nur reguläre Dateien,
+immer `Content-Disposition: attachment`, `Content-Security-Policy: default-src 'none'; sandbox`, `Content-Type` nach
+Endung (HTML/SVG/JS und Unbekanntes als `application/octet-stream`). Der `.zip`-Writer ist eigener Code ohne
+Abhängigkeit (Deflate, Data-Descriptor, UTF-8-Namen, Zeitstempel = Erzeugungszeit des Artefakts); Ordner ab etwa 4 GiB
+bzw. mehr als 65 535 Dateien lassen sich nicht als `.zip` laden (`413`), die Dateien einzeln schon. Löschen und Starten
+werden mit Benutzername im Daemon-Log bzw. (Start) im Run-Audit protokolliert.
+
 ### Notifications
 
 | Methode | Pfad | Antwort |
@@ -714,10 +764,11 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 |---|---|---|
 | `stream.open` | `id` = aktuelle Basis (ohne Resume) | `{lastEventId, replayed}` |
 | `stream.reset` | `id` = neueste ID | `{reason:"too_many_missed_events"\|"unknown_last_event_id", lastEventId}` – Client lädt per REST neu (auch wenn die `Last-Event-ID` größer als jede bekannte ID ist, z. B. nach Austausch des data-dir) |
-| `run.event` | ja | RunEvent `{id, runId, sequence, timestamp, origin: worker\|orchestrator, type, payload}`; `type` u. a. `run.status` (`{from,to,target?,outcome?,hook?,blockId?}`; `outcome`/`hook` beim Übergang nach `finalizing`), `run.outcome_warning` (`{code: invalid_outcome|unmatched_outcome, message, outcome?, hook?}`), Worker-`status`/`progress`/…, `diagnostic.*`, `lifecycle.action`, `lifecycle.chain`, `run.spawn`, `run.cancel_requested`, `recovery.*`, `run.kept_files`, `workspace.cleanup`, `audit.user_action` (WI-26) |
+| `run.event` | ja | RunEvent `{id, runId, sequence, timestamp, origin: worker\|orchestrator, type, payload}`; `type` u. a. `run.status` (`{from,to,target?,outcome?,hook?,blockId?}`; `outcome`/`hook` beim Übergang nach `finalizing`), `run.outcome_warning` (`{code: invalid_outcome|unmatched_outcome, message, outcome?, hook?}`), Worker-`status`/`progress`/…, `diagnostic.*`, `lifecycle.action`, `lifecycle.chain`, `run.spawn`, `run.cancel_requested`, `recovery.*`, `run.kept_files`, `run.artifacts` (WI-35), `workspace.cleanup`, `audit.user_action` (WI-26) |
 | `run.output` | nein | `{runId, stream: stdout\|stderr, data, at}` (Live-Log, redigiert; per REST nachladen) |
 | `run.action` | nein | Action-Journal-Eintrag nach Änderung |
 | `block.created` / `block.cleared` | nein | Block |
+| `artifact.created` / `artifact.deleted` | nein | Artifact (wie `GET /api/v1/artifacts/:id` → `artifact`, seit 0.10.0, WI-35); systemweit, auch bei `?run=` nicht zugestellt |
 | `system.status` | nein | `{ready, paused, draining, stopping, activeRuns}` |
 | `system.ready` | nein | `{ready:true}` nach Recovery |
 | `notification` | nein | Notification inkl. `deliveries` (bei Anlage und jedem Zustellversuch) |

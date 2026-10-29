@@ -4,6 +4,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { systemClock, type Clock } from '../core/index.js';
 import { ActionRepository } from './actions.js';
+import { ArtifactRepository } from './artifacts.js';
 import { BlockRepository } from './blocks.js';
 import { CronFiringRepository } from './cron-firings.js';
 import { openDatabase, type MigrationResult, type OpenDatabaseOptions } from './database.js';
@@ -25,6 +26,8 @@ export interface Repositories {
   retention: RetentionRepository;
   /** Audit of UI actions (WI-27). */
   uiActions: UiActionRepository;
+  /** Artifact metadata (WI-35). */
+  artifacts: ArtifactRepository;
   /** Run `fn` in one transaction (nested repository calls join it via savepoints). */
   transaction<T>(fn: () => T): T;
   /**
@@ -48,6 +51,7 @@ export function createRepositories(db: DatabaseSync, options: { clock?: Clock } 
     cronFirings: new CronFiringRepository(db, clock),
     retention: new RetentionRepository(db, clock),
     uiActions: new UiActionRepository(db, clock),
+    artifacts: new ArtifactRepository(db, clock),
     transaction: (fn) => transaction(db, fn),
     afterCommit: (cb) => afterCommit(db, cb),
   };

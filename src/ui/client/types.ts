@@ -117,6 +117,12 @@ export interface RunDetail extends RunSummary {
   block: Block | null;
   /** Summary of the `run.kept_files` event (WI-22), `null` if nothing was kept. */
   kept: { files: number; bytes: number; skippedCount: number; message: string | null; error: string | null } | null;
+  /** Artifacts of the run (WI-35). */
+  artifacts?: {
+    created: Artifact[];
+    report: { message?: string; warnings?: Array<{ index: number; name: string; path: string; reason: string; message: string }> } | null;
+    input: { id: string; exists: boolean; artifact: Artifact | null } | null;
+  };
   supervised: boolean;
   configVersion: number | null;
   configHash: string | null;
@@ -471,4 +477,36 @@ export interface Notification {
   createdAt: string;
   deliveredAt: string | null;
   deliveries: Array<{ channelId: string; state: string; attempts: number; lastError: string | null; lastStatus: number | null; nextAttemptAt: string | null; deliveredAt: string | null }>;
+}
+
+/** An artifact (`GET /api/v1/artifacts`, WI-35). */
+export interface Artifact {
+  id: string;
+  name: string;
+  type: string;
+  kind: 'file' | 'folder';
+  fileName: string;
+  size: number;
+  fileCount: number;
+  workflow: string;
+  runId: string;
+  parent: string | null;
+  consumedBy: string[];
+  attemptedBy?: string[];
+  createdAt: string;
+  url: string;
+}
+
+/** `GET /api/v1/artifacts/:id`. */
+export interface ArtifactDetail {
+  artifact: Artifact;
+  files: Array<{ path: string; size: number }>;
+  filesTruncated: boolean;
+  producer: { runId: string; workflow: string; run: RunSummary | null };
+  parent: { id: string; exists: boolean; name: string | null } | null;
+  children: Artifact[];
+  runs: RunSummary[];
+  workflows: Array<{ id: string; name: string | null; enabled: boolean }>;
+  itemKey: string | null;
+  sourceId: string | null;
 }

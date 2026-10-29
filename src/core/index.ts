@@ -2,6 +2,7 @@
  * Shared contracts of the orchestrator: domain types, component interfaces and
  * small pure helpers. Other components import core only via this module.
  */
+export * from './artifacts.js';
 export * from './clock.js';
 export * from './container.js';
 export * from './display-text.js';

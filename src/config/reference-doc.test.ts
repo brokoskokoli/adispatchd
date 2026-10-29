@@ -27,6 +27,8 @@ import {
 } from '../sources/github/index.js';
 import { VIEW_RUN_FIELDS } from '../views/index.js';
 import { KEEP_MAX_ENTRIES, KEEP_MAX_FILES } from '../runs/index.js';
+import { ARTIFACT_MAX_ENTRIES, ARTIFACT_MAX_FILES } from '../artifacts/index.js';
+import { ARTIFACT_FIELD_DEFINITIONS } from '../sources/index.js';
 import {
   DEFAULT_WORKING_DIRECTORY,
   DEFAULTS,
@@ -228,6 +230,24 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain('GET /api/v1/runs/:id/kept');
     const fmt = (n: number): string => String(n).replace(/\B(?=(\d{3})+$)/g, ' ');
     expect(markdown).toContain(`höchstens ${fmt(KEEP_MAX_FILES)} Dateien und ${fmt(KEEP_MAX_ENTRIES)} untersuchte Verzeichniseinträge`);
+  });
+
+  it('documents artifacts: source, keys, defaults, fields, event, limits and retention (WI-35)', () => {
+    for (const name of ['reference', 'artifacts']) expect(sets.get(name)?.invalid, name).toBe(false);
+    expect(sets.get('err-artifacts')?.invalid).toBe(true);
+    for (const key of ['artifacts', 'artifacts.[].name', 'artifacts.[].type', 'artifacts.[].path', 'artifacts.[].required']) {
+      expect(markdown, key).toContain(`| \`${key}\` |`);
+    }
+    expect(markdown).toContain(`| \`artifacts_max_size\` | Größe | nein | \`${DEFAULTS.artifactsMaxSize}\` |`);
+    expect(markdown).toContain('| `retention.artifacts` | Dauer \\| `never` | `never` |');
+    expect(markdown).toContain('`run.artifacts`');
+    expect(markdown).toContain('`run_required_artifact_missing`');
+    expect(markdown).toMatch(/Secrets werden beim Kopieren redigiert\*\* – best effort,\s+wie Logs \(gleiche Ersetzung wie bei `keep`\)/);
+    expect(markdown).toContain('Only one source of type "artifacts" is allowed');
+    const fmt = (n: number): string => String(n).replace(/\B(?=(\d{3})+$)/g, ' ');
+    expect(markdown).toContain(`höchstens ${fmt(ARTIFACT_MAX_FILES)} Dateien und ${fmt(ARTIFACT_MAX_ENTRIES)} untersuchte Verzeichniseinträge`);
+    const section = markdown.slice(markdown.indexOf('### 4.9 Feldkatalog der Source `artifacts`'), markdown.indexOf('## 5. Platzhalter-Referenz'));
+    for (const f of ARTIFACT_FIELD_DEFINITIONS) expect(section, f.name).toContain(`| \`${f.name}\` | ${f.type} |`);
   });
 
   it('documents the container executor: keys, defaults, mounts, labels and config.yaml (WI-19)', () => {

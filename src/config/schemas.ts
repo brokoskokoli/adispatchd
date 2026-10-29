@@ -10,6 +10,7 @@
  */
 import { z } from 'zod';
 import {
+  ARTIFACT_TYPE_MAX_LENGTH,
   CONFIG_ID_PATTERN,
   CONTAINER_ENGINES,
   CONTAINER_MOUNT_MODES,
@@ -56,6 +57,7 @@ export const DEFAULTS = {
   shellActionTimeout: '5m',
   cancelGrace: '30s',
   keepMaxSize: '100MB',
+  artifactsMaxSize: '100MB',
   scheduleTimezone: 'UTC',
   containerEngine: 'docker',
   containerPull: 'missing',
@@ -268,6 +270,8 @@ export const globalConfigSchema = z.strictObject({
       cleanup_interval: loopInterval.default(parseDuration(DEFAULTS.cleanupInterval)),
       /** Audit entries of UI actions (WI-27), regardless of their result. */
       ui_actions: durationOrNever.default(parseDuration(DEFAULTS.uiActionsRetention)),
+      /** Artifacts (WI-35) are kept until deleted by default. */
+      artifacts: durationOrNever.default(null),
     })
     .prefault({}),
   notifications: z
@@ -374,9 +378,15 @@ const githubSourceSchema = z.strictObject({
   vars: sourceVarsSchema.optional(),
 });
 
+/** Artifacts as a source (WI-35): every artifact is an item; nothing else to configure. */
+const artifactsSourceSchema = z.strictObject({
+  type: z.literal('artifacts'),
+  vars: sourceVarsSchema.optional(),
+});
+
 /** Schema of `sources.yaml`. */
 export const sourcesFileSchema = z.strictObject({
-  sources: z.record(configId, z.discriminatedUnion('type', [githubSourceSchema])).default({}),
+  sources: z.record(configId, z.discriminatedUnion('type', [githubSourceSchema, artifactsSourceSchema])).default({}),
 });
 
 /** Parsed `sources.yaml`. */
@@ -536,6 +546,17 @@ const parameterSchema = z.discriminatedUnion('type', [
 /** Parsed parameter definition (default still unchecked; see validate.ts). */
 export type RawParameter = z.output<typeof parameterSchema>;
 
+/** One `execute.artifacts` entry (WI-35). */
+const artifactOutputSchema = z.strictObject({
+  /** Display name; placeholders allowed (rendered when the artifact is collected). */
+  name: nonEmpty,
+  /** Free type for filtering. */
+  type: nonEmpty.max(ARTIFACT_TYPE_MAX_LENGTH, `Must not be longer than ${ARTIFACT_TYPE_MAX_LENGTH} characters`),
+  /** File or folder relative to the workspace (checked in validate.ts). */
+  path: z.string('Expected a path such as out/report.pdf'),
+  required: z.boolean().default(false),
+});
+
 /** Settings of `execute` shared by `shell` and `container`. */
 const executeCommon = {
   working_directory: nonEmpty.default(DEFAULT_WORKING_DIRECTORY),
@@ -552,6 +573,9 @@ const executeCommon = {
   // Patterns are checked in validate.ts (path + message per entry).
   keep: z.array(z.string('Expected a pattern such as .agent/*.log')).default([]),
   keep_max_size: positiveSize.optional(),
+  // Artifacts (WI-35): paths are checked in validate.ts (path + message per entry).
+  artifacts: z.array(artifactOutputSchema).default([]),
+  artifacts_max_size: positiveSize.optional(),
 };
 
 /** Memory limit as understood by docker/podman (`512m`, `8g`, `1.5g`, bytes without unit). */

@@ -9,6 +9,25 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ### Hinzugefügt
 
+- **Artefakte** (WI-35): Workflows erzeugen Dateien oder Ordner, die run-übergreifend sichtbar sind und andere Workflows
+  als Eingabe verarbeiten – ohne Pipeline-Engine.
+  - `execute.artifacts` (`name` mit Platzhaltern, `type`, `path`, `required`) und `artifacts_max_size` (Default 100MB):
+    nach dem Abschluss-Hook und vor dem Workspace-Cleanup gespeichert unter `data-dir/artifacts/<id>/`, nur bei Runs,
+    die `completed` enden; Sicherheitsregeln wie `execute.keep` (keine Symlinks, nur reguläre Dateien, Größenlimit,
+    Secret-Redaktion). Fehlender Pfad = Warnung im Event `run.artifacts`, mit `required: true` ein technischer Fehler
+    (Run `crashed`).
+  - Neue Source `type: artifacts` (jedes Artefakt ist ein Item; keine Identity): Auto-Trigger mit Filter, manueller
+    Start, Views, Item-Verlauf. Eingebautes Feld `consumed_by` (Workflows, die das Artefakt mit Erfolg verarbeitet
+    haben) verhindert erneutes Verarbeiten, `attempted_by` (Run abgeschlossen, auch bei fachlichem `failure`) ist der Retry-Schutz; die Konfigurationsprüfung warnt, wenn ein Artefakt-Workflow keinen Filter darauf hat; weitere Felder `id`, `name`, `type`, `kind`, `file_name`, `size`,
+    `file_count`, `created_at`, `workflow`, `run_id`, `parent`, `url`.
+  - Eingabe: schreibgeschützte Kopie unter `<workspace>/inputs/<Name>`, Platzhalter `{item.path}`, `{item.name}`,
+    `{item.type}` und `source.input` in `context.json`; Löschen ist gesperrt, solange ein aktiver Run das Artefakt nutzt.
+  - API: `GET /api/v1/artifacts`, `…/:id`, `…/:id/files/<pfad>`, `…/:id/download` (Datei oder `.zip` ohne neue
+    Dependency), `POST …/:id/start`, `DELETE …/:id` (`409 artifact_in_use`); Rollen viewer/operator/admin; SSE
+    `artifact.created`/`artifact.deleted`; Run-Detail `artifacts`.
+  - UI: Seite „Artifacts“ (Liste, Filter, Dateibaum, Download, Löschen, „Workflow starten…“), Verlinkung vom Run.
+  - `retention.artifacts` (Default `never`); Beispiel-Kette `make-report` → `summarize-report` in `examples/config`.
+
 - **Hub im Betrieb** (WI-38). `adispatch service install --hub` richtet den Hub als **eine** systemd-Unit ein (Default-Name
   `adispatchd-hub`, Env-Datei `/etc/default/adispatchd-hub`): `ExecStart=… hub start`, `KillMode=mixed`, `TimeoutStopSec` aus Drain-,
   Cancel-Timeout und dem größten `cancel_grace` **aller** Workspaces, `RestartPreventExitStatus=78`. Dieselben Optionen und
@@ -65,6 +84,8 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ### Geändert
 
+- **DB-Schema v7** (Migration mit Backup, Einbahnstraße): Tabelle `artifacts`. `workspace`-Cleanup und Retention
+  stellen die Schreibrechte der Artefakt-Eingabe (`inputs/`) vor dem Löschen wieder her.
 - **Web-UI der Instanzen: seitenrelative URLs.** Alle Anfragen (API, SSE, Downloads) laufen als `./api/v1/…` relativ zur Seite,
   damit dieselbe UI unter `/`, unter `/w/<id>/` und hinter einem Reverse Proxy mit zusätzlichem Pfadpräfix funktioniert. Die
   Einzelinstanz verhält sich unverändert. Nebenbei funktioniert der Download-Link der erhaltenen Dateien (`execute.keep`) wieder:

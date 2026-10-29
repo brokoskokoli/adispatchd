@@ -77,6 +77,8 @@ export interface RetentionConfig {
   cleanupIntervalMs: number;
   /** `retention.ui_actions` (WI-27): audit entries of UI actions, any result; `null` = keep forever. */
   uiActionsMs: number | null;
+  /** `retention.artifacts` (WI-35): artifacts older than this are deleted; `null` = keep until deleted. */
+  artifactsMs: number | null;
 }
 
 /**
@@ -248,8 +250,27 @@ export interface GithubProjectConfig {
   fields: Readonly<Record<string, ProjectFieldKind>>;
 }
 
-/** A configured source (V1: only GitHub). */
-export type SourceConfig = GithubSourceConfig;
+/**
+ * Artifacts as a source (WI-35): every artifact is an item. At most one source
+ * of this type. It has no identity and no project (`null`), so code that reads
+ * `source.identity` / `source.project` needs no special case.
+ */
+export interface ArtifactsSourceConfig {
+  id: string;
+  type: 'artifacts';
+  identity: null;
+  project: null;
+  /** Free variables of the source, available as `{source.vars.<name>}`. */
+  vars: Readonly<Record<string, string>>;
+}
+
+/** A configured source. */
+export type SourceConfig = GithubSourceConfig | ArtifactsSourceConfig;
+
+/** Human-readable location of a source (`{source.repository}`): `owner/name`, `artifacts` for artifacts. */
+export function sourceLocation(source: SourceConfig): string {
+  return source.type === 'github' ? `${source.owner}/${source.repository}` : source.type;
+}
 
 /** GitHub App identity. The private key is read from `privateKeyEnv` at runtime. */
 export interface GithubAppIdentityConfig {
@@ -473,6 +494,25 @@ interface ExecuteCommon {
   keep: readonly string[];
   /** Max. total size of kept files per run in bytes (`keep_max_size`, default 100MB). */
   keepMaxSizeBytes: number;
+  /**
+   * Files and folders collected as artifacts after the completion hook and
+   * before the cleanup (WI-35). Missing in snapshots written before 0.10.0 (= none).
+   */
+  artifacts: readonly ArtifactOutputConfig[];
+  /** Max. total size of the artifacts collected per run in bytes (`artifacts_max_size`, default 100MB). */
+  artifactsMaxSizeBytes: number;
+}
+
+/** One `execute.artifacts` entry (WI-35). */
+export interface ArtifactOutputConfig {
+  /** Display name template (placeholders allowed). */
+  name: string;
+  /** Free type for filtering. */
+  type: string;
+  /** Literal path of a file or folder relative to the workspace (`./` removed). */
+  path: string;
+  /** A missing path is a technical failure of the run instead of a warning. */
+  required: boolean;
 }
 
 /** Main worker execution as a local process (Spec §5.4, §8.3, §9). */
