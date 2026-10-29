@@ -19,7 +19,8 @@
 2. [Gemeinsame Datentypen](#2-gemeinsame-datentypen)
 3. [Die Dateien](#3-die-dateien) – [config.yaml](#31-configyaml), [sources.yaml](#32-sourcesyaml),
    [identities.yaml](#33-identitiesyaml), [workflows/*.yaml](#34-workflowsyaml), [views/*.yaml](#35-viewsyaml),
-   [filters/*.yaml](#36-filtersyaml), [dashboard.yaml](#37-dashboardyaml), [Grenzen](#38-bekannte-grenzen-v1)
+   [filters/*.yaml](#36-filtersyaml), [dashboard.yaml](#37-dashboardyaml), [Grenzen](#38-bekannte-grenzen-v1),
+   [hub.yaml](#39-hubyaml-hub-seit-0100)
 4. [Filter-Sprache](#4-filter-sprache)
 5. [Platzhalter-Referenz](#5-platzhalter-referenz)
 6. [Auswertungsablauf](#6-auswertungsablauf)
@@ -44,6 +45,9 @@ config-dir/
   dashboard.yaml       Info-Kacheln und Layout des Dashboards (§3.7) optional (fehlt → Standard-Layout, keine Info-Kacheln)
   scripts/…            frei; Skripte werden über Pfade referenziert (siehe §2.4)
 ```
+
+Das config-dir eines **Hubs** (`adispatch hub …`, seit 0.10.0) enthält nur `hub.yaml` (§3.9); die Workspaces des Hubs sind
+ganz normale config-dirs wie oben.
 
 `adispatch init --config-dir D --data-dir D` legt eine kommentierte, gültige Beispielkonfiguration an
 (`src/cli/init-templates.ts`): `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/hello.yaml`
@@ -1918,6 +1922,97 @@ layout:
   `item_priority`-Regel, View-`filter`, jeder benannte Filter für sich). Benannte Filter werden an jedem
   Verwendungsort kopiert; die Expansion bricht ab, bevor die Grenze überschritten würde (Fehler am Verwendungsort).
 
+### 3.9 hub.yaml (Hub, seit 0.10.0)
+
+Ein **Hub** (`adispatch hub start`) startet mehrere **Workspaces** als Kindprozesse und teilt ein gemeinsames Limit
+für automatische Runs. `hub.yaml` liegt im **eigenen config-dir des Hubs** (`--config-dir` von `hub start`/`hub validate`)
+und ist die einzige Datei dort, die der Hub liest. Ein Workspace ist eine vollständige, unveränderte Instanz mit eigenem
+config-dir (alle Dateien dieser Referenz), eigenem data-dir (eigene Datenbank, Logs, Workspaces), eigenem Port und eigener
+Instanzsperre – es gibt keine gemeinsamen Tabellen und keine `workspace_id` im Schema. Die Datei wird beim Start des Hubs
+gelesen; es gibt **keinen Reload** (Änderungen wirken nach einem Neustart des Hubs).
+
+| Schlüssel | Typ | Default | Bedeutung |
+|---|---|---|---|
+| `hub.max_concurrent` | Integer ≥ 1 | `5` | Limit gleichzeitig laufender **automatischer** Runs (Source, Cron) über alle Workspaces. Das lokale `scheduler.max_concurrent` und die Limits der Workflows gelten zusätzlich. Manuelle Starts werden nicht begrenzt, belegen aber einen Platz |
+| `hub.server.host` | String | `127.0.0.1` | Bind-Adresse des HTTP-Servers des Hubs (Übersichtsseite: späteres Work-Item). Nicht-Loopback → Warnung |
+| `hub.server.port` | Integer 1–65535 | `8090` | Port dieses Servers; darf kein `workspaces[].port` sein |
+| `hub.server.allowed_hosts` | Liste String | `[]` | wie `server.allowed_hosts` in §3.1 |
+| `workspaces` | Liste | `[]` | die Workspaces; leer → Warnung |
+| `workspaces[].id` | String | – | Pflicht; Kleinbuchstaben, Ziffern und `-`, höchstens 40 Zeichen, eindeutig |
+| `workspaces[].config_dir` | Pfad | – | Pflicht; config-dir der Instanz; relative Pfade gelten ab dem config-dir des Hubs; eindeutig |
+| `workspaces[].data_dir` | Pfad | – | Pflicht; data-dir der Instanz; eindeutig, **nicht verschachtelt** mit einem anderen data-dir, dem data-dir des Hubs oder dem eigenen config-dir |
+| `workspaces[].port` | Integer 1–65535 | – | Pflicht; Loopback-Port der Instanz (der Hub startet sie mit `--host 127.0.0.1 --port <port>`, `server.host`/`server.port` der Instanz werden überschrieben); eindeutig |
+| `workspaces[].enabled` | Boolean | `true` | `false`: bekannt, aber nicht vom Hub gestartet (`hub workspace start <id>` startet sie trotzdem) |
+
+Alle Objekte sind strikt (unbekannte Schlüssel sind Fehler mit „did you mean“). Der Hub startet jedes Kind als
+`adispatch start --config-dir … --data-dir … --host 127.0.0.1 --port … --drain-timeout … --cancel-timeout …` unter
+**demselben Benutzer** wie der Hub; die Kinder erben die Umgebung des Hubs (Env-Variablen der Secrets, §3.3) und erhalten
+zusätzlich `ADISPATCH_HUB_SOCKET` (Slot-Socket) und `ADISPATCH_HUB_WORKSPACE` (die Workspace-ID). Andere Benutzer je
+Workspace gibt es nicht: dafür den Container-Executor (`execute.type: container`, `user`) oder eigenständige Instanzen
+verwenden. `adispatch hub validate` prüft `hub.yaml` **und** die Konfiguration jedes Workspaces (auch deaktivierter).
+
+```yaml
+# example: hub
+# file: hub.yaml
+hub:
+  max_concurrent: 6                    # Gesamtlimit über alle Workspaces
+  server: { host: 127.0.0.1, port: 8090, allowed_hosts: [] }
+workspaces:
+  - id: coder
+    config_dir: /etc/adispatchd/coder
+    data_dir: /var/lib/adispatchd/coder
+    port: 8091
+    enabled: true
+  - id: docs
+    config_dir: /etc/adispatchd/docs   # eigene Workflows, Sources, Identities, Datenbank
+    data_dir: /var/lib/adispatchd/docs
+    port: 8092
+```
+
+Fehler in der Struktur werden zusammen gemeldet; die Eindeutigkeits- und Verschachtelungsprüfung läuft erst, wenn die
+Struktur gültig ist:
+
+```yaml
+# example: hub-invalid
+# file: hub.yaml
+# invalid
+# expect: hub.yaml: hub.max_concurrent: Must be greater than 0
+# expect: hub.yaml: hub.server.port: Must be between 1 and 65535
+# expect: hub.yaml: hub.server: Unknown key(s): "hots" (did you mean "host"?)
+# expect: hub.yaml: workspaces[0].id: Invalid workspace ID
+# expect: hub.yaml: workspaces[0]: Unknown key(s): "enable" (did you mean "enabled"?)
+# expect: hub.yaml: workspaces[0].port: Must be between 1 and 65535
+# expect: hub.yaml: workspaces[1].config_dir: Must not be empty
+hub:
+  max_concurrent: 0
+  server: { hots: 127.0.0.1, port: 70000 }
+workspaces:
+  - { id: Coder_1, config_dir: /etc/adispatchd/a, data_dir: /var/lib/adispatchd/a, port: 0, enable: true }
+  - { id: docs, config_dir: '', data_dir: /var/lib/adispatchd/b, port: 8092 }
+```
+
+```yaml
+# example: hub-invalid-paths
+# file: hub.yaml
+# invalid
+# expect: hub.yaml: workspaces[1].id: Duplicate workspace ID "coder" (already used by workspaces[0])
+# expect: hub.yaml: workspaces[1].config_dir: Duplicate config_dir "/etc/adispatchd/coder" (already used by workspaces[0])
+# expect: hub.yaml: workspaces[1].data_dir: data_dir "/var/lib/adispatchd/coder/inner" is nested with the data_dir of workspaces[0]
+# expect: hub.yaml: workspaces[1].port: Port 8090 is also used by hub.server.port
+hub:
+  server: { port: 8090 }
+workspaces:
+  - { id: coder, config_dir: /etc/adispatchd/coder, data_dir: /var/lib/adispatchd/coder, port: 8091 }
+  - { id: coder, config_dir: /etc/adispatchd/coder, data_dir: /var/lib/adispatchd/coder/inner, port: 8090 }
+```
+
+**Gemeinsames Limit.** Der Scheduler jeder Instanz fragt vor **jedem automatischen Run** (Source und Cron) beim Hub einen
+Platz an und gibt ihn mit dem Ende des Runs zurück; der Hub vergibt nie mehr als `hub.max_concurrent` Plätze. Die
+Entscheidung heißt `hub_limit` („hub limit reached (n/m active)“, „hub paused …“ oder „hub not reachable …“) und erscheint in
+der Planungsdiagnose (§6.1), im Dry-Run (§6.13) und bei Cron-Terminen als `skipped_limit`. Ist der Hub nicht erreichbar,
+starten **keine neuen automatischen Runs** (sichere Seite); laufende Runs laufen unverändert weiter. Details und Protokoll:
+[worker-protocol.md](worker-protocol.md#slot-protokoll-hub-seit-0100), Betrieb: [operations.md](operations.md#hub-mehrere-workspaces-auf-einem-server-seit-0100).
+
 ---
 
 ## 4. Filter-Sprache
@@ -2345,6 +2440,10 @@ Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität.
 - Aktiv = `reserved`, `starting`, `running`, `cancelling`, `finalizing`, `recovery_pending` (also auch während
   Abschluss-Hooks laufen).
 - Overrides wirken sofort.
+- Unter einem **Hub** (seit 0.10.0, §3.9) gilt zusätzlich `hub.max_concurrent` über alle Workspaces. Es wird als letztes
+  geprüft (Entscheidung `hub_limit`): ein Platz wird beim Hub angefragt, bevor der Run reserviert wird, und mit dem Ende des
+  Runs zurückgegeben. Manuelle Starts umgehen es wie das globale Limit, belegen aber einen Platz. Ohne Hub gibt es diese
+  Prüfung nicht.
 
 ### 6.4 Locks und Retry-Blocks
 

@@ -241,10 +241,17 @@ mit `auth.mode: none` wie bisher ohne Einschränkung. `admin` umfasst alles von 
   "counts": { "activeBlocks": 1, "failedActions": 0, "notifications": { "pending": 0, "delivered": 3, "failed": 1 } },
   "config": { "version": 2, "hash": "…", "loadedAt": "…", "configDir": "/etc/adispatchd" },
   "server": { "host": "127.0.0.1", "port": 8787, "loopback": true },
+  "hub": { "workspace": "coder", "reachable": true, "paused": false, "active": 3, "max": 6 },
   "sse": { "clients": 1 },
   "retention": { "lastRunAt": "…", "deletedRuns": { "successful": 3, "failed": 0, "blocked": 0 }, "errors": 0 }
 }
 ```
+
+`hub` (seit 0.10.0) steht nur, wenn die Instanz von einem Hub gestartet wurde (`ADISPATCH_HUB_SOCKET`, siehe unten): `reachable`
+= der Slot-Socket des Hubs antwortet, `active`/`max` = belegte Plätze über alle Workspaces und `hub.max_concurrent` (letzter
+bekannter Stand), `paused` = `hub pause`. Ohne Hub fehlt das Feld. Der Kandidaten-Status `hub_limit` (Planungsdiagnose und
+Dry-Run) bedeutet: Hub-Limit erreicht, Hub pausiert oder nicht erreichbar; `capacity.hub` im DryRunResult hat dieselben Werte
+(`{active, max, reachable, paused}`), Cron-Termine werden bei vollem Hub als `skipped_limit` mit dieser Begründung verbucht.
 
 ### Scheduler / Shutdown
 
@@ -727,3 +734,48 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 - Heartbeat-Kommentar `: heartbeat …` alle 15 s; `retry: 3000`.
 - Langsame Clients: mehr als 1 MiB ungesendete Daten → Verbindung wird getrennt (Client reconnectet mit `Last-Event-ID`);
   die Logerfassung wird nie blockiert.
+
+## Steuer-Schnittstelle des Hubs (seit 0.10.0)
+
+Der Hub (`adispatch hub start`, WI-35) hat **keine HTTP-API auf einem TCP-Port** – die Übersichtsseite und das Durchreichen der
+Workspace-UIs folgen in einem späteren Work-Item (WI-36), das auf derselben Schnittstelle (`HubControl` in
+`src/hub/control-server.ts`) aufbaut. Für die CLI gibt es einen kleinen JSON-über-HTTP-Server auf einem **Unix-Socket**
+`<hub-data-dir>/hub.sock` (Modus `0600`, nur der Benutzer des Hubs; deshalb keine Anmeldung und kein CSRF-Header).
+
+| Methode | Pfad | Wirkung |
+|---|---|---|
+| GET | `/status` | `HubStatus` (s. u.) |
+| POST | `/pause`, `/resume` | keine neuen **automatischen** Runs in allen Workspaces / wieder erlauben (laufende Runs enden regulär, manuelle Starts bleiben möglich) |
+| POST | `/stop-all` | `cancel-all` in allen Workspaces (`on_cancel`), sie bleiben danach gestoppt |
+| POST | `/drain-all` | alle Workspaces: keine neuen Runs, aktive laufen zu Ende, dann stoppen sie |
+| POST | `/workspaces/:id/start` | gestoppten, fehlgeschlagenen oder deaktivierten Workspace starten (`409 invalid_state`, wenn er läuft) |
+| POST | `/workspaces/:id/stop` | `cancel-all` dieses Workspaces; bleibt gestoppt |
+| POST | `/workspaces/:id/drain` | Drain ohne Frist; bleibt gestoppt |
+| POST | `/workspaces/:id/restart` | Drain (begrenzt durch `--drain-timeout`, danach Cancel), dann neu starten |
+
+Antwort jeder erfolgreichen Anfrage: `200 {"ok": true, "status": HubStatus}`; Fehler: `{"error": {"code", "message"}}` mit
+`404 unknown_workspace`/`not_found`, `409 invalid_state`/`shutting_down`, `400 bad_request`. Die Befehle kehren zurück, sobald
+die Anforderung verschickt ist (`transition` zeigt `draining`/`stopping`/`restarting`), sie warten nicht auf das Ende.
+
+```json
+{
+  "version": "0.10.0", "pid": 4711, "startedAt": "…", "time": "…",
+  "state": "running|paused|stopping", "paused": false,
+  "slots": { "max": 6, "active": 3, "byWorkspace": { "coder": 2, "docs": 1 } },
+  "server": { "host": "127.0.0.1", "port": 8090 },
+  "workspaces": [{
+    "id": "coder", "enabled": true, "url": "http://127.0.0.1:8091",
+    "state": "starting|running|backoff|stopped|failed",
+    "transition": null, "pid": 4720, "port": 8091, "configDir": "…", "dataDir": "…",
+    "startedAt": "…", "restarts": 0, "crashes": 0,
+    "lastExit": { "code": null, "signal": "SIGKILL", "at": "…" }, "nextRestartAt": null, "message": null,
+    "slots": 2, "connected": true
+  }]
+}
+```
+
+`state`: `starting` (Prozess läuft, antwortet noch nicht auf `/health`), `running`, `backoff` (abgestürzt, Neustart bei
+`nextRestartAt`; 1 s, 2 s, 4 s … höchstens 60 s, zurückgesetzt nach 60 s stabilem Lauf), `stopped` (absichtlich beendet oder
+Exit 0), `failed` (Exit-Code 78: Konfiguration/Instanzsperre, oder Prozess nicht startbar – kein automatischer Neustart).
+`transition`: `draining`, `stopping` oder `restarting`, solange eine Anforderung läuft. `slots` = belegte Plätze,
+`connected` = der Workspace hat eine Slot-Verbindung.
