@@ -414,4 +414,18 @@ describe('hub drain-all --wait', () => {
     expect(await createHubGlobalHandler('drain-all', e.io, { client: fakeClient([busy]).client })({ dataDir: '/x', timeout: '1s' })).toBe(2);
     expect(await createHubGlobalHandler('drain-all', e.io, { client: fakeClient([busy]).client })({ dataDir: '/x', wait: true, timeout: 'soon' })).toBe(2);
   });
+
+  it('validates --timeout before executing anything and keeps --json output parseable while waiting', async () => {
+    const done = statusOf(ws({}));
+    let calls = 0;
+    const counting = { client: () => ({ ...fakeClient([done]).client(), drainAll: async () => ((calls += 1), done) }) };
+    const bad = captured();
+    expect(await createHubGlobalHandler('drain-all', bad.io, counting)({ dataDir: '/x', wait: true, timeout: 'soon' })).toBe(2);
+    expect(calls).toBe(0);
+
+    const c = captured();
+    expect(await createHubGlobalHandler('drain-all', c.io, { client: fakeClient([done]).client })({ dataDir: '/x', wait: true, json: true })).toBe(0);
+    expect(() => JSON.parse(c.text())).not.toThrow();
+    expect(c.errText()).toContain('all workspaces ended');
+  });
 });

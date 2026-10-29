@@ -400,12 +400,14 @@ async function waitForWorkspaces(name: string, opts: HubControlCliOptions, io: I
     }
   }
   const client = deps.client ? deps.client(socketOf(opts)) : new HubControlClient(socketOf(opts));
-  io.stdout('waiting for all workspaces to end...\n');
+  // Progress goes to stdout only in text mode, so that --json output stays parseable.
+  const say = (text: string): void => (opts.json ? io.stderr(text) : io.stdout(text));
+  say('waiting for all workspaces to end...\n');
   for (;;) {
     try {
       const status = await client.status();
       if (allWorkspacesStopped(status)) {
-        io.stdout('all workspaces ended\n');
+        say('all workspaces ended\n');
         return 0;
       }
     } catch (err) {
@@ -437,6 +439,15 @@ export function createHubGlobalHandler(action: 'pause' | 'resume' | 'stop-all' |
     if (opts.timeout && !opts.wait) {
       io.stderr(`${name}: --timeout requires --wait\n`);
       return 2;
+    }
+    if (opts.timeout) {
+      // Validate before anything is executed: a typo must not drain/stop the workspaces.
+      try {
+        parseDuration(opts.timeout);
+      } catch (err) {
+        io.stderr(`${name}: invalid --timeout: ${errorMessage(err)}\n`);
+        return 2;
+      }
     }
     const code = await runControl(
       name,
