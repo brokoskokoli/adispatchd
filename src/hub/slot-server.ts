@@ -1,5 +1,5 @@
 /**
- * Slot server of the hub (WI-35): listens on a Unix socket (mode 0600) in the
+ * Slot server of the hub (WI-36): listens on a Unix socket (mode 0600) in the
  * hub data dir and hands out the shared run slots (see `protocol.ts`).
  *
  * Lifetime of a workspace's leases: they live as long as the workspace
@@ -41,7 +41,7 @@ export interface SlotServerOptions {
   logger?: Logger;
   /** Time without a message after which a connection is closed and its leases expire. */
   leaseTtlMs?: number;
-  /** Called after every change of the ledger (WI-36: live updates). */
+  /** Called after every change of the ledger (WI-37: live updates). */
   onChange?: () => void;
 }
 

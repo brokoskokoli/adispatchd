@@ -81,7 +81,7 @@ export interface LiveConnectionOptions {
   /** Backoff for manual reconnects (default 1 s doubling up to 30 s). */
   initialDelayMs?: number;
   maxDelayMs?: number;
-  /** `event:` types to listen for (default {@link LIVE_EVENT_TYPES}; the hub stream has its own, WI-36). */
+  /** `event:` types to listen for (default {@link LIVE_EVENT_TYPES}; the hub stream has its own, WI-37). */
   eventTypes?: readonly string[];
 }
 

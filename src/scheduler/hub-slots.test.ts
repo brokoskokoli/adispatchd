@@ -5,7 +5,7 @@ import { ITEM_KEY, REPO, createSchedulerEnv, scheduleWorkflow, sourceWorkflow, w
 
 const READY = `filter: { field: labels, operator: contains, value: ready-for-coding }`;
 
-describe('Scheduler with a hub (WI-35)', () => {
+describe('Scheduler with a hub (WI-36)', () => {
   let s: SchedulerEnv;
   let hub: FakeHubSlots;
   beforeEach(() => {

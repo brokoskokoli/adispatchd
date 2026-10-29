@@ -5,7 +5,7 @@
  * second prefix) → start again on the same config/data dirs → history and
  * logs are still there → SIGTERM (exit 0).
  *
- * Hub (WI-37), with the same installation: `hub init` (production layout with
+ * Hub (WI-38), with the same installation: `hub init` (production layout with
  * `--workspaces-data-dir`) → `hub validate` → `service install --hub --dry-run`
  * → `hub start` → one run in each of two workspaces through the hub's
  * `/w/<id>/` pass-through → `hub drain-all --wait` → SIGTERM (exit 0); then the
@@ -259,7 +259,7 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     Object.assign(shared, { bin: bin2, configDir, dataDir, runId });
   }, 600_000);
 
-  it('runs a hub with two workspaces from the installed package and migrates a single instance into a hub (WI-37)', async () => {
+  it('runs a hub with two workspaces from the installed package and migrates a single instance into a hub (WI-38)', async () => {
     const { bin, configDir: instConfig, dataDir: instData, runId: oldRun } = shared;
     if (!bin || !instConfig || !instData || !oldRun) throw new Error('the single-instance test must run (and pass) first');
 

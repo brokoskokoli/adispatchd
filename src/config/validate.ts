@@ -181,7 +181,7 @@ function validateAuth(global: GlobalConfig, issues: IssueCollector): void {
 }
 
 /**
- * Checks of an `auth:` section, shared by `config.yaml` and `hub.yaml` (WI-36).
+ * Checks of an `auth:` section, shared by `config.yaml` and `hub.yaml` (WI-37).
  * `fallback` names what still works when nobody can log in.
  */
 export function validateAuthSection(auth: AuthConfig, file: string, issues: IssueCollector, fallback: string): void {

@@ -219,7 +219,7 @@ describe('hub start and the control commands', () => {
   });
 });
 
-describe('hub init layouts (WI-37)', () => {
+describe('hub init layouts (WI-38)', () => {
   it('--workspaces-data-dir keeps the data of the workspaces outside the config dir (production layout), idempotent, hub validate green', async () => {
     const root = tmp();
     const configDir = path.join(root, 'etc', 'hub');
@@ -265,7 +265,7 @@ describe('hub init layouts (WI-37)', () => {
   });
 });
 
-describe('migrating a single instance into a hub (WI-37)', () => {
+describe('migrating a single instance into a hub (WI-38)', () => {
   it('keeps config-dir and data-dir unchanged, starts the instance with the new port and leaves its data alone', async () => {
     const root = tmp();
     // 1. An existing single instance with data (database marker, logs) on port 8787.

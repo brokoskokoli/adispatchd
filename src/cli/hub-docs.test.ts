@@ -1,5 +1,5 @@
 /**
- * Documentation consistency of the hub operations (WI-37): pinned installation lines match the version, links into
+ * Documentation consistency of the hub operations (WI-38): pinned installation lines match the version, links into
  * operations.md resolve, and the public documents (README EN/DE, website) mention the hub and `service install --hub`.
  */
 import { readFileSync } from 'node:fs';
@@ -45,7 +45,7 @@ describe('hub documentation', () => {
     for (const rel of ['README.md', 'README.de.md', 'docs/configuration-reference.md', 'docs/api.md', 'docs/status.md', 'docs/worker-protocol.md']) {
       for (const m of read(rel).matchAll(/operations\.md#([^)\s]+)/g)) expect(ops.has(m[1] ?? ''), `${rel}: operations.md#${m[1]}`).toBe(true);
     }
-    for (const heading of ['hub-als-systemd-dienst-seit-0100-wi-37', 'eine-bestehende-einzelinstanz-in-einen-hub-aufnehmen-migration', 'verzeichnisse-eines-hubs']) {
+    for (const heading of ['hub-als-systemd-dienst-seit-0100-wi-38', 'eine-bestehende-einzelinstanz-in-einen-hub-aufnehmen-migration', 'verzeichnisse-eines-hubs']) {
       expect(ops.has(heading), heading).toBe(true);
     }
   });

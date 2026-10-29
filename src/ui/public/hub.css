@@ -1,4 +1,4 @@
-/* Hub overview (WI-36). Builds on app.css (tokens, cards, buttons, badges, dialogs). */
+/* Hub overview (WI-37). Builds on app.css (tokens, cards, buttons, badges, dialogs). */
 .top-spacer { flex: 1 1 auto; }
 a.btn { display: inline-block; text-decoration: none; }
 a.btn:hover { text-decoration: none; }

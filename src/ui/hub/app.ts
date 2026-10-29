@@ -1,5 +1,5 @@
 /**
- * Overview page of the hub (WI-36): one tile per workspace (state, runs,
+ * Overview page of the hub (WI-37): one tile per workspace (state, runs,
  * blocks, failed actions, share of the slots), the shared slot limit, server
  * resources, start/stop/restart/drain per workspace and drain/stop/pause for
  * all. Updates live from `/api/v1/hub/events` (SSE) and reloads over REST

@@ -9,7 +9,7 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ### Hinzugefügt
 
-- **Hub im Betrieb** (WI-37). `adispatch service install --hub` richtet den Hub als **eine** systemd-Unit ein (Default-Name
+- **Hub im Betrieb** (WI-38). `adispatch service install --hub` richtet den Hub als **eine** systemd-Unit ein (Default-Name
   `adispatchd-hub`, Env-Datei `/etc/default/adispatchd-hub`): `ExecStart=… hub start`, `KillMode=mixed`, `TimeoutStopSec` aus Drain-,
   Cancel-Timeout und dem größten `cancel_grace` **aller** Workspaces, `RestartPreventExitStatus=78`. Dieselben Optionen und
   Schutzprüfungen wie bei der Einzelinstanz, erweitert auf alle Verzeichnisse aus `hub.yaml` (Systempfade, Home-Verzeichnisse,
@@ -25,7 +25,7 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   `examples/hub/hub.yaml`, README EN/DE, Website. `npm run test:pack` deckt jetzt auch den Hub ab (installiertes Paket: `hub init` →
   `hub start` → Run in zwei Workspaces → `drain-all --wait` → SIGTERM, danach die Migration einer Einzelinstanz).
 
-- **Hub: mehrere Workspaces auf einem Server mit gemeinsamem Limit** (WI-35). `adispatch hub start` startet jeden Workspace
+- **Hub: mehrere Workspaces auf einem Server mit gemeinsamem Limit** (WI-36). `adispatch hub start` startet jeden Workspace
   (eine vollständige, unveränderte Instanz mit eigenem config-dir, data-dir, eigener Datenbank und eigenem Port) als
   Kindprozess unter demselben Benutzer und überwacht ihn: Zustand (`starting|running|backoff|stopped|failed`), Neustart nach
   Absturz mit Backoff (1 s … 60 s), Zähler, Ausgabe der Kinder mit Präfix im Hub-Log, Drain aller Kinder beim Hub-Shutdown
@@ -43,7 +43,7 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   `hub init` legt `hub.yaml` und die Workspace-Verzeichnisse an und überschreibt nie; `hub validate` prüft zusätzlich die
   Konfiguration jedes Workspaces. Doku: Konfigurationsreferenz §3.9, operations.md „Hub“, worker-protocol.md
   „Slot-Protokoll“, api.md „Steuer-Schnittstelle des Hubs“.
-- **Weboberfläche des Hubs** (WI-36). `hub.server` (Default `127.0.0.1:8090`) bedient jetzt HTTP unter **einem Port**:
+- **Weboberfläche des Hubs** (WI-37). `hub.server` (Default `127.0.0.1:8090`) bedient jetzt HTTP unter **einem Port**:
   die **Übersicht** `/` (Kachel je Workspace mit Zustand, laufenden Runs, blockierten Items, fehlgeschlagenen Actions,
   belegten Plätzen und Neustarts; Gesamtleiste „Slots n/m“; Serverressourcen; live per SSE; hell/dunkel, schmal),
   die **Hub-API** `/api/v1/hub/…` (`status`, `workspaces`, `workspaces/:id/start|stop|restart|drain`, `pause|resume|stop-all|drain-all`,

@@ -1,5 +1,5 @@
 /**
- * Pass-through of the workspace UIs and APIs below `/w/<id>/` (WI-36).
+ * Pass-through of the workspace UIs and APIs below `/w/<id>/` (WI-37).
  *
  * `GET /w/<id>/` serves the workspace's web UI, `/w/<id>/api/v1/…` its API
  * (including the SSE stream) – streamed in both directions to the workspace's

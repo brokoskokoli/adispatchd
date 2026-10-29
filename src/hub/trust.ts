@@ -1,5 +1,5 @@
 /**
- * Trust channel between a hub and the instances it starts (WI-36).
+ * Trust channel between a hub and the instances it starts (WI-37).
  *
  * The hub authenticates the browser users, then forwards their identity to the
  * workspace instance (`X-Adispatch-Hub-*` headers, see `api/auth.ts`). So that

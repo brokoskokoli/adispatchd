@@ -1,4 +1,4 @@
-/** Client of the hub's control socket (WI-35); used by the `adispatch hub …` commands. */
+/** Client of the hub's control socket (WI-36); used by the `adispatch hub …` commands. */
 import http from 'node:http';
 import { errorMessage } from '../core/index.js';
 import type { HubStatus } from './hub.js';

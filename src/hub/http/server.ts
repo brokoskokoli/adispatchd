@@ -1,5 +1,5 @@
 /**
- * HTTP server of the hub (WI-36) on `hub.server`:
+ * HTTP server of the hub (WI-37) on `hub.server`:
  *
  * - `/` the overview UI, `/api/v1/hub/…` the hub API (docs/api.md), `/api/v1/auth/…` login;
  * - `/w/<id>/…` the workspace UIs and APIs passed through (`proxy.ts`).

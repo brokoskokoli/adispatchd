@@ -1,5 +1,5 @@
 /**
- * Overview of the hub (WI-36), DOM-free so it is unit-testable: defensive
+ * Overview of the hub (WI-37), DOM-free so it is unit-testable: defensive
  * parsing of the hub API payloads, the model that live events update, which
  * actions a workspace offers in which state, and the texts of the confirmation
  * dialogs. Nothing from the payloads is ever interpreted as HTML.

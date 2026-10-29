@@ -1,5 +1,5 @@
 /**
- * Workspace supervision of the hub (WI-35): starts every workspace as a child
+ * Workspace supervision of the hub (WI-36): starts every workspace as a child
  * process (`adispatch start …`), keeps it running and reports its state.
  *
  * States: `starting` (spawned, not answering yet) → `running` (answers on its
@@ -88,7 +88,7 @@ export interface SupervisorOptions {
   output: (workspaceId: string, stream: 'stdout' | 'stderr', line: string) => void;
   /** Called when a child process has exited (the hub frees its slots). */
   onExit?: (workspaceId: string) => void;
-  /** Called after every state change (WI-36: live updates). */
+  /** Called after every state change (WI-37: live updates). */
   onChange?: () => void;
   /** Environment of the hub that the children inherit. */
   baseEnv?: Readonly<Record<string, string | undefined>>;
@@ -113,7 +113,7 @@ interface Managed {
   state: WorkspaceState;
   transition: WorkspaceTransition;
   child: ChildHandle | null;
-  /** Secret handed to the current child on its standard input (WI-36); the hub's identity channel to it. */
+  /** Secret handed to the current child on its standard input (WI-37); the hub's identity channel to it. */
   trustToken: string | null;
   startedAt: Date | null;
   restarts: number;
@@ -178,7 +178,7 @@ export class WorkspaceSupervisor {
     return this.managed.has(id);
   }
 
-  /** Secret of the workspace's current child process (WI-36); `null` without a child. Never part of a status. */
+  /** Secret of the workspace's current child process (WI-37); `null` without a child. Never part of a status. */
   trustTokenOf(id: string): string | null {
     return this.managed.get(id)?.trustToken ?? null;
   }

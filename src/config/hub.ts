@@ -1,5 +1,5 @@
 /**
- * `hub.yaml` (WI-35): configuration of a hub that runs several workspaces
+ * `hub.yaml` (WI-36): configuration of a hub that runs several workspaces
  * (complete, unchanged dispatcher instances) as child processes under one
  * shared run limit.
  *
@@ -29,7 +29,7 @@ export const WORKSPACE_ID_PATTERN = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
 
 /** Default `hub.max_concurrent`. */
 export const DEFAULT_HUB_MAX_CONCURRENT = DEFAULTS.globalMaxConcurrent;
-/** Default `hub.server.port` (overview page, hub API and workspace pass-through, WI-36). */
+/** Default `hub.server.port` (overview page, hub API and workspace pass-through, WI-37). */
 export const DEFAULT_HUB_PORT = 8090;
 
 /** `auth:` without a section: no login (as in config.yaml). */
@@ -53,7 +53,7 @@ const hubFileSchema = z.strictObject({
         .prefault({}),
     })
     .prefault({}),
-  /** Login of the hub's web UI and API (same section as in config.yaml, WI-26; WI-36). */
+  /** Login of the hub's web UI and API (same section as in config.yaml, WI-26; WI-37). */
   auth: authSchema.prefault({}),
   workspaces: z
     .array(
@@ -87,9 +87,9 @@ export interface HubConfig {
   configDir: string;
   /** Limit of simultaneously running runs across all workspaces. */
   maxConcurrent: number;
-  /** Bind address of the hub's own HTTP server (overview, hub API, workspace pass-through; WI-36). */
+  /** Bind address of the hub's own HTTP server (overview, hub API, workspace pass-through; WI-37). */
   server: { host: string; port: number; allowedHosts: readonly string[] };
-  /** Authentication of the hub's HTTP server (WI-36); the workspaces' own `auth` is independent of it. */
+  /** Authentication of the hub's HTTP server (WI-37); the workspaces' own `auth` is independent of it. */
   auth: AuthConfig;
   workspaces: readonly HubWorkspaceConfig[];
 }

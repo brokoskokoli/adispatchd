@@ -11,7 +11,7 @@
  * anything (works on every platform). On non-Linux systems the real commands
  * refuse with an explanation.
  *
- * `--hub` (WI-37) installs the unit of a hub (`adispatch hub start`): `--config-dir`
+ * `--hub` (WI-38) installs the unit of a hub (`adispatch hub start`): `--config-dir`
  * is the hub's config dir (with `hub.yaml`), `--data-dir` the hub's own data
  * dir; the directories of all workspaces are read from `hub.yaml` and get the
  * same ownership/permission treatment. Default unit name `adispatchd-hub`.

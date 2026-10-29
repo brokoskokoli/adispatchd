@@ -1,5 +1,5 @@
 /**
- * Component `hub` – public API (WI-35, WI-36): slot protocol, slot server/client,
+ * Component `hub` – public API (WI-36, WI-37): slot protocol, slot server/client,
  * the hub itself (workspace supervision, control socket) and its HTTP server
  * (overview, hub API, pass-through of the workspace UIs).
  */

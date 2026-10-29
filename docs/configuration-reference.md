@@ -1934,10 +1934,10 @@ gelesen; es gibt **keinen Reload** (Änderungen wirken nach einem Neustart des H
 | Schlüssel | Typ | Default | Bedeutung |
 |---|---|---|---|
 | `hub.max_concurrent` | Integer ≥ 1 | `5` | Limit gleichzeitig laufender **automatischer** Runs (Source, Cron) über alle Workspaces. Das lokale `scheduler.max_concurrent` und die Limits der Workflows gelten zusätzlich. Manuelle Starts werden nicht begrenzt, belegen aber einen Platz |
-| `hub.server.host` | String | `127.0.0.1` | Bind-Adresse des HTTP-Servers des Hubs: Übersichtsseite `/`, Hub-API `/api/v1/hub/…` und die durchgereichten Workspace-UIs `/w/<id>/` (seit WI-36). Nicht-Loopback → Warnung |
+| `hub.server.host` | String | `127.0.0.1` | Bind-Adresse des HTTP-Servers des Hubs: Übersichtsseite `/`, Hub-API `/api/v1/hub/…` und die durchgereichten Workspace-UIs `/w/<id>/` (seit WI-37). Nicht-Loopback → Warnung |
 | `hub.server.port` | Integer 1–65535 | `8090` | Port dieses Servers; darf kein `workspaces[].port` sein |
 | `hub.server.allowed_hosts` | Liste String | `[]` | wie `server.allowed_hosts` in §3.1 |
-| `auth` | Objekt | `mode: none` | Anmeldung des HTTP-Servers des Hubs (seit WI-36): **derselbe Abschnitt wie `auth` in `config.yaml` (§3.1)** – `mode` (`none` \| `password` \| `trusted_header`), `users`, `trusted_header`, `trusted_proxies`, `session_ttl`, `read_requires_login` – mit denselben Prüfungen (doppelte Benutzer/Logins sind Fehler, ein Modus ohne Benutzer eine Warnung). Passwort-Hashes und `proxy_secret_env` stammen aus der Umgebung des Hubs. Die `auth`-Abschnitte der Workspaces sind davon unabhängig |
+| `auth` | Objekt | `mode: none` | Anmeldung des HTTP-Servers des Hubs (seit WI-37): **derselbe Abschnitt wie `auth` in `config.yaml` (§3.1)** – `mode` (`none` \| `password` \| `trusted_header`), `users`, `trusted_header`, `trusted_proxies`, `session_ttl`, `read_requires_login` – mit denselben Prüfungen (doppelte Benutzer/Logins sind Fehler, ein Modus ohne Benutzer eine Warnung). Passwort-Hashes und `proxy_secret_env` stammen aus der Umgebung des Hubs. Die `auth`-Abschnitte der Workspaces sind davon unabhängig |
 | `workspaces` | Liste | `[]` | die Workspaces; leer → Warnung |
 | `workspaces[].id` | String | – | Pflicht; Kleinbuchstaben, Ziffern und `-`, höchstens 40 Zeichen, eindeutig |
 | `workspaces[].config_dir` | Pfad | – | Pflicht; config-dir der Instanz; relative Pfade gelten ab dem config-dir des Hubs; eindeutig |
@@ -1976,8 +1976,8 @@ workspaces:
     port: 8092
 ```
 
-Der HTTP-Server des Hubs (seit WI-36) und das Vertrauensmodell zu den Workspaces: [operations.md](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-36),
-Endpunkte: [api.md](api.md#hub-api-seit-0100-wi-36). Der Hub reicht jedem Kind außerdem beim Start ein Geheimnis auf der
+Der HTTP-Server des Hubs (seit WI-37) und das Vertrauensmodell zu den Workspaces: [operations.md](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-37),
+Endpunkte: [api.md](api.md#hub-api-seit-0100-wi-37). Der Hub reicht jedem Kind außerdem beim Start ein Geheimnis auf der
 Standardeingabe (die Umgebungsvariable `ADISPATCH_HUB_TRUST` mit dem Wert `stdin` zeigt der Instanz, dass sie es lesen muss): Eine so gestartete Instanz akzeptiert nur Anfragen mit der Identität des Hubs
 oder dem Steuer-Token der CLI – **auch mit `auth.mode: none`** in ihrer eigenen `config.yaml`.
 
@@ -2050,7 +2050,7 @@ auth:
 workspaces: []
 ```
 
-**Verzeichnislayout für den Dienstbetrieb (seit WI-37).** Konfiguration und veränderliche Daten gehören getrennt: Unter
+**Verzeichnislayout für den Dienstbetrieb (seit WI-38).** Konfiguration und veränderliche Daten gehören getrennt: Unter
 `adispatch service install --hub` wird das config-dir des Hubs samt allen `config_dir` der Workspaces rekursiv `root`
 übereignet und für den Dienst schreibgeschützt, alle `data_dir` (und das data-dir des Hubs) gehören dem Dienstbenutzer.
 Ein `data_dir` **innerhalb** eines config-dirs wird deshalb abgelehnt. Empfohlen:

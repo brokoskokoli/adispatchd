@@ -1,5 +1,5 @@
 /**
- * Audit log of the hub (WI-36): who did what to which workspace and when.
+ * Audit log of the hub (WI-37): who did what to which workspace and when.
  * A small SQLite database `hub.db` in the hub's data dir (own file, own
  * schema; the workspaces' databases are untouched). Entries contain no
  * secrets and no request bodies. Old entries are trimmed (newest

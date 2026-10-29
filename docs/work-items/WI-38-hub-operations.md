@@ -1,6 +1,6 @@
-# WI-37 – Hub im Betrieb: systemd, `init`, Doku und Website
+# WI-38 – Hub im Betrieb: systemd, `init`, Doku und Website
 
-**Herkunft:** Wunsch des Maintainers (29. Oktober 2026) · **Abhängig von:** WI-35, WI-36 · **Branch:** `wi-37-hub-operations` · **Zielversion:** 0.10.0
+**Herkunft:** Wunsch des Maintainers (29. Oktober 2026) · **Abhängig von:** WI-36, WI-37 · **Branch:** `wi-38-hub-operations` · **Zielversion:** 0.10.0
 
 ## Umfang
 
@@ -16,7 +16,7 @@
    Executor `user` für getrennte Rechte, Reverse Proxy mit `/w/…`, Backup/Update, Verhalten bei Hub-Ausfall),
    `docs/manual-tests/` (Hub unter systemd/Linux), Konfigurationsreferenz.
 5. **Öffentliche Doku:** README (EN) und README.de, Website `site/` (EN/DE) Feature-Liste, `examples/config`, CHANGELOG
-   (0.10.0 datieren), `docs/status.md` (Gate-Ergebnisse), Spec-Kopf, `docs/handoff/WI-37.md`.
+   (0.10.0 datieren), `docs/status.md` (Gate-Ergebnisse), Spec-Kopf, `docs/handoff/WI-38.md`.
 6. **Release 0.10.0 vorbereiten:** `package.json`, Lockfile, `APP_VERSION`, Installationszeilen; `npm run test:pack`
    erweitert um einen Hub-Durchlauf (pack → install → hub init → hub start → Run in zwei Workspaces → drain-all).
    Nicht pushen oder publizieren.

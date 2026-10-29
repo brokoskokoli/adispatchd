@@ -120,7 +120,7 @@ export interface ApiDeps {
   background(what: string, start: (signal: AbortSignal) => Promise<unknown>): Promise<unknown>;
   /** Static info for `/status`. */
   info: { version: string; startedAt: string; host: string; port: () => number | null };
-  /** Hub membership (WI-35): last known state of the shared slot limit; `null`/absent without a hub. */
+  /** Hub membership (WI-36): last known state of the shared slot limit; `null`/absent without a hub. */
   hub?: () => { workspace: string; reachable: boolean; paused: boolean; active: number; max: number } | null;
   /** Additional allowed `Origin`s for mutating requests (besides the request's own host). */
   allowedOrigins?: readonly string[];

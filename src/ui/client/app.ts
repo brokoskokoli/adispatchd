@@ -141,7 +141,7 @@ const renderCount = (el: HTMLElement, n: number, tone: 'warn' | 'error'): void =
   replaceChildren(el, n > 0 ? badge(String(n), tone) : null);
 };
 
-/** Hub (WI-36): below `/w/<id>/` a link leads back to the overview. */
+/** Hub (WI-37): below `/w/<id>/` a link leads back to the overview. */
 const updateHubBack = (workspace: string | null | undefined): void => {
   const href = hubOverviewHref(location.pathname, workspace);
   if (href) hubBack.setAttribute('href', href);

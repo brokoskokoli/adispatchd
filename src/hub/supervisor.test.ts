@@ -65,7 +65,7 @@ describe('WorkspaceSupervisor', () => {
     expect(s.statusOfWorkspace('coder')).toMatchObject({ pid: 1000, port: 8091, restarts: 0, crashes: 0, startedAt: '2026-01-01T00:00:00.000Z' });
   });
 
-  it('hands every child a fresh secret on standard input, keeps it out of env, args and status, and forgets it on exit (WI-36)', () => {
+  it('hands every child a fresh secret on standard input, keeps it out of env, args and status, and forgets it on exit (WI-37)', () => {
     const s = make();
     s.startEnabled();
     const first = spawner.last('coder');

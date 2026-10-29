@@ -1,5 +1,5 @@
 /**
- * Decision about the shared run limit of a hub (WI-35), used by the scheduler
+ * Decision about the shared run limit of a hub (WI-36), used by the scheduler
  * and the dry-run.
  */
 import type { HubSlotsSnapshot } from '../core/index.js';

@@ -113,7 +113,7 @@ describe('web UI with authentication (WI-26)', () => {
   });
 });
 
-describe('hub overview UI (WI-36)', () => {
+describe('hub overview UI (WI-37)', () => {
   it('is built next to the workspace UI and every file hub.html needs is served by the hub, which does not serve the workspace index', async () => {
     const { createHubHttp } = await import('../hub/http/testing/hub.js');
     const hub = await createHubHttp({ uiDir: outDir });

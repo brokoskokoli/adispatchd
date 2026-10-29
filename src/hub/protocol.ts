@@ -1,6 +1,6 @@
 /**
  * Slot protocol between a workspace instance (client) and the hub (server)
- * over a Unix socket (WI-35, docs/worker-protocol.md "Slot-Protokoll").
+ * over a Unix socket (WI-36, docs/worker-protocol.md "Slot-Protokoll").
  *
  * Framing: one JSON object per line (`\n`), at most {@link MAX_LINE_BYTES}
  * bytes. The workspace announces itself with `hello` (workspace ID and the

@@ -113,7 +113,7 @@ export interface SchedulerOptions {
    */
   parameterOptions?: ManualParameterOptionsCheck;
   /**
-   * Shared run limit of a hub (WI-35); absent = single instance. Automatic runs
+   * Shared run limit of a hub (WI-36); absent = single instance. Automatic runs
    * (source and cron) need a slot from the hub, manual runs are only registered.
    */
   hubSlots?: HubSlots;
@@ -326,7 +326,7 @@ export class Scheduler {
   /**
    * Limit check with live effective values (overrides apply immediately).
    * `sourceId` (source candidates) also checks `max_concurrent_per_source` (WI-20).
-   * With a hub (WI-35) the last known hub state is checked last (`hub_limit`);
+   * With a hub (WI-36) the last known hub state is checked last (`hub_limit`);
    * `hub: false` skips it (the caller already holds a slot).
    */
   private capacityProblem(
@@ -507,7 +507,7 @@ export class Scheduler {
     // Linked fields already fetched for the filter are handed to the start (no second identical query).
     const linkedFields = await candidateLinkedFields(candidate, 'start');
 
-    // WI-35: the hub's shared slot is taken before the synchronous section (the request is asynchronous);
+    // WI-36: the hub's shared slot is taken before the synchronous section (the request is asynchronous);
     // every exit that does not hand it to a started run gives it back.
     const slot = await this.acquireHubSlot();
     if (!slot.ok) return set('hub_limit', slot.reason);
@@ -735,7 +735,7 @@ export class Scheduler {
       if (again) return this.recordFiring(state, slot, again.decision, again.reason);
     }
 
-    // WI-35: take the hub's shared slot (asynchronous), then re-check the local preconditions synchronously.
+    // WI-36: take the hub's shared slot (asynchronous), then re-check the local preconditions synchronously.
     const hub = await this.acquireHubSlot();
     if (!hub.ok) return this.recordFiring(state, slot, 'skipped_limit', hub.reason);
     let handedOver = false;
@@ -875,7 +875,7 @@ export class Scheduler {
     });
     this.logger.info('manual run reserved', { workflowId, runId: run.id, item: item?.key ?? null });
     const handle = this.controller.startRun(run);
-    // WI-35: manual runs ignore the hub limit like the global one, but occupy a slot.
+    // WI-36: manual runs ignore the hub limit like the global one, but occupy a slot.
     this.hubSlots?.adopt(run.id, handle.done);
     return { run, done: handle.done };
   }

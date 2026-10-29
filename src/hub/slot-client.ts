@@ -1,5 +1,5 @@
 /**
- * Slot client of a workspace instance (WI-35): connects to the hub's Unix
+ * Slot client of a workspace instance (WI-36): connects to the hub's Unix
  * socket (`ADISPATCH_HUB_SOCKET`) and implements {@link HubSlots} for the
  * scheduler.
  *

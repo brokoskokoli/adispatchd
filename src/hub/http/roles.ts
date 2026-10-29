@@ -1,5 +1,5 @@
 /**
- * Minimum role per route of the hub's HTTP server (WI-36), same rules and
+ * Minimum role per route of the hub's HTTP server (WI-37), same rules and
  * roles as the instances (WI-26): reading from `viewer`, controlling workspaces
  * from `operator`, the audit log for `admin`. Every route the server registers
  * must be listed (the server refuses others), and `http.test.ts` compares this

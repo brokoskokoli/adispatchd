@@ -1,5 +1,5 @@
 /**
- * Test double for the hub's shared slot limit (WI-35): counts like the real
+ * Test double for the hub's shared slot limit (WI-36): counts like the real
  * hub (granted slots are active until released) and records every call.
  */
 import type { HubAcquireResult, HubSlotLease, HubSlots, HubSlotsSnapshot } from '../../core/index.js';

@@ -1,5 +1,5 @@
 /**
- * The web UI never assumes it lives at the root of its host (WI-36): the same
+ * The web UI never assumes it lives at the root of its host (WI-37): the same
  * files are served by an instance at `/` and by a hub at `/w/<id>/` (possibly
  * behind a reverse proxy with a path prefix). All requests therefore use URLs
  * relative to the page (`./api/v1/…`), which the browser resolves against the

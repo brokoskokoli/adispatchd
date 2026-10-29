@@ -1,5 +1,5 @@
 /**
- * End-to-end test of the hub (WI-35) with real processes: `adispatch hub start`
+ * End-to-end test of the hub (WI-36) with real processes: `adispatch hub start`
  * runs two real workspace instances (child processes) against Fake-GitHub
  * (served on a local port; the children reach it through a fetch preload).
  *
@@ -151,7 +151,7 @@ function startHub(): { exited: Promise<number | null> } {
   return { exited: new Promise((resolve) => proc.on('exit', (code) => resolve(code))) };
 }
 
-/** Status of a workspace instance, read directly with its local control token (the instance refuses everything else, WI-36). */
+/** Status of a workspace instance, read directly with its local control token (the instance refuses everything else, WI-37). */
 async function instanceStatus(id: 'w1' | 'w2'): Promise<any> {
   const token = JSON.parse(readFileSync(path.join(root, 'hub', 'workspaces', id, 'data', 'control.token'), 'utf8')) as { token: string };
   return (await fetch(`http://127.0.0.1:${ports[id]}/api/v1/status`, { headers: { 'x-adispatch-control-token': token.token } })).json();
@@ -233,7 +233,7 @@ beforeAll(async () => {
       'hub:',
       '  max_concurrent: 2',
       `  server: { host: 127.0.0.1, port: ${ports.hub} }`,
-      // Login of the hub's HTTP server (WI-36)
+      // Login of the hub's HTTP server (WI-37)
       'auth:',
       '  mode: password',
       '  users:',
@@ -262,7 +262,7 @@ afterAll(async () => {
   if (root) rmSync(root, { recursive: true, force: true });
 });
 
-describe('hub with real workspace processes (WI-35)', () => {
+describe('hub with real workspace processes (WI-36)', () => {
   it('shares the limit of 2 across two workspaces, frees the slots of a killed child and restarts it with backoff', { timeout: 240_000 }, async () => {
     const s0 = await boot();
     expect(s0.workspaces.map((w) => w.id)).toEqual(['w1', 'w2']);
@@ -389,7 +389,7 @@ describe('hub with real workspace processes (WI-35)', () => {
     hubProc!.kill('SIGTERM');
   });
 
-  it('serves the hub API and the workspace UIs/APIs of two real processes under one port, with roles, audit and drain/stop/pause end to end (WI-36)', { timeout: 300_000 }, async () => {
+  it('serves the hub API and the workspace UIs/APIs of two real processes under one port, with roles, audit and drain/stop/pause end to end (WI-37)', { timeout: 300_000 }, async () => {
     await boot();
     const base = `http://127.0.0.1:${ports.hub}`;
     const call = async (method: string, target: string, opts: { cookie?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<{ status: number; json: any; headers: Headers }> => {

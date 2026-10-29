@@ -602,7 +602,7 @@ Sources, Identities, Datenbank und eigener Port); der Hub ist ein eigener Prozes
 (`adispatch start …`), überwacht und neu startet. Die Isolation ist die Prozessgrenze – es gibt keine gemeinsamen Tabellen.
 Format von `hub.yaml`: [Konfigurationsreferenz §3.9](configuration-reference.md#39-hubyaml-hub-seit-0100). Bedient wird der
 Hub mit der CLI (Unix-Socket) **oder** im Browser: eine Übersichtsseite, die Workspace-UIs unter demselben Port und die
-Hub-API (Abschnitt [Weboberfläche des Hubs](#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-36)).
+Hub-API (Abschnitt [Weboberfläche des Hubs](#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-37)).
 
 ```bash
 # Einmalig: hub.yaml und je Workspace ein vollständiges Beispiel-config-dir/data-dir anlegen (überschreibt nie)
@@ -696,7 +696,7 @@ Socket-Pfad kennt ein Worker also nur, wenn er die Dienstumgebung über `/proc` 
 `auth.mode: none` **ungeschützt** (wie eine Einzelinstanz): bei `127.0.0.1` bleiben, sonst `auth:` in `hub.yaml` setzen
 oder einen authentifizierenden Proxy davorstellen; ein Bind außerhalb von Loopback warnt beim Start.
 
-### Weboberfläche des Hubs, Durchreichen und Vertrauensmodell (seit 0.10.0, WI-36)
+### Weboberfläche des Hubs, Durchreichen und Vertrauensmodell (seit 0.10.0, WI-37)
 
 `adispatch hub start` startet zusätzlich einen **HTTP-Server** auf `hub.server.host`/`hub.server.port` (Default
 `127.0.0.1:8090`; schlägt das Binden fehl, startet der Hub gar keinen Workspace). Er liefert unter **einem Port**:
@@ -705,7 +705,7 @@ oder einen authentifizierenden Proxy davorstellen; ein Bind außerhalb von Loopb
 |---|---|
 | `/` | **Übersicht**: Kachel je Workspace (Zustand, laufende Runs, blockierte Items, fehlgeschlagene Actions, belegte Plätze, Version, Neustarts), Gesamtleiste „Slots n/m“, Serverressourcen (CPU, RAM, fülltester Datenträger, Load), live per SSE |
 | `/w/<workspace>/…` | die **Web-UI und API des Workspaces**, durchgereicht an dessen Loopback-Port (HTTP, SSE, Downloads); „← Hub“ in der Kopfzeile führt zurück |
-| `/api/v1/hub/…` | die Hub-API ([api.md](api.md#hub-api-seit-0100-wi-36)): Status, Workspaces, Start/Stop/Restart/Drain, Alle drainen/stoppen/pausieren, Audit, SSE |
+| `/api/v1/hub/…` | die Hub-API ([api.md](api.md#hub-api-seit-0100-wi-37)): Status, Workspaces, Start/Stop/Restart/Drain, Alle drainen/stoppen/pausieren, Audit, SSE |
 
 **Anmeldung und Rollen** wie bei einer Instanz (Abschnitt „Anmeldung“): Der Abschnitt `auth:` steht in `hub.yaml`
 (`mode: none` \| `password` \| `trusted_header`, derselbe Aufbau wie in `config.yaml`, Passwort-Hashes mit
@@ -798,7 +798,7 @@ Identität an die Instanz weiter; die Instanz glaubt sie nur dem Hub, der sie ge
 data-dir des Hubs mit Modus `0600`; der Pfad darf höchstens 100 Byte lang sein (Grenze von Unix-Sockets) – bei einem zu
 langen Pfad meldet der Hub einen Fehler: ein kürzeres data-dir wählen.
 
-### Hub als systemd-Dienst (seit 0.10.0, WI-37)
+### Hub als systemd-Dienst (seit 0.10.0, WI-38)
 
 Der Hub ist der **einzige** Dienst: Die Workspaces sind seine Kindprozesse und haben keine eigenen Units. Voraussetzungen wie
 bei der Einzelinstanz (Abschnitt „Installation als systemd-Dienst“: systemweites Node, feste Version global installieren, kein `npx`).

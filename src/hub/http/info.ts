@@ -1,5 +1,5 @@
 /**
- * Activity of the workspaces for the overview (WI-36): the hub asks every
+ * Activity of the workspaces for the overview (WI-37): the hub asks every
  * running workspace instance for `GET /api/v1/status` now and then, with the
  * identity channel (see `api/auth.ts`, role `viewer`), and keeps a small
  * summary (runs, blocks, failed actions, scheduler state). Nothing of it is

@@ -125,7 +125,7 @@ async function load(name: string): Promise<Awaited<ReturnType<typeof loadConfig>
   const files = resolveFiles(sets, name);
   const temp = await createTempConfigDir(files);
   temps.push(temp);
-  // A set with hub.yaml is the config dir of a hub (WI-35), not of an instance.
+  // A set with hub.yaml is the config dir of a hub (WI-36), not of an instance.
   if ('hub.yaml' in files) return loadHubConfig(temp.dir, { dataDir: temp.dataDir });
   return loadConfig(temp.dir, { dataDir: temp.dataDir });
 }
@@ -254,7 +254,7 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain('**nur Befehlsnamen, nie Argumente**');
   });
 
-  it('documents hub.yaml: keys, defaults, limits and the workspace ID rule (WI-35)', () => {
+  it('documents hub.yaml: keys, defaults, limits and the workspace ID rule (WI-36)', () => {
     for (const key of ['hub.max_concurrent', 'hub.server.host', 'hub.server.port', 'hub.server.allowed_hosts', 'workspaces', 'workspaces[].id', 'workspaces[].config_dir', 'workspaces[].data_dir', 'workspaces[].port', 'workspaces[].enabled', 'auth']) {
       expect(markdown, key).toContain(`| \`${key}\` |`);
     }

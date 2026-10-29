@@ -15,7 +15,7 @@
  *   if `proxy_secret_env` is set – the proxy sends the shared secret in
  *   `X-Adispatch-Proxy-Secret`.
  *
- * Hub (WI-36): an instance started by a hub receives a secret from it (standard
+ * Hub (WI-37): an instance started by a hub receives a secret from it (standard
  * input, `hubToken`). The hub authenticates the browser users itself and forwards
  * their identity with `X-Adispatch-Hub-Token` (the secret), `-User` and `-Role`;
  * only the holder of the secret is believed, and only from loopback. Such an
@@ -44,7 +44,7 @@ export const SECURE_SESSION_COOKIE = `__Host-${SESSION_COOKIE}`;
 export const CONTROL_TOKEN_HEADER = 'x-adispatch-control-token';
 /** Header carrying the shared proxy secret (`auth.trusted_header.proxy_secret_env`). */
 export const PROXY_SECRET_HEADER = 'x-adispatch-proxy-secret';
-/** Headers of the identity a hub forwards to the instance it started (WI-36). */
+/** Headers of the identity a hub forwards to the instance it started (WI-37). */
 export const HUB_TOKEN_HEADER = 'x-adispatch-hub-token';
 export const HUB_USER_HEADER = 'x-adispatch-hub-user';
 export const HUB_ROLE_HEADER = 'x-adispatch-hub-role';
@@ -136,7 +136,7 @@ export interface AuthServiceOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Fixed control token (tests); default random. */
   controlToken?: string;
-  /** Secret of the hub that started this instance (WI-36): its forwarded identities are believed. */
+  /** Secret of the hub that started this instance (WI-37): its forwarded identities are believed. */
   hubToken?: string;
   /** Soft cap of the rate-limit stores (tests). */
   limiterMaxKeys?: number;
@@ -341,7 +341,7 @@ export class AuthService {
     return this.hubManaged || this.config.mode !== 'none';
   }
 
-  /** The instance was started by a hub (WI-36): anonymous access is never allowed, reading needs a login or the hub. */
+  /** The instance was started by a hub (WI-37): anonymous access is never allowed, reading needs a login or the hub. */
   get hubManaged(): boolean {
     return this.hubToken !== undefined;
   }
@@ -482,7 +482,7 @@ export class AuthService {
     return { ok: true, principal: { name: user.login, role: user.role, via: 'trusted_header' } };
   }
 
-  /** Identity forwarded by the hub that started this instance (WI-36). */
+  /** Identity forwarded by the hub that started this instance (WI-37). */
   private resolveHub(req: AuthRequest): ResolveResult {
     const sent = header(req, HUB_TOKEN_HEADER);
     if (this.hubToken === undefined || sent === undefined || !isLoopbackAddress(req.remoteAddress) || !secretEquals(sent, this.hubToken)) {

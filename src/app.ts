@@ -75,7 +75,7 @@ export const APP_VERSION = '0.10.0';
 export const DEFAULT_DRAIN_TIMEOUT_MS = 10 * 60_000;
 /** Default time for cancelled runs (incl. `on_cancel`) before hooks are interrupted. */
 export const DEFAULT_CANCEL_TIMEOUT_MS = 2 * 60_000;
-/** How long the start waits for the hub before the first planning step (WI-35). */
+/** How long the start waits for the hub before the first planning step (WI-36). */
 const HUB_CONNECT_WAIT_MS = 3_000;
 
 // ---------------------------------------------------------------------------
@@ -277,14 +277,14 @@ export interface AppOptions {
   allowedOrigins?: readonly string[];
   /** Static web UI directory (WI-11). */
   uiDir?: string;
-  /** Authentication tuning (WI-26; tests: fake scrypt, no failure delay, fixed control token); `hubToken` = secret of the hub that started this instance (WI-36). */
+  /** Authentication tuning (WI-26; tests: fake scrypt, no failure delay, fixed control token); `hubToken` = secret of the hub that started this instance (WI-37). */
   auth?: Partial<Pick<AuthServiceOptions, 'scrypt' | 'sleep' | 'controlToken' | 'hubToken'>>;
   /** Per-user limits of UI actions (WI-27; tests). */
   uiActionLimits?: Partial<UiActionLimits>;
   /** Resource monitor (WI-23); tests inject a fake OS probe. */
   monitoring?: { probe?: SystemProbe; primeDelayMs?: number };
   /**
-   * Membership in a hub (WI-35). Default: from the environment variables
+   * Membership in a hub (WI-36). Default: from the environment variables
    * `ADISPATCH_HUB_SOCKET` / `ADISPATCH_HUB_WORKSPACE` (set by the hub for its
    * child processes); without them the instance runs on its own.
    */
@@ -469,7 +469,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     logger,
     redact: redactor.asRedactor,
   });
-  // WI-35: shared run limit of a hub; without it the instance behaves exactly as a single instance.
+  // WI-36: shared run limit of a hub; without it the instance behaves exactly as a single instance.
   const hubConfig = options.hub ?? hubFromEnv(options.env ?? process.env);
   const hubClient = hubConfig
     ? new HubSlotClient({
@@ -806,7 +806,7 @@ export async function createApp(options: AppOptions): Promise<App> {
           errors: report.errors.length,
         });
         if (shuttingDown) return;
-        // WI-35: let the hub answer before the first planning step (otherwise it would wait one polling interval).
+        // WI-36: let the hub answer before the first planning step (otherwise it would wait one polling interval).
         if (hubClient) await hubClient.whenConnected(HUB_CONNECT_WAIT_MS);
         if (shuttingDown) return;
         scheduler.start();

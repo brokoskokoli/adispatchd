@@ -1,5 +1,5 @@
 /**
- * Slot ledger of the hub (WI-35): who holds how many of the `max` slots.
+ * Slot ledger of the hub (WI-36): who holds how many of the `max` slots.
  * Pure bookkeeping without I/O; the invariant is that {@link SlotLedger.tryAcquire}
  * never grants a slot while `active >= max` (or while paused). Adopted leases
  * (manual starts, runs found after a hub or workspace restart) are real runs

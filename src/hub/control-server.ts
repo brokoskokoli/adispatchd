@@ -1,7 +1,7 @@
 /**
- * Control interface of the hub (WI-35): a small JSON-over-HTTP API on a Unix
+ * Control interface of the hub (WI-36): a small JSON-over-HTTP API on a Unix
  * socket (`<hub-data-dir>/hub.sock`, mode 0600, owner = hub user). Used by the
- * `adispatch hub …` commands; WI-36 builds the web UI on the same
+ * `adispatch hub …` commands; WI-37 builds the web UI on the same
  * {@link HubControl} object.
  *
  * | Request | Effect |

@@ -1,5 +1,5 @@
 /**
- * Identity forwarded by a hub (WI-36): an instance started by a hub believes
+ * Identity forwarded by a hub (WI-37): an instance started by a hub believes
  * `X-Adispatch-Hub-*` only with the hub's secret and only from loopback; it
  * refuses everything else (also with `auth.mode: none`).
  */

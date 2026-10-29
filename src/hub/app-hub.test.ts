@@ -31,7 +31,7 @@ afterEach(async () => {
   await rm(sockDir, { recursive: true, force: true });
 });
 
-describe('hub membership of an instance (WI-35)', () => {
+describe('hub membership of an instance (WI-36)', () => {
   it('reads the hub from the environment variables and ignores an empty value', () => {
     expect(hubFromEnv({})).toBeUndefined();
     expect(hubFromEnv({ [HUB_SOCKET_ENV]: '  ' })).toBeUndefined();

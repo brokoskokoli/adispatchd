@@ -735,9 +735,9 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 - Langsame Clients: mehr als 1 MiB ungesendete Daten → Verbindung wird getrennt (Client reconnectet mit `Last-Event-ID`);
   die Logerfassung wird nie blockiert.
 
-## Hub-API (seit 0.10.0, WI-36)
+## Hub-API (seit 0.10.0, WI-37)
 
-Der HTTP-Server des Hubs (`hub.server` in `hub.yaml`, Default `127.0.0.1:8090`; [Betrieb](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-36))
+Der HTTP-Server des Hubs (`hub.server` in `hub.yaml`, Default `127.0.0.1:8090`; [Betrieb](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-37))
 bedient drei Dinge unter **einem** Port: die Übersichtsseite (`/`), die Hub-API (`/api/v1/hub/…`) und die durchgereichten
 Workspaces (`/w/<id>/…`, [unten](#durchreichen-wid)). Es gelten dieselben Regeln wie für eine Instanz: Host-/Origin-Allowlist
 (`hub.server.allowed_hosts`), CSRF-Header für mutierende Requests, JSON-Bodies, Fehlerform `{"error": {"code", "message",
@@ -830,7 +830,7 @@ Antworten sind die der Instanz (Statuscodes, JSON, Fehlerform). Regeln:
 | Body über 2 MiB | `413 payload_too_large` |
 
 Identität: Der Hub setzt `X-Adispatch-Hub-Token`, `-User`, `-Role` aus seiner Anmeldung (siehe
-[Vertrauensmodell](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-36)); alle gleichnamigen
+[Vertrauensmodell](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-37)); alle gleichnamigen
 Header des Clients und ein mitgesendeter `X-Adispatch-Control-Token` führen zu `401` bzw. werden verworfen. Eine **hubverwaltete
 Instanz** (gestartet von `hub start`) beantwortet ohne diese Identität nur `/health`, `/ready`, `GET /api/v1/auth/me` (mit
 `mode: "trusted_header"` und `error.code: "hub_required"`) und die statische UI-Hülle; alles andere `401` – auch mit
@@ -853,9 +853,9 @@ ungesendeten Daten werden getrennt.
 
 ## Steuer-Schnittstelle des Hubs (seit 0.10.0)
 
-Für die CLI (`adispatch hub status|pause|…`, WI-35) gibt es einen kleinen JSON-über-HTTP-Server auf einem **Unix-Socket**
+Für die CLI (`adispatch hub status|pause|…`, WI-36) gibt es einen kleinen JSON-über-HTTP-Server auf einem **Unix-Socket**
 `<hub-data-dir>/hub.sock` (Modus `0600`, nur der Benutzer des Hubs; deshalb keine Anmeldung und kein CSRF-Header). Die HTTP-API
-des Hubs für Browser und Skripte (seit WI-36) ist [oben](#hub-api-seit-0100-wi-36) beschrieben; beide rufen dieselben
+des Hubs für Browser und Skripte (seit WI-37) ist [oben](#hub-api-seit-0100-wi-37) beschrieben; beide rufen dieselben
 Operationen (`HubControl` in `src/hub/control-server.ts`) im Hub auf.
 
 | Methode | Pfad | Wirkung |

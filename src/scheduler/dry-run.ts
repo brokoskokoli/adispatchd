@@ -40,7 +40,7 @@ export interface DryRunDeps {
   clock?: Clock;
   /** Controller gate; omit when no controller runs (local CLI dry-run). */
   gate?: () => GateInfo;
-  /** Last known state of the hub's shared limit (WI-35); absent without a hub. */
+  /** Last known state of the hub's shared limit (WI-36); absent without a hub. */
   hub?: HubSlotsSnapshot;
   /** Additional notes (e.g. "no database"). */
   notes?: readonly string[];

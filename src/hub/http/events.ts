@@ -1,5 +1,5 @@
 /**
- * Server-Sent Events of the hub (WI-36): `GET /api/v1/hub/events`.
+ * Server-Sent Events of the hub (WI-37): `GET /api/v1/hub/events`.
  *
  * Every message carries `event: <type>` and `data: {type, time, payload}`.
  * Types: `stream.open` (first message), `hub.snapshot` (the complete status,

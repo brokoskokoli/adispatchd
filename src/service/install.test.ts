@@ -135,7 +135,7 @@ describe('service install plan', () => {
   });
 });
 
-describe('hub paths and plans (WI-37)', () => {
+describe('hub paths and plans (WI-38)', () => {
   const HUB: UnitOptions = {
     ...UNIT,
     unitName: 'adispatchd-hub',

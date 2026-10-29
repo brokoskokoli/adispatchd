@@ -1,6 +1,6 @@
 /**
  * Contract between the scheduler of a workspace instance and the hub's shared
- * slot limit (WI-35). The scheduler only sees this interface; the client that
+ * slot limit (WI-36). The scheduler only sees this interface; the client that
  * talks to the hub over the Unix socket lives in `src/hub/`.
  */
 
@@ -9,7 +9,7 @@ export const HUB_SOCKET_ENV = 'ADISPATCH_HUB_SOCKET';
 /** Environment variable carrying the workspace ID into a workspace instance. */
 export const HUB_WORKSPACE_ENV = 'ADISPATCH_HUB_WORKSPACE';
 /**
- * Set to `stdin` by the hub (WI-36): the instance reads the hub's secret (one line)
+ * Set to `stdin` by the hub (WI-37): the instance reads the hub's secret (one line)
  * from its standard input before it starts. The secret itself never appears in
  * the environment or in arguments (same-user processes can read both).
  */

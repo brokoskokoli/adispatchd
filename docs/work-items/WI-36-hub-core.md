@@ -1,6 +1,6 @@
-# WI-35 – Hub-Kern: mehrere Workspaces als Kindprozesse mit gemeinsamem Slot-Limit
+# WI-36 – Hub-Kern: mehrere Workspaces als Kindprozesse mit gemeinsamem Slot-Limit
 
-**Herkunft:** Wunsch des Maintainers (29. Oktober 2026): mehrere Projekte bzw. Dispatcher-Instanzen auf einem Server mit gemeinsamer Übersicht und gemeinsamem Limit · **Abhängig von:** `main` (0.9.1) · **Branch:** `wi-35-hub-core` · **Zielversion:** 0.10.0 (zusammen mit WI-36 und WI-37)
+**Herkunft:** Wunsch des Maintainers (29. Oktober 2026): mehrere Projekte bzw. Dispatcher-Instanzen auf einem Server mit gemeinsamer Übersicht und gemeinsamem Limit · **Abhängig von:** `main` (0.9.1) · **Branch:** `wi-36-hub-core` · **Zielversion:** 0.10.0 (zusammen mit WI-37 und WI-38)
 
 ## Entscheidungen
 
@@ -19,7 +19,7 @@
    ```yaml
    hub:
      max_concurrent: 6          # Gesamtlimit gleichzeitiger Runs über alle Workspaces
-     server: { host: 127.0.0.1, port: 8090, allowed_hosts: [] }   # genutzt von WI-36
+     server: { host: 127.0.0.1, port: 8090, allowed_hosts: [] }   # genutzt von WI-37
    workspaces:
      - id: coder                # [a-z0-9-], eindeutig
        config_dir: /etc/adispatchd/coder
@@ -50,7 +50,7 @@
 ## Doku
 
 Konfigurationsreferenz (neuer Abschnitt `hub.yaml`), `docs/worker-protocol.md` oder `docs/operations.md` (Slot-Protokoll),
-Spec-Nachtrag, CHANGELOG (Unreleased), `docs/status.md`, `docs/handoff/WI-35.md`.
+Spec-Nachtrag, CHANGELOG (Unreleased), `docs/status.md`, `docs/handoff/WI-36.md`.
 
 ## Acceptance Criteria
 

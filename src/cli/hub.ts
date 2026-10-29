@@ -1,5 +1,5 @@
 /**
- * `adispatch hub …` (WI-35): run several workspaces (complete dispatcher
+ * `adispatch hub …` (WI-36): run several workspaces (complete dispatcher
  * instances) as child processes of one hub with a shared run limit.
  *
  * - `hub init`      creates `hub.yaml` and the directories of its workspaces (never overwrites).

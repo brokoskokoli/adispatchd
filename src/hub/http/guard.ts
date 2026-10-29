@@ -1,5 +1,5 @@
 /**
- * Request checks of the hub's HTTP server (WI-36), applied identically to the
+ * Request checks of the hub's HTTP server (WI-37), applied identically to the
  * hub's own routes and to everything passed through to a workspace:
  *
  * 1. `Host` must name this server (DNS-rebinding protection, `hub.server.allowed_hosts`).

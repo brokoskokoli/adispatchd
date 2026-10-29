@@ -1,5 +1,5 @@
 /**
- * Hub HTTP server (WI-36): hub API with roles and audit, login, the
+ * Hub HTTP server (WI-37): hub API with roles and audit, login, the
  * `/w/<id>/` pass-through (identity channel, header hygiene, path rules,
  * streaming), the 503 page and the live event stream. The workspace
  * instances are fakes that check the hub's secret like the real ones.

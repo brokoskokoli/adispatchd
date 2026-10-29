@@ -198,7 +198,7 @@ describe('createHub', () => {
     await expect(stat(early.slotSocketPath)).rejects.toThrow();
   });
 
-  describe('HTTP server (WI-36)', () => {
+  describe('HTTP server (WI-37)', () => {
     const getJson = async (hub: Hub, target: string, init: RequestInit = {}): Promise<{ status: number; json: any }> => {
       const res = await fetch(`${hub.httpUrl}${target}`, init);
       return { status: res.status, json: await res.json().catch(() => null) };

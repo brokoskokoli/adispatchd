@@ -1,5 +1,5 @@
 /**
- * `service install|status|uninstall --hub` (WI-37): the unit of a hub, path checks over all
+ * `service install|status|uninstall --hub` (WI-38): the unit of a hub, path checks over all
  * workspaces, dry runs and the real path against an in-memory runner. Nothing here touches systemd.
  */
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';

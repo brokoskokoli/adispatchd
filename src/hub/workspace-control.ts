@@ -1,6 +1,6 @@
 /**
  * How the hub talks to a workspace instance over its loopback HTTP port
- * (WI-35): readiness probe (`/health`) and the control API (`drain`,
+ * (WI-36): readiness probe (`/health`) and the control API (`drain`,
  * `cancel-all`), authenticated with the instance's local control token
  * (`<data-dir>/control.token`, the same mechanism the CLI uses).
  */

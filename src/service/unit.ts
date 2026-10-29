@@ -62,7 +62,7 @@ export interface UnitOptions {
   /** Additional stop buffer (default {@link DEFAULT_STOP_BUFFER_MS}). */
   stopBufferMs?: number;
   /**
-   * Hub mode (WI-37): the unit runs `hub start` instead of `start`. `configDir`/`dataDir` are the hub's own
+   * Hub mode (WI-38): the unit runs `hub start` instead of `start`. `configDir`/`dataDir` are the hub's own
    * directories; these are the (absolute, deduplicated) directories of all workspaces from `hub.yaml`.
    */
   hub?: HubUnitDirs;

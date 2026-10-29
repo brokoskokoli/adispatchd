@@ -1,5 +1,5 @@
 /**
- * Child process abstraction of the hub (WI-35): the supervisor never spawns
+ * Child process abstraction of the hub (WI-36): the supervisor never spawns
  * directly, so tests can drive it with fakes and real children alike.
  */
 import { spawn } from 'node:child_process';
@@ -11,7 +11,7 @@ export interface SpawnSpec {
   args: string[];
   /** Complete environment of the child. */
   env: Record<string, string | undefined>;
-  /** Written to the child's standard input, which is then closed (WI-36: the hub's secret). Without it stdin is not connected. */
+  /** Written to the child's standard input, which is then closed (WI-37: the hub's secret). Without it stdin is not connected. */
   input?: string;
 }
 

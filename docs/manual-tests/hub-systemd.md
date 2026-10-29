@@ -1,4 +1,4 @@
-# Manuelle Tests: Hub unter systemd (Linux, WI-37)
+# Manuelle Tests: Hub unter systemd (Linux, WI-38)
 
 Automatisiert sind die Unit-Generierung für den Hub (Snapshot), `service install --hub --dry-run` und der Lauf gegen einen
 In-Memory-Runner (Pfadprüfungen, Reihenfolge der Schritte), `hub init|validate|drain-all --wait`, die Migration einer

@@ -1,5 +1,5 @@
 /**
- * The hub (WI-35): one process that starts every workspace of `hub.yaml` as a
+ * The hub (WI-36): one process that starts every workspace of `hub.yaml` as a
  * child process, shares a run limit between them through the slot server and
  * offers a local control socket.
  *
@@ -51,7 +51,7 @@ export interface HubWorkspaceStatus extends WorkspaceStatus {
   connected: boolean;
 }
 
-/** Everything `hub status` shows (and WI-36 serves). */
+/** Everything `hub status` shows (and WI-37 serves). */
 export interface HubStatus {
   version: string;
   pid: number;
@@ -89,7 +89,7 @@ export interface HubOptions {
   /** Heartbeat silence after which a workspace's slots expire. */
   leaseTtlMs?: number;
   /**
-   * The hub's HTTP server (`hub.server`: overview, hub API, workspace pass-through; WI-36).
+   * The hub's HTTP server (`hub.server`: overview, hub API, workspace pass-through; WI-37).
    * Absent = no HTTP server (library use and most tests); `adispatch hub start` always sets it.
    */
   http?: Omit<HubHttpOptions, 'config' | 'hub' | 'dataDir' | 'version' | 'clock' | 'timers' | 'logger' | 'env'>;

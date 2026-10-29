@@ -86,7 +86,7 @@ export interface ServiceCliOptions extends GlobalOptions {
   dryRun?: boolean;
   /** Unit name without `.service` (default `adispatchd`, with `--hub` `adispatchd-hub`). */
   name?: string;
-  /** The unit of a hub (`adispatch hub start`) instead of a single instance (WI-37). */
+  /** The unit of a hub (`adispatch hub start`) instead of a single instance (WI-38). */
   hub?: boolean;
   /** Dedicated service user (default `adispatchd`). */
   user?: string;

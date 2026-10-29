@@ -123,7 +123,7 @@ describe('start command', () => {
     expect(out.join('')).toContain('invalid --cancel-timeout');
   });
 
-  it('exits with 78 instead of running open when the hub secret does not arrive (WI-36)', async () => {
+  it('exits with 78 instead of running open when the hub secret does not arrive (WI-37)', async () => {
     const out: string[] = [];
     const io = { stdout: (t: string) => out.push(t), stderr: (t: string) => out.push(t) };
     const { configDir, dataDir } = tempConfig(1);

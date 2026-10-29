@@ -196,7 +196,7 @@ const RESERVED_AUTH_HEADERS = new Set(['host', 'cookie', 'origin', 'content-type
 
 const authRole = z.enum(AUTH_ROLES);
 
-/** `auth:` (WI-26); also the `auth:` section of `hub.yaml` (WI-36). */
+/** `auth:` (WI-26); also the `auth:` section of `hub.yaml` (WI-37). */
 export const authSchema = z.strictObject({
   mode: z.enum(AUTH_MODES).default(DEFAULTS.authMode),
   users: z
