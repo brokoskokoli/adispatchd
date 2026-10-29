@@ -369,6 +369,38 @@ CREATE TABLE item_history_gaps (
 );
 `;
 
+/**
+ * v7 (WI-35): artifacts (files or folders that workflows produce and that
+ * other workflows process as items of the source `type: artifacts`). Only
+ * metadata; the contents live below `data-dir/artifacts/<id>/`. `run_id` and
+ * `parent_id` are plain text without foreign keys: they must survive the
+ * deletion of the run (retention) or of the parent artifact. `consumed_by_json`
+ * is the list of workflow IDs that processed the artifact successfully;
+ * `(run_id, ordinal)` makes the collection after a crash idempotent.
+ */
+const V7_DDL = `
+CREATE TABLE artifacts (
+  id                TEXT PRIMARY KEY,
+  name              TEXT NOT NULL,
+  type              TEXT NOT NULL,
+  kind              TEXT NOT NULL CHECK (kind IN ('file','folder')),
+  file_name         TEXT NOT NULL,
+  size              INTEGER NOT NULL CHECK (size >= 0),
+  file_count        INTEGER NOT NULL CHECK (file_count >= 0),
+  workflow_id       TEXT NOT NULL,
+  run_id            TEXT NOT NULL,
+  ordinal           INTEGER NOT NULL CHECK (ordinal >= 0),
+  parent_id         TEXT,
+  consumed_by_json  TEXT NOT NULL DEFAULT '[]',
+  created_at        TEXT NOT NULL
+);
+CREATE INDEX artifacts_created ON artifacts (created_at DESC);
+CREATE INDEX artifacts_workflow ON artifacts (workflow_id, created_at DESC);
+CREATE INDEX artifacts_type ON artifacts (type, created_at DESC);
+CREATE INDEX artifacts_parent ON artifacts (parent_id);
+CREATE UNIQUE INDEX artifacts_run_ordinal ON artifacts (run_id, ordinal);
+`;
+
 /** All built-in migrations, in order. */
 export const MIGRATIONS: readonly Migration[] = [
   {
@@ -413,6 +445,13 @@ export const MIGRATIONS: readonly Migration[] = [
     name: 'item_history',
     up(db) {
       db.exec(V6_DDL);
+    },
+  },
+  {
+    version: 7,
+    name: 'artifacts',
+    up(db) {
+      db.exec(V7_DDL);
     },
   },
 ];
