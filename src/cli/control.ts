@@ -72,6 +72,12 @@ export function formatStatus(s: any): string {
   lines.push(
     `blocks:     ${counts.activeBlocks ?? 0} active · failed actions: ${counts.failedActions ?? 0} · notifications failed: ${n.failed ?? 0}, pending: ${n.pending ?? 0}`,
   );
+  if (s?.hub) {
+    lines.push(
+      `hub:        workspace ${s.hub.workspace}, ` +
+        (s.hub.reachable ? `${s.hub.active}/${s.hub.max} slots in use${s.hub.paused ? ', PAUSED (no new automatic runs)' : ''}` : 'NOT REACHABLE (no new automatic runs)'),
+    );
+  }
   if (s?.config) lines.push(`config:     version ${s.config.version}, hash ${String(s.config.hash ?? '').slice(0, 12)}, ${s.config.configDir}`);
   if (s?.server) lines.push(`server:     ${s.server.host}:${s.server.port}${s.server.loopback ? '' : ' (NOT loopback – must be behind an authenticating proxy)'}`);
   return `${lines.join('\n')}\n`;

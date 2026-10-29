@@ -22,6 +22,8 @@ import {
   systemClock,
   systemTimers,
   type Clock,
+  type HubSlotLease,
+  type HubSlots,
   type Logger,
   type Redactor,
   type SourceAdapter,
@@ -53,6 +55,7 @@ import { ConditionStatusStore, summarizeItemChecks, type WorkflowConditionStatus
 import { dueSlots, parseCron, type CronSchedule } from './cron.js';
 import { dryRunWorkflow } from './dry-run.js';
 import { SchedulerError } from './errors.js';
+import { hubLimitReason } from './hub-limit.js';
 import { candidateLinkedFields, checkEligibility, prepareSourceWorkflow, verifyItemFor, type ListCache, type PreparedCandidate, type PreparedWorkflow, type SourceLookup } from './planner.js';
 import { repositoryState, type SchedulingState } from './state.js';
 import {
@@ -109,6 +112,11 @@ export interface SchedulerOptions {
    * with `options_from` (WI-31); absent = no list check.
    */
   parameterOptions?: ManualParameterOptionsCheck;
+  /**
+   * Shared run limit of a hub (WI-35); absent = single instance. Automatic runs
+   * (source and cron) need a slot from the hub, manual runs are only registered.
+   */
+  hubSlots?: HubSlots;
 }
 
 /** Check of manual-start parameter values against run-time options (WI-31, see `parameter-options`). */
@@ -189,6 +197,7 @@ export class Scheduler {
   private readonly logger: Logger;
   private readonly misfireToleranceMs: number;
   private readonly parameterOptions: ManualParameterOptionsCheck | undefined;
+  private readonly hubSlots: HubSlots | undefined;
   private readonly maxRecordedMissed: number;
 
   private started = false;
@@ -218,6 +227,7 @@ export class Scheduler {
       if (this.isCurrentDefinition(wf)) this.conditionStatusStore.recordWorkflowCondition(wf.id, wf.conditions.workflow.length, diag, result);
     });
     this.parameterOptions = options.parameterOptions;
+    this.hubSlots = options.hubSlots;
     this.misfireToleranceMs = options.cronMisfireToleranceMs ?? 60_000;
     this.maxRecordedMissed = options.maxRecordedMissedSlots ?? 100;
   }
@@ -316,11 +326,14 @@ export class Scheduler {
   /**
    * Limit check with live effective values (overrides apply immediately).
    * `sourceId` (source candidates) also checks `max_concurrent_per_source` (WI-20).
+   * With a hub (WI-35) the last known hub state is checked last (`hub_limit`);
+   * `hub: false` skips it (the caller already holds a slot).
    */
   private capacityProblem(
     workflowId: string,
     sourceId?: string,
-  ): { decision: 'global_limit' | 'workflow_limit' | 'source_limit'; reason: string } | null {
+    options: { hub?: boolean } = {},
+  ): { decision: 'global_limit' | 'workflow_limit' | 'source_limit' | 'hub_limit'; reason: string } | null {
     const globalMax = this.config.maxConcurrent;
     const globalActive = this.state.countActive();
     if (globalActive >= globalMax) {
@@ -337,7 +350,18 @@ export class Scheduler {
         return { decision: 'source_limit', reason: `limit per source reached for '${sourceId}' (${fromSource}/${perSource} active)` };
       }
     }
+    if (this.hubSlots && options.hub !== false) {
+      const reason = hubLimitReason(this.hubSlots.snapshot());
+      if (reason) return { decision: 'hub_limit', reason };
+    }
     return null;
+  }
+
+  /** Ask the hub for a slot (no hub: nothing to do). The slot is released by the caller if no run takes it over. */
+  private async acquireHubSlot(): Promise<{ ok: true; lease: HubSlotLease | null } | { ok: false; reason: string }> {
+    if (!this.hubSlots) return { ok: true, lease: null };
+    const result = await this.hubSlots.acquire();
+    return result.ok ? { ok: true, lease: result.lease } : { ok: false, reason: result.reason };
   }
 
   // ---------------------------------------------------------------------------
@@ -483,6 +507,30 @@ export class Scheduler {
     // Linked fields already fetched for the filter are handed to the start (no second identical query).
     const linkedFields = await candidateLinkedFields(candidate, 'start');
 
+    // WI-35: the hub's shared slot is taken before the synchronous section (the request is asynchronous);
+    // every exit that does not hand it to a started run gives it back.
+    const slot = await this.acquireHubSlot();
+    if (!slot.ok) return set('hub_limit', slot.reason);
+    let handedOver = false;
+    try {
+      return this.reserveAndStart(candidate, cfg, linkedFields, slot.lease, set, () => {
+        handedOver = true;
+      });
+    } finally {
+      if (!handedOver) slot.lease?.release();
+    }
+  }
+
+  /** The synchronous section of {@link considerCandidate}: re-validate, reserve and start. */
+  private reserveAndStart(
+    candidate: PreparedCandidate,
+    cfg: LoadedConfig,
+    linkedFields: Awaited<ReturnType<typeof candidateLinkedFields>>,
+    lease: HubSlotLease | null,
+    set: (decision: CandidateDecision, reason: string) => null,
+    handOver: () => void,
+  ): string | null {
+    const diag = candidate.diagnosis;
     // --- synchronous section: re-validate and reserve atomically -------------
     if (this.stopped) return set('gate_closed', 'scheduler is stopping');
     const gate = this.gateReason();
@@ -491,7 +539,7 @@ export class Scheduler {
     if (!eff || !eff.enabled || this.config.current.workflowHashes[candidate.workflowId] !== cfg.workflowHashes[candidate.workflowId]) {
       return set('workflow_unavailable', 'workflow was disabled, removed or changed during the planning step');
     }
-    const capacity = this.capacityProblem(candidate.workflowId, candidate.item.sourceId);
+    const capacity = this.capacityProblem(candidate.workflowId, candidate.item.sourceId, { hub: false });
     if (capacity) return set(capacity.decision, capacity.reason);
     let run: RunRecord;
     try {
@@ -520,7 +568,9 @@ export class Scheduler {
     diag.runId = run.id;
     try {
       const verifyItem = verifyItemFor(candidate.workflow, candidate.adapter);
-      this.controller.startRun(run, { ...(verifyItem ? { verifyItem } : {}), ...(linkedFields ? { linkedFields } : {}) });
+      const handle = this.controller.startRun(run, { ...(verifyItem ? { verifyItem } : {}), ...(linkedFields ? { linkedFields } : {}) });
+      lease?.attach(run.id, handle.done);
+      handOver();
     } catch (err) {
       // The controller finalizes a refused reserved run itself (lock released).
       return set('start_failed', `run ${run.id} could not be started: ${errorMessage(err)}`);
@@ -685,7 +735,27 @@ export class Scheduler {
       if (again) return this.recordFiring(state, slot, again.decision, again.reason);
     }
 
-    // Synchronous: record + reserve in one transaction (at most one run per slot).
+    // WI-35: take the hub's shared slot (asynchronous), then re-check the local preconditions synchronously.
+    const hub = await this.acquireHubSlot();
+    if (!hub.ok) return this.recordFiring(state, slot, 'skipped_limit', hub.reason);
+    let handedOver = false;
+    try {
+      const last = this.slotPrecondition(workflowId, { hub: false });
+      if (last) return this.recordFiring(state, slot, last.decision, last.reason);
+      handedOver = this.reserveCronRun(state, slot, eff, hub.lease);
+    } finally {
+      if (!handedOver) hub.lease?.release();
+    }
+  }
+
+  /** Synchronous part of a cron slot: record + reserve in one transaction (at most one run per slot), then start. */
+  private reserveCronRun(
+    state: CronState,
+    slot: Date,
+    eff: NonNullable<ReturnType<ConfigManager['getWorkflow']>>,
+    lease: HubSlotLease | null,
+  ): boolean {
+    const workflowId = state.workflowId;
     let run: RunRecord | null;
     try {
       run = this.repos.transaction(() => {
@@ -703,30 +773,36 @@ export class Scheduler {
         return reserved;
       });
     } catch (err) {
-      if (err instanceof BlockedError) return this.recordFiring(state, slot, 'skipped_blocked', `retry block ${err.blockId}`);
-      if (err instanceof UnblockRunActiveError) return this.recordFiring(state, slot, 'skipped_blocked', `unblock run ${err.runId} active`);
-      if (err instanceof LockConflictError) return this.recordFiring(state, slot, 'skipped_lock', `slot lock held by run ${err.holderRunId}`);
-      this.logger.error('cron reservation failed', { workflowId, slot: slot.toISOString(), error: errorMessage(err) });
-      return this.recordFiring(state, slot, 'start_failed', errorMessage(err));
+      if (err instanceof BlockedError) this.recordFiring(state, slot, 'skipped_blocked', `retry block ${err.blockId}`);
+      else if (err instanceof UnblockRunActiveError) this.recordFiring(state, slot, 'skipped_blocked', `unblock run ${err.runId} active`);
+      else if (err instanceof LockConflictError) this.recordFiring(state, slot, 'skipped_lock', `slot lock held by run ${err.holderRunId}`);
+      else {
+        this.logger.error('cron reservation failed', { workflowId, slot: slot.toISOString(), error: errorMessage(err) });
+        this.recordFiring(state, slot, 'start_failed', errorMessage(err));
+      }
+      return false;
     }
-    if (!run) return;
+    if (!run) return false;
     state.quietDecision = null;
     this.logger.info('cron slot', { workflowId, slot: slot.toISOString(), decision: 'started', runId: run.id });
     try {
-      this.controller.startRun(run);
+      const handle = this.controller.startRun(run);
+      lease?.attach(run.id, handle.done);
+      return true;
     } catch (err) {
       this.repos.cronFirings.update(workflowId, slot, { decision: 'start_failed', reason: errorMessage(err) });
+      return false;
     }
   }
 
   /** Synchronous checks before a slot may start (enabled, gate, limits, block). */
-  private slotPrecondition(workflowId: string): { decision: CronSlotDecision; reason: string } | null {
+  private slotPrecondition(workflowId: string, options: { hub?: boolean } = {}): { decision: CronSlotDecision; reason: string } | null {
     const eff = this.config.getWorkflow(workflowId);
     if (!eff || eff.config.trigger.type !== 'schedule') return { decision: 'skipped_disabled', reason: 'workflow no longer scheduled' };
     if (!eff.enabled) return { decision: 'skipped_disabled', reason: 'workflow is disabled' };
     const gate = this.stopped ? 'draining' : this.gateReason();
     if (gate) return { decision: `skipped_${gate}`, reason: `automatic starts not possible (${gate})` };
-    const capacity = this.capacityProblem(workflowId);
+    const capacity = this.capacityProblem(workflowId, undefined, options);
     if (capacity) return { decision: 'skipped_limit', reason: capacity.reason };
     const block = this.state.activeBlock(workflowId, null);
     if (block) return { decision: 'skipped_blocked', reason: `retry block ${block.id}: ${block.reason}` };
@@ -799,6 +875,8 @@ export class Scheduler {
     });
     this.logger.info('manual run reserved', { workflowId, runId: run.id, item: item?.key ?? null });
     const handle = this.controller.startRun(run);
+    // WI-35: manual runs ignore the hub limit like the global one, but occupy a slot.
+    this.hubSlots?.adopt(run.id, handle.done);
     return { run, done: handle.done };
   }
 
@@ -875,6 +953,7 @@ export class Scheduler {
         state: this.state,
         clock: this.clock,
         gate: () => this.gateInfo(),
+        ...(this.hubSlots ? { hub: this.hubSlots.snapshot() } : {}),
         ...(options.signal ? { signal: options.signal } : {}),
       },
       workflowId,

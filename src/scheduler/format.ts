@@ -78,6 +78,10 @@ export function formatDryRun(r: DryRunResult): string {
     `  enabled: ${r.enabled ? 'yes' : 'no'}, workflow priority: ${r.workflowPriority}`,
     `  capacity: workflow ${r.capacity.workflow.active}/${r.capacity.workflow.max} active, global ${r.capacity.global.active}/${r.capacity.global.max} active`,
   ];
+  if (r.capacity.hub) {
+    const h = r.capacity.hub;
+    lines.push(`  hub: ${h.reachable ? `${h.active}/${h.max} active${h.paused ? ', paused' : ''}` : 'not reachable (no new automatic runs)'}`);
+  }
   if (r.capacity.perSource) {
     const per = Object.entries(r.capacity.perSource.active).map(([id, n]) => `${id} ${n}/${r.capacity.perSource?.max ?? 0}`);
     lines.push(`  capacity per source: ${per.join(', ')}`);
