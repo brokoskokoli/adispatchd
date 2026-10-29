@@ -327,7 +327,7 @@ async function runHubAction(action: HubWideAction, label: string): Promise<void>
 /** Live events normally deliver the result; this makes the page right even if the stream is down. */
 function afterAction(): void {
   refresher.trigger();
-  void loadAudit();
+  auditRefresher.trigger();
 }
 
 // ------------------------------------------------------------------ data
@@ -338,6 +338,7 @@ async function load(): Promise<void> {
   renderResources();
   renderTiles();
 }
+const auditRefresher = createRefresher(loadAudit, 2000);
 const refresher = createRefresher(() => load().catch((err: unknown) => toast(err instanceof Error ? err.message : String(err), 'error')), 1000);
 
 const STATE_LABEL: Record<LiveState, string> = { connecting: 'connecting…', open: 'live', reconnecting: 'reconnecting…', closed: 'offline' };
@@ -357,6 +358,7 @@ function startLive(): void {
           renderTiles();
           break;
         case 'status':
+          auditRefresher.trigger();
           renderSummary();
           renderTiles(); // tiles show their slots relative to the hub limit
           break;
@@ -364,6 +366,7 @@ function startLive(): void {
           renderResources();
           break;
         case 'workspace':
+          auditRefresher.trigger();
           updateTile(result.change.id);
           renderSummary();
           break;
