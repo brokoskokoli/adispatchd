@@ -78,6 +78,7 @@ describe('artifact routes (WI-35)', () => {
       runId: 'run-gone',
       parent: null,
       consumedBy: [],
+      attemptedBy: [],
       createdAt: '2026-10-29T10:00:01.000Z',
       url: `#/artifacts/${ID(1)}`,
     });

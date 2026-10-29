@@ -17,6 +17,7 @@ const record = (over: Partial<ArtifactRecord> = {}): ArtifactRecord => ({
   ordinal: 0,
   parentId: null,
   consumedBy: ['archive'],
+  attemptedBy: ['archive'],
   createdAt: '2026-10-29T10:00:00.000Z',
   ...over,
 });
@@ -49,6 +50,7 @@ describe('ArtifactSourceAdapter (WI-35)', () => {
         run_id: 'run-1',
         parent: null,
         consumed_by: ['archive'],
+        attempted_by: ['archive'],
       },
     });
     expect(Object.keys(artifactFields(a)).sort()).toEqual(ARTIFACT_FIELD_DEFINITIONS.map((d) => d.name).sort());

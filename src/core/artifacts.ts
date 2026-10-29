@@ -65,6 +65,8 @@ export interface ArtifactRecord {
   parentId: string | null;
   /** IDs of the workflows that processed the artifact successfully (run `completed` with result `success`). */
   consumedBy: string[];
+  /** IDs of the workflows whose run on the artifact completed, with result success or failure (retry protection). */
+  attemptedBy: string[];
   /** ISO time. */
   createdAt: string;
 }

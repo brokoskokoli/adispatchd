@@ -16,7 +16,7 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
     (Run `crashed`).
   - Neue Source `type: artifacts` (jedes Artefakt ist ein Item; keine Identity): Auto-Trigger mit Filter, manueller
     Start, Views, Item-Verlauf. Eingebautes Feld `consumed_by` (Workflows, die das Artefakt mit Erfolg verarbeitet
-    haben) verhindert erneutes Verarbeiten; weitere Felder `id`, `name`, `type`, `kind`, `file_name`, `size`,
+    haben) verhindert erneutes Verarbeiten, `attempted_by` (Run abgeschlossen, auch bei fachlichem `failure`) ist der Retry-Schutz; die Konfigurationsprüfung warnt, wenn ein Artefakt-Workflow keinen Filter darauf hat; weitere Felder `id`, `name`, `type`, `kind`, `file_name`, `size`,
     `file_count`, `created_at`, `workflow`, `run_id`, `parent`, `url`.
   - Eingabe: schreibgeschützte Kopie unter `<workspace>/inputs/<Name>`, Platzhalter `{item.path}`, `{item.name}`,
     `{item.type}` und `source.input` in `context.json`; Löschen ist gesperrt, solange ein aktiver Run das Artefakt nutzt.

@@ -1407,6 +1407,10 @@ export class RunController {
         await this.stageArtifactInput(item, prepared);
       } catch (err) {
         if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: true, ...ctx });
+        // The artifact vanished meanwhile (deleted between the re-read and now): like a vanished item, not a technical failure.
+        if (err instanceof ArtifactError && err.code === 'artifact_not_found') {
+          return this.finalize(runId, snapshot, cancelled('artifact no longer available'), { hooks: true, ...ctx });
+        }
         return this.finalize(runId, snapshot, startError(`artifact input could not be staged: ${errorMessage(err)}`), {
           hooks: true,
           ...ctx,
@@ -1808,11 +1812,12 @@ export class RunController {
     }
   }
 
-  /** Record that a successful run processed its artifact item (`consumed_by`, WI-35). */
+  /** Record that a completed run processed its artifact item (`attempted_by`, and `consumed_by` on success, WI-35). */
   private markArtifactConsumed(run: RunRecord, snapshot: WorkflowSnapshot | null, target: FinalizationTarget): void {
     if (snapshot?.source?.type !== ARTIFACT_SOURCE_TYPE || !run.sourceItemKey) return;
-    if (target.status !== 'completed' || target.businessResult !== 'success') return;
-    this.repos.artifacts.markConsumed(parseSourceItemKey(run.sourceItemKey).itemId, run.workflowId);
+    if (target.status !== 'completed') return;
+    // `attempted_by`: every completed run (retry protection); `consumed_by`: only a successful one.
+    this.repos.artifacts.markCompleted(parseSourceItemKey(run.sourceItemKey).itemId, run.workflowId, target.businessResult === 'success');
   }
 
   /** Create the workspace and copy the artifact of `item` read-only to `inputs/` (WI-35). */

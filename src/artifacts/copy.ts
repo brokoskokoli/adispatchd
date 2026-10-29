@@ -14,7 +14,7 @@ import { errorMessage, isWithin } from '../core/index.js';
 import { StreamRedactor } from '../executors/index.js';
 
 /** Why a file could not be copied. */
-export type CopyFailure = 'symlink' | 'not_regular_file' | 'changed' | 'outside_workspace' | 'size_limit' | 'error';
+export type CopyFailure = 'symlink' | 'hardlink' | 'not_regular_file' | 'changed' | 'outside_workspace' | 'size_limit' | 'error';
 
 /** Result of {@link copyRegularFile}. */
 export type CopyResult = { ok: true; written: number } | { ok: false; reason: CopyFailure; message?: string };
@@ -84,6 +84,8 @@ export async function copyRegularFile(options: CopyFileOptions): Promise<CopyRes
   try {
     const st = await handle.stat();
     if (!st.isFile()) return { ok: false, reason: 'not_regular_file' };
+    // A hard link may be another name for a file outside the workspace (e.g. /etc/shadow): never copied.
+    if (st.nlink > 1) return { ok: false, reason: 'hardlink' };
     if (st.dev !== expect.dev || st.ino !== expect.ino) return { ok: false, reason: 'changed' };
     if (!isWithin(root, await realpath(src))) return { ok: false, reason: 'outside_workspace' };
     // Without secrets the written size equals the source size; with secrets it is checked while writing.

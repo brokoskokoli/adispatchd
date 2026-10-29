@@ -42,6 +42,7 @@ export function artifactFields(record: ArtifactRecord): Record<string, FieldValu
     run_id: record.runId,
     parent: record.parentId,
     consumed_by: [...record.consumedBy],
+    attempted_by: [...record.attemptedBy],
     url: artifactRoute(record.id),
   };
 }

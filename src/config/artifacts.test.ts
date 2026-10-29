@@ -156,6 +156,21 @@ describe('config: artifacts (WI-35)', () => {
     expect(joined).toMatch(/b\.yaml: trigger\.sources: All sources of a workflow must have the same adapter type/);
   });
 
+  it('warns when an artifact workflow has no filter on consumed_by / attempted_by', async () => {
+    const none = await load({ 'workflows/a.yaml': workflow('a', '{ type: source, source: artifacts }') });
+    expect(none.errors).toEqual([]);
+    expect(none.warnings.join('\n')).toMatch(/a\.yaml: filter: The workflow processes artifacts but its filter does not look at "consumed_by" or "attempted_by"/);
+    const other = await load({ 'workflows/a.yaml': workflow('a', '{ type: source, source: artifacts }', 'filter: { field: type, operator: equals, value: report }\n') });
+    expect(other.warnings.join('\n')).toMatch(/does not look at/);
+    for (const field of ['consumed_by', 'attempted_by']) {
+      const ok = await load({ 'workflows/a.yaml': workflow('a', '{ type: source, source: artifacts }', `filter:\n  not: { field: ${field}, operator: contains, value: a }\n`) });
+      expect(ok.warnings, field).toEqual([]);
+    }
+    // GitHub workflows are not affected.
+    const gh = await load({ 'workflows/g.yaml': workflow('g', '{ type: source, source: repo_a }') });
+    expect(gh.warnings.join('\n')).not.toMatch(/consumed_by/);
+  });
+
   it('snapshots carry the artifacts source and no identity', async () => {
     const { config } = await load({ 'workflows/sum.yaml': workflow('sum', '{ type: source, source: artifacts }') });
     const snapshot = snapshotWorkflow(config as LoadedConfig, 'sum');

@@ -490,6 +490,7 @@ export interface Artifact {
   runId: string;
   parent: string | null;
   consumedBy: string[];
+  attemptedBy?: string[];
   createdAt: string;
   url: string;
 }

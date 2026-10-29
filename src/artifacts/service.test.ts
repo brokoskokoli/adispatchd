@@ -229,6 +229,25 @@ describe('ArtifactService (WI-35)', () => {
     }
   });
 
+  it('stops cleanly when a download is abandoned: the file handle is released', async () => {
+    const { open } = await import('node:fs/promises');
+    const file = path.join(tmp, 'big.bin');
+    writeFileSync(file, Buffer.alloc(3_000_000, 'x'));
+    const handle = await open(file, 'r');
+    let closed = 0;
+    const realClose = handle.close.bind(handle);
+    handle.close = async () => {
+      closed++;
+      return realClose();
+    };
+    const { zipStream } = await import('./zip.js');
+    const gen = zipStream([{ name: 'big.bin', size: 3_000_000, open: async () => handle }], new Date());
+    await gen.next(); // local header
+    await gen.next(); // first data chunk
+    await gen.return(undefined as never);
+    expect(closed).toBeGreaterThanOrEqual(1);
+  });
+
   it('refuses a .zip that would need ZIP64', async () => {
     put('res/a.txt', 'a');
     await collect([{ name: 'Res', type: 't', path: 'res' }]);

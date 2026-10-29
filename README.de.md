@@ -74,7 +74,7 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
 - **Artefakte:** Ein Workflow nennt Dateien oder Ordner unter `execute.artifacts`; nach dem Run werden sie als
   unveränderliche Artefakte gespeichert (ohne Symlinks, mit Größenlimit, Secrets redigiert) und auf der Seite
   **Artifacts** mit Dateibaum, Download (Ordner als `.zip`) und Löschen angezeigt. Zugleich sind sie die Items der Source
-  `type: artifacts`: Ein anderer Workflow verarbeitet sie automatisch – über das eingebaute Feld `consumed_by` genau
+  `type: artifacts`: Ein anderer Workflow verarbeitet sie automatisch – über die eingebauten Felder `consumed_by` / `attempted_by` genau
   einmal je Artefakt – oder per manuellem Start und sieht eine schreibgeschützte Kopie unter `inputs/` (`{item.path}`).
   Ketten *erzeugen → verarbeiten* brauchen keine Pipeline-Engine (`retention.artifacts`, API `/api/v1/artifacts`; seit 0.10.0).
 - **Item-Verlauf:** Seit 0.9.0 zeigt eine Seite je Issue/PR den Weg durch die Workflows: aktueller Stand (frisch von

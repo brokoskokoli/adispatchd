@@ -71,7 +71,7 @@ who picks which issue, what happens when an agent crashes, how do labels get res
 - **Artifacts** – a workflow lists files or folders in `execute.artifacts`; after the run they are stored as immutable
   artifacts (no symlinks, size-limited, secrets redacted), listed on the **Artifacts** page with file tree, download
   (folders as `.zip`) and delete. Artifacts are also the items of the source `type: artifacts`: another workflow
-  processes them automatically – exactly once per artifact via the built-in field `consumed_by` – or by a manual start,
+  processes them automatically – exactly once per artifact via the built-in fields `consumed_by` / `attempted_by` – or by a manual start,
   and sees a read-only copy below `inputs/` (`{item.path}`). Chains such as *produce → process* need no pipeline engine
   (`retention.artifacts`, API `/api/v1/artifacts`; since 0.10.0).
 - **Item history** – since 0.9.0 one page per issue/PR shows its way through the workflows: the current state (read

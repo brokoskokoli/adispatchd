@@ -5,8 +5,10 @@ trigger: { type: source, source: artifacts }
 filter:
   all:
     - { field: type, operator: equals, value: report }
-    # consumed_by lists the workflows that processed the artifact successfully (run completed + success)
-    - not: { field: consumed_by, operator: contains, value: summarize-report }
+    # attempted_by lists the workflows whose run on the artifact completed (success OR failure): one attempt per
+    # artifact, even when the result is "failure". consumed_by lists only the successful ones: filter on it instead
+    # to try again after a failure (endlessly, as long as it fails). Without one of them the workflow restarts forever.
+    - not: { field: attempted_by, operator: contains, value: summarize-report }
 execute:
   type: shell
   command: /etc/adispatchd/scripts/artifacts/summarize-report.sh

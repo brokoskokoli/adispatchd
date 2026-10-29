@@ -79,11 +79,32 @@ describe('collecting artifacts from a workspace (WI-35)', () => {
     expect(readdirSync(path.join(out, 'content', 'sub'))).toEqual(['b.txt']);
   });
 
-  it('copies hard links by content (they are regular files)', async () => {
-    put('res/a.txt', 'a');
-    linkSync(path.join(ws, 'res', 'a.txt'), path.join(ws, 'res', 'b.txt'));
+  it('never copies files with several hard links (could name a file outside the workspace)', async () => {
+    put('res/ok.txt', 'ok');
+    writeFileSync(path.join(tmp, 'outside.txt'), 'top secret');
+    linkSync(path.join(tmp, 'outside.txt'), path.join(ws, 'res', 'linked.txt'));
     const res = await collectArtifact({ source: await inspect('res'), dest: path.join(out, 'content'), maxBytes: 100, secrets: [] });
-    expect(res).toMatchObject({ ok: true, fileCount: 2, size: 2 });
+    expect(res).toMatchObject({ ok: true, fileCount: 1, size: 2, skipped: [{ path: 'linked.txt', reason: 'hardlink' }] });
+    expect(readdirSync(path.join(out, 'content'))).toEqual(['ok.txt']);
+    // As the artifact itself: refused.
+    linkSync(path.join(tmp, 'outside.txt'), path.join(ws, 'single.txt'));
+    expect(await collectArtifact({ source: await inspect('single.txt'), dest: path.join(out, 'single'), maxBytes: 100, secrets: [] })).toMatchObject({
+      ok: false,
+      reason: 'hardlink',
+    });
+  });
+
+  it('skips names with backslashes or control characters (they could break paths and archives)', async () => {
+    put('res/ok.txt', 'ok');
+    put('res/back\\slash.txt', 'b');
+    put('res/new\nline.txt', 'n');
+    put('res/sub/tab\tname', 't');
+    put('res/sub/fine.txt', 'f');
+    const res = await collectArtifact({ source: await inspect('res'), dest: path.join(out, 'content'), maxBytes: 100, secrets: [] });
+    expect(res).toMatchObject({ ok: true, fileCount: 2, skippedCount: 3 });
+    expect(res.ok && res.skipped.map((s) => s.reason)).toEqual(['unsafe_name', 'unsafe_name', 'unsafe_name']);
+    expect(readdirSync(path.join(out, 'content')).sort()).toEqual(['ok.txt', 'sub']);
+    expect(readdirSync(path.join(out, 'content', 'sub'))).toEqual(['fine.txt']);
   });
 
   it('enforces the size limit for files and folders (nothing partial is reported as success)', async () => {

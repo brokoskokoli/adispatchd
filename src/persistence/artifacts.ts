@@ -11,7 +11,7 @@ import { ACTIVE_STATUSES, type ArtifactCatalog, type ArtifactKind, type Artifact
 import { all, fromJson, get, iso, placeholders, run, str, toJson, transaction, type Params, type Row } from './sqlite.js';
 
 /** Input of {@link ArtifactRepository.insert}. */
-export type NewArtifact = Omit<ArtifactRecord, 'createdAt' | 'consumedBy'> & { createdAt?: string };
+export type NewArtifact = Omit<ArtifactRecord, 'createdAt' | 'consumedBy' | 'attemptedBy'> & { createdAt?: string };
 
 /** Query of {@link ArtifactRepository.query}. */
 export interface ArtifactQuery {
@@ -46,6 +46,7 @@ function toRecord(row: Row): ArtifactRecord {
     ordinal: Number(row.ordinal),
     parentId: str(row.parent_id),
     consumedBy: fromJson<string[]>(row.consumed_by_json) ?? [],
+    attemptedBy: fromJson<string[]>(row.attempted_by_json) ?? [],
     createdAt: String(row.created_at),
   };
 }
@@ -66,8 +67,8 @@ export class ArtifactRepository implements ArtifactCatalog {
   insert(input: NewArtifact): ArtifactRecord {
     run(
       this.db,
-      `INSERT INTO artifacts (id, name, type, kind, file_name, size, file_count, workflow_id, run_id, ordinal, parent_id, consumed_by_json, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', ?)`,
+      `INSERT INTO artifacts (id, name, type, kind, file_name, size, file_count, workflow_id, run_id, ordinal, parent_id, consumed_by_json, attempted_by_json, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?)`,
       [
         input.id,
         input.name,
@@ -162,6 +163,21 @@ export class ArtifactRepository implements ArtifactCatalog {
       if (current.consumedBy.includes(workflowId)) return current;
       run(this.db, 'UPDATE artifacts SET consumed_by_json = ? WHERE id = ?', [toJson([...current.consumedBy, workflowId]), id]);
       return this.get(id);
+    });
+  }
+
+  /**
+   * Record that a run of `workflowId` on the artifact completed (`success` adds `consumed_by` as well).
+   * Idempotent; returns the updated record, or `null` if the artifact no longer exists.
+   */
+  markCompleted(id: string, workflowId: string, success: boolean): ArtifactRecord | null {
+    return transaction(this.db, () => {
+      const current = this.get(id);
+      if (!current) return null;
+      if (!current.attemptedBy.includes(workflowId)) {
+        run(this.db, 'UPDATE artifacts SET attempted_by_json = ? WHERE id = ?', [toJson([...current.attemptedBy, workflowId]), id]);
+      }
+      return success ? this.markConsumed(id, workflowId) : this.get(id);
     });
   }
 

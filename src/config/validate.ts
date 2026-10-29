@@ -25,6 +25,7 @@ import {
   type TemplateMode,
   type TemplateScope,
 } from '../core/index.js';
+import { collectFields } from '../filters/index.js';
 import { PROJECT_FIELD_PREFIX, valueProblem } from '../sources/index.js';
 import {
   checkFieldName,
@@ -403,6 +404,17 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   }
   // Artifact items (WI-35): `{item.name}`, `{item.type}`, `{item.path}`.
   const artifact = triggerSources.length > 0 && triggerSources.every((s) => s.type === ARTIFACT_SOURCE_TYPE);
+  // Without a filter on consumed_by / attempted_by an artifact workflow starts again and again for the same artifact.
+  if (artifact) {
+    const used = wf.filter ? collectFields(wf.filter) : [];
+    if (!used.includes('consumed_by') && !used.includes('attempted_by')) {
+      issues.warning(
+        file,
+        ['filter'],
+        'The workflow processes artifacts but its filter does not look at "consumed_by" or "attempted_by": it will start again for the same artifact after every run (e.g. not: { field: attempted_by, operator: contains, value: ' + wf.id + ' })',
+      );
+    }
+  }
   // `{item.work_branch}` / `{item.work_pr}` need adapters that provide the linked fields (WI-21) – every trigger source.
   const linked = triggerSources.length > 0 && triggerSources.every((s) => providesLinkedFields(s.type));
   // `{source.vars.<name>}` must be defined in every (known) source of the workflow (WI-20).

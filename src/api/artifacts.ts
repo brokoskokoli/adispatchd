@@ -48,6 +48,7 @@ export interface ArtifactView {
   runId: string;
   parent: string | null;
   consumedBy: string[];
+  attemptedBy: string[];
   createdAt: string;
   /** UI route. */
   url: string;
@@ -67,6 +68,7 @@ export function toArtifactView(a: ArtifactRecord): ArtifactView {
     runId: a.runId,
     parent: a.parentId,
     consumedBy: [...a.consumedBy],
+    attemptedBy: [...a.attemptedBy],
     createdAt: a.createdAt,
     url: artifactRoute(a.id),
   };

@@ -105,10 +105,9 @@ export async function* zipStream(entries: readonly ZipEntry[], mtime: Date): Asy
     let crc = 0;
     let size = 0;
     let compressed = 0;
+    const deflate = createDeflateRaw();
+    const input = entry.size === 0 ? null : createReadStream('', { fd: handle, start: 0, end: entry.size - 1, autoClose: false });
     try {
-      const deflate = createDeflateRaw();
-      const input =
-        entry.size === 0 ? null : createReadStream('', { fd: handle, start: 0, end: entry.size - 1, autoClose: false });
       if (input) {
         input.on('data', (chunk) => {
           const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
@@ -126,6 +125,9 @@ export async function* zipStream(entries: readonly ZipEntry[], mtime: Date): Asy
         yield emit(buf);
       }
     } finally {
+      // Also when the consumer stops early or a read fails: release the streams before closing the file.
+      deflate.destroy();
+      input?.destroy();
       await handle.close().catch(() => undefined);
     }
     yield emit(descriptor(crc, compressed, size));

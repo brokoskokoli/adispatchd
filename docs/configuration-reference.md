@@ -696,7 +696,7 @@ trigger: { type: source, source: artifacts }
 filter:
   all:
     - { field: type, operator: equals, value: report }
-    - not: { field: consumed_by, operator: contains, value: summarize }   # genau einmal je Artefakt
+    - not: { field: attempted_by, operator: contains, value: summarize }   # genau ein Versuch je Artefakt
 execute:
   type: shell
   command: scripts/summarize.sh
@@ -705,16 +705,20 @@ execute:
     - { name: 'Zusammenfassung von {item.name}', type: summary, path: out/summary.txt }
 ```
 
-- **Felder** (Filter, Views, `context.json`): siehe §4.9. Das eingebaute Feld `consumed_by` ist die Liste der
-  Workflow-IDs, die das Artefakt **mit Erfolg** verarbeitet haben – Run `completed` mit Ergebnis `success`, eingetragen
-  **mit dem Ende des Runs** (nicht beim Start), in derselben Transaktion, die die Sperre des Runs freigibt. Ein
-  Workflow, der Artefakte nur einmal verarbeiten soll, schließt sich selbst im Filter aus
-  (`not: { field: consumed_by, operator: contains, value: <workflow-id> }`); ohne diese Bedingung startet er für ein
-  Artefakt wieder und wieder. Ein Run mit fachlichem Ergebnis `failure`, `crashed`, `timed_out` oder `cancelled`
-  trägt **nichts** ein: das Artefakt bleibt für diesen Workflow offen und wird (bei passendem Filter) im nächsten
-  Planungsschritt erneut gestartet – technische Fehler zählen dabei wie immer in den Retry-Block (§6.4), ein fachliches
-  `failure` nicht. Soll das nicht erneut laufen, im Filter zusätzlich ausschließen, was der Workflow vorher anhand
-  eigener Kriterien erkennt, oder `on_failure` nutzen, um es zu melden.
+- **Felder** (Filter, Views, `context.json`): siehe §4.9. Zwei eingebaute Listen von Workflow-IDs, beide eingetragen
+  **mit dem Ende des Runs** (nicht beim Start), idempotent und in derselben Transaktion, die die Sperre des Runs freigibt:
+  - `consumed_by`: Workflows, die das Artefakt **mit Erfolg** verarbeitet haben (Run `completed` mit Ergebnis `success`).
+  - `attempted_by`: Workflows, deren Run auf dem Artefakt **abgeschlossen** wurde (`completed`, Ergebnis `success`
+    **oder** `failure`) – der Retry-Schutz.
+
+  Ein Workflow, der ein Artefakt nur einmal bearbeiten soll, schließt sich selbst im Filter aus. Mit
+  `not: { field: attempted_by, operator: contains, value: <workflow-id> }` genau **ein** Versuch je Artefakt: auch bei
+  fachlichem `failure` startet er nicht in jedem Planungsschritt neu. Mit `consumed_by` statt `attempted_by` wird nach
+  einem fachlichen `failure` erneut versucht (gewollt, wenn sich etwas ändern kann; dann endlos, solange es scheitert –
+  Retry-Blocks gelten nur für technische Fehler, §6.4). Ohne eine der beiden Bedingungen startet der Workflow für ein
+  Artefakt wieder und wieder; die Konfigurationsprüfung warnt dann (`The workflow processes artifacts but its filter does
+  not look at "consumed_by" or "attempted_by"`). Technische Fehlschläge (`crashed`, `timed_out`, `start_error`,
+  `cancelled`) tragen nichts ein; sie zählen wie immer in den Retry-Block.
 - **Eingabe:** Läuft ein Workflow auf einem Artefakt-Item, kopiert der Daemon den Inhalt nach `on_start` und vor dem
   Start des Workers **schreibgeschützt** (Dateien `0444`, Verzeichnisse `0555`, auch `inputs/` selbst) nach
   `<workspace>/inputs/<Name>`. `<Name>` ist der Artefaktname als sicheres Pfadsegment (jedes Zeichen außer
@@ -724,6 +728,8 @@ execute:
   `working_directory`) wird ersetzt; scheitert das Kopieren, endet der Run als `start_error`. Solange ein aktiver Run
   das Artefakt als Item nutzt, kann es nicht gelöscht werden (`409 artifact_in_use`). Beim Aufräumen des Workspaces
   (und der Retention) werden die Schreibrechte der Verzeichnisse vorher wiederhergestellt.
+- **Verschwundenes Artefakt:** Wird das Artefakt zwischen Planung und Kopieren der Eingabe gelöscht, endet der Run als
+  `cancelled` (`artifact no longer available`, kein Retry-Block-Zähler) statt als `start_error`.
 - **Keine Aktionen am Item:** `source.update` und `source.comment` gibt es für Artefakt-Items nicht
   (Konfigurationsfehler `"source.comment" is not supported for artifact items …`); `shell`-Actions gehen. Eine
   Workflow-Source muss einheitlich sein: `sources: [repo_a, artifacts]` ist ein Fehler (alle Sources eines Workflows
@@ -1290,7 +1296,7 @@ nach Erreichen der Grenze nichts gefunden haben, gelten als „nicht durchsucht�
 `data-dir/artifacts/<artifact-id>/content` und legt einen Eintrag in der Tabelle `artifacts` an (§3.2.1, API in
 [api.md](api.md)). Es gelten dieselben Sicherheitsregeln wie für `keep`: kein Pfadbestandteil darf ein Symlink sein
 (`symlink`), der aufgelöste Pfad muss im Workspace liegen (`outside_workspace`), nur reguläre Dateien werden kopiert –
-Symlinks und Sonderdateien **in** einem Ordner werden übersprungen und im Event vermerkt –, jede Datei wird vor dem
+Symlinks, Sonderdateien, **Dateien mit mehreren Hardlinks** (`nlink > 1`, Grund `hardlink`: sie könnten ein weiterer Name einer Datei außerhalb des Workspaces sein) und Namen mit `\`, NUL oder Steuerzeichen (`unsafe_name`) **in** einem Ordner werden übersprungen und im Event vermerkt – jede Datei wird vor dem
 Kopieren mit `O_NOFOLLOW` und über ihre Inode geprüft, und **Secrets werden beim Kopieren redigiert** – best effort,
 wie Logs (gleiche Ersetzung wie bei `keep`). Gespeichert wird nur bei Runs, die `completed` enden (Ergebnis `success`
 **oder** `failure`); ein abgestürzter, abgebrochener oder zeitüberschrittener Run speichert keine Artefakte. Überschreiten
@@ -1298,7 +1304,7 @@ die Artefakte eines Runs zusammen `artifacts_max_size`, wird das betreffende nic
 Grenzen je Ordner: höchstens 10 000 Dateien und 100 000 untersuchte Verzeichniseinträge, ein Ordner ohne reguläre Datei
 wird nicht gespeichert. Probleme sind **Warnungen**, kein Fehlschlag des Runs: das Event `run.artifacts` (sichtbar im Run
 unter „Artifacts“ und in `GET /api/v1/runs/:id`) nennt je nicht gespeichertem Eintrag Position, Pfad, Grund
-(`missing`, `symlink`, `outside_workspace`, `not_regular_file`, `empty`, `size_limit`, `file_limit`, `entry_limit`,
+(`missing`, `symlink`, `hardlink`, `outside_workspace`, `not_regular_file`, `empty`, `size_limit`, `file_limit`, `entry_limit`,
 `invalid_name`, `error`) und Meldung. Mit **`required: true`** prüft der Daemon den Pfad schon beim Ende des Workers:
 fehlt er, wird der Run – statt `completed` – als `crashed` beendet (Grund `required artifact "<pfad>" is not available:
 …`, Fehlercode `run_required_artifact_missing`), `on_crash` bzw. `on_error` läuft, der Fehler zählt für den Retry-Block
@@ -2324,7 +2330,8 @@ Wert (`parent` ohne Eltern-Artefakt) ist `null`.
 | `workflow` | string | ID des erzeugenden Workflows |
 | `run_id` | string | ID des erzeugenden Runs (der Run kann durch die Retention gelöscht sein) |
 | `parent` | string | ID des Artefakts, das der erzeugende Run als Item hatte; `null` ohne |
-| `consumed_by` | string[] | IDs der Workflows, die das Artefakt mit Erfolg verarbeitet haben (§3.2.1) |
+| `consumed_by` | string[] | IDs der Workflows, die das Artefakt mit Erfolg verarbeitet haben (Run `completed` + `success`, §3.2.1) |
+| `attempted_by` | string[] | IDs der Workflows, deren Run auf dem Artefakt abgeschlossen wurde (`completed`, Erfolg oder fachliches `failure`) – Retry-Schutz (§3.2.1) |
 | `url` | string | UI-Route `#/artifacts/<id>` (Link-Ziel von `name` in Views) |
 
 ---

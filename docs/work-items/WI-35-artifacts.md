@@ -1,6 +1,6 @@
 # WI-35 – Artefakte: Workflows erzeugen Dateien/Ordner, Artefakt-Ansicht, Artefakte als Workflow-Eingabe
 
-**Herkunft:** Wunsch des Maintainers (29. Oktober 2026) · **Abhängig von:** `main` (0.9.1) · **Branch:** `wi-35-artifacts` · **Zielversion:** 0.10.0 (DB-Schema v7)
+**Herkunft:** Wunsch des Maintainers (29. Oktober 2026) · **Abhängig von:** `main` (0.9.1) · **Branch:** `claude/artifact-workflows-management-cq0fjx` · **Zielversion:** 0.10.0 (DB-Schema v7)
 
 ## Problem
 
@@ -38,7 +38,9 @@ Die Artefakt-Metadaten liegen in SQLite (interner Zustand wie Runs, keine zweite
    (keine Symlinks, nur reguläre Dateien, Pfad nicht absolut/`..`, Größenlimit, Secret-Redaktion). Fehlt der Pfad,
    ist das ein Warn-Event, kein Fehlschlag (Option `required: true` macht es zum technischen Fehler).
 2. **Dedupe über eingebautes Feld `consumed_by`**: Liste der Workflow-IDs, die das Artefakt mit Erfolg verarbeitet
-   haben (Run `completed`, Ergebnis `success`). Filter z. B. `not: { contains: { consumed_by: summarize } }`.
+   haben (Run `completed`, Ergebnis `success`). **Ergänzung (Review M1):** zusätzlich `attempted_by` = Workflows, deren
+   Run auf dem Artefakt `completed` endete (Erfolg oder fachliches `failure`) als Retry-Schutz; die Konfigurationsprüfung
+   warnt, wenn ein Artefakt-Workflow keinen Filter auf eines der beiden Felder hat. Filter z. B. `not: { contains: { consumed_by: summarize } }`.
 3. **Ordner-Download als `.zip`** (eigener kleiner Writer, keine neue Dependency; Dateien einzeln als Datei).
 
 ## Umfang
@@ -83,7 +85,7 @@ Upload von Artefakten über die UI, Versionierung, Artefakt-Tags, Pipeline-Edito
 
 - [ ] Workflow mit `execute.artifacts` legt Datei- und Ordner-Artefakte an; fehlender Pfad → Warn-Event bzw. mit `required` Fehler.
 - [ ] Pfad-Traversal, Symlinks, Größenlimit und Secret-Redaktion wie bei `keep` getestet.
-- [ ] Source `artifacts`: Auto-Trigger mit Filter startet genau einmal je Artefakt und Workflow (`consumed_by`).
+- [ ] Source `artifacts`: Auto-Trigger mit Filter startet genau einmal je Artefakt und Workflow (`consumed_by`/`attempted_by`: mit Filter `not attempted_by contains <workflow>` startet auch ein Run mit fachlichem `failure` nicht erneut; Konfig-Warnung ohne solchen Filter).
 - [ ] Manueller Start auf einem Artefakt und auf einem Ordner-Artefakt (Eingabe unter `inputs/`, schreibgeschützt).
 - [ ] Liste, Detail, Dateibaum, Download (Datei und `.zip`) und Löschen (inkl. 409 bei aktiver Nutzung) per API und UI; Rollen geprüft.
 - [ ] Retention löscht Artefakte nach `retention.artifacts`; Migration v7 mit Backup getestet.

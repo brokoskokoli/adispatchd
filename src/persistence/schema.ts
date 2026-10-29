@@ -375,7 +375,8 @@ CREATE TABLE item_history_gaps (
  * metadata; the contents live below `data-dir/artifacts/<id>/`. `run_id` and
  * `parent_id` are plain text without foreign keys: they must survive the
  * deletion of the run (retention) or of the parent artifact. `consumed_by_json`
- * is the list of workflow IDs that processed the artifact successfully;
+ * is the list of workflow IDs that processed the artifact successfully, `attempted_by_json` the list of
+ * workflows whose run on it completed (success or failure);
  * `(run_id, ordinal)` makes the collection after a crash idempotent.
  */
 const V7_DDL = `
@@ -392,6 +393,7 @@ CREATE TABLE artifacts (
   ordinal           INTEGER NOT NULL CHECK (ordinal >= 0),
   parent_id         TEXT,
   consumed_by_json  TEXT NOT NULL DEFAULT '[]',
+  attempted_by_json TEXT NOT NULL DEFAULT '[]',
   created_at        TEXT NOT NULL
 );
 CREATE INDEX artifacts_created ON artifacts (created_at DESC);

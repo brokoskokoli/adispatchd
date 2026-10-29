@@ -71,6 +71,9 @@ beforeAll(async () => {
     // size limit
     wf('tiny', ['id: tiny', 'trigger: { type: manual }', shell(e.script('tiny.sh', `mkdir -p out; head -c 100 /dev/zero > out/big.bin; ${RESULT}`)), '  artifacts_max_size: 50B', '  artifacts:', '    - { name: Big, type: big, path: out/big.bin }', ''].join('\n'));
     // processes an artifact but fails: no consumed_by
+    // automatic workflow whose run always ends with business result failure: attempted_by stops the restarts
+    wf('flaky', ['id: flaky', 'trigger: { type: source, source: artifacts }', 'filter:', '  all:', '    - { field: type, operator: equals, value: flakytype }', '    - not: { field: attempted_by, operator: contains, value: flaky }', shell(e.script('flaky.sh', `echo run >> ${e.marks}/flaky.log\n${fail}`)), ''].join('\n'));
+    wf('flakymaker', ['id: flakymaker', 'trigger: { type: manual }', shell(e.script('flakymaker.sh', `mkdir -p out; echo x > out/f.txt; ${RESULT}`)), '  artifacts:', '    - { name: F, type: flakytype, path: out/f.txt }', ''].join('\n'));
     wf('strict', ['id: strict', 'trigger: { type: source, source: artifacts }', 'filter: { field: type, operator: equals, value: never }', shell(e.script('strict.sh', fail)), ''].join('\n'));
     wf(
       'make',
@@ -177,8 +180,9 @@ describe('artifacts end-to-end (WI-35)', () => {
 
     const detail = await env.request('GET', `/api/v1/artifacts/${reportId}`);
     expect(detail.json.artifact.consumedBy).toEqual(['summarize']);
+    expect(detail.json.artifact.attemptedBy).toEqual(['summarize']);
     expect(detail.json.runs.map((r: { id: string }) => r.id)).toEqual([run.id]);
-    expect(detail.json.workflows.map((w: { id: string }) => w.id).sort()).toEqual(['publish', 'strict', 'summarize']);
+    expect(detail.json.workflows.map((w: { id: string }) => w.id).sort()).toEqual(['flaky', 'publish', 'strict', 'summarize']);
     expect(detail.json.children).toHaveLength(1);
 
     // More planning steps start nothing: the filter excludes the artifact, and the summary is of type "summary".
@@ -335,12 +339,31 @@ describe('artifacts end-to-end (WI-35)', () => {
       expect(detail.json.artifacts.report.message).toMatch(/0 artifact\(s\) stored.*1 not stored \(size_limit\)/);
     });
 
-    it('does not record consumed_by when the run ends with business result failure', async () => {
+    it('a failing automatic run is not restarted when the filter excludes attempted_by', async () => {
+      const made = await makeRun('flakymaker');
+      expect(made.status).toBe('completed');
+      await env.app.scheduler.planOnce();
+      const first = runsOf('flaky');
+      expect(first).toHaveLength(1);
+      const run = await env.waitTerminal(first[0]!.id);
+      expect(run).toMatchObject({ status: 'completed', businessResult: 'failure' });
+      await env.app.scheduler.planOnce();
+      await env.app.scheduler.planOnce();
+      expect(runsOf('flaky')).toHaveLength(1);
+      expect(readFileSync(path.join(env.marks, 'flaky.log'), 'utf8').trim().split('\n')).toHaveLength(1);
+      const [artifact] = await artifactsOf(made.id);
+      const detail = (await env.request('GET', `/api/v1/artifacts/${artifact!.id}`)).json.artifact;
+      expect(detail).toMatchObject({ attemptedBy: ['flaky'], consumedBy: [] });
+    });
+
+    it('records attempted_by but not consumed_by when the run ends with business result failure', async () => {
       const [anyArtifact] = (await env.request('GET', '/api/v1/artifacts?type=log')).json.artifacts as Array<{ id: string }>;
       const start = await env.request('POST', `/api/v1/artifacts/${anyArtifact!.id}/start`, { workflow: 'strict' });
       const run = await env.waitTerminal(start.json.run.id);
       expect(run).toMatchObject({ status: 'completed', businessResult: 'failure' });
-      expect((await env.request('GET', `/api/v1/artifacts/${anyArtifact!.id}`)).json.artifact.consumedBy).toEqual([]);
+      const after = (await env.request('GET', `/api/v1/artifacts/${anyArtifact!.id}`)).json.artifact;
+      expect(after.consumedBy).toEqual([]);
+      expect(after.attemptedBy).toEqual(['strict']);
     });
   });
 });

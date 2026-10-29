@@ -23,6 +23,7 @@ export const ARTIFACT_MAX_REPORTED_SKIPS = 50;
 export type CollectFailure =
   | 'missing'
   | 'symlink'
+  | 'hardlink'
   | 'outside_workspace'
   | 'not_regular_file'
   | 'empty'
@@ -35,7 +36,7 @@ export type CollectFailure =
 export interface CollectSkip {
   /** Path relative to the artifact folder. */
   path: string;
-  reason: 'symlink' | 'not_regular_file' | 'changed' | 'outside_workspace' | 'error';
+  reason: 'symlink' | 'hardlink' | 'unsafe_name' | 'not_regular_file' | 'changed' | 'outside_workspace' | 'error';
 }
 
 /** The inspected source of an artifact. */
@@ -163,8 +164,13 @@ export async function collectArtifact(options: CollectOptions): Promise<CollectR
       names.sort();
       for (const name of names) {
         if (failure.value) return;
-        const abs = path.join(dir, name);
         const relPath = [...rel, name].join('/');
+        // Names a path or an archive could misread (separators, NUL, control characters) never enter an artifact.
+        if (/[\\\u0000-\u001f\u007f]/.test(name)) {
+          skip({ path: relPath.replace(/[\u0000-\u001f\u007f]/g, '?'), reason: 'unsafe_name' });
+          continue;
+        }
+        const abs = path.join(dir, name);
         const st = await lstat(abs).catch(() => null);
         if (!st) {
           skip({ path: relPath, reason: 'changed' });
@@ -216,6 +222,8 @@ function copyMessage(reason: string, message: string | undefined): string {
       return 'the content exceeds the size limit';
     case 'symlink':
       return 'the file is a symbolic link';
+    case 'hardlink':
+      return 'the file has several hard links and is not copied';
     case 'outside_workspace':
       return 'the file resolves outside the workspace';
     case 'changed':

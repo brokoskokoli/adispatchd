@@ -95,6 +95,20 @@ describe('ArtifactRepository (WI-35)', () => {
     }
   });
 
+  it('records every completed attempt in attempted_by, successes also in consumed_by (idempotent)', () => {
+    const { p, cleanup } = openTestPersistence();
+    try {
+      p.artifacts.insert({ id: 'art-1', ...base });
+      expect(p.artifacts.markCompleted('art-1', 'wf', false)).toMatchObject({ attemptedBy: ['wf'], consumedBy: [] });
+      expect(p.artifacts.markCompleted('art-1', 'wf', false)).toMatchObject({ attemptedBy: ['wf'], consumedBy: [] });
+      expect(p.artifacts.markCompleted('art-1', 'wf', true)).toMatchObject({ attemptedBy: ['wf'], consumedBy: ['wf'] });
+      expect(p.artifacts.markCompleted('art-1', 'other', true)).toMatchObject({ attemptedBy: ['wf', 'other'], consumedBy: ['wf', 'other'] });
+      expect(p.artifacts.markCompleted('gone', 'x', true)).toBeNull();
+    } finally {
+      cleanup();
+    }
+  });
+
   it('finds active runs that use an artifact as their item', () => {
     const { p, cleanup } = openTestPersistence();
     try {

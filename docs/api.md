@@ -710,12 +710,13 @@ Artefakte sind unveränderlich. Ohne konfigurierte Source `artifacts` funktionie
 ```json
 { "id": "art-20261029T100000123Z-3fa2c91b", "name": "Report run-…", "type": "report", "kind": "file|folder",
   "fileName": "report.pdf", "size": 12345, "fileCount": 1, "workflow": "make-report", "runId": "run-…",
-  "parent": null, "consumedBy": ["summarize"], "createdAt": "…", "url": "#/artifacts/art-…" }
+  "parent": null, "consumedBy": ["summarize"], "attemptedBy": ["summarize"], "createdAt": "…", "url": "#/artifacts/art-…" }
 ```
 `size` sind die gespeicherten Bytes (nach dem Redigieren von Secrets), `fileName` der Basisname der gesammelten Datei bzw.
 des Ordners (Download-Name), `parent` die ID des Artefakts, das der erzeugende Run selbst als Item hatte (bleibt als Text
 erhalten, auch wenn das Eltern-Artefakt gelöscht wird), `consumedBy` die Workflows, die das Artefakt mit Erfolg
-verarbeitet haben (Run `completed` mit Ergebnis `success`, eingetragen mit dem Ende des Runs).
+verarbeitet haben (Run `completed` mit Ergebnis `success`, eingetragen mit dem Ende des Runs), `attemptedBy` die Workflows,
+deren Run auf dem Artefakt abgeschlossen wurde (`completed`, Erfolg oder fachliches `failure`; Retry-Schutz im Filter).
 
 `ArtifactDetail`: `{artifact, files: [{path, size}], filesTruncated, producer: {runId, workflow, run: RunSummary|null},
 parent: {id, exists, name}|null, children: [Artifact], runs: [RunSummary], workflows: [{id, name, enabled}], itemKey, sourceId}`.

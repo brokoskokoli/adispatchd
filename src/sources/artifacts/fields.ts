@@ -22,5 +22,11 @@ export const ARTIFACT_FIELD_DEFINITIONS: readonly FieldDefinition[] = Object.fre
     description: 'IDs of the workflows that processed the artifact successfully (run completed with result success)',
     operators: OPERATORS_BY_TYPE['string[]'],
   },
+  {
+    name: 'attempted_by',
+    type: 'string[]',
+    description: 'IDs of the workflows whose run on the artifact completed, with result success or failure (retry protection)',
+    operators: OPERATORS_BY_TYPE['string[]'],
+  },
   { name: 'url', type: 'string', description: 'UI link of the artifact', operators: STRING_OPS },
 ] satisfies FieldDefinition[]);
