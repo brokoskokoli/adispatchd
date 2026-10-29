@@ -4,6 +4,7 @@
  */
 import { api, qs, seg } from '../api.js';
 import { h, replaceChildren, rerender } from '../dom.js';
+import { appPath } from '../../shared/base-path.js';
 import { buildHash } from '../../shared/route.js';
 import { createRefresher } from '../../shared/throttle.js';
 import { LogWindow } from '../../shared/logs.js';
@@ -426,7 +427,7 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
             k.files.map((f) => [
               h('code', { class: 'wrap' }, f.path),
               formatBytes(f.size),
-              h('a', { href: `/api/v1/runs/${seg(runId)}/kept/${f.path.split('/').map(seg).join('/')}`, download: f.path.split('/').pop() ?? 'file' }, 'Download'),
+              h('a', { href: appPath(`/api/v1/runs/${seg(runId)}/kept/${f.path.split('/').map(seg).join('/')}`), download: f.path.split('/').pop() ?? 'file' }, 'Download'),
             ]),
             { empty: d.active ? 'Files are kept when the run ends.' : 'No kept files.' },
           ),

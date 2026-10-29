@@ -533,7 +533,7 @@ export async function createHubHttp(options: HubHttpOptions): Promise<HubHttp> {
     events.handle(req.raw, reply.raw);
   });
 
-  // Static overview UI: only the hub's own files, never the workspace UI's index.html or scripts.
+  // Static overview UI. The workspace UI's own index.html is not served here (it belongs below /w/<id>/).
   const uiDir = options.uiDir && existsSync(path.join(options.uiDir, 'hub.html')) ? path.resolve(options.uiDir) : null;
   if (uiDir) {
     const fastifyStatic = (await import('@fastify/static')).default;
@@ -541,7 +541,7 @@ export async function createHubHttp(options: HubHttpOptions): Promise<HubHttp> {
       root: uiDir,
       prefix: '/',
       index: false,
-      allowedPath: (pathName) => pathName !== '/index.html' && !pathName.startsWith('/js/client/'),
+      allowedPath: (pathName) => pathName !== '/index.html',
     });
     app.get('/', async (_req: FastifyRequest, reply: FastifyReply) => reply.sendFile('hub.html'));
   } else {

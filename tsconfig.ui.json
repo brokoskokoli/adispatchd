@@ -18,6 +18,6 @@
     "rootDir": "src/ui",
     "outDir": "dist/ui/public/js"
   },
-  "include": ["src/ui/client/**/*.ts", "src/ui/shared/**/*.ts"],
+  "include": ["src/ui/client/**/*.ts", "src/ui/hub/**/*.ts", "src/ui/shared/**/*.ts"],
   "exclude": ["src/ui/**/*.test.ts"]
 }

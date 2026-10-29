@@ -73,6 +73,8 @@ h3 { font-size: 14px; margin: 16px 0 6px; }
   padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--border);
 }
 .brand { font-weight: 700; color: var(--text); white-space: nowrap; }
+.hub-back { white-space: nowrap; font-weight: 600; padding: 4px 10px; border-radius: 6px; background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+.hub-back:hover { text-decoration: none; filter: brightness(0.96); }
 #nav { flex: 1 1 auto; min-width: 0; }
 .menu { list-style: none; display: flex; flex-wrap: wrap; gap: 2px; margin: 0; padding: 0; }
 .menu > li { position: relative; }

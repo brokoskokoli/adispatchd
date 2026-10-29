@@ -186,6 +186,8 @@ export interface Status {
   config: { version: number; hash: string; loadedAt: string; configDir: string };
   server: { host: string; port: number | null; loopback: boolean };
   sse: { clients: number };
+  /** Present when this instance is a workspace of a hub (WI-35). */
+  hub?: { workspace: string; reachable: boolean; paused: boolean; active: number; max: number } | null;
   retention: { lastRunAt: string; deletedRuns: Record<string, number>; errors: number } | null;
 }
 

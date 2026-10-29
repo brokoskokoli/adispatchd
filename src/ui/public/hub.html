@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Content-Security-Policy comes as an HTTP header (src/api/csp.ts). -->
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Hub · adispatchd</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="auth.css" />
+    <link rel="stylesheet" href="hub.css" />
+    <script type="module" src="js/hub/app.js"></script>
+  </head>
+  <body>
+    <header class="top">
+      <a class="brand" href="./" title="Agent Dispatch Daemon hub">adispatchd hub</a>
+      <span class="top-spacer"></span>
+      <span id="user" class="user-slot"></span>
+      <span id="live" class="live live-connecting" role="status" aria-live="polite">connecting…</span>
+    </header>
+    <main id="main" tabindex="-1">
+      <noscript><p>This interface needs JavaScript.</p></noscript>
+    </main>
+  </body>
+</html>
