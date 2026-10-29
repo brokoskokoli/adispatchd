@@ -9,6 +9,7 @@
  * config dir. The configuration of the workspaces themselves is checked by
  * `adispatch hub validate` (see the CLI), not by this loader.
  */
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { isIP } from 'node:net';
 import { z } from 'zod';
@@ -128,8 +129,25 @@ export async function loadHubConfig(configDir: string, options: LoadHubConfigOpt
 }
 
 /** Cross-checks of `hub.yaml`: uniqueness of IDs/paths/ports and nesting of data dirs. */
-function validateHub(config: HubConfig, hubDataDir: string, issues: IssueCollector): void {
-  const ws = config.workspaces;
+/** Resolve symlinks of the longest existing prefix of `p` (the rest is appended unchanged), so nesting is judged on real locations. */
+function realish(p: string): string {
+  const rest: string[] = [];
+  let cur = p;
+  for (;;) {
+    try {
+      return path.join(realpathSync(cur), ...rest.reverse());
+    } catch {
+      const parent = path.dirname(cur);
+      if (parent === cur) return p;
+      rest.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+function validateHub(config: HubConfig, hubDataDirRaw: string, issues: IssueCollector): void {
+  const ws = config.workspaces.map((w) => ({ ...w, configDir: realish(w.configDir), dataDir: realish(w.dataDir) }));
+  const hubDataDir = realish(hubDataDirRaw);
   const first = <K extends 'id' | 'configDir' | 'dataDir' | 'port'>(key: K, label: string, yamlKey: string): void => {
     const seen = new Map<unknown, number>();
     ws.forEach((w, i) => {
@@ -143,7 +161,7 @@ function validateHub(config: HubConfig, hubDataDir: string, issues: IssueCollect
   first('dataDir', 'data_dir', 'data_dir');
   first('port', 'port', 'port');
   ws.forEach((w, i) => {
-    if (w.port === config.server.port && isLoopbackName(config.server.host)) {
+    if (w.port === config.server.port) {
       issues.error(HUB_FILE, ['workspaces', i, 'port'], `Port ${w.port} is also used by hub.server.port`);
     }
     if (isWithin(hubDataDir, w.dataDir) || isWithin(w.dataDir, hubDataDir)) {

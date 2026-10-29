@@ -232,9 +232,19 @@ export function createHubStartHandler(io: Io, deps: HubStartDeps = {}) {
       io.stderr(`hub start: ${errorMessage(err)}\n`);
       return 1;
     }
+    const exit = deps.exit ?? ((code: number) => process.exit(code));
+    const uninstall = installSignalHandlers(hub, {
+      ...(deps.signals ? { target: deps.signals } : {}),
+      drainTimeoutMs,
+      cancelTimeoutMs,
+      forceExit: (code) => {
+        void hub.forceStop().finally(() => exit(code));
+      },
+    });
     try {
       await hub.start();
     } catch (err) {
+      uninstall();
       io.stderr(`hub start: ${errorMessage(err)}\n`);
       await hub.stopped;
       return 1;
@@ -245,15 +255,6 @@ export function createHubStartHandler(io: Io, deps: HubStartDeps = {}) {
         `control socket ${hub.controlSocketPath}\n` +
         `SIGTERM/Ctrl-C: drain all workspaces (up to ${formatDuration(drainTimeoutMs)}, then cancel); a second signal cancels all runs, a third stops immediately\n`,
     );
-    const exit = deps.exit ?? ((code: number) => process.exit(code));
-    const uninstall = installSignalHandlers(hub, {
-      ...(deps.signals ? { target: deps.signals } : {}),
-      drainTimeoutMs,
-      cancelTimeoutMs,
-      forceExit: (code) => {
-        void hub.forceStop().finally(() => exit(code));
-      },
-    });
     deps.onStarted?.(hub, loaded.config);
     const result = await hub.stopped;
     uninstall();

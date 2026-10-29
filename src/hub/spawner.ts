@@ -18,8 +18,8 @@ export interface ChildHandle {
   readonly pid: number | undefined;
   /** Send a signal; `false` if the process is already gone. */
   kill(signal: NodeJS.Signals): boolean;
-  /** Exit notification (also called once if the process could not be started: code `null`, signal `null`). */
-  onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
+  /** Exit notification (also called once if the process could not be started: code `null`, signal `null`, `error` = reason). */
+  onExit(listener: (code: number | null, signal: NodeJS.Signals | null, error?: string) => void): void;
   /** Output chunks (UTF-8 text). */
   onOutput(listener: (stream: 'stdout' | 'stderr', chunk: string) => void): void;
 }
@@ -55,18 +55,18 @@ export function processSpawner(options: ProcessSpawnerOptions = {}): WorkspaceSp
         detached: true,
       });
       let exited = false;
-      const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
-      const notify = (code: number | null, signal: NodeJS.Signals | null): void => {
+      const exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null, error?: string) => void> = [];
+      const notify = (code: number | null, signal: NodeJS.Signals | null, error?: string): void => {
         if (exited) return;
         exited = true;
-        for (const l of exitListeners) l(code, signal);
+        for (const l of exitListeners) l(code, signal, error);
       };
       // `close` fires after the output pipes ended (all lines delivered); a grandchild holding a pipe must not delay the exit forever.
       child.on('close', notify);
       child.on('exit', (code, signal) => {
         setTimeout(() => notify(code, signal), 1_000).unref();
       });
-      child.on('error', () => notify(null, null));
+      child.on('error', (err) => notify(null, null, err.message));
       child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');
       return {

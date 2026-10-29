@@ -15,10 +15,11 @@
  * `{error: {code, message}}` with 404 (unknown workspace), 409 (wrong state)
  * or 400.
  */
-import { chmodSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import http from 'node:http';
 import { errorMessage, noopLogger, type Logger } from '../core/index.js';
 import { HubError } from './errors.js';
+import { listenPrivate } from './private-listen.js';
 import type { HubStatus } from './hub.js';
 
 /** The operations of a hub (shared by the control socket and, later, the web UI). */
@@ -55,14 +56,7 @@ export class ControlServer {
     server.headersTimeout = 10_000;
     server.requestTimeout = 30_000;
     this.server = server;
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(this.options.socketPath, () => {
-        server.off('error', reject);
-        resolve();
-      });
-    });
-    chmodSync(this.options.socketPath, 0o600);
+    await listenPrivate(server, this.options.socketPath);
   }
 
   async close(): Promise<void> {
@@ -88,7 +82,12 @@ export class ControlServer {
         size += (chunk as Buffer).length;
         if (size > 64 * 1024) throw new HubError('bad_request', 'Request body too large', 400);
       }
-      const url = new URL(req.url ?? '/', 'http://hub');
+      let url: URL;
+      try {
+        url = new URL(req.url ?? '/', 'http://hub');
+      } catch {
+        throw new HubError('bad_request', 'Invalid request URL', 400);
+      }
       const parts = url.pathname.split('/').filter(Boolean);
       const method = req.method ?? 'GET';
       const { control } = this.options;
@@ -100,7 +99,13 @@ export class ControlServer {
       else if (parts.length === 1 && parts[0] === 'stop-all') status = await control.stopAll();
       else if (parts.length === 1 && parts[0] === 'drain-all') status = await control.drainAll();
       else if (parts.length === 3 && parts[0] === 'workspaces' && WORKSPACE_ACTIONS.has(parts[2] as string)) {
-        status = await control.workspace(decodeURIComponent(parts[1] as string), parts[2] as 'start' | 'stop' | 'restart' | 'drain');
+        let id: string;
+        try {
+          id = decodeURIComponent(parts[1] as string);
+        } catch {
+          throw new HubError('bad_request', 'Invalid workspace ID encoding', 400);
+        }
+        status = await control.workspace(id, parts[2] as 'start' | 'stop' | 'restart' | 'drain');
       } else throw new HubError('not_found', `No such resource: ${method} ${url.pathname}`, 404);
       this.send(res, 200, { ok: true, status });
     } catch (err) {

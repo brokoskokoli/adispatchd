@@ -1,4 +1,5 @@
 import { mkdtemp, rm, stat } from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -169,5 +170,30 @@ describe('createHub', () => {
     // The lock is free again.
     const again = make();
     await again.start();
+  });
+
+  it('control socket answers invalid URLs and encodings with 400, keeps the umask, and a shutdown before start() starts nothing', async () => {
+    const before = process.umask();
+    const hub = make();
+    await hub.start();
+    expect(process.umask()).toBe(before);
+    const raw = (p: string): Promise<number> =>
+      new Promise((resolve, reject) => {
+        const req = http.request({ socketPath: hub.controlSocketPath, method: 'POST', path: p }, (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        });
+        req.on('error', reject);
+        req.end();
+      });
+    expect(await raw('/workspaces/%E0%A4%A/start')).toBe(400);
+    expect(await raw('//')).toBe(400);
+    expect(await raw('/nope')).toBe(404);
+    const early = make({ dataDir: path.join(dir, 'early') });
+    void early.shutdown();
+    await early.start();
+    await early.stopped;
+    expect(spawner.children.filter((c) => c.spec.env.ADISPATCH_HUB_WORKSPACE).length).toBe(2); // only the first hub's children
+    await expect(stat(early.slotSocketPath)).rejects.toThrow();
   });
 });

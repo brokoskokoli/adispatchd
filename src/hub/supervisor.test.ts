@@ -108,6 +108,7 @@ describe('WorkspaceSupervisor', () => {
   });
 
   it('does not restart after exit code 78 (failed) or after a clean exit 0 (stopped)', async () => {
+    probeOk = false;
     const s = make();
     s.startEnabled();
     spawner.last('coder').exit(78);
@@ -230,5 +231,29 @@ describe('WorkspaceSupervisor', () => {
     await clock.advanceAsync(1_000);
     await p;
     expect(spawner.last('coder').signals).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('an asynchronous spawn error (ENOENT) is failed, not a crash loop', async () => {
+    const s = make();
+    s.startEnabled();
+    spawner.last('coder').exit(null, null, 'spawn node ENOENT');
+    expect(s.statusOfWorkspace('coder')).toMatchObject({ state: 'failed', crashes: 0, message: 'cannot start the process: spawn node ENOENT' });
+    await clock.advanceAsync(120_000);
+    expect(spawner.of('coder')).toHaveLength(1);
+  });
+
+  it('exit 78 while an instance answers on the port is reported as already running outside the hub', async () => {
+    const s = make();
+    s.startEnabled();
+    spawner.last('coder').exit(78);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(s.statusOfWorkspace('coder')).toMatchObject({ state: 'failed' });
+    expect(s.statusOfWorkspace('coder').message).toContain('already running for this workspace outside the hub');
+    probeOk = false;
+    spawner.last('docs').exit(78);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(s.statusOfWorkspace('docs').message).toContain('exit code 78');
   });
 });

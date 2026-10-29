@@ -381,10 +381,10 @@ export class WorkspaceSupervisor {
       }
       for (const line of lines) if (line !== '') options.output(id, stream, line.length > MAX_OUTPUT_LINE ? `${line.slice(0, MAX_OUTPUT_LINE)} …` : line);
     });
-    child.onExit((code, signal) => {
+    child.onExit((code, signal, error) => {
       if (m.generation !== generation) return;
       for (const stream of ['stdout', 'stderr'] as const) if (buffers[stream] !== '') options.output(id, stream, buffers[stream]);
-      this.handleExit(m, code, signal);
+      this.handleExit(m, code, signal, error);
     });
     this.changed();
     this.armProbe(m, generation);
@@ -412,7 +412,7 @@ export class WorkspaceSupervisor {
     }, this.options.probeIntervalMs ?? 500);
   }
 
-  private handleExit(m: Managed, code: number | null, signal: NodeJS.Signals | null): void {
+  private handleExit(m: Managed, code: number | null, signal: NodeJS.Signals | null, error?: string): void {
     const id = m.config.id;
     this.clearTimer(m, 'probe');
     this.clearTimer(m, 'stable');
@@ -439,10 +439,27 @@ export class WorkspaceSupervisor {
       m.message = null;
       return finish();
     }
+    if (error !== undefined) {
+      // The process could not be started at all (e.g. ENOENT): restarting does not help.
+      m.state = 'failed';
+      m.message = `cannot start the process: ${error}`;
+      this.log.error('workspace could not be started', { workspace: id, error });
+      return finish();
+    }
     if (code === EXIT_CONFIG) {
       m.state = 'failed';
       m.message = 'configuration error or instance lock held (exit code 78); fix it and start the workspace again';
       this.log.error('workspace failed: not restarting', { workspace: id, code });
+      // An instance that is still alive on the port was not started by this hub (e.g. orphaned after a hub crash).
+      void this.options
+        .probe(m.config)
+        .catch(() => false)
+        .then((alive) => {
+          if (!alive || m.state !== 'failed' || m.child) return;
+          m.message = `an instance is already running for this workspace outside the hub (answers on port ${m.config.port}; e.g. orphaned after a hub crash): stop it (adispatch drain --url http://127.0.0.1:${m.config.port} --data-dir <workspace data-dir>), then start the workspace`;
+          this.log.warn('workspace already running outside the hub', { workspace: id, port: m.config.port });
+          this.changed();
+        });
       return finish();
     }
     // Crash: restart with backoff.

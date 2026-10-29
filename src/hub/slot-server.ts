@@ -9,10 +9,11 @@
  * leases it still holds), then they expire. A `bye` or {@link SlotServer.dropWorkspace}
  * (the hub saw the child process exit) frees them at once.
  */
-import { chmodSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import net from 'node:net';
 import { errorMessage, noopLogger, systemClock, systemTimers, type Clock, type Logger, type TimerHandle, type Timers } from '../core/index.js';
 import { SlotLedger } from './ledger.js';
+import { listenPrivate } from './private-listen.js';
 import {
   LineBuffer,
   LineTooLongError,
@@ -24,8 +25,6 @@ import {
   type SlotState,
 } from './protocol.js';
 
-/** Default heartbeat interval of clients. */
-export const DEFAULT_HEARTBEAT_MS = 2_000;
 /** Default time without heartbeat after which leases expire. */
 export const DEFAULT_LEASE_TTL_MS = 15_000;
 /** Longest usable Unix socket path (sockaddr_un.sun_path is 104 bytes on macOS, 108 on Linux). */
@@ -92,14 +91,7 @@ export class SlotServer {
     rmSync(p, { force: true });
     const server = net.createServer((socket) => this.accept(socket));
     this.server = server;
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(p, () => {
-        server.off('error', reject);
-        resolve();
-      });
-    });
-    chmodSync(p, 0o600);
+    await listenPrivate(server, p);
     server.on('error', (err) => this.log.error('slot socket error', { error: errorMessage(err) }));
     this.armSweep();
     this.log.info('slot server listening', { max: this.options.ledger.max });

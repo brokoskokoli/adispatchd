@@ -29,8 +29,8 @@ import {
   type TimerHandle,
   type Timers,
 } from '../core/index.js';
-import { DEFAULT_HEARTBEAT_MS } from './slot-server.js';
 import {
+  DEFAULT_HEARTBEAT_MS,
   LineBuffer,
   SLOT_PROTOCOL_VERSION,
   encodeMessage,
@@ -257,6 +257,8 @@ export class HubSlotClient implements HubSlots {
         this.reconnectDelay = this.reconnectInitialMs;
         this.log.info('connected to the hub', { max: msg.max, active: msg.active, paused: msg.paused, ...(this.outageLogged ? { recovered: true } : {}) });
         this.outageLogged = false;
+        // Leases created while the handshake was in flight are not in `hello`: announce every known lease again.
+        for (const key of this.leases.keys()) this.send({ t: 'adopt', lease: key });
         for (const w of this.waiters) {
           if (w.timer) this.timers.clearTimeout(w.timer);
           w.resolve(true);

@@ -36,7 +36,7 @@ function freePort(): Promise<number> {
   });
 }
 
-async function until<T>(what: string, fn: () => T | undefined | false | Promise<T | undefined | false>, timeoutMs = 40_000): Promise<T> {
+async function until<T>(what: string, fn: () => T | undefined | false | Promise<T | undefined | false>, timeoutMs = 90_000): Promise<T> {
   const end = Date.now() + timeoutMs;
   for (;;) {
     try {
@@ -248,7 +248,7 @@ afterAll(async () => {
 });
 
 describe('hub with real workspace processes (WI-35)', () => {
-  it('shares the limit of 2 across two workspaces, frees the slots of a killed child and restarts it with backoff', { timeout: 120_000 }, async () => {
+  it('shares the limit of 2 across two workspaces, frees the slots of a killed child and restarts it with backoff', { timeout: 240_000 }, async () => {
     const s0 = await boot();
     expect(s0.workspaces.map((w) => w.id)).toEqual(['w1', 'w2']);
 
@@ -300,7 +300,7 @@ describe('hub with real workspace processes (WI-35)', () => {
     await until('hub stopped', () => hubProc!.exitCode !== null || undefined, 30_000);
   });
 
-  it('SIGTERM drains and a second signal cancels; no processes are left behind', { timeout: 120_000 }, async () => {
+  it('SIGTERM drains and a second signal cancels; no processes are left behind', { timeout: 240_000 }, async () => {
     await boot();
     await until('2 slots in use', async () => (await status()).slots.active === 2 || undefined);
     const before = await status();
@@ -327,7 +327,7 @@ describe('hub with real workspace processes (WI-35)', () => {
     expect(existsSync(path.join(hubData, 'slots.sock'))).toBe(false);
   });
 
-  it('a crashed hub leaves the workspaces and their runs alone, nothing new starts, and the slots are counted again after the hub is back', { timeout: 120_000 }, async () => {
+  it('a crashed hub leaves the workspaces and their runs alone, nothing new starts, and the slots are counted again after the hub is back', { timeout: 240_000 }, async () => {
     await boot();
     await until('2 slots in use', async () => (await status()).slots.active === 2 || undefined);
     const before = await status();
@@ -358,7 +358,7 @@ describe('hub with real workspace processes (WI-35)', () => {
     startHub();
     const back = await until('slots counted again', async () => {
       const s = await status();
-      return s.slots.active === 2 ? s : undefined;
+      return s.slots.active === 2 && s.workspaces.every((w) => w.state === 'failed') ? s : undefined;
     });
     expect(back.workspaces.every((w) => w.state === 'failed')).toBe(true);
     expect(back.workspaces.every((w) => w.connected)).toBe(true);

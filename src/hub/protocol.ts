@@ -14,6 +14,8 @@
 
 /** Protocol version sent in `hello`. */
 export const SLOT_PROTOCOL_VERSION = 1;
+/** Default heartbeat interval of clients. */
+export const DEFAULT_HEARTBEAT_MS = 2_000;
 /** Maximum size of one protocol line. */
 export const MAX_LINE_BYTES = 64 * 1024;
 /** Maximum number of leases a workspace may hold (bounds memory per connection). */

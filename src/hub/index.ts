@@ -4,8 +4,8 @@
  */
 export { SlotLedger } from './ledger.js';
 export { HubSlotClient, type HubSlotClientOptions } from './slot-client.js';
-export { SlotServer, DEFAULT_HEARTBEAT_MS, DEFAULT_LEASE_TTL_MS, MAX_SOCKET_PATH_BYTES, type SlotServerOptions } from './slot-server.js';
-export { SLOT_PROTOCOL_VERSION, type SlotState } from './protocol.js';
+export { SlotServer, DEFAULT_LEASE_TTL_MS, MAX_SOCKET_PATH_BYTES, type SlotServerOptions } from './slot-server.js';
+export { DEFAULT_HEARTBEAT_MS, SLOT_PROTOCOL_VERSION, type SlotState } from './protocol.js';
 export { HubError } from './errors.js';
 export { ControlServer, type HubControl, type ControlServerOptions } from './control-server.js';
 export {

@@ -5,7 +5,7 @@ import type { ChildHandle, SpawnSpec, WorkspaceSpawner } from '../spawner.js';
 export class FakeChild implements ChildHandle {
   readonly signals: NodeJS.Signals[] = [];
   alive = true;
-  private exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null) => void> = [];
+  private exitListeners: Array<(code: number | null, signal: NodeJS.Signals | null, error?: string) => void> = [];
   private outputListeners: Array<(stream: 'stdout' | 'stderr', chunk: string) => void> = [];
   /** Signals that terminate the process by themselves (like an unhandled SIGKILL). */
   killedBy = new Set<NodeJS.Signals>(['SIGKILL']);
@@ -22,7 +22,7 @@ export class FakeChild implements ChildHandle {
     return true;
   }
 
-  onExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): void {
+  onExit(listener: (code: number | null, signal: NodeJS.Signals | null, error?: string) => void): void {
     this.exitListeners.push(listener);
   }
 
@@ -34,10 +34,10 @@ export class FakeChild implements ChildHandle {
     for (const l of this.outputListeners) l(stream, chunk);
   }
 
-  exit(code: number | null, signal: NodeJS.Signals | null = null): void {
+  exit(code: number | null, signal: NodeJS.Signals | null = null, error?: string): void {
     if (!this.alive) return;
     this.alive = false;
-    for (const l of this.exitListeners) l(code, signal);
+    for (const l of this.exitListeners) l(code, signal, error);
   }
 }
 

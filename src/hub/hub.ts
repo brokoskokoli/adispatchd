@@ -259,12 +259,18 @@ export function createHub(options: HubOptions): Hub {
     async start() {
       if (started) throw new Error('hub already started');
       started = true;
+      if (shuttingDown) return; // a signal arrived before the start
       try {
         await slots.listen();
         await controlServer.listen();
       } catch (err) {
         await teardown(errorMessage(err));
         throw err;
+      }
+      if (shuttingDown) {
+        // A signal arrived while the sockets were created: nothing was started, finish the stop.
+        await Promise.all([slots.close(), controlServer.close()]).catch(() => undefined);
+        return;
       }
       log.info('hub started', { maxConcurrent: config.maxConcurrent, workspaces: config.workspaces.length, slotSocket: slotSocketPath });
       supervisor.startEnabled();

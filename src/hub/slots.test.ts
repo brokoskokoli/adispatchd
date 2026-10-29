@@ -173,4 +173,27 @@ describe('slot server and client', () => {
     const r = await a.acquire();
     expect(r.ok).toBe(false);
   });
+
+  it('re-announces leases that were created while the handshake was in flight', async () => {
+    const received: string[] = [];
+    const socks: net.Socket[] = [];
+    const fake = net.createServer((sock) => {
+      socks.push(sock);
+      sock.setEncoding('utf8');
+      sock.on('data', (chunk: string) => {
+        for (const line of chunk.split('\n').filter(Boolean)) {
+          received.push(line);
+          if (line.includes('"hello"')) setTimeout(() => sock.write('{"t":"welcome","active":0,"max":2,"paused":false}\n'), 100);
+        }
+      });
+    });
+    await new Promise<void>((r) => fake.listen(socketPath, r));
+    closers.push(() => new Promise<void>((r) => (socks.forEach((x) => x.destroy()), fake.close(() => r()))));
+    const runs: string[] = [];
+    client('a', () => runs);
+    await until('hello', () => received.some((l) => l.includes('"hello"')));
+    runs.push('late-run'); // becomes known after hello was sent, before welcome
+    await until('adopted after welcome', () => received.some((l) => l.includes('"adopt"') && l.includes('run:late-run')));
+    expect(received.findIndex((l) => l.includes('"adopt"'))).toBeGreaterThan(received.findIndex((l) => l.includes('"hello"')));
+  });
 });

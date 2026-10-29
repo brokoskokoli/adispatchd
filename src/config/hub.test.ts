@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -117,5 +117,23 @@ describe('loadHubConfig', () => {
     const w = result.warnings.map((x) => x.message).join('\n');
     expect(w).toContain('No workspaces configured');
     expect(w).toContain('not a loopback address');
+  });
+
+  it('rejects a workspace port equal to hub.server.port also for a non-loopback hub host', async () => {
+    const { result } = await load(['hub: { server: { host: 0.0.0.0, port: 9000 } }', 'workspaces:', '  - { id: a, config_dir: c1, data_dir: d1, port: 9000 }', ''].join('\n'));
+    expect(errors(result).join('\n')).toContain('workspaces[0].port: Port 9000 is also used by hub.server.port');
+  });
+
+  it('judges nesting of data dirs on real paths (symlinks)', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'orch-hub-'));
+    dirs.push(root);
+    await mkdir(path.join(root, 'real'), { recursive: true });
+    await symlink(path.join(root, 'real'), path.join(root, 'link'));
+    await writeFile(
+      path.join(root, 'hub.yaml'),
+      ['workspaces:', '  - { id: a, config_dir: c1, data_dir: real, port: 9001 }', '  - { id: b, config_dir: c2, data_dir: link/inner, port: 9002 }', ''].join('\n'),
+    );
+    const result = await loadHubConfig(root, { dataDir: path.join(root, 'hub-data') });
+    expect(errors(result).join('\n')).toContain('is nested with the data_dir of workspaces[0]');
   });
 });
