@@ -24,6 +24,7 @@ import { configPage } from './pages/config.js';
 import { toolPage } from './pages/tools.js';
 import { itemPage, uiActionsPage } from './pages/item.js';
 import { historyPage } from './pages/history.js';
+import { artifactPage, artifactsPage } from './pages/artifacts.js';
 import { externalLinks, reloadExternalLinks } from './external-links.js';
 import { externalNavItem, TOOLS_ROUTE } from '../shared/external-links.js';
 import { isNavActive, NAV_ENTRIES } from '../shared/nav.js';
@@ -198,6 +199,8 @@ function pageFor(route: Route, ctx: PageContext): Page {
       return b ? runPage(ctx, b) : runsPage(ctx);
     case 'workflows':
       return b ? workflowPage(ctx, b) : workflowsPage(ctx);
+    case 'artifacts':
+      return b ? artifactPage(ctx, b) : artifactsPage(ctx);
     case 'blocked':
       return blockedPage(ctx);
     case 'actions':
