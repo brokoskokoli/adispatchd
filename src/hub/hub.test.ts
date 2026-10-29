@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { noopLogger } from '../core/index.js';
-import type { HubConfig } from '../config/index.js';
+import { NO_AUTH_CONFIG, type HubConfig } from '../config/index.js';
 import { HubControlClient, HubResponseError, HubUnreachableError } from './control-client.js';
 import { createHub, type Hub, type HubOptions } from './hub.js';
 import { HubSlotClient } from './slot-client.js';
@@ -19,6 +19,7 @@ const config = (max = 2): HubConfig => ({
   configDir: '/etc/hub',
   maxConcurrent: max,
   server: { host: '127.0.0.1', port: 8090, allowedHosts: [] },
+  auth: NO_AUTH_CONFIG,
   workspaces: [
     { id: 'coder', configDir: '/cfg/coder', dataDir: '/data/coder', port: 8091, enabled: true },
     { id: 'docs', configDir: '/cfg/docs', dataDir: '/data/docs', port: 8092, enabled: true },

@@ -42,6 +42,7 @@ import { formatIssuePath, type IssueCollector, type IssuePath } from './issues.j
 import {
   configuredHooks,
   resultHookOutcomes,
+  type AuthConfig,
   type ContainerExecuteConfig,
   triggerSourceIds,
   type GlobalConfig,
@@ -176,30 +177,37 @@ function validateGlobal(global: GlobalConfig, issues: IssueCollector): void {
 
 /** `auth:` (WI-26): unique users; a mode without users locks everybody out (warning, the control token still works). */
 function validateAuth(global: GlobalConfig, issues: IssueCollector): void {
-  const auth = global.auth;
+  validateAuthSection(global.auth, CONFIG_FILE, issues, 'CLI control commands still work locally');
+}
+
+/**
+ * Checks of an `auth:` section, shared by `config.yaml` and `hub.yaml` (WI-36).
+ * `fallback` names what still works when nobody can log in.
+ */
+export function validateAuthSection(auth: AuthConfig, file: string, issues: IssueCollector, fallback: string): void {
   const names = new Set<string>();
   auth.users.forEach((user, i) => {
     const key = user.name.toLowerCase();
-    if (names.has(key)) issues.error(CONFIG_FILE, ['auth', 'users', i, 'name'], `Duplicate user "${user.name}"`);
+    if (names.has(key)) issues.error(file, ['auth', 'users', i, 'name'], `Duplicate user "${user.name}"`);
     names.add(key);
   });
   const logins = new Set<string>();
   auth.trustedHeader.users.forEach((user, i) => {
-    if (logins.has(user.login)) issues.error(CONFIG_FILE, ['auth', 'trusted_header', 'users', i, 'login'], `Duplicate login "${user.login}"`);
+    if (logins.has(user.login)) issues.error(file, ['auth', 'trusted_header', 'users', i, 'login'], `Duplicate login "${user.login}"`);
     logins.add(user.login);
   });
   if (auth.mode === 'password' && auth.users.length === 0) {
-    issues.warning(CONFIG_FILE, ['auth', 'users'], 'No users configured: nobody can log in to the web UI (CLI control commands still work locally)');
+    issues.warning(file, ['auth', 'users'], `No users configured: nobody can log in to the web UI (${fallback})`);
   }
   if (auth.mode === 'trusted_header' && auth.trustedHeader.users.length === 0) {
-    issues.warning(CONFIG_FILE, ['auth', 'trusted_header', 'users'], 'No logins configured: every request is rejected with 403 (CLI control commands still work locally)');
+    issues.warning(file, ['auth', 'trusted_header', 'users'], `No logins configured: every request is rejected with 403 (${fallback})`);
   }
   if (auth.mode === 'trusted_header' && auth.trustedHeader.trustedProxies.length === 0) {
-    issues.warning(CONFIG_FILE, ['auth', 'trusted_header', 'trusted_proxies'], 'No trusted proxies: every request is rejected with 401');
+    issues.warning(file, ['auth', 'trusted_header', 'trusted_proxies'], 'No trusted proxies: every request is rejected with 401');
   }
   const anyAddress = (list: readonly string[], at: IssuePath): void => {
     list.forEach((entry, i) => {
-      if (/\/0$/.test(entry)) issues.warning(CONFIG_FILE, [...at, i], `"${entry}" trusts every address: anyone who can connect can claim an identity or HTTPS`);
+      if (/\/0$/.test(entry)) issues.warning(file, [...at, i], `"${entry}" trusts every address: anyone who can connect can claim an identity or HTTPS`);
     });
   };
   anyAddress(auth.trustedHeader.trustedProxies, ['auth', 'trusted_header', 'trusted_proxies']);

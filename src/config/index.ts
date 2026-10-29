@@ -21,6 +21,7 @@ export {
   DEFAULT_HUB_PORT,
   HUB_FILE,
   loadHubConfig,
+  NO_AUTH_CONFIG,
   WORKSPACE_ID_PATTERN,
   type HubConfig,
   type HubWorkspaceConfig,
