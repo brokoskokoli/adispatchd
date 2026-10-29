@@ -2495,7 +2495,7 @@ for views (fields) only, …` bzw. `Views cannot be sorted by "history": …`) u
 ### 4.9 Feldkatalog der Source `artifacts` (seit 0.10.0)
 
 Die Felder eines Artefakt-Items (§3.2.1) – alle billig, keine Pushdown-Operatoren, keine Projektfelder. Die
-Operatoren je Typ gelten wie in §4.2; `consumed_by` ist wie `labels` eine Liste (`contains`, `in`), ein fehlender
+Operatoren je Typ gelten wie in §4.2; `consumed_by` und `attempted_by` sind wie `labels` Listen (`contains`, `in`), ein fehlender
 Wert (`parent` ohne Eltern-Artefakt) ist `null`.
 
 | Feld | Typ | Bedeutung |
