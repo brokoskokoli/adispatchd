@@ -101,10 +101,20 @@ export function parseWorkspacePath(target: string): WorkspacePath {
   return { kind: 'proxy', id, rest, query };
 }
 
-/** The static web UI shell and its assets: readable without login (as on a workspace instance). */
+/**
+ * The static web UI shell and its assets: readable without login (as on a workspace instance). Decided on the
+ * **decoded** path (`%61pi` is `api`), so an escaped spelling can never make an API path look static; a path that does not
+ * decode cleanly is not public either.
+ */
 export function isPublicWorkspaceRequest(method: string, rest: string): boolean {
   if (method !== 'GET' && method !== 'HEAD') return false;
-  return !(rest === '/api' || rest.startsWith('/api/') || rest === '/health' || rest === '/ready');
+  let decoded: string;
+  try {
+    decoded = rest.split('/').map((seg) => decodeURIComponent(seg)).join('/').toLowerCase();
+  } catch {
+    return false;
+  }
+  return !(decoded === '/api' || decoded.startsWith('/api/') || decoded === '/health' || decoded === '/ready' || decoded.startsWith('/health/') || decoded.startsWith('/ready/'));
 }
 
 /** Path of `to` relative to the directory of `from` (both absolute, `from` a request path). */
@@ -168,13 +178,19 @@ export function unavailableResponse(
   target: WorkspaceTarget | null,
   csp: string,
   reason?: string,
+  /** Callers without a login only learn that the workspace is not available (no state, no supervisor messages). */
+  detailed = true,
 ): void {
+  if (!detailed) {
+    reason = undefined;
+    target = null;
+  }
   const state = target?.state ?? 'stopped';
-  const text = reason ?? `Workspace "${id}" ${STATE_TEXT[state]}${target?.transition ? ` (${target.transition})` : ''}.`;
+  const text = !detailed ? `Workspace "${id}" is not available.` : reason ?? `Workspace "${id}" ${STATE_TEXT[state]}${target?.transition ? ` (${target.transition})` : ''}.`;
   const wantsHtml = String(req.headers.accept ?? '').includes('text/html') && (req.method === 'GET' || req.method === 'HEAD');
   const common = { 'cache-control': 'no-store', 'retry-after': '5', 'x-content-type-options': 'nosniff', 'x-frame-options': 'DENY', 'referrer-policy': 'no-referrer' };
   if (!wantsHtml) {
-    const body = JSON.stringify({ error: { code: 'workspace_unavailable', message: text, details: { workspace: id, state } } });
+    const body = JSON.stringify({ error: { code: 'workspace_unavailable', message: text, ...(detailed ? { details: { workspace: id, state } } : {}) } });
     res.writeHead(503, { ...common, 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) });
     res.end(req.method === 'HEAD' ? undefined : body);
     return;
@@ -184,7 +200,9 @@ export function unavailableResponse(
   const up = relativePath(pathname, '/');
   const detail = target?.message ? `<p class="muted">${escapeHtml(target.message)}</p>` : '';
   const hint =
-    state === 'stopped' && target && !target.enabled
+    !detailed
+      ? 'Try again later, or sign in to see why.'
+      : state === 'stopped' && target && !target.enabled
       ? 'This workspace is disabled in hub.yaml; start it from the overview.'
       : state === 'starting' || target?.transition === 'restarting'
         ? 'This page reloads by itself.'
@@ -204,13 +222,13 @@ export function unavailableResponse(
 }
 
 /** JSON error response of the pass-through. */
-function jsonError(res: ServerResponse, status: number, code: string, message: string): void {
+function jsonError(res: ServerResponse, status: number, code: string, message: string, close = false): void {
   if (res.headersSent) {
     res.destroy();
     return;
   }
   const body = JSON.stringify({ error: { code, message } });
-  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' });
+  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', ...(close ? { connection: 'close' } : {}) });
   res.end(body);
 }
 
@@ -244,14 +262,17 @@ export function createWorkspaceProxy(
     if (!METHODS.has(method)) return jsonError(res, 405, 'method_not_allowed', `Method ${method} is not supported`);
     const target = options.target(id);
     const token = options.token(id);
-    if (!target || target.state !== 'running' || !token) return unavailableResponse(req, res, id, target, options.csp);
+    if (!target || target.state !== 'running' || !token) return unavailableResponse(req, res, id, target, options.csp, undefined, actor !== null);
 
     const headers: OutgoingHttpHeaders = {};
+    const hasBody = method !== 'GET' && method !== 'HEAD';
     for (const name of REQUEST_HEADERS) {
+      // A request without a body must not announce one: the pooled upstream connection would be out of sync.
+      if (!hasBody && (name === 'content-length' || name === 'content-type')) continue;
       const value: IncomingHttpHeaders[string] = req.headers[name];
       if (value !== undefined) headers[name] = value as string;
     }
-    if (headers['content-length'] === undefined && req.headers['transfer-encoding'] !== undefined) headers['transfer-encoding'] = 'chunked';
+    if (hasBody && headers['content-length'] === undefined && req.headers['transfer-encoding'] !== undefined) headers['transfer-encoding'] = 'chunked';
     Object.assign(headers, identityHeaders(actor, token));
     headers.host = `127.0.0.1:${target.port}`;
     headers.connection = 'keep-alive';
@@ -283,8 +304,13 @@ export function createWorkspaceProxy(
       if (responded) return void res.destroy();
       log.debug('workspace request failed', { workspace: id, error: errorMessage(err) });
       const refused = (err as NodeJS.ErrnoException).code === 'ECONNREFUSED';
-      if (/too large/.test(err.message)) return jsonError(res, 413, 'payload_too_large', 'Request body too large');
-      if (refused) return unavailableResponse(req, res, id, options.target(id), options.csp, `Workspace "${id}" refused the connection.`);
+      if (/too large/.test(err.message)) {
+        // The rest of the upload is not read: close the connection after the answer instead of leaving it half-consumed.
+        jsonError(res, 413, 'payload_too_large', 'Request body too large', true);
+        res.once('finish', () => req.destroy());
+        return;
+      }
+      if (refused) return unavailableResponse(req, res, id, options.target(id), options.csp, `Workspace "${id}" refused the connection.`, actor !== null);
       jsonError(res, 504, 'workspace_timeout', `Workspace "${id}" did not answer: ${err.message}`);
     });
     upstream.on('response', (ures) => {

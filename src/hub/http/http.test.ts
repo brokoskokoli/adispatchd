@@ -534,6 +534,60 @@ describe('pass-through /w/<id>/', () => {
   });
 });
 
+describe('pass-through regressions (review)', () => {
+  it('does not forward entity headers of GET/HEAD requests, so pooled upstream connections stay in sync', async () => {
+    const { base } = await start();
+    const body = 'x'.repeat(60);
+    for (const method of ['GET', 'HEAD', 'GET', 'HEAD', 'GET']) {
+      const res = await send(base, method, '/w/a/', { rawBody: body, headers: { 'content-type': 'text/plain' } });
+      expect(res.status, method).toBe(200);
+    }
+    // the same pooled connection keeps working for ordinary requests afterwards
+    for (let i = 0; i < 3; i++) expect((await send(base, 'GET', '/w/a/')).status).toBe(200);
+    expect((await send(base, 'POST', '/w/a/api/v1/echo', { body: { a: 1 } })).status).toBe(200);
+    for (const r of a.seen.filter((r) => r.method === 'GET' || r.method === 'HEAD')) {
+      expect(r.headers['content-length']).toBeUndefined();
+      expect(r.headers['content-type']).toBeUndefined();
+      expect(r.headers['transfer-encoding']).toBeUndefined();
+    }
+  });
+
+  it('classifies public requests on the decoded path', async () => {
+    const { base } = await start(PASSWORD_AUTH);
+    for (const target of ['/w/a/%61pi/v1/status', '/w/a/%41pi/v1/status', '/w/a/%68ealth', '/w/a/%72eady', '/w/a/api/v1/status', '/w/a/health']) {
+      expect((await send(base, 'GET', target)).status, target).toBe(401);
+    }
+    expect((await send(base, 'GET', '/w/a/favicon.svg')).status).toBe(404); // static path: public, the instance answers
+    expect(a.seen.some((r) => /api|health|ready/i.test(decodeURIComponent(r.url)))).toBe(false);
+  });
+
+  it('shows the 503 page without details to callers without a login', async () => {
+    const { base } = await start(PASSWORD_AUTH);
+    source.set('a', { state: 'failed', pid: null, message: 'cannot start: /srv/secret/path --data-dir /var/x port 4711' });
+    const html = await send(base, 'GET', '/w/a/', { headers: { accept: 'text/html' } });
+    expect(html.status).toBe(503);
+    expect(html.text).toContain('not available');
+    for (const leak of ['secret', '/srv', 'data-dir', '4711', 'failed', 'stopped', 'starting']) expect(html.text.toLowerCase(), leak).not.toContain(leak);
+    const json = await send(base, 'GET', '/w/a/', { headers: { accept: 'application/json' } });
+    expect(json.status).toBe(503);
+    expect(JSON.stringify(json.json)).not.toMatch(/secret|data-dir|4711|failed|state/);
+    const cookie = await login(base, 'victor');
+    const detailed = await send(base, 'GET', '/w/a/', { headers: { accept: 'text/html', cookie } });
+    expect(detailed.text).toContain('/srv/secret/path');
+    expect((await send(base, 'GET', '/w/a/api/v1/status', { headers: { cookie } })).json.error.details).toMatchObject({ state: 'failed' });
+  });
+
+  it('answers 413 with Connection: close', async () => {
+    const { base } = await start();
+    const big = await send(base, 'POST', '/w/a/api/v1/echo', { rawBody: JSON.stringify({ x: 'y'.repeat(2.5 * 1024 * 1024) }) }).catch(() => null);
+    if (big) {
+      expect(big.status).toBe(413);
+      expect(big.headers.connection).toBe('close');
+    }
+    expect((await send(base, 'GET', '/w/a/')).status).toBe(200); // the hub itself is fine
+  });
+});
+
 describe('pass-through limits', () => {
   it('answers 504 when a workspace stays silent and 413 for oversized bodies', async () => {
     const { base } = await start(NO_AUTH_CONFIG, { idleMs: 150 });
@@ -577,5 +631,19 @@ describe('live events', () => {
     const s = await stream(base, '/api/v1/hub/events', { cookie });
     expect(s.status).toBe(200);
     s.close();
+  });
+});
+
+describe('authorize', () => {
+  it('refuses a login name that cannot be forwarded in an HTTP header', async () => {
+    const { AuthService } = await import('../../api/index.js');
+    const { authorize, HttpRejection } = await import('./guard.js');
+    const auth = new AuthService({
+      config: () => ({ ...NO_AUTH_CONFIG, mode: 'trusted_header', trustedHeader: { header: 'x-user', trustedProxies: ['127.0.0.1'], proxySecretEnv: null, users: [{ login: 'a€b', role: 'admin' }, { login: 'ok', role: 'admin' }] } }),
+    });
+    const req = (login: string) => ({ method: 'GET', headers: { 'x-user': login }, socket: { remoteAddress: '127.0.0.1' } }) as never;
+    expect(() => authorize(auth, req('a€b'), 'viewer')).toThrow(HttpRejection);
+    expect(() => authorize(auth, req('a€b'), 'viewer')).toThrow(/Latin-1/);
+    expect(authorize(auth, req('ok'), 'viewer').actor?.name).toBe('ok');
   });
 });
