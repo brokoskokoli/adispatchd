@@ -16,7 +16,7 @@
  * package, needs npm with the dependencies in its cache or registry access
  * and takes ~10–60 s, so it is not part of the per-commit gate.
  */
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -77,9 +77,45 @@ async function waitFor<T>(what: string, fn: () => Promise<T | undefined>, timeou
 }
 
 const children: ChildProcess[] = [];
+
+/** PIDs of all descendants of a process we started (via `ps`, our own process tree only). */
+function descendants(root: number): number[] {
+  try {
+    const rows = execFileSync('ps', ['-A', '-o', 'pid=,ppid='], { encoding: 'utf8' })
+      .split('\n')
+      .map((l) => l.trim().split(/\s+/).map(Number))
+      .filter((r) => r.length === 2 && !r.some(Number.isNaN)) as Array<[number, number]>;
+    const out: number[] = [];
+    const queue = [root];
+    while (queue.length > 0) {
+      const parent = queue.shift() as number;
+      for (const [pid, ppid] of rows) if (ppid === parent) (out.push(pid), queue.push(pid));
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
 const root = ENABLED ? mkdtempSync(path.join(os.tmpdir(), 'orch-pack-')) : '';
 afterAll(() => {
-  for (const c of children) if (c.exitCode === null && c.signalCode === null) c.kill('SIGKILL');
+  for (const c of children) {
+    if (c.exitCode !== null || c.signalCode !== null) continue;
+    // Hub children and their workers run in their own process groups: terminate the hub's descendants via their own PIDs first.
+    if (c.pid) {
+      for (const pid of descendants(c.pid)) {
+        try {
+          process.kill(-pid, 'SIGKILL');
+        } catch {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // already gone
+          }
+        }
+      }
+    }
+    c.kill('SIGKILL');
+  }
   if (root) rmSync(root, { recursive: true, force: true });
 });
 

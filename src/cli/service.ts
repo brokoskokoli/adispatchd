@@ -138,6 +138,11 @@ async function hubWorkspaces(configDir: string, dataDir: string, io: Io, dryRun:
     return [];
   }
   for (const w of loaded.warnings) io.stderr(`warning: ${formatConfigIssue(w)}\n`);
+  if (loaded.config.workspaces.length === 0) {
+    const why = `${HUB_FILE} in ${configDir} lists no workspaces (add at least one, e.g. an existing instance; see docs/operations.md, "Migration")`;
+    if (!dryRun) throw new ServiceError('service_config_invalid', why);
+    io.stderr(`warning: ${why}\n`);
+  }
   return loaded.config.workspaces.map((w) => ({ label: w.id, configDir: realOrResolved(w.configDir), dataDir: realOrResolved(w.dataDir) }));
 }
 
@@ -272,6 +277,14 @@ export function createServiceInstallHandler(io: Io, deps: ServiceDeps = {}) {
       return 1;
     }
 
+    if (unit.hub && unit.unitName === DEFAULT_UNIT_NAME && runner.exists(unitFilePath(unitDir, unit.unitName))) {
+      const msg = `${unitFilePath(unitDir, unit.unitName)} exists – it may be a single-instance unit that this hub unit would overwrite; stop and uninstall it first ("adispatch service uninstall") or choose another --name`;
+      if (!opts.dryRun) {
+        io.stderr(`service install --hub: ${msg}\n`);
+        return 1;
+      }
+      plan.notes.push(msg);
+    }
     if (unit.hub && unit.unitName !== DEFAULT_UNIT_NAME && runner.exists(unitFilePath(unitDir, DEFAULT_UNIT_NAME))) {
       plan.notes.push(
         `a single-instance unit ${DEFAULT_UNIT_NAME}.service exists: if its instance becomes a workspace of this hub, stop and disable it first ` +

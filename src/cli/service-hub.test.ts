@@ -301,6 +301,35 @@ describe('service install --hub (Linux path, in-memory runner)', () => {
   });
 });
 
+describe('service install --hub: guards', () => {
+  it('needs at least one workspace outside dry runs (hub init --empty)', async () => {
+    const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'orch-svchub-none-')));
+    roots.push(root);
+    expect(await createHubInitHandler(captureIo())({ configDir: root, dataDir: path.join(root, '..', 'x-data'), empty: true })).toBe(0);
+    const dry = await service(['install', '--hub', '--dry-run', '--config-dir', root, '--data-dir', '/var/lib/orch-hub-test/hub'], linux(memoryRunner()));
+    expect(dry.code, dry.err).toBe(0);
+    expect(dry.err).toContain('lists no workspaces');
+    const runner = memoryRunner();
+    const real = await service(['install', '--hub', '--config-dir', root, '--data-dir', '/var/lib/orch-hub-test/hub'], linux(runner));
+    expect(real.code).toBe(2);
+    expect(real.err).toContain('lists no workspaces');
+    expect(runner.log).toEqual([]);
+  });
+
+  it('does not silently overwrite a single-instance unit with --name adispatchd', async () => {
+    const hub = await initHub(['a']);
+    const existing = ['/etc/systemd/system/adispatchd.service'];
+    const runner = memoryRunner(existing);
+    const real = await service(['install', '--hub', '--name', 'adispatchd', '--config-dir', hub.configDir, '--data-dir', hub.dataDir], linux(runner));
+    expect(real.code).toBe(1);
+    expect(real.err).toContain('would overwrite');
+    expect(runner.log.filter((l) => !l.startsWith('exec id -u'))).toEqual([]);
+    const dry = await service(['install', '--hub', '--dry-run', '--name', 'adispatchd', '--config-dir', hub.configDir, '--data-dir', hub.dataDir], linux(memoryRunner(existing)));
+    expect(dry.code, dry.err).toBe(0);
+    expect(dry.out).toContain('would overwrite');
+  });
+});
+
 describe('service status|uninstall --hub', () => {
   it('default to the hub unit name; --name overrides', async () => {
     const runner = memoryRunner();
