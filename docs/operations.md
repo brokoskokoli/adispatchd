@@ -737,8 +737,16 @@ Content-Type/-Length, Bedingungs-Header, Range, Last-Event-ID, User-Agent, `X-Ad
 `Origin`, `Referer`, `X-Forwarded-*`, Identitäts-Header eines Proxys und alle `X-Adispatch-Hub-*`/`-Control-Token`-Header des
 Clients werden **nicht** weitergegeben (ein Client, der bei aktivierter Anmeldung Hub-Header mitsendet, wird mit `401` abgewiesen, sonst werden sie verworfen). Bei Antworten
 entfallen Hop-by-Hop-Header und `Set-Cookie`; ein absoluter Pfad in `Location` wird unter `/w/<id>/` gehalten, ein
-Verweis auf einen anderen Ursprung entfernt. Anfragekörper über 2 MiB werden abgewiesen (`413`). Die statische UI-Hülle eines Workspaces ist (wie bei einer Instanz) ohne Anmeldung abrufbar, damit die Login-Seite lädt; Besucher ohne Anmeldung können
-damit erkennen, **welche** Workspace-IDs es gibt, sonst nichts. Ein Workspace, der nicht
+Verweis auf einen anderen Ursprung entfernt. Anfragekörper über 2 MiB werden mit `413` und `Connection: close` abgewiesen (die Verbindung wird danach geschlossen); `GET`/`HEAD` geben `Content-Length`/`Content-Type` nicht weiter. Die statische UI-Hülle eines Workspaces ist (wie bei einer Instanz) ohne Anmeldung abrufbar, damit die Login-Seite lädt; dabei zählt der
+**dekodierte** Pfad (`%61pi` ist `api`), alles außer `GET`/`HEAD` auf Nicht-API-Pfaden braucht `viewer`. **Ohne Anmeldung sichtbar** ist
+damit nur: welche Workspace-IDs es gibt und ob ein Workspace antwortet (Statuscode `200` der Hülle bzw. `503`); die 503-Seite nennt
+dann nur „not available“ – Zustand, Meldungen des Supervisors, Ports und Hinweise mit Pfaden erscheinen erst ab `viewer`.
+**Gemeinsamer Ursprung:** Hub, Übersicht und alle Workspace-UIs teilen jetzt **einen Origin und eine Sitzung** (vorher je ein Origin pro
+Port). Eine Schwachstelle in einer Workspace-UI hätte damit Zugriff auf die Hub-Sitzung und alle anderen Workspaces. Schutz: die UI
+rendert nie HTML aus Daten (kein `innerHTML`, Element-Builder mit Allow-List, per Test erzwungen), CSP `script-src 'self'`
+(kein Inline-Skript), Downloads als `attachment` mit Sandbox-CSP, Cookie `HttpOnly; SameSite=Strict`. Wer Workspaces mit
+unterschiedlichem Vertrauen betreibt, nimmt getrennte Instanzen/Hubs. Ein
+Workspace, der nicht Ein Workspace, der nicht
 `running` ist, liefert eine klare **503-Seite** („Workspace unavailable“ mit Zustand, Grund und Link zur Übersicht; lädt sich
 alle 5 s neu; für API-Clients JSON `workspace_unavailable` mit `Retry-After: 5`), ein Workspace, der die Verbindung verweigert
 oder 120 s schweigt, `503` bzw. `504 workspace_timeout`. **Cookies** gelten pro Host-Name, nicht pro Port: Läuft der Hub unter
