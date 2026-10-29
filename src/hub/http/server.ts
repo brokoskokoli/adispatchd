@@ -372,7 +372,8 @@ export async function createHubHttp(options: HubHttpOptions): Promise<HubHttp> {
         handler(req, res);
       });
       server.headersTimeout = 20_000;
-      server.requestTimeout = 0; // streams (SSE, uploads) must not be cut by a total request timeout
+      // Receiving a request (headers and body, at most 2 MiB) must finish; responses (SSE) are not limited by this.
+      server.requestTimeout = 5 * 60_000;
       return server;
     },
   });

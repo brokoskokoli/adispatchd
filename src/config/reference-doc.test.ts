@@ -255,7 +255,7 @@ describe('docs/configuration-reference.md', () => {
   });
 
   it('documents hub.yaml: keys, defaults, limits and the workspace ID rule (WI-35)', () => {
-    for (const key of ['hub.max_concurrent', 'hub.server.host', 'hub.server.port', 'hub.server.allowed_hosts', 'workspaces', 'workspaces[].id', 'workspaces[].config_dir', 'workspaces[].data_dir', 'workspaces[].port', 'workspaces[].enabled']) {
+    for (const key of ['hub.max_concurrent', 'hub.server.host', 'hub.server.port', 'hub.server.allowed_hosts', 'workspaces', 'workspaces[].id', 'workspaces[].config_dir', 'workspaces[].data_dir', 'workspaces[].port', 'workspaces[].enabled', 'auth']) {
       expect(markdown, key).toContain(`| \`${key}\` |`);
     }
     expect(markdown).toContain(`| \`hub.max_concurrent\` | Integer ≥ 1 | \`${DEFAULT_HUB_MAX_CONCURRENT}\` |`);
@@ -263,7 +263,7 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain('| `workspaces[].enabled` | Boolean | `true` |');
     expect(WORKSPACE_ID_PATTERN.test('coder-2')).toBe(true);
     expect(WORKSPACE_ID_PATTERN.test('Coder_2')).toBe(false);
-    for (const decision of ['hub_limit', 'ADISPATCH_HUB_SOCKET', 'ADISPATCH_HUB_WORKSPACE']) expect(markdown, decision).toContain(`\`${decision}\``);
+    for (const decision of ['hub_limit', 'ADISPATCH_HUB_SOCKET', 'ADISPATCH_HUB_WORKSPACE', 'ADISPATCH_HUB_TRUST']) expect(markdown, decision).toContain(`\`${decision}\``);
   });
 
   it('documents all hooks, operators and notification events', () => {

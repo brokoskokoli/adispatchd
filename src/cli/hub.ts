@@ -64,8 +64,16 @@ hub:
   # Limit of simultaneously running runs across ALL workspaces (a workspace's own
   # scheduler.max_concurrent stays an additional upper bound). Manual starts are not limited.
   max_concurrent: ${options.maxConcurrent}
-  # Address of the hub's own HTTP server (overview page: a later work item).
+  # Address of the hub's own HTTP server: overview page, hub API and the workspace UIs below /w/<id>/.
+  # Behind a reverse proxy add its host name to allowed_hosts.
   server: { host: 127.0.0.1, port: ${options.hubPort}, allowed_hosts: [] }
+
+# Login of the hub's web UI and API (optional; same section as in a workspace's config.yaml). Without it nobody is asked to
+# log in: keep the server on 127.0.0.1 or put an authenticating proxy in front. Hash: adispatch auth hash-password
+# auth:
+#   mode: password
+#   users:
+#     - { name: admin, password_hash_env: HUB_PW_ADMIN, role: admin }
 
 workspaces:
 ${ws}

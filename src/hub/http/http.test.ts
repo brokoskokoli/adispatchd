@@ -4,10 +4,11 @@
  * streaming), the 503 page and the live event stream. The workspace
  * instances are fakes that check the hub's secret like the real ones.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { AUTH_HASHES, AUTH_PASSWORDS, fakeScrypt } from '../../api/testing/auth.js';
 import { noopLogger } from '../../core/index.js';
@@ -258,6 +259,15 @@ describe('hub API', () => {
       if (key === 'GET /*') continue; // registered by the static plugin only with a UI dir
       expect(registered.has(key), key).toBe(true);
     }
+  });
+});
+
+describe('documentation', () => {
+  it('docs/api.md lists exactly the hub routes with their minimum role', () => {
+    const doc = readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../docs/api.md'), 'utf8');
+    const section = doc.slice(doc.indexOf('### Mindestrolle je Hub-Endpunkt'), doc.indexOf('Die Wirkung der Aktionen entspricht'));
+    const rows = [...section.matchAll(/^\| (GET|POST) \| `([^`?]+)[^`]*` \| (public|viewer|operator|admin) \|/gm)].map((m) => [`${m[1]} ${m[2]}`, m[3]] as const);
+    expect(Object.fromEntries(rows)).toEqual(HUB_ROUTE_ROLES);
   });
 });
 

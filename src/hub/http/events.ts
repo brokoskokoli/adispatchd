@@ -14,6 +14,8 @@ import { errorMessage, noopLogger, systemClock, systemTimers, type Clock, type L
 
 /** Default heartbeat interval. */
 export const HUB_SSE_HEARTBEAT_MS = 15_000;
+/** Open streams at most (more are answered with 503). */
+export const HUB_SSE_MAX_CLIENTS = 200;
 /** Unsent bytes per client before it is disconnected. */
 export const HUB_SSE_MAX_BUFFER_BYTES = 512 * 1024;
 
@@ -57,6 +59,11 @@ export class HubEventStream {
     if (this.closed) {
       res.writeHead(503, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { code: 'shutting_down', message: 'Server is shutting down' } }));
+      return;
+    }
+    if (this.clients.size >= HUB_SSE_MAX_CLIENTS) {
+      res.writeHead(503, { 'content-type': 'application/json', 'retry-after': '10' });
+      res.end(JSON.stringify({ error: { code: 'too_many_streams', message: 'Too many open event streams' } }));
       return;
     }
     res.writeHead(200, {
