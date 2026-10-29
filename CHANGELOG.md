@@ -25,7 +25,32 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
   `hub init` legt `hub.yaml` und die Workspace-Verzeichnisse an und überschreibt nie; `hub validate` prüft zusätzlich die
   Konfiguration jedes Workspaces. Doku: Konfigurationsreferenz §3.9, operations.md „Hub“, worker-protocol.md
   „Slot-Protokoll“, api.md „Steuer-Schnittstelle des Hubs“.
-- Die HTTP-Übersichtsseite des Hubs folgt mit WI-36.
+- **Weboberfläche des Hubs** (WI-36). `hub.server` (Default `127.0.0.1:8090`) bedient jetzt HTTP unter **einem Port**:
+  die **Übersicht** `/` (Kachel je Workspace mit Zustand, laufenden Runs, blockierten Items, fehlgeschlagenen Actions,
+  belegten Plätzen und Neustarts; Gesamtleiste „Slots n/m“; Serverressourcen; live per SSE; hell/dunkel, schmal),
+  die **Hub-API** `/api/v1/hub/…` (`status`, `workspaces`, `workspaces/:id/start|stop|restart|drain`, `pause|resume|stop-all|drain-all`,
+  `audit`, SSE `hub.*`) und `/w/<id>/…`, das die **Web-UI und API jedes Workspaces** (HTTP, SSE) an dessen Loopback-Port
+  durchreicht. Start/Stop/Restart/Drain je Workspace und „Alle drainen/stoppen“ sowie „Pausieren“ gibt es mit Bestätigung nur
+  für `operator`/`admin`; aus einer Workspace-UI führt „← Hub“ zurück. Start schlägt fehl (kein Workspace gestartet), wenn der
+  Port belegt ist.
+- **Anmeldung, Rollen und Audit im Hub:** `hub.yaml` kennt einen Abschnitt `auth` wie `config.yaml` (`none`, `password`,
+  `trusted_header`; Lesen ab `viewer`, Steuern ab `operator`, Audit-Log `admin`). Einmal anmelden gilt für alle Workspace-UIs; die
+  Rolle gilt auch **in** den Workspaces (die Instanz setzt sie durch und nennt den Benutzer im Audit). Verwaltungsaktionen des
+  Hubs stehen – auch bei Fehlern – in der Tabelle `hub_audit` der Datei `hub.db` im data-dir des Hubs.
+- **Vertrauenskanal Hub → Workspace:** Der Hub gibt jedem Kind bei jedem Start ein Geheimnis auf der Standardeingabe
+  (`ADISPATCH_HUB_TRUST=stdin`; nie in Umgebung, Argumenten oder Dateien) und leitet damit die Identität des angemeldeten
+  Benutzers weiter (`X-Adispatch-Hub-Token|-User|-Role`). Eine vom Hub gestartete Instanz akzeptiert nur noch Anfragen mit
+  dieser Identität oder dem Steuer-Token der CLI – **auch mit `auth.mode: none`** (direkter Zugriff auf den Loopback-Port
+  zeigt „managed by a hub“). Beim Durchreichen werden Pfade segmentweise geprüft (`..`, kodierte Trenner → `400`), Header per
+  Allow-List weitergegeben, Cookies und fremde Identitäts-Header nie; ein nicht laufender Workspace liefert eine klare 503-Seite.
+  Details und Sicherheitsabwägung: operations.md „Weboberfläche des Hubs“, api.md „Hub-API“.
+
+### Geändert
+
+- **Web-UI der Instanzen: seitenrelative URLs.** Alle Anfragen (API, SSE, Downloads) laufen als `./api/v1/…` relativ zur Seite,
+  damit dieselbe UI unter `/`, unter `/w/<id>/` und hinter einem Reverse Proxy mit zusätzlichem Pfadpräfix funktioniert. Die
+  Einzelinstanz verhält sich unverändert. Nebenbei funktioniert der Download-Link der erhaltenen Dateien (`execute.keep`) wieder:
+  der Element-Builder hatte den bisherigen absoluten Pfad verworfen.
 
 ## [0.9.1] – 2026-10-27
 
