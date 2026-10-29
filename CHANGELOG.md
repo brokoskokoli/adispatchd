@@ -5,6 +5,13 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+## [0.10.1] – 2026-10-29
+
+### Geändert
+
+- Konfigurationsreferenz §4.9: `attempted_by` ist wie `consumed_by` ein Listenfeld (`contains`, `in`); nur Doku, kein
+  geändertes Verhalten.
+
 ## [0.10.0] – 2026-10-29
 
 ### Hinzugefügt
@@ -520,6 +527,7 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
+[0.10.1]: https://github.com/brokoskokoli/adispatchd/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/brokoskokoli/adispatchd/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.8.0...v0.9.0

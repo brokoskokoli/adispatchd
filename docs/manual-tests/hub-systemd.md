@@ -11,10 +11,10 @@ Produktion) – Ergänzung zu [systemd.md](systemd.md) (Einzelinstanz), das vorh
 
 ```bash
 # VM: Debian/Ubuntu mit systemd, Node 24 systemweit (/usr/bin/node)
-npm pack                                        # im Repo → adispatchd-0.10.0.tgz
-scp adispatchd-0.10.0.tgz vm:
+npm pack                                        # im Repo → adispatchd-0.10.1.tgz
+scp adispatchd-0.10.1.tgz vm:
 ssh vm
-sudo npm install -g ./adispatchd-0.10.0.tgz
+sudo npm install -g ./adispatchd-0.10.1.tgz
 
 H=/var/lib/adispatchd-hub/hub                    # data-dir des Hubs
 sudo adispatch hub init --config-dir /etc/adispatchd-hub --data-dir $H \

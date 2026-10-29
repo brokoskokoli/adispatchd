@@ -72,8 +72,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.10.0
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.10.0.tgz
+sudo npm install -g adispatchd@0.10.1
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.10.1.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -809,7 +809,7 @@ Der Hub ist der **einzige** Dienst: Die Workspaces sind seine Kindprozesse und h
 bei der Einzelinstanz (Abschnitt „Installation als systemd-Dienst“: systemweites Node, feste Version global installieren, kein `npx`).
 
 ```bash
-sudo npm install -g adispatchd@0.10.0
+sudo npm install -g adispatchd@0.10.1
 
 # 1. Hub und Workspaces anlegen (überschreibt nie bestehende Dateien); Layout: Abschnitt „Verzeichnisse eines Hubs“
 sudo adispatch hub init --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub \

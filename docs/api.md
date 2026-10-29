@@ -833,7 +833,7 @@ fehlgeschlagene – steht im Audit-Log des Hubs.
 
 ```json
 // HubStatusView (GET /api/v1/hub/status)
-{ "version": "0.10.0", "startedAt": "…", "time": "…", "state": "running|paused|stopping", "paused": false,
+{ "version": "0.10.1", "startedAt": "…", "time": "…", "state": "running|paused|stopping", "paused": false,
   "slots": { "max": 6, "active": 3, "byWorkspace": { "coder": 2, "docs": 1 } },
   "resources": { "at": "…", "cpu": { "percent": 12.5, "cores": 8, "load": [0.4, 0.3, 0.3] },
                  "memory": { "usedBytes": 4294967296, "totalBytes": 17179869184 },
@@ -845,7 +845,7 @@ fehlgeschlagene – steht im Audit-Log des Hubs.
   "port": 8091, "path": "/w/coder/", "startedAt": "…", "restarts": 0, "crashes": 0,
   "lastExit": { "code": null, "signal": "SIGKILL", "at": "…" }, "nextRestartAt": null, "message": null,
   "slots": 2, "connected": true,
-  "activity": { "version": "0.10.0", "activeRuns": 2, "supervisedRuns": 2, "recoveryPending": 0,
+  "activity": { "version": "0.10.1", "activeRuns": 2, "supervisedRuns": 2, "recoveryPending": 0,
                 "activeBlocks": 1, "failedActions": 0, "failedNotifications": 0,
                 "scheduler": { "state": "running", "paused": false, "draining": false }, "ownLimit": 5, "at": "…" } }  // null, solange der Workspace nicht läuft/antwortet
 
@@ -926,7 +926,7 @@ die Anforderung verschickt ist (`transition` zeigt `draining`/`stopping`/`restar
 
 ```json
 {
-  "version": "0.10.0", "pid": 4711, "startedAt": "…", "time": "…",
+  "version": "0.10.1", "pid": 4711, "startedAt": "…", "time": "…",
   "state": "running|paused|stopping", "paused": false,
   "slots": { "max": 6, "active": 3, "byWorkspace": { "coder": 2, "docs": 1 } },
   "server": { "host": "127.0.0.1", "port": 8090 },
