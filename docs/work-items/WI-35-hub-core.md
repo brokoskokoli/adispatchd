@@ -60,4 +60,4 @@ Spec-Nachtrag, CHANGELOG (Unreleased), `docs/status.md`, `docs/handoff/WI-35.md`
 - [x] `hub_limit` erscheint in Diagnose, Dry-Run und Cron-Firings (es entsteht kein Run); ohne Hub (kein `ADISPATCH_HUB_SOCKET`) unverändertes Verhalten, alle bestehenden Tests grün.
 - [x] `hub drain-all`/`stop-all`/`pause` verhalten sich wie beschrieben; Hub-Shutdown hinterlässt keine Waisenprozesse (auch bei SIGTERM und Doppelsignal).
 - [x] Hub-Ausfall: Kinder starten keine neuen automatischen Runs, laufende Runs bleiben unberührt.
-- [x] Doku aktualisiert, Doku-Test grün; `npm run check` grün.
+- [ ] Doku aktualisiert, Doku-Test grün; `npm run check` grün (Doku und Doku-Test grün; `check` in der Sandbox wegen 9 umgebungsbedingter Fehlschläge nicht grün, Linux-Container und macOS vor dem Release).
