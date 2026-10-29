@@ -134,3 +134,66 @@ describe('service install plan', () => {
     expect(() => planInstall(input({ dryRun: true, unit: { ...UNIT, dataDir: '/var/lib' } }))).toThrow(/system directory/);
   });
 });
+
+describe('hub paths and plans (WI-37)', () => {
+  const HUB: UnitOptions = {
+    ...UNIT,
+    unitName: 'adispatchd-hub',
+    configDir: '/etc/adispatchd-hub',
+    dataDir: '/var/lib/adispatchd-hub/hub',
+    envFile: '/etc/default/adispatchd-hub',
+    hub: {
+      workspaceConfigDirs: ['/etc/adispatchd-hub/workspaces/a/config', '/etc/adispatchd-legacy'],
+      workspaceDataDirs: ['/var/lib/adispatchd-hub/workspaces/a', '/var/lib/adispatchd-legacy'],
+    },
+  };
+
+  it('plans the hub data dir, every workspace data dir and every config tree once (nested configs are covered)', () => {
+    const cmds = argvs(planInstall(input({ unit: HUB })));
+    expect(cmds).toEqual([
+      'install -d -m 0750 -o orch -g orch /var/lib/adispatchd-hub/hub',
+      'chown -R orch:orch /var/lib/adispatchd-hub/hub',
+      'install -d -m 0750 -o orch -g orch /var/lib/adispatchd-hub/workspaces/a',
+      'chown -R orch:orch /var/lib/adispatchd-hub/workspaces/a',
+      'install -d -m 0750 -o orch -g orch /var/lib/adispatchd-legacy',
+      'chown -R orch:orch /var/lib/adispatchd-legacy',
+      'chown -R root:orch /etc/adispatchd-hub',
+      'chmod -R u=rwX,g=rX,o= /etc/adispatchd-hub',
+      'chown -R root:orch /etc/adispatchd-legacy',
+      'chmod -R u=rwX,g=rX,o= /etc/adispatchd-legacy',
+      'chown root:orch /etc/default/adispatchd-hub',
+      'chmod 0640 /etc/default/adispatchd-hub',
+      'systemctl daemon-reload',
+      'systemctl enable adispatchd-hub.service',
+    ]);
+  });
+
+  it('writes an environment file template that explains the shared environment', () => {
+    const plan = planInstall(input({ unit: HUB }));
+    const write = plan.steps.find((s) => s.kind === 'write' && s.path === '/etc/default/adispatchd-hub');
+    expect(write && 'content' in write ? write.content : '').toContain('ALL workspaces inherit this environment');
+  });
+
+  it('rejects unsafe or nested workspace directories', () => {
+    const dirs = (hub: NonNullable<UnitOptions['hub']>) => ({ configDir: HUB.configDir, dataDir: HUB.dataDir, hub });
+    expect(() => assertSafeServicePaths(dirs({ workspaceConfigDirs: [], workspaceDataDirs: ['/var/lib'] }))).toThrow(/workspace data dir \/var\/lib is a system directory/);
+    expect(() => assertSafeServicePaths(dirs({ workspaceConfigDirs: ['/etc'], workspaceDataDirs: [] }))).toThrow(/system directory/);
+    expect(() => assertSafeServicePaths(dirs({ workspaceConfigDirs: [], workspaceDataDirs: ['/home/alice'] }))).toThrow(/home directory/);
+    // Trial layout: data of a workspace inside the (root-owned, read-only) hub config dir.
+    expect(() => assertSafeServicePaths(dirs({ workspaceConfigDirs: [], workspaceDataDirs: ['/etc/adispatchd-hub/workspaces/a/data'] }))).toThrow(/--workspaces-data-dir/);
+    // Config dir of a workspace inside a data dir of another one.
+    expect(() => assertSafeServicePaths(dirs({ workspaceConfigDirs: ['/var/lib/adispatchd-hub/workspaces/a/config'], workspaceDataDirs: ['/var/lib/adispatchd-hub/workspaces/a'] }))).toThrow(/non-nested/);
+    // Data dirs of two workspaces nested or equal.
+    expect(() => assertSafeServicePaths(dirs({ workspaceConfigDirs: [], workspaceDataDirs: ['/srv/x/a', '/srv/x/a/b'] }))).toThrow(/must not be nested or equal/);
+    expect(() => assertSafeServicePaths(dirs({ workspaceConfigDirs: [], workspaceDataDirs: ['/srv/x/a', '/var/lib/adispatchd-hub/hub'] }))).toThrow(/must not be nested or equal/);
+    // Without a hub the old message stays.
+    expect(() => assertSafeServicePaths({ configDir: '/etc/o', dataDir: '/etc/o/data' })).toThrow(/different owners/);
+    expect(() => planInstall(input({ unit: { ...HUB, hub: { workspaceConfigDirs: [], workspaceDataDirs: ['/var/lib'] } } }))).toThrow(/system directory/);
+  });
+
+  it('the hub uninstall plan points to hub drain-all', () => {
+    const plan = planUninstall({ unitName: 'adispatchd-hub', unitDir: '/etc/systemd/system', hub: true });
+    expect(plan.notes.join(' ')).toContain('hub drain-all --wait');
+    expect(argvs(plan)[0]).toBe('systemctl disable --now adispatchd-hub.service');
+  });
+});

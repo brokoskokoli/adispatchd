@@ -98,7 +98,6 @@ describe('cli program', () => {
       dryRun: true,
       createUser: true,
       user: 'adispatchd',
-      name: 'adispatchd',
       unitDir: '/etc/systemd/system',
       drainTimeout: '10m',
       cancelTimeout: '2m',
