@@ -900,16 +900,18 @@ Dienst `adispatchd`.
 sudo adispatch hub init --empty --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
 
 # 2. Alte Instanz sauber beenden und abschalten (sonst hält sie die Instanzsperre ihres data-dirs)
-adispatch drain --config-dir /etc/adispatchd --wait
+sudo -u adispatchd adispatch drain --wait --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd   # Steuer-Token liegt im data-dir
 sudo systemctl disable --now adispatchd          # oder: sudo adispatch service uninstall (Dateien bleiben)
 
-# 3. Instanz in hub.yaml eintragen – config_dir/data_dir UNVERÄNDERT, neuer freier Port
+# 3. Instanz in hub.yaml eintragen – config_dir/data_dir UNVERÄNDERT, neuer freier Port.
+#    Die Zeile `workspaces: []` aus der --empty-Vorlage muss dabei ERSETZT werden (sonst bleibt die Liste leer).
 sudoedit /etc/adispatchd-hub/hub.yaml
 #   workspaces:
 #     - { id: main, config_dir: /etc/adispatchd, data_dir: /var/lib/adispatchd, port: 8091 }
 
 # 4. Secrets der alten Env-Datei in die des Hubs übernehmen (alle Workspaces teilen sie)
-sudo sh -c 'cat /etc/default/adispatchd >> /etc/default/adispatchd-hub'     # danach doppelte/Beispielzeilen bereinigen
+sudo install -m 0640 -o root -g adispatchd /dev/null /etc/default/adispatchd-hub   # nie welt-lesbar anlegen (vor service install, das eine Vorlage nur bei fehlender Datei schreibt)
+sudo sh -c 'cat /etc/default/adispatchd >> /etc/default/adispatchd-hub'            # danach Variablen prüfen und ggf. umbenennen
 
 # 5. Prüfen, Dienst einrichten und starten
 sudo adispatch hub validate --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
