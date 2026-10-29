@@ -5,6 +5,13 @@
  * second prefix) → start again on the same config/data dirs → history and
  * logs are still there → SIGTERM (exit 0).
  *
+ * Hub (WI-37), with the same installation: `hub init` (production layout with
+ * `--workspaces-data-dir`) → `hub validate` → `service install --hub --dry-run`
+ * → `hub start` → one run in each of two workspaces through the hub's
+ * `/w/<id>/` pass-through → `hub drain-all --wait` → SIGTERM (exit 0); then the
+ * single instance of the first test is migrated into a second hub (unchanged
+ * config/data dirs, new port) and its history is served through the hub.
+ *
  * Runs only with `ADISPATCH_PACK_TEST=1` (`npm run test:pack`): it builds the
  * package, needs npm with the dependencies in its cache or registry access
  * and takes ~10–60 s, so it is not part of the per-commit gate.
@@ -41,6 +48,20 @@ function freePort(): Promise<number> {
   });
 }
 
+/** Two consecutive free loopback ports (`hub init --base-port` gives the workspaces consecutive ports). */
+async function freePortPair(): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const first = await freePort();
+    const second = await new Promise<boolean>((resolve) => {
+      const srv = net.createServer();
+      srv.once('error', () => resolve(false));
+      srv.listen(first + 1, '127.0.0.1', () => srv.close(() => resolve(true)));
+    });
+    if (second) return first;
+  }
+  throw new Error('no two consecutive free ports');
+}
+
 async function waitFor<T>(what: string, fn: () => Promise<T | undefined>, timeoutMs = 30_000): Promise<T> {
   const end = Date.now() + timeoutMs;
   for (;;) {
@@ -72,6 +93,44 @@ function startInstance(bin: string, configDir: string, dataDir: string) {
   child.stderr?.on('data', (c: Buffer) => (out.stderr += c.toString()));
   const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
   return { child, out, exited };
+}
+
+/** State handed from the single-instance test to the hub test (same installation, same directories). */
+const shared: { bin?: string; configDir?: string; dataDir?: string; runId?: string } = {};
+
+function startHub(bin: string, configDir: string, dataDir: string) {
+  const child = spawn(bin, ['hub', 'start', '--config-dir', configDir, '--data-dir', dataDir, '--drain-timeout', '30s', '--cancel-timeout', '10s'], {
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  children.push(child);
+  const out = { stdout: '', stderr: '' };
+  child.stdout?.on('data', (c: Buffer) => (out.stdout += c.toString()));
+  child.stderr?.on('data', (c: Buffer) => (out.stderr += c.toString()));
+  const exited = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)));
+  return { child, out, exited };
+}
+
+interface HubStatusJson {
+  slots: { max: number; active: number };
+  workspaces: Array<{ id: string; state: string; pid: number | null; connected: boolean; transition: string | null }>;
+}
+
+const postJson = (url: string, body: unknown) =>
+  fetch(url, { method: 'POST', headers: { 'x-adispatch-request': '1', 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+/** Start the hello workflow of a workspace through the hub and wait for the run to succeed. */
+async function helloThroughHub(hubBase: string, workspace: string, name: string): Promise<string> {
+  const started = await postJson(`${hubBase}/w/${workspace}/api/v1/workflows/hello/start`, { parameters: { name } });
+  expect(started.status, `start in ${workspace}`).toBe(202);
+  const runId = ((await started.json()) as { run: { id: string } }).run.id;
+  const done = await waitFor(`run in ${workspace}`, async () => {
+    const r = (await (await fetch(`${hubBase}/w/${workspace}/api/v1/runs/${runId}`)).json()) as { status: string; businessResult: string; lifecycleStatus: string };
+    return r.status === 'completed' && r.lifecycleStatus !== 'running' ? r : undefined;
+  });
+  expect(done).toMatchObject({ businessResult: 'success', lifecycleStatus: 'succeeded' });
+  const logs = (await (await fetch(`${hubBase}/w/${workspace}/api/v1/runs/${runId}/logs?stream=stdout`)).json()) as { data: string };
+  expect(logs.data).toContain(`Hello, ${name}!`);
+  return runId;
 }
 
 describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
@@ -161,5 +220,101 @@ describe.skipIf(!ENABLED)('npm pack: installable package (WI-12)', () => {
     second.child.kill('SIGTERM');
     expect(await second.exited).toBe(0);
     expect(second.out.stdout).toContain('adispatchd stopped');
+    Object.assign(shared, { bin: bin2, configDir, dataDir, runId });
+  }, 600_000);
+
+  it('runs a hub with two workspaces from the installed package and migrates a single instance into a hub (WI-37)', async () => {
+    const { bin, configDir: instConfig, dataDir: instData, runId: oldRun } = shared;
+    if (!bin || !instConfig || !instData || !oldRun) throw new Error('the single-instance test must run (and pass) first');
+
+    // 1. hub init in the production layout (config tree, hub data dir and workspace data dirs separate); idempotent.
+    const hubConfig = path.join(root, 'hub-config');
+    const hubData = path.join(root, 'hub-data');
+    const wsData = path.join(root, 'ws-data');
+    const hubPort = await freePort();
+    const basePort = await freePortPair();
+    const initArgs = ['hub', 'init', '--config-dir', hubConfig, '--data-dir', hubData, '--workspaces-data-dir', wsData, '--workspace', 'alpha', '--workspace', 'beta', '--hub-port', String(hubPort), '--base-port', String(basePort)];
+    const init = await run(bin, initArgs, { cwd: root });
+    expect(init.code, init.stderr).toBe(0);
+    expect(init.stdout).toContain('Hub configuration in');
+    expect(init.stdout).toContain('2 workspace(s) (2 enabled)');
+    const init2 = await run(bin, initArgs, { cwd: root });
+    expect(init2.code, init2.stderr).toBe(0);
+    expect(init2.stdout).not.toContain('created  ');
+    const validate = await run(bin, ['hub', 'validate', '--config-dir', hubConfig, '--data-dir', hubData], { cwd: root });
+    expect(validate.code, validate.stderr).toBe(0);
+
+    // 2. The systemd unit of this installation (dry run: nothing is changed).
+    const unit = await run(bin, ['service', 'install', '--hub', '--dry-run', '--config-dir', hubConfig, '--data-dir', hubData, '--create-user'], { cwd: root });
+    expect(unit.code, unit.stderr).toBe(0);
+    expect(unit.stdout).toContain('# /etc/systemd/system/adispatchd-hub.service');
+    expect(unit.stdout).toMatch(/ExecStart=\S*node\S* \S*dist\/cli\/main\.js hub start --config-dir /);
+    expect(unit.stdout).toContain('KillMode=mixed');
+    expect(unit.stdout).toContain(`install -d -m 0750 -o adispatchd -g adispatchd ${path.join(wsData, 'beta')}`);
+    expect(unit.stdout).toContain('nothing was changed');
+
+    // 3. hub start: overview, pass-through, one run in each workspace.
+    const hubBase = `http://127.0.0.1:${hubPort}`;
+    const hub = startHub(bin, hubConfig, hubData);
+    const ready = async (): Promise<HubStatusJson> =>
+      waitFor('workspaces running', async () => {
+        const r = await run(bin, ['hub', 'status', '--data-dir', hubData, '--json'], { cwd: root });
+        if (r.code !== 0) return undefined;
+        const s = JSON.parse(r.stdout) as HubStatusJson;
+        return s.workspaces.length > 0 && s.workspaces.every((w) => w.state === 'running' && w.connected) ? s : undefined;
+      }, 60_000);
+    const status = await ready();
+    expect(status.workspaces.map((w) => w.id)).toEqual(['alpha', 'beta']);
+    expect(hub.out.stdout).toContain(`web UI and API on ${hubBase}`);
+    const overview = await fetch(`${hubBase}/`);
+    expect(overview.status).toBe(200);
+    expect(await overview.text()).toMatch(/<html/i);
+    expect((await fetch(`${hubBase}/w/alpha/`)).status).toBe(200);
+    expect((await fetch(`${hubBase}/api/v1/hub/status`)).status).toBe(200);
+    const runAlpha = await helloThroughHub(hubBase, 'alpha', 'alpha');
+    const runBeta = await helloThroughHub(hubBase, 'beta', 'beta');
+    expect(runAlpha).not.toBe('');
+    expect(runBeta).not.toBe('');
+    // Separate databases: a run of one workspace is unknown in the other (run IDs are only unique per workspace database).
+    expect(existsSync(path.join(wsData, 'alpha', 'adispatchd.sqlite'))).toBe(true);
+    expect(existsSync(path.join(wsData, 'beta', 'adispatchd.sqlite'))).toBe(true);
+
+    // 4. drain-all --wait: every workspace ends, the hub keeps running; SIGTERM ends it with exit 0.
+    const drain = await run(bin, ['hub', 'drain-all', '--data-dir', hubData, '--wait', '--timeout', '60s'], { cwd: root });
+    expect(drain.code, drain.stderr).toBe(0);
+    expect(drain.stdout).toContain('all workspaces ended');
+    const after = JSON.parse((await run(bin, ['hub', 'status', '--data-dir', hubData, '--json'], { cwd: root })).stdout) as HubStatusJson;
+    expect(after.workspaces.map((w) => w.state)).toEqual(['stopped', 'stopped']);
+    hub.child.kill('SIGTERM');
+    expect(await hub.exited).toBe(0);
+    expect(hub.out.stdout).toContain('hub stopped');
+    expect(existsSync(path.join(hubData, 'hub.sock'))).toBe(false);
+
+    // 5. Migration: the single instance of the first test (unchanged config/data dirs, history included) becomes a workspace.
+    const hub2Config = path.join(root, 'hub2-config');
+    const hub2Data = path.join(root, 'hub2-data');
+    const hub2Port = await freePort();
+    const legacyPort = await freePort();
+    const initEmpty = await run(bin, ['hub', 'init', '--empty', '--config-dir', hub2Config, '--data-dir', hub2Data, '--hub-port', String(hub2Port)], { cwd: root });
+    expect(initEmpty.code, initEmpty.stderr).toBe(0);
+    const yamlFile = path.join(hub2Config, 'hub.yaml');
+    writeFileSync(
+      yamlFile,
+      readFileSync(yamlFile, 'utf8').replace('workspaces: []', `workspaces:\n  - { id: legacy, config_dir: ${JSON.stringify(instConfig)}, data_dir: ${JSON.stringify(instData)}, port: ${legacyPort} }`),
+    );
+    const validate2 = await run(bin, ['hub', 'validate', '--config-dir', hub2Config, '--data-dir', hub2Data], { cwd: root });
+    expect(validate2.code, validate2.stderr).toBe(0);
+    const hub2Base = `http://127.0.0.1:${hub2Port}`;
+    const hub2 = startHub(bin, hub2Config, hub2Data);
+    await waitFor('legacy workspace', async () => {
+      const r = await fetch(`${hub2Base}/w/legacy/ready`).catch(() => undefined);
+      return r?.status === 200 ? true : undefined;
+    }, 60_000);
+    const kept = (await (await fetch(`${hub2Base}/w/legacy/api/v1/runs/${oldRun}`)).json()) as { status: string; resultMessage: string };
+    expect(kept).toMatchObject({ status: 'completed', resultMessage: 'Said hello' });
+    await helloThroughHub(hub2Base, 'legacy', 'migrated');
+    expect(readFileSync(path.join(instConfig, 'workflows', 'hello.yaml'), 'utf8')).toContain('# local edit');
+    hub2.child.kill('SIGTERM');
+    expect(await hub2.exited).toBe(0);
   }, 600_000);
 });
