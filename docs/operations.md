@@ -12,6 +12,8 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
 | `/var/lib/adispatchd/` (data-dir) | `adispatchd.sqlite` (+ `-wal`/`-shm`), `adispatchd.lock`, `logs/`, `runs/`, `workspaces/`, `backups/` | `adispatchd`, 0750 |
 | Paket, z. B. `/usr/lib/node_modules/adispatchd/` | Code (`dist/`), wird bei Updates ersetzt | `root`, nur lesbar für den Dienst |
 
+Verzeichnisse eines Hubs (mehrere Workspaces): Abschnitt [Verzeichnisse eines Hubs](#verzeichnisse-eines-hubs).
+
 - **Schreibrecht auf config-dir = Codeausführung** mit den Rechten des Dienstes (Skripte, Kommandos in YAML, Spec §20.2).
   Deshalb gehört config-dir `root`, der Dienst kann seine eigene Konfiguration nicht ändern.
 - **data-dir muss auf einem lokalen Dateisystem liegen (kein NFS/SMB).** Der Instanz-Lock (`adispatchd.lock`) beruht auf
@@ -70,8 +72,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.5.0
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.5.0.tgz
+sudo npm install -g adispatchd@0.10.0
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.10.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -111,6 +113,9 @@ user-eigene Projekte empfohlen: klassischer PAT des Owners mit `read:project`, b
 (der Token liest auch die Issues/PRs); fine-grained Tokens sind dafür nicht verifiziert. Setzt ein Workflow
 Projektfelder (`source.update` → `project`, seit 0.3.0), braucht die schreibende Identity **Projects: Read and write**
 (App) bzw. den Scope **`project`** statt `read:project` (klassischer PAT).
+
+Mehrere Projekte auf einem Server unter einem gemeinsamen Limit betreibt ein **Hub** (`service install --hub`, eine Unit für alle
+Workspaces): Abschnitt [Hub](#hub-mehrere-workspaces-auf-einem-server-seit-0100).
 
 Optionen von `service install`: `--user`/`--group` (Default `adispatchd`), `--create-user`, `--name` (Unit-Name),
 `--node`/`--entry` (absolute Pfade, Default: das laufende Node und diese Installation), `--env-file <pfad|none>`,
@@ -601,24 +606,44 @@ Hub-API (Abschnitt [Weboberfläche des Hubs](#weboberfläche-des-hubs-durchreich
 
 ```bash
 # Einmalig: hub.yaml und je Workspace ein vollständiges Beispiel-config-dir/data-dir anlegen (überschreibt nie)
-adispatch hub init     --config-dir /var/lib/adispatchd-hub/config --data-dir /var/lib/adispatchd-hub/data --workspace coder --workspace docs
-adispatch hub validate --config-dir /var/lib/adispatchd-hub/config --data-dir /var/lib/adispatchd-hub/data   # hub.yaml + Konfiguration jedes Workspaces
+adispatch hub init     --config-dir ./hub --data-dir ./hub-data --workspaces-data-dir ./hub-workspaces --workspace coder --workspace docs
+adispatch hub validate --config-dir ./hub --data-dir ./hub-data       # hub.yaml + Konfiguration jedes Workspaces
 
-adispatch hub start    --config-dir /var/lib/adispatchd-hub/config --data-dir /var/lib/adispatchd-hub/data   # Vordergrund, startet alle enabled Workspaces
-adispatch hub status   --data-dir /var/lib/adispatchd-hub/data                                    # Zustand je Workspace, Neustarts, Plätze
-adispatch hub pause    --data-dir /var/lib/adispatchd-hub/data    # keine neuen automatischen Runs (laufende enden regulär)
-adispatch hub resume   --data-dir /var/lib/adispatchd-hub/data
-adispatch hub workspace restart coder --data-dir /var/lib/adispatchd-hub/data    # start | stop | restart | drain
-adispatch hub drain-all  --data-dir /var/lib/adispatchd-hub/data  # alle Workspaces: Runs zu Ende laufen lassen, dann stoppen
-adispatch hub stop-all   --data-dir /var/lib/adispatchd-hub/data  # alle Workspaces: cancel-all, dann stoppen
+adispatch hub start    --config-dir ./hub --data-dir ./hub-data       # Vordergrund, startet alle enabled Workspaces
+adispatch hub status   --data-dir ./hub-data                          # Zustand je Workspace, Neustarts, Plätze
+adispatch hub pause    --data-dir ./hub-data    # keine neuen automatischen Runs (laufende enden regulär)
+adispatch hub resume   --data-dir ./hub-data
+adispatch hub workspace restart coder --data-dir ./hub-data    # start | stop | restart | drain
+adispatch hub drain-all --wait --data-dir ./hub-data   # alle Workspaces: Runs zu Ende laufen lassen, dann stoppen (--timeout 30m möglich)
+adispatch hub stop-all  --wait --data-dir ./hub-data   # alle Workspaces: cancel-all, dann stoppen
 ```
 
-`--data-dir` ist das **eigene** data-dir des Hubs (Instanzsperre `adispatchd.lock`, die Sockets `slots.sock` und `hub.sock`);
-es darf sich nicht mit den data-dirs der Workspaces überschneiden. `hub init` legt je Workspace `workspaces/<id>/config` und
-`workspaces/<id>/data` unter dem Hub-config-dir an – **auch die veränderlichen Daten** (Datenbank, Logs, Workspaces) liegen
-damit im config-dir. Das ist ein Layout zum Ausprobieren; für Produktivsysteme tragen Sie in `hub.yaml` die echten Pfade ein
-(Konfiguration unter `/etc/adispatchd/<id>`, Daten unter `/var/lib/adispatchd/<id>`) oder legen das config-dir unter `/var/lib/…` an. Die Steuer-Befehle erreichen den Hub über `<data-dir>/hub.sock`
-(oder `--socket`); Exit-Codes: 0 ok, 1 Fehler, 3 Hub nicht erreichbar.
+`--data-dir` ist das **eigene** data-dir des Hubs (Instanzsperre `adispatchd.lock`, die Sockets `slots.sock` und `hub.sock`,
+`hub.db` mit dem Audit); es darf sich nicht mit den data-dirs der Workspaces überschneiden. Die Steuer-Befehle erreichen den Hub
+über `<data-dir>/hub.sock` (oder `--socket`); der Socket ist nur für den Benutzer des Hubs zugänglich (`0600`), unter systemd also
+`sudo -u adispatchd adispatch hub status …`. Exit-Codes: 0 ok, 1 Fehler, 2 Aufruf, 3 Hub nicht erreichbar, 4 `--wait` abgelaufen.
+`drain-all`/`stop-all` kehren ohne `--wait` sofort zurück (der Zustand steht in `hub status` als `transition`); mit `--wait`
+fragen sie den Zustand ab, bis kein Workspace mehr einen Prozess hat. Der Hub selbst läuft danach weiter (Beenden: SIGTERM bzw. `systemctl stop`).
+
+### Verzeichnisse eines Hubs
+
+`hub init` legt standardmäßig **alles** unter dem config-dir des Hubs an (`workspaces/<id>/config` und `workspaces/<id>/data`) –
+praktisch zum Ausprobieren, aber nicht für den Dienstbetrieb: Dort gehört das config-dir `root` und ist für den Dienst
+schreibgeschützt (Schreibrecht auf die Konfiguration = Codeausführung, Spec §20.2), die Daten dagegen dem Dienstbenutzer. Mit
+`--workspaces-data-dir` liegen die Daten der Workspaces getrennt; `service install --hub` lehnt ein `data_dir` innerhalb eines
+config-dirs mit genau diesem Hinweis ab. Empfohlenes Layout:
+
+| Pfad (Vorschlag) | Inhalt | Eigentümer / Modus |
+|---|---|---|
+| `/etc/adispatchd-hub/` | `hub.yaml`, `workspaces/<id>/config/` (je Workspace `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/`, `scripts/` …) | `root:adispatchd`, Verzeichnisse 0750, Dateien 0640 |
+| `/etc/default/adispatchd-hub` | Secrets **aller** Workspaces und `auth` des Hubs (Umgebungsvariablen) | `root:adispatchd`, 0640 |
+| `/var/lib/adispatchd-hub/hub/` | data-dir des Hubs: `adispatchd.lock`, `slots.sock`, `hub.sock`, `hub.db` (Audit) | `adispatchd`, 0750 |
+| `/var/lib/adispatchd-hub/workspaces/<id>/` | data-dir je Workspace: `adispatchd.sqlite`, `logs/`, `runs/`, `workspaces/`, `backups/` | `adispatchd`, 0750 |
+| Paket, z. B. `/usr/lib/node_modules/adispatchd/` | Code, einmal für Hub und alle Workspaces | `root` |
+
+Die Pfadlänge des Hub-data-dirs ist begrenzt (Unix-Socket, höchstens 100 Byte inkl. `/slots.sock`); die Regeln für data-dir
+(lokales Dateisystem, kein NFS) gelten für jedes Verzeichnis. Ein Workspace darf auch außerhalb des Hub-config-dirs liegen
+(z. B. eine übernommene Einzelinstanz unter `/etc/adispatchd`).
 
 **Zustände eines Workspaces** (`hub status`): `starting` → `running`; `backoff` nach einem Absturz (Neustart nach 1 s, 2 s, 4 s … höchstens 60 s,
 der Zähler beginnt nach 60 s stabilem Lauf von vorn); `stopped` (absichtlich beendet, oder Exit 0 – z. B. weil jemand die
@@ -662,15 +687,6 @@ mit SIGKILL beendet. Kindprozesse laufen in einer **eigenen Prozessgruppe**: Ctr
 die Signale weiterreicht. `hub workspace drain <id>` und `drain-all` rufen `POST /api/v1/shutdown/drain` des Workspaces mit
 dessen Steuer-Token auf (ohne Frist), `stop`/`stop-all` das `cancel-all`; ist die API nicht erreichbar, fällt der Hub auf
 SIGTERM zurück. Danach bleiben die Workspaces `stopped` (der Hub läuft weiter); `hub workspace start <id>` startet sie wieder.
-
-**systemd.** `adispatch service install` richtet nur eine Einzelinstanz ein. Für einen Hub legen Sie eine Unit nach demselben
-Muster an (Abschnitt „Generierte Unit“): `ExecStart=… main.js hub start --config-dir … --data-dir … --drain-timeout 10m
---cancel-timeout 2m`, `KillMode=mixed` (SIGTERM nur an den Hub, der die Kinder selbst beendet – mit dem Default
-`control-group` bekämen die Kinder zusätzlich SIGTERM von systemd und würden sofort abbrechen), `RestartPreventExitStatus=78`
-und `TimeoutStopSec` ≥ Drain- + Cancel-Timeout + 60 s. Secrets stehen in der `EnvironmentFile` des Hubs; **alle** Workspaces
-erben diese Umgebung (jeder Workspace nutzt nur die Variablen, die seine `identities.yaml` nennt). Alle Workspaces laufen unter
-dem Benutzer des Hubs; sollen Projekte unter verschiedenen Benutzern laufen, nehmen Sie getrennte Instanzen oder den
-Container-Executor (`user`, [Abschnitt „Container-Executor“](#container-executor-executetype-container-seit-030)).
 
 **Sicherheit.** Die Sockets `slots.sock` und `hub.sock` sind nur für den Benutzer des Hubs lesbar/schreibbar (`0600`). Worker
 und Actions der Workspaces laufen unter demselben Benutzer und könnten sich daher verbinden (`hub.sock` erlaubt `pause`, `stop-all`
@@ -781,6 +797,200 @@ Identität an die Instanz weiter; die Instanz glaubt sie nur dem Hub, der sie ge
 (`adispatch config reload --url http://127.0.0.1:<port> --data-dir <workspace-data-dir>`). Der Slot-Socket liegt im
 data-dir des Hubs mit Modus `0600`; der Pfad darf höchstens 100 Byte lang sein (Grenze von Unix-Sockets) – bei einem zu
 langen Pfad meldet der Hub einen Fehler: ein kürzeres data-dir wählen.
+
+### Hub als systemd-Dienst (seit 0.10.0, WI-37)
+
+Der Hub ist der **einzige** Dienst: Die Workspaces sind seine Kindprozesse und haben keine eigenen Units. Voraussetzungen wie
+bei der Einzelinstanz (Abschnitt „Installation als systemd-Dienst“: systemweites Node, feste Version global installieren, kein `npx`).
+
+```bash
+sudo npm install -g adispatchd@0.10.0
+
+# 1. Hub und Workspaces anlegen (überschreibt nie bestehende Dateien); Layout: Abschnitt „Verzeichnisse eines Hubs“
+sudo adispatch hub init --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub \
+  --workspaces-data-dir /var/lib/adispatchd-hub/workspaces --workspace coder --workspace docs
+sudoedit /etc/adispatchd-hub/workspaces/coder/config/sources.yaml /etc/adispatchd-hub/workspaces/coder/config/identities.yaml
+sudo adispatch hub validate --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
+
+# 2. Vorschau: Unit-Datei und geplante Schritte (ändert nichts, läuft auf jedem System)
+sudo adispatch service install --hub --dry-run --create-user \
+  --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
+
+# 3. Installieren: Benutzer, Rechte aller Verzeichnisse, Env-Datei-Vorlage, Unit, daemon-reload, enable
+sudo adispatch service install --hub --create-user \
+  --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
+
+# 4. Secrets aller Workspaces eintragen und starten
+sudoedit /etc/default/adispatchd-hub
+sudo systemctl start adispatchd-hub
+sudo -u adispatchd adispatch hub status --data-dir /var/lib/adispatchd-hub/hub
+journalctl -u adispatchd-hub -f            # Ausgabe aller Workspaces mit Präfix "[<id>] "
+```
+
+`service install --hub` nimmt `--config-dir` als config-dir **des Hubs** (mit `hub.yaml`) und `--data-dir` als data-dir **des
+Hubs** und liest die Verzeichnisse aller Workspaces (auch deaktivierter) aus `hub.yaml`. Es gelten dieselben Optionen und
+Schutzprüfungen wie bei `service install` (`--user`/`--group`, `--create-user`, `--name`, `--node`/`--entry`, `--env-file`,
+`--drain-timeout`, `--cancel-timeout`, `--unit-dir`, `--now`, `--dry-run`; kein `npx`, keine relativen Pfade, kein `root`, nur
+Linux außerhalb von `--dry-run`), mit diesen Unterschieden:
+
+- **Default-Unit-Name `adispatchd-hub`** (Env-Datei `/etc/default/adispatchd-hub`); neben einer Einzelinstanz `adispatchd` auf demselben Server
+  möglich. `service status --hub` und `service uninstall --hub` meinen ohne `--name` ebenfalls diese Unit.
+- **Außerhalb von `--dry-run` bricht der Befehl ab**, wenn `hub.yaml` fehlt oder ungültig ist oder die Konfiguration eines
+  Workspaces ungültig ist (Meldung mit Workspace-ID; Schutz vor Tippfehlern, da `chown -R`/`chmod -R` laufen). Im Dry-Run
+  erscheint dann nur eine Warnung.
+- **Pfadprüfung über alle Verzeichnisse:** Für das Hub-config-dir, das Hub-data-dir und **jedes** `config_dir`/`data_dir`
+  eines Workspaces gelten die Regeln der Einzelinstanz (keine Systemverzeichnisse, keine Pfade direkt unter `/`, keine
+  Home-Verzeichnisse, auch über Symlinks); zusätzlich darf **kein data-dir in einem config-dir liegen** (und umgekehrt) und
+  data-dirs dürfen weder gleich noch verschachtelt sein. Das Layout von `hub init` ohne `--workspaces-data-dir` fällt
+  durch diese Prüfung (mit Hinweis). Der Pfad der Sockets im Hub-data-dir darf höchstens 100 Byte lang sein.
+- **Rechte:** Hub-data-dir und alle Workspace-data-dirs gehören dem Dienstbenutzer (0750); das Hub-config-dir (mit den
+  Workspace-Konfigurationen darin) und jedes weitere Workspace-`config_dir` gehören `root:<Gruppe>` (0750/0640) – der Dienst
+  kann seine Konfiguration nicht ändern. Die Env-Datei bekommt eine Vorlage (nie überschrieben).
+- Gibt es bereits eine Einzelinstanz-Unit `adispatchd.service`, weist der Befehl darauf hin: Nutzen beide dieselben
+  data-dirs, muss die alte Unit vorher abgeschaltet werden (Abschnitt „Migration“).
+
+**Generierte Unit** (gekürzt; der Rest entspricht der Einzelinstanz):
+
+```ini
+[Service]
+Type=simple
+User=adispatchd
+Group=adispatchd
+ExecStart=/usr/bin/node /usr/lib/node_modules/adispatchd/dist/cli/main.js hub start --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub --drain-timeout 10m --cancel-timeout 2m
+WorkingDirectory=/var/lib/adispatchd-hub/hub
+EnvironmentFile=-/etc/default/adispatchd-hub
+Restart=on-failure
+RestartSec=5s
+RestartPreventExitStatus=78
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=810
+```
+
+**Stop-Vertrag.** Er ist der der Einzelinstanz („Stop-/Restart-Vertrag“), nur eine Ebene tiefer:
+
+- **`KillMode=mixed` ist Pflicht.** `systemctl stop` sendet SIGTERM nur an den Hub. Der Hub gibt **jedem Workspace genau ein
+  SIGTERM** weiter (= Drain bis `--drain-timeout`, dann Cancel-All bis `--cancel-timeout`; die Workspaces drainen parallel) und
+  beendet sich, wenn alle Kinder beendet sind (Exit 0). Mit dem systemd-Default `control-group` bekäme **jeder** Prozess der cgroup
+  – auch jeder Worker – gleichzeitig SIGTERM: kein Drain, alle Runs würden sofort abgebrochen. Die Kinder laufen zwar in eigenen
+  Prozessgruppen, systemd signalisiert aber die ganze cgroup.
+- **`TimeoutStopSec`** = Drain-Timeout + Cancel-Timeout + größtes `execute.cancel_grace` **über alle Workspaces** + 60 s Puffer.
+  Ein Kind, das trotz Frist nicht endet, beendet der Hub nach Drain + Cancel + 30 s mit SIGKILL; danach (oder nach
+  `TimeoutStopSec`) räumt systemd per SIGKILL die restliche cgroup inkl. Worker ab. Die Regel „`cancel_grace` kleiner als
+  `--cancel-timeout`“ gilt für jeden Workspace; `service install --hub` warnt, wenn es der größte Wert verletzt.
+- **Lange Runs:** Wie bei der Einzelinstanz garantiert `systemctl stop` keinen vollständigen Drain. Für geplante Stopps und
+  Updates vorher `hub drain-all --wait` (ohne Zeitlimit; siehe „Update“ unten).
+- **Exit-Codes:** Orderliches Ende (SIGTERM) = 0, kein Neustart. Ein ungültiges `hub.yaml` oder eine bereits gehaltene
+  Instanzsperre des Hub-data-dirs enden mit **78** (`RestartPreventExitStatus=78`, kein Neustart-Loop). Ein belegter
+  `hub.server.port` beendet den Hub mit Exit 1, **bevor** ein Workspace gestartet wurde; systemd versucht es nach 5 s erneut
+  (wie bei der Einzelinstanz, wenn deren Port belegt ist).
+  Der Absturz **eines Workspaces** ist kein Unit-Fehler: Der Hub startet ihn selbst neu (Backoff, Zustand `backoff`); ein
+  Workspace mit Exit 78 bleibt `failed`, ohne dass der Dienst endet – `hub status` und die Übersicht zeigen ihn.
+- Stirbt der **Hub** (Absturz, `kill -9`, OOM), beendet systemd per `KillMode=mixed` die ganze cgroup; `Restart=on-failure` startet
+  den Hub nach 5 s, die Workspaces starten neu und ihre Recovery finalisiert die unterbrochenen Runs als `crashed`.
+
+### Eine bestehende Einzelinstanz in einen Hub aufnehmen (Migration)
+
+Eine laufende Einzelinstanz (config-dir, data-dir mit Datenbank, Logs, Run-Historie) wird zu einem Workspace, **ohne dass Daten
+oder Konfiguration kopiert oder geändert werden**. Beispiel: Instanz unter `/etc/adispatchd`, `/var/lib/adispatchd`, Port 8787,
+Dienst `adispatchd`.
+
+```bash
+# 1. Hub ohne Workspaces anlegen (eigene Verzeichnisse; das data-dir des Hubs ist NICHT das der Instanz)
+sudo adispatch hub init --empty --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
+
+# 2. Alte Instanz sauber beenden und abschalten (sonst hält sie die Instanzsperre ihres data-dirs)
+sudo -u adispatchd adispatch drain --wait --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd   # Steuer-Token liegt im data-dir
+sudo systemctl disable --now adispatchd          # oder: sudo adispatch service uninstall (Dateien bleiben)
+
+# 3. Instanz in hub.yaml eintragen – config_dir/data_dir UNVERÄNDERT, neuer freier Port.
+#    Die Zeile `workspaces: []` aus der --empty-Vorlage muss dabei ERSETZT werden (sonst bleibt die Liste leer).
+sudoedit /etc/adispatchd-hub/hub.yaml
+#   workspaces:
+#     - { id: main, config_dir: /etc/adispatchd, data_dir: /var/lib/adispatchd, port: 8091 }
+
+# 4. Secrets der alten Env-Datei in die des Hubs übernehmen (alle Workspaces teilen sie)
+sudo install -m 0640 -o root -g adispatchd /dev/null /etc/default/adispatchd-hub   # nie welt-lesbar anlegen (vor service install, das eine Vorlage nur bei fehlender Datei schreibt)
+sudo sh -c 'cat /etc/default/adispatchd >> /etc/default/adispatchd-hub'            # danach Variablen prüfen und ggf. umbenennen
+
+# 5. Prüfen, Dienst einrichten und starten
+sudo adispatch hub validate --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
+sudo adispatch service install --hub --create-user --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
+sudo systemctl start adispatchd-hub
+sudo -u adispatchd adispatch hub status --data-dir /var/lib/adispatchd-hub/hub     # main: running, Plätze verbunden
+```
+
+Danach ist die Historie der Instanz unter `http://127.0.0.1:8090/w/main/` (statt `:8787`) erreichbar. Was sich ändert und was
+nicht:
+
+- **Unverändert:** `config.yaml`, Workflows, Sources, Identities, `adispatchd.sqlite`, Logs, Runs, Locks und Retry-Blocks.
+  Der Dienstbenutzer der Einzelinstanz kann beibehalten werden (`--user adispatchd`): dann ändern sich die Eigentümer der
+  Verzeichnisse nicht. Läuft die Instanz bisher unter einem **anderen** Benutzer, übernimmt `service install --hub` die
+  Verzeichnisse dem Hub-Benutzer (`chown -R`).
+- **Port:** Der Hub startet die Instanz mit `--host 127.0.0.1 --port <port aus hub.yaml>`; `server.host`/`server.port` in
+  deren `config.yaml` bleiben stehen, werden aber überschrieben. Der Port muss unter allen Workspaces und dem `hub.server.port` eindeutig sein.
+- **Zugänge ändern sich:** URL und Lesezeichen (`/w/<id>/`), Reverse-Proxy-Ziel, Webhook-Ziele von außen, CLI-Aufrufe
+  (`adispatch status --url http://127.0.0.1:8091 --data-dir /var/lib/adispatchd` mit dem Steuer-Token der Instanz, oder
+  im Browser über den Hub). Die Anmeldung übernimmt der Hub (`auth:` in `hub.yaml`); ein `auth`-Abschnitt der Instanz wird nicht mehr gebraucht, denn
+  eine vom Hub gestartete Instanz nimmt direkte Zugriffe auf ihren Port ohnehin nur mit dem Steuer-Token der CLI an.
+- **Gemeinsames Limit:** Ab jetzt zählt die Instanz gegen `hub.max_concurrent`; ihr `scheduler.max_concurrent` bleibt zusätzlich gültig.
+- **Sicherheitsnetz:** Läuft die alte Instanz noch (oder eine zweite Kopie), scheitert der Start des Workspaces an der Instanzsperre
+  (Exit 78 → Zustand `failed`, Hinweis in `hub status`), ohne Daten zu beschädigen. Zwei Prozesse auf demselben data-dir sind nicht möglich.
+- **Rückweg:** `hub drain-all --wait`, Hub stoppen (`systemctl disable --now adispatchd-hub`), die alte Unit wieder aktivieren
+  (`systemctl enable --now adispatchd`). Die Daten wurden nie verschoben; die DB-Schemaversion ändert sich nur, wenn dabei auch
+  die Paketversion wechselt (Abschnitt „Update“).
+
+### Betrieb: ein Benutzer, Secrets, Backup, Update, Hub-Ausfall
+
+- **Ein Benutzer für alle Workspaces.** Hub, Workspaces und alle ihre Worker laufen unter demselben Dienstbenutzer. Die Isolation
+  zwischen Workspaces ist die Prozessgrenze und die Trennung der Konfiguration/Daten, **keine** Rechtetrennung: Ein Worker
+  eines Workspaces kann prinzipiell die data-dirs und (über `/proc`) die Umgebung der anderen lesen – dieselbe
+  Vertrauensgrenze wie bei der Einzelinstanz (Spec §20.2). Für Projekte mit unterschiedlichem Vertrauen: den **Container-Executor** mit
+  `user` und passenden Mounts verwenden ([Abschnitt „Container-Executor“](#container-executor-executetype-container-seit-030)) –
+  der Run sieht dann nur seinen Workspace – oder **getrennte Hubs/Instanzen unter verschiedenen Benutzern** (je eigene Unit mit
+  `--name`/`--user`).
+- **Secrets.** Eine Env-Datei (`/etc/default/adispatchd-hub`, 0640 `root:adispatchd`) für den ganzen Hub; jeder Workspace nutzt nur
+  die Variablen, die seine `identities.yaml`/`config.yaml` nennen. Verschiedene Workspaces brauchen **verschiedene Variablennamen**
+  (`ACME_APP_PRIVATE_KEY`, `DOCS_APP_PRIVATE_KEY`). Dazu kommen die Hashes der Hub-Anmeldung (`password_hash_env`).
+  Änderungen wirken nach `systemctl restart adispatchd-hub` (nach `hub drain-all --wait`).
+- **Reverse Proxy.** Ein Ziel genügt: `http://127.0.0.1:8090` (Übersicht, Hub-API und `/w/<id>/…` der Workspaces). Konfiguration
+  (`allowed_hosts`, Pfadpräfix, SSE ungepuffert), Anmeldung und Vertrauensmodell: Abschnitt „Weboberfläche des Hubs“ oben. Die
+  Loopback-Ports der Workspaces gehören nicht in den Proxy und nicht in die Firewall.
+- **Backup.** Wie bei der Einzelinstanz (Abschnitt „Backups“), aber **je Verzeichnis**: das config-dir des Hubs (git; enthält die
+  Konfiguration aller Workspaces, keine Secrets), die Env-Datei (verschlüsselt), das data-dir **jedes Workspaces** (DB per
+  `sqlite3 … ".backup"`, `logs/`, `runs/`; Lock-Dateien und `runs/*/secrets/` ausschließen) und `hub.db` im data-dir des Hubs
+  (Audit; `sqlite3 /var/lib/adispatchd-hub/hub/hub.db ".backup '…'"`). `slots.sock`, `hub.sock` und `adispatchd.lock*` nie sichern.
+  ```bash
+  for d in /var/lib/adispatchd-hub/workspaces/*/; do
+    id=$(basename "$d")
+    rsync -a --exclude 'adispatchd.lock*' --exclude 'adispatchd.sqlite*' \
+      --exclude '/runs/*/secrets/' --exclude '/runs/*/actions/*/*/secrets/' "$d" "/backup/hub/$id/"
+    sqlite3 "$d/adispatchd.sqlite" ".backup '/backup/hub/$id/adispatchd.sqlite'"
+  done
+  ```
+- **Update** (Code ersetzen; config-dir, data-dirs und Env-Datei bleiben):
+  ```bash
+  sudo -u adispatchd adispatch hub drain-all --wait --data-dir /var/lib/adispatchd-hub/hub   # alle Runs enden lassen, keine neuen
+  sudo systemctl stop adispatchd-hub                      # Hub ohne laufende Kinder: endet sofort
+  sudo npm install -g adispatchd@<neue-version>
+  sudo adispatch hub validate --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub
+  sudo adispatch service install --hub --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub   # nur bei geänderten Pfaden/Optionen
+  sudo systemctl start adispatchd-hub
+  sudo -u adispatchd adispatch hub status --data-dir /var/lib/adispatchd-hub/hub
+  ```
+  Die **DB-Migrationen** laufen je Workspace beim Start (Schema-Einbahnstraße und Backup nach `<data-dir>/backups/` wie im
+  Abschnitt „Update“); ein fehlgeschlagener Workspace bleibt `failed`, die anderen laufen. Hub und Workspaces haben immer
+  dieselbe Paketversion – es gibt keinen gemischten Betrieb.
+- **Hub-Ausfall – Überblick.**
+
+  | Ereignis | Wirkung auf Workspaces und Runs | Danach |
+  |---|---|---|
+  | Hub stirbt unter systemd (`KillMode=mixed`) | systemd beendet die ganze cgroup: Workspaces und Worker sind weg | Hub-Neustart nach 5 s, Workspaces starten, Recovery: Runs `crashed` + `on_crash`/`on_error` |
+  | Hub stirbt ohne systemd / `KillMode=process` | Workspaces und Runs laufen weiter, **keine neuen automatischen Runs** (`hub: NOT REACHABLE`, Cron-Termine `skipped_limit`) | Hub-Neustart: Slot-Verbindungen kommen zurück, laufende Runs zählen wieder; der Hub **übernimmt** die verwaisten Instanzen nicht (siehe „Hub-Ausfall“ oben) |
+  | Ein Workspace stürzt ab | nur dieser; die Geschwister laufen weiter | Neustart durch den Hub mit Backoff, Recovery des Workspaces |
+  | Hub stoppt (SIGTERM) | jeder Workspace drained (dann Cancel), Hub endet mit Exit 0 | `systemctl start` |
+  | Hub-Konfiguration ungültig / Instanzsperre belegt | Hub startet nicht (Exit 78, kein Neustart), kein Workspace wird gestartet | Fehler beheben, dann `systemctl start` |
+  | `hub.server.port` belegt | Hub endet mit Exit 1, kein Workspace wird gestartet; systemd versucht es alle 5 s erneut | Port freigeben bzw. ändern |
 
 ## Observability
 

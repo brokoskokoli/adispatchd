@@ -53,9 +53,15 @@ export function unitFilePath(unitDir: string, unitName: string): string {
 }
 
 /** Template of a new environment file (no secrets, only placeholders). */
-export function environmentFileTemplate(unitName: string): string {
+export function environmentFileTemplate(unitName: string, hub = false): string {
   return [
     `# Environment of the ${unitName} service (loaded via EnvironmentFile=).`,
+    ...(hub
+      ? [
+          '# Hub: ALL workspaces inherit this environment; each one uses only the variables its identities.yaml / config.yaml name.',
+          '# Use distinct variable names per workspace (e.g. ACME_APP_PRIVATE_KEY) and hash variables of hub.yaml auth (password_hash_env).',
+        ]
+      : []),
     '# Keep this file at mode 0640, owner root, group = service group. Never commit it.',
     '# GitHub App private keys referenced by identities.yaml (private_key_env), PEM with \\n escapes or quoted:',
     '# GITHUB_MAINTAINER_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\\n...\\n-----END RSA PRIVATE KEY-----"',
@@ -91,20 +97,31 @@ function isInside(child: string, parent: string): boolean {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
+/** Directories checked by {@link assertSafeServicePaths}: the unit's own pair plus, for a hub, those of its workspaces. */
+export interface ServicePathSet {
+  configDir: string;
+  dataDir: string;
+  hub?: { workspaceConfigDirs: string[]; workspaceDataDirs: string[] } | undefined;
+}
+
 /**
  * Reject config-dir/data-dir values on which a recursive `chown`/`chmod`
  * would be harmful: system directories, top-level directories (depth < 2),
  * user home directories, and config-dir/data-dir that are equal or nested.
+ * For a hub the same rules apply to every workspace directory, and no data
+ * dir may lie inside (or contain) any config dir: config dirs become
+ * `root`-owned and read-only for the service, data dirs belong to the service.
  * Throws {@link ServiceError} (`service_unsafe_path`).
  */
-export function assertSafeServicePaths(dirs: { configDir: string; dataDir: string }): void {
+export function assertSafeServicePaths(dirs: ServicePathSet): void {
   const fail = (msg: string): never => {
     throw new ServiceError('service_unsafe_path', msg);
   };
-  for (const [label, raw] of [
-    ['config dir', dirs.configDir],
-    ['data dir', dirs.dataDir],
-  ] as const) {
+  const configs: Array<[string, string]> = [['config dir', dirs.configDir]];
+  const datas: Array<[string, string]> = [['data dir', dirs.dataDir]];
+  for (const p of dirs.hub?.workspaceConfigDirs ?? []) configs.push(['workspace config dir', p]);
+  for (const p of dirs.hub?.workspaceDataDirs ?? []) datas.push(['workspace data dir', p]);
+  for (const [label, raw] of [...configs, ...datas]) {
     const p = path.resolve(raw);
     if (PROTECTED_PATHS.includes(p)) fail(`${label} ${p} is a system directory – use a dedicated directory such as /etc/adispatchd or /var/lib/adispatchd`);
     if (depth(p) < 2) fail(`${label} ${p} is too close to the file system root (at least two levels, e.g. /srv/adispatchd)`);
@@ -112,9 +129,33 @@ export function assertSafeServicePaths(dirs: { configDir: string; dataDir: strin
       if (path.dirname(p) === home) fail(`${label} ${p} is a user home directory – use a dedicated subdirectory`);
     }
   }
-  const c = path.resolve(dirs.configDir);
-  const d = path.resolve(dirs.dataDir);
-  if (isInside(c, d) || isInside(d, c)) fail(`config dir ${c} and data dir ${d} must be separate, non-nested directories (different owners/permissions)`);
+  for (const [cl, c] of configs) {
+    for (const [dl, d] of datas) {
+      const rc = path.resolve(c);
+      const rd = path.resolve(d);
+      if (!isInside(rc, rd) && !isInside(rd, rc)) continue;
+      if (dirs.hub) {
+        fail(
+          `${cl} ${rc} and ${dl} ${rd} must be separate, non-nested directories (config dirs become read-only root-owned, data dirs belong to the service user); ` +
+            'with "hub init" use --workspaces-data-dir <dir> to keep the data of the workspaces outside the config dir',
+        );
+      }
+      fail(`config dir ${rc} and data dir ${rd} must be separate, non-nested directories (different owners/permissions)`);
+    }
+  }
+  for (let i = 0; i < datas.length; i++) {
+    for (let j = i + 1; j < datas.length; j++) {
+      const a = path.resolve(datas[i]![1]);
+      const b = path.resolve(datas[j]![1]);
+      if (isInside(a, b) || isInside(b, a)) fail(`${datas[i]![0]} ${a} and ${datas[j]![0]} ${b} must not be nested or equal`);
+    }
+  }
+}
+
+/** Remove directories that lie inside another directory of the list (and duplicates); a recursive `chown` covers them. */
+function outermost(dirs: readonly string[]): string[] {
+  const unique = [...new Set(dirs.map((d) => path.resolve(d)))];
+  return unique.filter((d) => !unique.some((o) => o !== d && isInside(d, o)));
 }
 
 /** Plan `service install`. Throws {@link ServiceError} if the user is missing and `createUser` is false (not in dry runs). */
@@ -152,28 +193,40 @@ export function planInstall(input: InstallPlanInput): ServicePlan {
     }
   }
 
-  steps.push(
-    {
-      kind: 'exec',
-      description: `create data dir ${unit.dataDir} (owner ${owner}, 0750)`,
-      argv: ['install', '-d', '-m', '0750', '-o', unit.user, '-g', unit.group, unit.dataDir],
-    },
-    {
-      kind: 'exec',
-      description: `data dir owned by the service user (database, logs, runs, workspaces)`,
-      argv: ['chown', '-R', owner, unit.dataDir],
-    },
-    {
-      kind: 'exec',
-      description: `config dir owned by root, readable by group ${unit.group} (the service cannot modify its own configuration/scripts)`,
-      argv: ['chown', '-R', `root:${unit.group}`, unit.configDir],
-    },
-    {
-      kind: 'exec',
-      description: 'config dir permissions: dirs 0750, files 0640 (executable scripts keep their x bit for the group)',
-      argv: ['chmod', '-R', 'u=rwX,g=rX,o=', unit.configDir],
-    },
-  );
+  const hubDirs = unit.hub;
+  const dataDirs = hubDirs ? outermost([unit.dataDir, ...hubDirs.workspaceDataDirs]) : [unit.dataDir];
+  // Workspace config dirs below the hub's config dir are covered by its recursive chown/chmod.
+  const configDirs = hubDirs ? outermost([unit.configDir, ...hubDirs.workspaceConfigDirs]) : [unit.configDir];
+  for (const dir of dataDirs) {
+    const label = !hubDirs ? 'data dir' : dir === path.resolve(unit.dataDir) ? 'hub data dir' : 'workspace data dir';
+    steps.push(
+      {
+        kind: 'exec',
+        description: `create ${label} ${dir} (owner ${owner}, 0750)`,
+        argv: ['install', '-d', '-m', '0750', '-o', unit.user, '-g', unit.group, dir],
+      },
+      {
+        kind: 'exec',
+        description: `${label}${hubDirs ? ` ${dir}` : ''} owned by the service user (${label === 'hub data dir' ? 'hub database, sockets, lock' : 'database, logs, runs, workspaces'})`,
+        argv: ['chown', '-R', owner, dir],
+      },
+    );
+  }
+  for (const dir of configDirs) {
+    const at = hubDirs ? ` ${dir}` : '';
+    steps.push(
+      {
+        kind: 'exec',
+        description: `config dir${at} owned by root, readable by group ${unit.group} (the service cannot modify its own configuration/scripts)`,
+        argv: ['chown', '-R', `root:${unit.group}`, dir],
+      },
+      {
+        kind: 'exec',
+        description: `config dir${at} permissions: dirs 0750, files 0640 (executable scripts keep their x bit for the group)`,
+        argv: ['chmod', '-R', 'u=rwX,g=rX,o=', dir],
+      },
+    );
+  }
 
   if (unit.envFile !== null) {
     if (!input.envFileExists) {
@@ -181,7 +234,7 @@ export function planInstall(input: InstallPlanInput): ServicePlan {
         kind: 'write',
         description: `create environment file template ${unit.envFile}`,
         path: unit.envFile,
-        content: environmentFileTemplate(unit.unitName),
+        content: environmentFileTemplate(unit.unitName, unit.hub !== undefined),
         mode: 0o640,
       });
     } else {
@@ -208,7 +261,7 @@ export function planInstall(input: InstallPlanInput): ServicePlan {
 }
 
 /** Plan `service uninstall`: stop + disable, remove the unit file, reload. Config, data and user stay. */
-export function planUninstall(input: { unitName: string; unitDir: string }): ServicePlan {
+export function planUninstall(input: { unitName: string; unitDir: string; hub?: boolean }): ServicePlan {
   const file = unitFilePath(input.unitDir, input.unitName);
   return {
     steps: [
@@ -223,7 +276,9 @@ export function planUninstall(input: { unitName: string; unitDir: string }): Ser
     ],
     notes: [
       'config dir, data dir (database, logs, workspaces) and the service user are kept; remove them manually if no longer needed',
-      `for a graceful stop of long runs, run "adispatch drain --wait" before uninstalling`,
+      input.hub
+        ? 'for a graceful stop of long runs, run "adispatch hub drain-all --wait --data-dir <hub-data-dir>" before uninstalling'
+        : `for a graceful stop of long runs, run "adispatch drain --wait" before uninstalling`,
     ],
   };
 }

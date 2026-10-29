@@ -5,7 +5,25 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+## [0.10.0] – 2026-10-29
+
 ### Hinzugefügt
+
+- **Hub im Betrieb** (WI-37). `adispatch service install --hub` richtet den Hub als **eine** systemd-Unit ein (Default-Name
+  `adispatchd-hub`, Env-Datei `/etc/default/adispatchd-hub`): `ExecStart=… hub start`, `KillMode=mixed`, `TimeoutStopSec` aus Drain-,
+  Cancel-Timeout und dem größten `cancel_grace` **aller** Workspaces, `RestartPreventExitStatus=78`. Dieselben Optionen und
+  Schutzprüfungen wie bei der Einzelinstanz, erweitert auf alle Verzeichnisse aus `hub.yaml` (Systempfade, Home-Verzeichnisse,
+  data-dir in einem config-dir, verschachtelte oder gleiche data-dirs, zu langer Socket-Pfad; außerhalb von `--dry-run` müssen
+  `hub.yaml` und jede Workspace-Konfiguration gültig sein); `--dry-run` läuft überall. `service status|uninstall --hub`.
+- **`hub init`:** `--workspaces-data-dir <dir>` legt die Daten der Workspaces getrennt vom config-dir an (Layout für den Dienstbetrieb:
+  Konfiguration unter `/etc/…`, Daten unter `/var/lib/…`), `--empty` erzeugt eine `hub.yaml` ohne Workspaces (zum Aufnehmen bestehender
+  Instanzen). **`hub drain-all|stop-all --wait [--timeout]`** wartet, bis alle Workspaces beendet sind (Exit 0, 3, 4).
+- **Migration einer Einzelinstanz in einen Hub** (dokumentiert und getestet): config-dir/data-dir unverändert eintragen, neuen Port
+  vergeben, alte Unit vorher draimen und abschalten; Historie, Datenbank und Konfiguration bleiben unberührt.
+- Doku: operations.md „Hub“ konsolidiert (Verzeichnisse, systemd, Migration, ein Benutzer, Secrets, Reverse Proxy, Backup, Update,
+  Hub-Ausfall), neue manuelle Tests [hub-systemd.md](docs/manual-tests/hub-systemd.md), Konfigurationsreferenz §3.9 (Layout, Beispiel),
+  `examples/hub/hub.yaml`, README EN/DE, Website. `npm run test:pack` deckt jetzt auch den Hub ab (installiertes Paket: `hub init` →
+  `hub start` → Run in zwei Workspaces → `drain-all --wait` → SIGTERM, danach die Migration einer Einzelinstanz).
 
 - **Hub: mehrere Workspaces auf einem Server mit gemeinsamem Limit** (WI-35). `adispatch hub start` startet jeden Workspace
   (eine vollständige, unveränderte Instanz mit eigenem config-dir, data-dir, eigener Datenbank und eigenem Port) als
@@ -481,6 +499,7 @@ Erste veröffentlichte Version.
 - CLI `adispatch` (`init`, `start`, `status`, `pause`/`resume`, `drain`, `cancel-all`, `config validate|reload`,
   `workflow dry-run`, `service install|status|uninstall` für systemd).
 
+[0.10.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.9.1...v0.10.0
 [0.9.1]: https://github.com/brokoskokoli/adispatchd/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/brokoskokoli/adispatchd/compare/v0.7.0...v0.8.0

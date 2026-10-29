@@ -3,6 +3,7 @@
  * install/uninstall plans. Other components import from this module only.
  */
 export {
+  DEFAULT_HUB_UNIT_NAME,
   DEFAULT_SERVICE_USER,
   DEFAULT_STOP_BUFFER_MS,
   DEFAULT_UNIT_DIR,
@@ -13,6 +14,7 @@ export {
   quoteSystemdArg,
   renderSystemdUnit,
   validateUnitOptions,
+  type HubUnitDirs,
   type UnitOptions,
 } from './unit.js';
 export {

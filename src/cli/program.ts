@@ -61,6 +61,10 @@ export interface HubInitCliOptions extends GlobalOptions {
   basePort?: string;
   /** `hub.server.port` (default 8090). */
   hubPort?: string;
+  /** No example workspace: `workspaces: []` with a commented entry (e.g. to add an existing instance). */
+  empty?: boolean;
+  /** Directory for the data dirs of the workspaces (`<dir>/<id>`; default: below the hub config dir, which only suits trials). */
+  workspacesDataDir?: string;
   /** `hub.max_concurrent` (default 5). */
   maxConcurrent?: string;
 }
@@ -70,14 +74,20 @@ export interface HubControlCliOptions extends GlobalOptions {
   /** Control socket (default `<data-dir>/hub.sock`). */
   socket?: string;
   json?: boolean;
+  /** `drain-all`/`stop-all`: wait until every workspace has ended. */
+  wait?: boolean;
+  /** With `--wait`: give up after this duration (exit code 4). */
+  timeout?: string;
 }
 
 /** Options of the `service` commands. */
 export interface ServiceCliOptions extends GlobalOptions {
   /** Print what would be done (unit file + steps) without changing anything. */
   dryRun?: boolean;
-  /** Unit name without `.service` (default `adispatchd`). */
+  /** Unit name without `.service` (default `adispatchd`, with `--hub` `adispatchd-hub`). */
   name?: string;
+  /** The unit of a hub (`adispatch hub start`) instead of a single instance (WI-37). */
+  hub?: boolean;
   /** Dedicated service user (default `adispatchd`). */
   user?: string;
   /** Group (default = user). */
@@ -269,8 +279,10 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
     .command('init')
     .description('create hub.yaml and the directories of its workspaces (never overwrites files)')
     .option('--workspace <id>', 'workspace ID to create (repeatable, default "main")', (value: string, previous: string[] = []) => [...previous, value])
+    .option('--empty', 'create no example workspace (workspaces: [] with a commented entry; to add existing instances)')
     .option('--base-port <port>', 'loopback port of the first workspace (default 8091)')
     .option('--hub-port <port>', 'hub.server.port (default 8090)')
+    .option('--workspaces-data-dir <dir>', 'directory for the data dirs of the workspaces, <dir>/<id> (default: below the hub config dir; use /var/lib/... for a service)')
     .option('--max-concurrent <n>', 'hub.max_concurrent (default 5)')
     .action(run('hub init', handlers.hubInit));
   hub
@@ -293,8 +305,12 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
   hubControl('status', 'show workspaces (state, restarts, slots) and the shared limit of the running hub', handlers.hubStatus);
   hubControl('pause', 'no new automatic runs in any workspace; running runs end normally', handlers.hubPause);
   hubControl('resume', 'allow automatic runs again', handlers.hubResume);
-  hubControl('stop-all', 'cancel the runs of all workspaces (on_cancel) and stop them; the hub keeps running', handlers.hubStopAll);
-  hubControl('drain-all', 'let all workspaces finish their active runs, start nothing new, then stop them', handlers.hubDrainAll);
+  hubControl('stop-all', 'cancel the runs of all workspaces (on_cancel) and stop them; the hub keeps running', handlers.hubStopAll)
+    .option('--wait', 'wait until every workspace has ended')
+    .option('--timeout <duration>', 'with --wait: give up after this long (exit code 4)');
+  hubControl('drain-all', 'let all workspaces finish their active runs, start nothing new, then stop them', handlers.hubDrainAll)
+    .option('--wait', 'wait until every workspace has ended')
+    .option('--timeout <duration>', 'with --wait: give up after this long (exit code 4)');
   const hubWorkspace = hub.command('workspace').description('control one workspace of the running hub');
   for (const [action, description] of [
     ['start', 'start a stopped, failed or disabled workspace'],
@@ -324,7 +340,8 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
     service
       .command(name)
       .description(description)
-      .option('--name <unit>', 'unit name without .service', 'adispatchd')
+      .option('--name <unit>', 'unit name without .service (default adispatchd, with --hub adispatchd-hub)')
+      .option('--hub', 'the unit of a hub (adispatch hub start; --config-dir = hub config dir, --data-dir = hub data dir)')
       .option('--unit-dir <path>', 'directory of unit files', '/etc/systemd/system')
       .action(run(`service ${name}`, handler));
   serviceCommand('install', 'install and enable the systemd service (needs root)', handlers.serviceInstall)

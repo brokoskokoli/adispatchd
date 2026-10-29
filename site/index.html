@@ -37,7 +37,7 @@
   "description": "Configuration-driven dispatcher and orchestrator for shell processes and AI agents, with GitHub issues as task source.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "Linux, macOS",
-  "softwareVersion": "0.5.0",
+  "softwareVersion": "0.10.0",
   "license": "https://opensource.org/licenses/MIT",
   "url": "https://brokoskokoli.github.io/adispatchd/",
   "image": "https://brokoskokoli.github.io/adispatchd/assets/og-image.png",
@@ -250,7 +250,7 @@
     <div class="wrap">
       <svg class="logo" viewBox="0 0 32 32" role="img" aria-label="adispatchd logo"><rect width="32" height="32" rx="6" fill="#2563eb"/><circle cx="10" cy="16" r="4" fill="#fff"/><circle cx="22" cy="9" r="3" fill="#fff"/><circle cx="22" cy="23" r="3" fill="#fff"/><path d="M13 14l6-4M13 18l6 4" stroke="#fff" stroke-width="2"/></svg>
       <h1>adispatchd</h1>
-      <p class="sub">Agent Dispatch Daemon · v0.5.0 · MIT</p>
+      <p class="sub">Agent Dispatch Daemon · v0.10.0 · MIT</p>
       <p class="tagline">
         <span data-l="en">Turn GitHub issues into supervised runs of your shell scripts and AI agents – declaratively, observably, on your own machine.</span>
         <span data-l="de" lang="de">Aus GitHub-Issues werden überwachte Runs deiner Shell-Skripte und KI-Agenten – deklarativ, nachvollziehbar, auf deinem eigenen Rechner.</span>
@@ -359,14 +359,19 @@
           <p data-l="de" lang="de">Eine kompakte Leiste im Dashboard zeigt CPU, RAM, Platte und die größten Prozesse auf einen Blick; der Reiter „Resources“ zeigt die CPU über die Zeit, gestapelt nach Daemon, jedem Run, Hooks und den größten fremden Prozessen – dazu RAM und Platte. Nur Befehlsnamen, nie Argumente.</p>
         </article>
         <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-4h12v4"/></svg></span><span data-l="en">One hub for several projects</span><span data-l="de" lang="de">Ein Hub für mehrere Projekte</span></h3>
+          <p data-l="en">Run several independent workspaces – each a complete instance with its own config, database and port – under <strong>one shared limit</strong>. One overview shows every workspace (state, runs, blocked items, slots, server resources); each workspace UI lives at <code>/w/&lt;id&gt;/</code> on the same port, with one login and roles. A crashed workspace restarts on its own; one systemd unit (<code>service install --hub</code>) covers everything, and an existing instance moves in without copying data.</p>
+          <p data-l="de" lang="de">Mehrere unabhängige Workspaces – je eine vollständige Instanz mit eigener Konfiguration, Datenbank und eigenem Port – laufen unter <strong>einem gemeinsamen Limit</strong>. Eine Übersicht zeigt jeden Workspace (Zustand, Runs, blockierte Items, Slots, Serverressourcen); die Workspace-UIs liegen unter <code>/w/&lt;id&gt;/</code> auf demselben Port, mit einer Anmeldung und Rollen. Ein abgestürzter Workspace startet selbst neu; eine systemd-Unit (<code>service install --hub</code>) deckt alles ab, und eine bestehende Instanz zieht ohne Kopieren von Daten ein.</p>
+        </article>
+        <article class="card">
           <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></span><span data-l="en">Dry-run &amp; validation</span><span data-l="de" lang="de">Dry-Run &amp; Validierung</span></h3>
           <p data-l="en"><code>config validate</code> reports errors with file and line; <code>workflow dry-run</code> explains for every item why it would or would not start – without starting anything.</p>
           <p data-l="de" lang="de"><code>config validate</code> meldet Fehler mit Datei und Zeile; <code>workflow dry-run</code> erklärt je Item, warum es starten würde oder nicht – ohne etwas zu starten.</p>
         </article>
         <article class="card">
           <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg></span><span data-l="en">Built for operations</span><span data-l="de" lang="de">Für den Betrieb gebaut</span></h3>
-          <p data-l="en">systemd service installer, drain and cancel-all, crash recovery, atomic config reload and automatic migrations with backup.</p>
-          <p data-l="de" lang="de">systemd-Installer, Drain und Cancel-All, Crash-Recovery, atomarer Config-Reload und automatische Migrationen mit Backup.</p>
+          <p data-l="en">systemd service installer (single instance or hub), drain and cancel-all, crash recovery, atomic config reload and automatic migrations with backup.</p>
+          <p data-l="de" lang="de">systemd-Installer (Einzelinstanz oder Hub), Drain und Cancel-All, Crash-Recovery, atomarer Config-Reload und automatische Migrationen mit Backup.</p>
         </article>
       </div>
     </div>
@@ -605,8 +610,8 @@ on_error:                            # crashed, start_error, timed_out, cancelle
         </a>
         <a class="card" href="https://github.com/brokoskokoli/adispatchd/blob/main/docs/operations.md">
           <h3><span data-l="en">Operations</span><span data-l="de" lang="de">Betrieb</span></h3>
-          <p data-l="en">systemd, updates, backups, recovery, reverse proxy, container permissions.</p>
-          <p data-l="de" lang="de">systemd, Updates, Backups, Recovery, Reverse Proxy, Container-Rechte.</p>
+          <p data-l="en">systemd, hub (several workspaces), updates, backups, recovery, reverse proxy, container permissions.</p>
+          <p data-l="de" lang="de">systemd, Hub (mehrere Workspaces), Updates, Backups, Recovery, Reverse Proxy, Container-Rechte.</p>
         </a>
         <a class="card" href="https://github.com/brokoskokoli/adispatchd/blob/main/docs/api.md">
           <h3>HTTP API / SSE</h3>

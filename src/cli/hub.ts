@@ -14,7 +14,7 @@
  */
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import { errorMessage, formatDuration, isOrchestratorError } from '../core/index.js';
+import { errorMessage, formatDuration, isOrchestratorError, parseDuration } from '../core/index.js';
 import { APP_VERSION, DEFAULT_CANCEL_TIMEOUT_MS, DEFAULT_DRAIN_TIMEOUT_MS, installSignalHandlers, type SignalTarget } from '../app.js';
 import { HUB_FILE, WORKSPACE_ID_PATTERN, formatConfigIssue, loadConfig, loadHubConfig, type ConfigIssue, type HubConfig } from '../config/index.js';
 import {
@@ -31,6 +31,7 @@ import { EXIT_CONFIG } from '../service/index.js';
 import { resolveUiDir } from '../ui/index.js';
 import { createExclusive, initDirectories } from './init.js';
 import { parseStartFlags } from './start.js';
+import { EXIT_WAIT_TIMEOUT } from './control.js';
 import { EXIT_UNREACHABLE } from './http-client.js';
 import type { CliIo, HubControlCliOptions, HubInitCliOptions, StartCliOptions, GlobalOptions } from './program.js';
 
@@ -44,13 +45,19 @@ function issues(list: readonly ConfigIssue[], prefix = ''): string {
 // hub init
 
 /** `hub.yaml` written by `hub init`. */
-export function hubYamlTemplate(options: { maxConcurrent: number; hubPort: number; workspaces: Array<{ id: string; port: number }> }): string {
+export function hubYamlTemplate(options: {
+  maxConcurrent: number;
+  hubPort: number;
+  workspaces: Array<{ id: string; port: number }>;
+  /** Absolute directory whose subdirectories `<id>` hold the data dirs (default: `workspaces/<id>/data` below the config dir). */
+  workspacesDataDir?: string;
+}): string {
   const ws = options.workspaces
     .map((w) =>
       [
         `  - id: ${w.id}`,
         `    config_dir: workspaces/${w.id}/config   # relative paths are relative to this directory`,
-        `    data_dir: workspaces/${w.id}/data       # must not be nested in another data_dir or in the hub's data dir`,
+        `    data_dir: ${options.workspacesDataDir ? yamlString(path.join(options.workspacesDataDir, w.id)) : `workspaces/${w.id}/data`}       # must not be nested in another data_dir or in the hub's data dir`,
         `    port: ${w.port}                        # loopback port of the workspace instance (unique)`,
         '    enabled: true                          # false: known, but only started with "hub workspace start"',
       ].join('\n'),
@@ -75,9 +82,20 @@ hub:
 #   users:
 #     - { name: admin, password_hash_env: HUB_PW_ADMIN, role: admin }
 
-workspaces:
-${ws}
+workspaces:${ws === '' ? ` []
+  # Add existing instances (or new workspaces) as list items below "workspaces:" (remove the []). Example: a single
+  # instance that ran on its own until now:
+  # - id: main
+  #   config_dir: /etc/adispatchd            # unchanged config-dir of the existing instance
+  #   data_dir: /var/lib/adispatchd          # unchanged data-dir (database, logs, runs)
+  #   port: 8091                             # new unique loopback port (the hub passes it as --port; server.port in config.yaml is not used)
+  #   enabled: true` : `\n${ws}`}
 `;
+}
+
+/** Plain YAML scalar when safe, otherwise a double-quoted string. */
+function yamlString(value: string): string {
+  return /^[A-Za-z0-9_@%+=,./-]+$/.test(value) ? value : JSON.stringify(value);
 }
 
 function parseWorkspaceSpecs(specs: readonly string[] | undefined, basePort: number): { workspaces: Array<{ id: string; port: number }> } | { error: string } {
@@ -111,23 +129,28 @@ export function createHubInitHandler(io: Io) {
     const basePort = num('base-port', opts.basePort, 8091);
     const maxConcurrent = num('max-concurrent', opts.maxConcurrent, 5);
     if (hubPort === undefined || basePort === undefined || maxConcurrent === undefined) return 2;
-    const parsed = parseWorkspaceSpecs(opts.workspace, basePort);
+    if (opts.empty && opts.workspace && opts.workspace.length > 0) {
+      io.stderr('hub init: --empty and --workspace exclude each other\n');
+      return 2;
+    }
+    const parsed = opts.empty ? { workspaces: [] } : parseWorkspaceSpecs(opts.workspace, basePort);
     if ('error' in parsed) {
       io.stderr(`hub init: ${parsed.error}\n`);
       return 2;
     }
     const configDir = path.resolve(opts.configDir);
     const dataDir = path.resolve(opts.dataDir ?? 'data');
+    const workspacesDataDir = opts.workspacesDataDir ? path.resolve(opts.workspacesDataDir) : undefined;
     try {
       await mkdir(configDir, { recursive: true, mode: 0o750 });
       const hubFile = path.join(configDir, HUB_FILE);
-      if (await createExclusive(hubFile, hubYamlTemplate({ maxConcurrent, hubPort, workspaces: parsed.workspaces }), 0o640)) io.stdout(`created  ${hubFile}\n`);
+      if (await createExclusive(hubFile, hubYamlTemplate({ maxConcurrent, hubPort, workspaces: parsed.workspaces, ...(workspacesDataDir ? { workspacesDataDir } : {}) }), 0o640)) io.stdout(`created  ${hubFile}\n`);
       else io.stdout(`kept     ${hubFile} (exists, not modified; workspaces given on the command line are not added to it)\n`);
       await mkdir(dataDir, { recursive: true, mode: 0o700 });
       for (const w of parsed.workspaces) {
         const result = await initDirectories({
           configDir: path.join(configDir, 'workspaces', w.id, 'config'),
-          dataDir: path.join(configDir, 'workspaces', w.id, 'data'),
+          dataDir: workspacesDataDir ? path.join(workspacesDataDir, w.id) : path.join(configDir, 'workspaces', w.id, 'data'),
           port: w.port,
         });
         for (const f of result.created) io.stdout(`created  ${f}\n`);
@@ -141,7 +164,16 @@ export function createHubInitHandler(io: Io) {
     const q = (p: string): string => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`);
     const code = await createHubValidateHandler(io)({ configDir, dataDir });
     if (code === 0) {
-      io.stdout(['', 'Next steps:', `  adispatch hub start --config-dir ${q(configDir)} --data-dir ${q(dataDir)}`, `  adispatch hub status --data-dir ${q(dataDir)}`, ''].join('\n'));
+      io.stdout(
+        [
+          '',
+          'Next steps:',
+          `  adispatch hub start --config-dir ${q(configDir)} --data-dir ${q(dataDir)}`,
+          `  adispatch hub status --data-dir ${q(dataDir)}`,
+          '  as a systemd service (Linux): adispatch service install --hub --dry-run --config-dir … --data-dir …  (docs/operations.md)',
+          '',
+        ].join('\n'),
+      );
     }
     return code;
   };
@@ -285,6 +317,10 @@ export function createHubStartHandler(io: Io, deps: HubStartDeps = {}) {
 export interface HubControlDeps {
   /** Client factory (default: {@link HubControlClient} on the socket). */
   client?: (socketPath: string) => Pick<HubControlClient, 'status' | 'pause' | 'resume' | 'stopAll' | 'drainAll' | 'workspace'>;
+  /** Poll interval of `--wait` (default 1 s) and the clock/sleep it uses (tests). */
+  pollIntervalMs?: number;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
 }
 
 function socketOf(opts: HubControlCliOptions): string {
@@ -343,6 +379,49 @@ export function createHubStatusHandler(io: Io, deps: HubControlDeps = {}) {
   return (opts: HubControlCliOptions): Promise<number> => runControl('hub status', opts, io, deps, (c) => c.status(), formatHubStatus);
 }
 
+/** True once no workspace has a process any more and none is changing state. */
+export function allWorkspacesStopped(s: HubStatus): boolean {
+  return s.workspaces.every((w) => w.pid === null && w.transition === null && w.state !== 'starting');
+}
+
+/**
+ * `--wait` of `hub drain-all` / `hub stop-all`: poll `status` until every workspace has ended (the hub itself keeps
+ * running – stop it afterwards with SIGTERM / `systemctl stop`). Exit codes: 0 done, 3 hub gone, 4 timeout.
+ */
+async function waitForWorkspaces(name: string, opts: HubControlCliOptions, io: Io, deps: HubControlDeps): Promise<number> {
+  let deadline: number | undefined;
+  const now = deps.now ?? Date.now;
+  if (opts.timeout) {
+    try {
+      deadline = now() + parseDuration(opts.timeout);
+    } catch (err) {
+      io.stderr(`${name}: invalid --timeout: ${errorMessage(err)}\n`);
+      return 2;
+    }
+  }
+  const client = deps.client ? deps.client(socketOf(opts)) : new HubControlClient(socketOf(opts));
+  // Progress goes to stdout only in text mode, so that --json output stays parseable.
+  const say = (text: string): void => (opts.json ? io.stderr(text) : io.stdout(text));
+  say('waiting for all workspaces to end...\n');
+  for (;;) {
+    try {
+      const status = await client.status();
+      if (allWorkspacesStopped(status)) {
+        say('all workspaces ended\n');
+        return 0;
+      }
+    } catch (err) {
+      io.stderr(`${name}: ${errorMessage(err)}\n`);
+      return err instanceof HubUnreachableError ? EXIT_UNREACHABLE : 1;
+    }
+    if (deadline !== undefined && now() >= deadline) {
+      io.stderr(`${name}: workspaces still running after ${opts.timeout} (runs are still active; they keep ending in the background)\n`);
+      return EXIT_WAIT_TIMEOUT;
+    }
+    await (deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms))))(deps.pollIntervalMs ?? 1000);
+  }
+}
+
 /** `hub pause` / `hub resume` / `hub stop-all` / `hub drain-all`. */
 export function createHubGlobalHandler(action: 'pause' | 'resume' | 'stop-all' | 'drain-all', io: Io, deps: HubControlDeps = {}) {
   const texts = {
@@ -351,15 +430,35 @@ export function createHubGlobalHandler(action: 'pause' | 'resume' | 'stop-all' |
     'stop-all': 'stop-all: cancelling the runs of all workspaces (on_cancel runs), the workspaces stop\n',
     'drain-all': 'drain-all: no new runs; all workspaces stop when their active runs have finished\n',
   } as const;
-  return (opts: HubControlCliOptions): Promise<number> =>
-    runControl(
-      `hub ${action}`,
+  return async (opts: HubControlCliOptions): Promise<number> => {
+    const name = `hub ${action}`;
+    if ((opts.wait || opts.timeout) && action !== 'drain-all' && action !== 'stop-all') {
+      io.stderr(`${name}: --wait/--timeout only apply to drain-all and stop-all\n`);
+      return 2;
+    }
+    if (opts.timeout && !opts.wait) {
+      io.stderr(`${name}: --timeout requires --wait\n`);
+      return 2;
+    }
+    if (opts.timeout) {
+      // Validate before anything is executed: a typo must not drain/stop the workspaces.
+      try {
+        parseDuration(opts.timeout);
+      } catch (err) {
+        io.stderr(`${name}: invalid --timeout: ${errorMessage(err)}\n`);
+        return 2;
+      }
+    }
+    const code = await runControl(
+      name,
       opts,
       io,
       deps,
       (c) => (action === 'pause' ? c.pause() : action === 'resume' ? c.resume() : action === 'stop-all' ? c.stopAll() : c.drainAll()),
       () => texts[action],
     );
+    return code === 0 && opts.wait ? waitForWorkspaces(name, opts, io, deps) : code;
+  };
 }
 
 /** `hub workspace start|stop|restart|drain <id>`. */

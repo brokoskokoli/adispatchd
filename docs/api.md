@@ -739,7 +739,7 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 
 Der HTTP-Server des Hubs (`hub.server` in `hub.yaml`, Default `127.0.0.1:8090`; [Betrieb](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-36))
 bedient drei Dinge unter **einem** Port: die Übersichtsseite (`/`), die Hub-API (`/api/v1/hub/…`) und die durchgereichten
-Workspaces (`/w/<id>/…`, [unten](#durchreichen-wworkspace)). Es gelten dieselben Regeln wie für eine Instanz: Host-/Origin-Allowlist
+Workspaces (`/w/<id>/…`, [unten](#durchreichen-wid)). Es gelten dieselben Regeln wie für eine Instanz: Host-/Origin-Allowlist
 (`hub.server.allowed_hosts`), CSRF-Header für mutierende Requests, JSON-Bodies, Fehlerform `{"error": {"code", "message",
 "details"?}}`, Header von `/api/*` (`no-store`, `nosniff`, `X-Frame-Options: DENY`, kein CORS), CSP der UI, und die
 Anmeldung des Abschnitts [Anmeldung und Rollen](#anmeldung-und-rollen-seit-040-wi-26) mit dem Abschnitt `auth:` der
@@ -759,7 +759,7 @@ Anmeldung des Abschnitts [Anmeldung und Rollen](#anmeldung-und-rollen-seit-040-w
 | GET | `/api/v1/hub/status` | viewer | `HubStatusView` |
 | GET | `/api/v1/hub/workspaces` | viewer | `{"workspaces": [HubWorkspaceView]}` |
 | GET | `/api/v1/hub/workspaces/:id` | viewer | `HubWorkspaceView` (`404 unknown_workspace`) |
-| GET | `/api/v1/hub/events` | viewer | SSE `hub.*` ([unten](#sse-getapiv1hubevents)) |
+| GET | `/api/v1/hub/events` | viewer | SSE `hub.*` ([unten](#sse-get-apiv1hubevents)) |
 | POST | `/api/v1/hub/workspaces/:id/start` | operator | `{"ok":true,"workspace": HubWorkspaceView}` |
 | POST | `/api/v1/hub/workspaces/:id/stop` | operator | wie `start` |
 | POST | `/api/v1/hub/workspaces/:id/restart` | operator | wie `start` |

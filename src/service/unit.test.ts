@@ -20,6 +20,29 @@ describe('systemd unit generation', () => {
     expect(renderSystemdUnit(BASE)).toMatchSnapshot();
   });
 
+  it('renders the unit of a hub (snapshot): `hub start`, KillMode=mixed, same stop contract', () => {
+    const hub = renderSystemdUnit({
+      ...BASE,
+      unitName: 'adispatchd-hub',
+      configDir: '/etc/adispatchd-hub',
+      dataDir: '/var/lib/adispatchd-hub/hub',
+      envFile: '/etc/default/adispatchd-hub',
+      hub: { workspaceConfigDirs: ['/etc/adispatchd-hub/workspaces/a/config'], workspaceDataDirs: ['/var/lib/adispatchd-hub/workspaces/a'] },
+    });
+    expect(hub).toMatchSnapshot();
+    const lines = hub.split('\n');
+    expect(lines).toContain(
+      'ExecStart=/usr/bin/node /usr/lib/node_modules/adispatchd/dist/cli/main.js hub start --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub --drain-timeout 10m --cancel-timeout 2m',
+    );
+    expect(lines).toContain('KillMode=mixed');
+    expect(lines).toContain('RestartPreventExitStatus=78');
+    expect(lines).toContain('TimeoutStopSec=810');
+    expect(lines).toContain('WorkingDirectory=/var/lib/adispatchd-hub/hub');
+    // The workspace directories are not part of the unit (the hub reads them from hub.yaml).
+    expect(hub).not.toContain('workspaces/a');
+    expect(() => renderSystemdUnit({ ...BASE, hub: { workspaceConfigDirs: ['rel'], workspaceDataDirs: [] } })).toThrow(/absolute/);
+  });
+
   it('uses absolute paths, a dedicated user and no npx', () => {
     const unit = renderSystemdUnit(BASE);
     const lines = unit.split('\n');

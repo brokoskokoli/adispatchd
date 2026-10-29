@@ -87,6 +87,11 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   365 days by default, `retention.ui_actions`); requires a login, never available to the CLI control token.
 - **Dry-run** – `adispatch workflow dry-run <id>` shows which items would start and why the others would not,
   without starting anything.
+- **Hub for several projects** (since 0.10.0) – `adispatch hub start` runs several independent workspaces (each a complete
+  instance with its own config, database and port) as child processes with crash restart, under **one shared limit** for
+  automatic runs. One web page lists all workspaces (state, running runs, blocked items, slot usage, server resources);
+  each workspace UI is served below `/w/<id>/` on the same port, with one login and roles for all. One systemd unit
+  (`service install --hub`) instead of one per project; an existing single instance moves in without copying any data.
 - **Robust operations** – retry blocks, action retries, cancel/timeout per process group, drain, crash recovery,
   atomic config reload, and a `systemd` service installer.
 
@@ -137,7 +142,23 @@ GitHub App per role (permissions: Issues read/write, Pull requests write, Metada
 (`export GITHUB_CODER_PRIVATE_KEY="$(cat key.pem)"`), set `enabled: true` in `workflows/coder.yaml` and run
 `adispatch config reload --config-dir ./config`.
 
-For services, always install a **fixed version** globally (`npm install -g adispatchd@0.5.0`), not `npx`.
+For services, always install a **fixed version** globally (`npm install -g adispatchd@0.10.0`), not `npx`.
+
+### Several projects: the hub
+
+```bash
+adispatch hub init     --config-dir ./hub --data-dir ./hub-data --workspace coder --workspace docs
+adispatch hub validate --config-dir ./hub --data-dir ./hub-data
+adispatch hub start    --config-dir ./hub --data-dir ./hub-data   # overview at http://127.0.0.1:8090/, workspaces at /w/<id>/
+adispatch hub status   --data-dir ./hub-data
+```
+
+`hub.yaml` lists the workspaces and the shared `hub.max_concurrent`; every workspace keeps its own configuration. On a
+Linux server run the hub as a single systemd service
+(`sudo adispatch service install --hub --dry-run --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub`),
+and move an existing single instance in by listing its unchanged config and data directories with a new port – see
+[operations → hub](docs/operations.md#hub-mehrere-workspaces-auf-einem-server-seit-0100). All workspaces run as the same
+service user; use containers (`user`) or separate hubs for projects that must not see each other.
 
 ## Example workflow
 
@@ -244,7 +265,9 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 | `config validate`, `config reload` | offline validation with file:line / atomic reload of a running instance |
 | `workflow dry-run <id> [--json] [--local]` | candidate selection without starting anything |
 | `auth hash-password` | scrypt hash of a password for `auth.users[].password_hash_env` (prompt without echo or stdin) |
-| `service install\|status\|uninstall [--dry-run]` | systemd service (Linux) |
+| `service install\|status\|uninstall [--dry-run]` | systemd service (Linux); with `--hub` the unit of a hub |
+| `hub init\|validate\|start` | create / validate `hub.yaml` and its workspaces / run the hub in the foreground (SIGTERM = drain all) |
+| `hub status\|pause\|resume`, `hub drain-all\|stop-all [--wait]`, `hub workspace start\|stop\|restart\|drain <id>` | control the running hub (local control socket) |
 
 ## Documentation
 
@@ -254,7 +277,7 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 |---|---|
 | [Configuration reference](docs/configuration-reference.md) | every file, field, default, filter, placeholder and the evaluation flow; examples are tested against the real loader |
 | [Worker protocol](docs/worker-protocol.md) | environment, context and result files, events, token files, containers |
-| [Operations](docs/operations.md) | systemd, updates, backups, recovery, reverse proxy, container permissions |
+| [Operations](docs/operations.md) | systemd, hub (several workspaces, migration), updates, backups, recovery, reverse proxy, container permissions |
 | [HTTP API / SSE](docs/api.md) | endpoints and live events |
 | [Cron semantics](docs/cron-semantics.md) | schedules, time zones, missed slots, DST |
 | [Changelog](CHANGELOG.md) | release notes |
@@ -279,12 +302,12 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **No isolation between runs of the same service:** `0700`/`0600` only protects against other system users. All
   workers run as the same service user and can read token files and, on Linux, the environment
   (`/proc/<pid>/environ`) of parallel runs. Run high- and low-privilege workflows in separate instances under
-  separate users or in containers (WI-19). With `execute.type: container` a worker only sees its own mounts; access
+  separate users or in containers (WI-19); the same holds for the workspaces of a hub. With `execute.type: container` a worker only sees its own mounts; access
   to the Docker daemon is equivalent to root.
 
 ## Status and roadmap
 
-Version 0.5.0. All planned work items are implemented and covered by an automated test suite (CI on Node 22 and 24).
+Version 0.10.0. All planned work items are implemented and covered by an automated test suite (CI on Node 22 and 24).
 Manual verification against real GitHub repositories and systemd on Linux is still pending – see
 [docs/status.md](docs/status.md) for what is open before production use, and [CHANGELOG.md](CHANGELOG.md) for
 release notes.

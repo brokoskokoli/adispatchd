@@ -2050,6 +2050,48 @@ auth:
 workspaces: []
 ```
 
+**Verzeichnislayout für den Dienstbetrieb (seit WI-37).** Konfiguration und veränderliche Daten gehören getrennt: Unter
+`adispatch service install --hub` wird das config-dir des Hubs samt allen `config_dir` der Workspaces rekursiv `root`
+übereignet und für den Dienst schreibgeschützt, alle `data_dir` (und das data-dir des Hubs) gehören dem Dienstbenutzer.
+Ein `data_dir` **innerhalb** eines config-dirs wird deshalb abgelehnt. Empfohlen:
+
+| Pfad | Inhalt |
+|---|---|
+| `/etc/adispatchd-hub/` | config-dir des Hubs: `hub.yaml` und `workspaces/<id>/config/` (je Workspace die Dateien dieser Referenz) |
+| `/var/lib/adispatchd-hub/hub/` | **data-dir des Hubs** (`--data-dir` von `hub start`): Instanzsperre, `slots.sock`, `hub.sock`, `hub.db` (Audit) |
+| `/var/lib/adispatchd-hub/workspaces/<id>/` | `data_dir` je Workspace (Datenbank, Logs, Runs) |
+| `/etc/default/adispatchd-hub` | Secrets aller Workspaces und `auth` des Hubs (Umgebung des Dienstes) |
+
+`adispatch hub init --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub --workspaces-data-dir
+/var/lib/adispatchd-hub/workspaces --workspace coder --workspace docs` erzeugt genau dieses Layout; ohne
+`--workspaces-data-dir` liegen die Daten der Workspaces unter `<config-dir>/workspaces/<id>/data` (nur zum Ausprobieren,
+nicht für `service install --hub`). Das Ergebnis:
+
+```yaml
+# example: hub-production
+# file: hub.yaml
+hub:
+  max_concurrent: 5
+  server: { host: 127.0.0.1, port: 8090, allowed_hosts: [] }
+workspaces:
+  - id: coder
+    config_dir: workspaces/coder/config                  # relativ zum config-dir des Hubs
+    data_dir: /var/lib/adispatchd-hub/workspaces/coder   # absolut, außerhalb jedes config-dirs
+    port: 8091
+  - id: docs
+    config_dir: workspaces/docs/config
+    data_dir: /var/lib/adispatchd-hub/workspaces/docs
+    port: 8092
+  - id: legacy                                           # eine bestehende Einzelinstanz, unverändert übernommen
+    config_dir: /etc/adispatchd
+    data_dir: /var/lib/adispatchd
+    port: 8093                                           # neuer Port; server.port in deren config.yaml wird überschrieben
+```
+
+Eine bestehende Einzelinstanz wird aufgenommen, indem ihr `config_dir`/`data_dir` **unverändert** eingetragen und ein freier
+`port` vergeben wird (Ablauf und Rückweg: [operations.md](operations.md#eine-bestehende-einzelinstanz-in-einen-hub-aufnehmen-migration)).
+`hub init --empty` legt dafür eine `hub.yaml` ohne Workspaces mit einem auskommentierten Beispieleintrag an.
+
 **Gemeinsames Limit.** Der Scheduler jeder Instanz fragt vor **jedem automatischen Run** (Source und Cron) beim Hub einen
 Platz an und gibt ihn mit dem Ende des Runs zurück; der Hub vergibt nie mehr als `hub.max_concurrent` Plätze. Die
 Entscheidung heißt `hub_limit` („hub limit reached (n/m active)“, „hub paused …“ oder „hub not reachable …“) und erscheint in
