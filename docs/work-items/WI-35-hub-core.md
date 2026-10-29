@@ -39,7 +39,7 @@
    Der Worker-Daemon erhält den Socket-Pfad über eine Umgebungsvariable (`ADISPATCH_HUB_SOCKET`); ohne sie ist das
    Verhalten unverändert (Einzelinstanz).
 4. **Scheduler-Anbindung:** `capacityProblem()` (`src/scheduler/scheduler.ts`) kennt die neue Entscheidung `hub_limit`
-   („hub limit reached (n/m active)“); auch Dry-Run, Diagnose und Run-Liste zeigen sie. Manuelle Starts werden wie
+   („hub limit reached (n/m active)“); auch Dry-Run, Diagnose und Cron-Firings (`skipped_limit`) zeigen sie. Manuelle Starts werden wie
    beim globalen Limit behandelt. Ist der Hub nicht erreichbar, starten automatische Runs nicht (sichere Seite),
    laufende Runs laufen weiter; Recovery nach Hub-Neustart gleicht Slots mit den tatsächlich laufenden Runs ab.
 5. **Server-Verwaltung (CLI, gegen die Steuer-API des Hubs):** `adispatch hub start|status`,
@@ -54,10 +54,10 @@ Spec-Nachtrag, CHANGELOG (Unreleased), `docs/status.md`, `docs/handoff/WI-35.md`
 
 ## Acceptance Criteria
 
-- [ ] Schema-Tests für `hub.yaml` (Eindeutigkeit, Verschachtelung, strikte Schlüssel); Beispiel in der Referenz wird validiert.
-- [ ] Hub startet zwei echte Kindprozesse (Fake-GitHub), Absturz eines Kindes führt zu Neustart mit Backoff; die Kinder beeinflussen sich nicht.
-- [ ] Gesamtlimit: bei `max_concurrent: 2` und zwei Workspaces laufen nie mehr als 2 Runs gleichzeitig; Slots verfallen bei `kill -9` eines Kindes.
-- [ ] `hub_limit` erscheint in Diagnose, Dry-Run und Run-Liste; ohne Hub (kein `ADISPATCH_HUB_SOCKET`) unverändertes Verhalten, alle bestehenden Tests grün.
-- [ ] `hub drain-all`/`stop-all`/`pause` verhalten sich wie beschrieben; Hub-Shutdown hinterlässt keine Waisenprozesse (auch bei SIGTERM und Doppelsignal).
-- [ ] Hub-Ausfall: Kinder starten keine neuen automatischen Runs, laufende Runs bleiben unberührt.
-- [ ] Doku aktualisiert, Doku-Test grün; `npm run check` grün.
+- [x] Schema-Tests für `hub.yaml` (Eindeutigkeit, Verschachtelung, strikte Schlüssel); Beispiel in der Referenz wird validiert.
+- [x] Hub startet zwei echte Kindprozesse (Fake-GitHub), Absturz eines Kindes führt zu Neustart mit Backoff; die Kinder beeinflussen sich nicht.
+- [x] Gesamtlimit: bei `max_concurrent: 2` und zwei Workspaces laufen nie mehr als 2 Runs gleichzeitig; Slots verfallen bei `kill -9` eines Kindes.
+- [x] `hub_limit` erscheint in Diagnose, Dry-Run und Cron-Firings (es entsteht kein Run); ohne Hub (kein `ADISPATCH_HUB_SOCKET`) unverändertes Verhalten, alle bestehenden Tests grün.
+- [x] `hub drain-all`/`stop-all`/`pause` verhalten sich wie beschrieben; Hub-Shutdown hinterlässt keine Waisenprozesse (auch bei SIGTERM und Doppelsignal).
+- [x] Hub-Ausfall: Kinder starten keine neuen automatischen Runs, laufende Runs bleiben unberührt.
+- [x] Doku aktualisiert, Doku-Test grün; `npm run check` grün.

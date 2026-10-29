@@ -600,22 +600,23 @@ Format von `hub.yaml`: [Konfigurationsreferenz §3.9](configuration-reference.md
 
 ```bash
 # Einmalig: hub.yaml und je Workspace ein vollständiges Beispiel-config-dir/data-dir anlegen (überschreibt nie)
-adispatch hub init     --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub --workspace coder --workspace docs
-adispatch hub validate --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub   # hub.yaml + Konfiguration jedes Workspaces
+adispatch hub init     --config-dir /var/lib/adispatchd-hub/config --data-dir /var/lib/adispatchd-hub/data --workspace coder --workspace docs
+adispatch hub validate --config-dir /var/lib/adispatchd-hub/config --data-dir /var/lib/adispatchd-hub/data   # hub.yaml + Konfiguration jedes Workspaces
 
-adispatch hub start    --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub   # Vordergrund, startet alle enabled Workspaces
-adispatch hub status   --data-dir /var/lib/adispatchd-hub                                    # Zustand je Workspace, Neustarts, Plätze
-adispatch hub pause    --data-dir /var/lib/adispatchd-hub    # keine neuen automatischen Runs (laufende enden regulär)
-adispatch hub resume   --data-dir /var/lib/adispatchd-hub
-adispatch hub workspace restart coder --data-dir /var/lib/adispatchd-hub    # start | stop | restart | drain
-adispatch hub drain-all  --data-dir /var/lib/adispatchd-hub  # alle Workspaces: Runs zu Ende laufen lassen, dann stoppen
-adispatch hub stop-all   --data-dir /var/lib/adispatchd-hub  # alle Workspaces: cancel-all, dann stoppen
+adispatch hub start    --config-dir /var/lib/adispatchd-hub/config --data-dir /var/lib/adispatchd-hub/data   # Vordergrund, startet alle enabled Workspaces
+adispatch hub status   --data-dir /var/lib/adispatchd-hub/data                                    # Zustand je Workspace, Neustarts, Plätze
+adispatch hub pause    --data-dir /var/lib/adispatchd-hub/data    # keine neuen automatischen Runs (laufende enden regulär)
+adispatch hub resume   --data-dir /var/lib/adispatchd-hub/data
+adispatch hub workspace restart coder --data-dir /var/lib/adispatchd-hub/data    # start | stop | restart | drain
+adispatch hub drain-all  --data-dir /var/lib/adispatchd-hub/data  # alle Workspaces: Runs zu Ende laufen lassen, dann stoppen
+adispatch hub stop-all   --data-dir /var/lib/adispatchd-hub/data  # alle Workspaces: cancel-all, dann stoppen
 ```
 
 `--data-dir` ist das **eigene** data-dir des Hubs (Instanzsperre `adispatchd.lock`, die Sockets `slots.sock` und `hub.sock`);
 es darf sich nicht mit den data-dirs der Workspaces überschneiden. `hub init` legt je Workspace `workspaces/<id>/config` und
-`workspaces/<id>/data` unter dem Hub-config-dir an; für Produktivsysteme tragen Sie in `hub.yaml` die echten Pfade ein
-(z. B. `/etc/adispatchd/coder`, `/var/lib/adispatchd/coder`). Die Steuer-Befehle erreichen den Hub über `<data-dir>/hub.sock`
+`workspaces/<id>/data` unter dem Hub-config-dir an – **auch die veränderlichen Daten** (Datenbank, Logs, Workspaces) liegen
+damit im config-dir. Das ist ein Layout zum Ausprobieren; für Produktivsysteme tragen Sie in `hub.yaml` die echten Pfade ein
+(Konfiguration unter `/etc/adispatchd/<id>`, Daten unter `/var/lib/adispatchd/<id>`) oder legen das config-dir unter `/var/lib/…` an. Die Steuer-Befehle erreichen den Hub über `<data-dir>/hub.sock`
 (oder `--socket`); Exit-Codes: 0 ok, 1 Fehler, 3 Hub nicht erreichbar.
 
 **Zustände eines Workspaces** (`hub status`): `starting` → `running`; `backoff` nach einem Absturz (Neustart nach 1 s, 2 s, 4 s … höchstens 60 s,
@@ -633,17 +634,22 @@ Die Entscheidung `hub_limit` steht in der Planungsdiagnose und im Dry-Run. Manue
 globalen Limit), belegen aber einen Platz und zählen damit für die automatischen Starts. Es gibt keine Quoten oder
 Prioritäten je Workspace: wer zuerst fragt, bekommt den freien Platz.
 
-**Plätze verfallen**, wenn der Kindprozess endet (sofort; auch bei `kill -9`) oder der Workspace länger als 15 s kein
-Lebenszeichen sendet. Hinweis: Bleiben nach dem Absturz eines Workspaces Worker-Prozesse zurück, laufen sie bis zur Recovery des
+**Plätze verfallen**, wenn der Kindprozess endet (sofort; auch bei `kill -9`) oder der Workspace kein Lebenszeichen mehr sendet: nach 15 s Stille schließt der Hub die Verbindung (Prüfung im Takt von 5 s), eine
+geschlossene Verbindung hält die Plätze noch 15 s – effektiv verfallen sie nach rund 30–35 s. Hinweis: Bleiben nach dem Absturz eines Workspaces Worker-Prozesse zurück, laufen sie bis zur Recovery des
 neu gestarteten Workspaces weiter, ohne einen Platz zu belegen – in diesem Zeitfenster kann das Gesamtlimit kurz überschritten
 werden.
 
-**Hub-Ausfall.** Stirbt der Hub (Absturz, `kill -9`), laufen die Workspaces und ihre Runs unverändert weiter (sie sind
-eigene Prozessgruppen; ihre Log-Zeilen gehen verloren, weil die Pipe zum Hub bricht). Sie starten **keine neuen
-automatischen Runs**, bis der Hub wieder erreichbar ist (`hub: NOT REACHABLE` in `adispatch status`). Nach einem Neustart des
+**Hub-Ausfall.** Stirbt der Hub (Absturz, `kill -9`) **ohne systemd** (oder mit `KillMode=process`), laufen die Workspaces und ihre Runs
+unverändert weiter (sie sind eigene Prozessgruppen; ihre Log-Zeilen gehen verloren, weil die Pipe zum Hub bricht). **Unter systemd mit
+`KillMode=mixed`** (empfohlen, s. u.) beendet systemd beim Tod des Hauptprozesses die ganze cgroup per SIGKILL: Workspaces und Worker
+sind dann ebenfalls weg, und die Recovery der Workspaces finalisiert die Runs beim nächsten Start als `crashed` (wie bei der
+Einzelinstanz, „Absturz unter systemd“). Das Folgende gilt für den Fall, dass die Workspaces überleben. Sie starten **keine neuen
+automatischen Runs**, bis der Hub wieder erreichbar ist (`hub: NOT REACHABLE` in `adispatch status`); Cron-Termine in dieser Zeit werden als
+`skipped_limit` („hub not reachable …“) verbucht und nicht nachgeholt. Nach einem Neustart des
 Hubs verbinden sich die verwaisten Workspaces wieder mit dem Slot-Socket und melden ihre laufenden Runs; der Hub zählt sie
 sofort wieder. Der Hub kann diese Instanzen aber nicht übernehmen: sein eigener Start des Workspaces scheitert an der
-Instanzsperre (Exit 78 → `failed`). Beenden Sie die verwaisten Instanzen mit `adispatch drain --wait --url
+Instanzsperre (Exit 78 → `failed`); antwortet die Instanz noch auf ihrem Port, steht in `hub status` der Hinweis „already running for
+this workspace outside the hub“. Beenden Sie die verwaisten Instanzen mit `adispatch drain --wait --url
 http://127.0.0.1:<port> --data-dir <workspace-data-dir>` (oder `cancel-all`) und starten Sie sie danach mit
 `hub workspace start <id>`.
 
