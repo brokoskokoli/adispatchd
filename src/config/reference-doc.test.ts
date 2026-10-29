@@ -34,7 +34,10 @@ import {
   MAX_MONITORING_SAMPLES,
   MIN_MONITORING_INTERVAL_MS,
   MIN_MONITORING_SAMPLES,
-  loadConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
+  DEFAULT_HUB_MAX_CONCURRENT,
+  DEFAULT_HUB_PORT,
+  WORKSPACE_ID_PATTERN,
+  loadConfig, loadHubConfig, MAX_EXPANDED_FILTER_NODES, MAX_FILTER_USE_DEPTH, type ConfigIssue } from './index.js';
 import { createTempConfigDir, type TempConfigDir } from './testing/fixtures.js';
 
 const DOC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../docs/configuration-reference.md');
@@ -118,15 +121,18 @@ afterAll(async () => {
   await Promise.all(temps.map((t) => t.cleanup()));
 });
 
-async function load(name: string): Promise<Awaited<ReturnType<typeof loadConfig>>> {
-  const temp = await createTempConfigDir(resolveFiles(sets, name));
+async function load(name: string): Promise<Awaited<ReturnType<typeof loadConfig>> | Awaited<ReturnType<typeof loadHubConfig>>> {
+  const files = resolveFiles(sets, name);
+  const temp = await createTempConfigDir(files);
   temps.push(temp);
+  // A set with hub.yaml is the config dir of a hub (WI-35), not of an instance.
+  if ('hub.yaml' in files) return loadHubConfig(temp.dir, { dataDir: temp.dataDir });
   return loadConfig(temp.dir, { dataDir: temp.dataDir });
 }
 
 describe('docs/configuration-reference.md', () => {
   it('contains the documented example sets', () => {
-    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters', 'multi-source', 'linked', 'dashboard']) {
+    for (const name of ['reference', 'minimal', 'github', 'cron', 'manual-params', 'notifications', 'projects', 'named-filters', 'multi-source', 'linked', 'dashboard', 'hub']) {
       expect(sets.get(name)?.invalid, name).toBe(false);
     }
     expect([...sets.values()].filter((s) => s.invalid).length).toBeGreaterThanOrEqual(10);
@@ -246,6 +252,18 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain('ps -A -o pid=,ppid=,pgid=,etime=,time=,rss=,ucomm=');
     expect(markdown).toContain('PR_SET_NAME');
     expect(markdown).toContain('**nur Befehlsnamen, nie Argumente**');
+  });
+
+  it('documents hub.yaml: keys, defaults, limits and the workspace ID rule (WI-35)', () => {
+    for (const key of ['hub.max_concurrent', 'hub.server.host', 'hub.server.port', 'hub.server.allowed_hosts', 'workspaces', 'workspaces[].id', 'workspaces[].config_dir', 'workspaces[].data_dir', 'workspaces[].port', 'workspaces[].enabled']) {
+      expect(markdown, key).toContain(`| \`${key}\` |`);
+    }
+    expect(markdown).toContain(`| \`hub.max_concurrent\` | Integer ≥ 1 | \`${DEFAULT_HUB_MAX_CONCURRENT}\` |`);
+    expect(markdown).toContain(`| \`hub.server.port\` | Integer 1–65535 | \`${DEFAULT_HUB_PORT}\` |`);
+    expect(markdown).toContain('| `workspaces[].enabled` | Boolean | `true` |');
+    expect(WORKSPACE_ID_PATTERN.test('coder-2')).toBe(true);
+    expect(WORKSPACE_ID_PATTERN.test('Coder_2')).toBe(false);
+    for (const decision of ['hub_limit', 'ADISPATCH_HUB_SOCKET', 'ADISPATCH_HUB_WORKSPACE']) expect(markdown, decision).toContain(`\`${decision}\``);
   });
 
   it('documents all hooks, operators and notification events', () => {

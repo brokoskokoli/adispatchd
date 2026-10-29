@@ -16,6 +16,17 @@ export {
   type LoadConfigOptions,
   type LoadConfigResult,
 } from './loader.js';
+export {
+  DEFAULT_HUB_MAX_CONCURRENT,
+  DEFAULT_HUB_PORT,
+  HUB_FILE,
+  loadHubConfig,
+  WORKSPACE_ID_PATTERN,
+  type HubConfig,
+  type HubWorkspaceConfig,
+  type LoadHubConfigOptions,
+  type LoadHubConfigResult,
+} from './hub.js';
 export { CONFIG_FILE, IDENTITIES_FILE, RESERVED_ENV_PREFIX, SOURCES_FILE, cronError, isValidTimeZone } from './validate.js';
 export {
   DEFAULT_WORKING_DIRECTORY,

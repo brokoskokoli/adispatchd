@@ -5,6 +5,28 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+### Hinzugefügt
+
+- **Hub: mehrere Workspaces auf einem Server mit gemeinsamem Limit** (WI-35). `adispatch hub start` startet jeden Workspace
+  (eine vollständige, unveränderte Instanz mit eigenem config-dir, data-dir, eigener Datenbank und eigenem Port) als
+  Kindprozess unter demselben Benutzer und überwacht ihn: Zustand (`starting|running|backoff|stopped|failed`), Neustart nach
+  Absturz mit Backoff (1 s … 60 s), Zähler, Ausgabe der Kinder mit Präfix im Hub-Log, Drain aller Kinder beim Hub-Shutdown
+  (zweites Signal: Cancel-All). Konfiguration in `hub.yaml` (`hub.max_concurrent`, `hub.server`, `workspaces[]` mit `id`,
+  `config_dir`, `data_dir`, `port`, `enabled`; strikt validiert: eindeutige IDs/Pfade/Ports, data-dirs nicht verschachtelt).
+- **Gemeinsames Gesamtlimit:** Die Instanzen fordern vor jedem automatischen Run (Source und Cron) über einen Unix-Socket
+  (`ADISPATCH_HUB_SOCKET`, Slot-Protokoll mit Lease und Heartbeat) einen Platz beim Hub an. Der Hub vergibt nie mehr als
+  `hub.max_concurrent`; Plätze verfallen, wenn der Kindprozess endet oder der Heartbeat ausbleibt. Manuelle Starts werden nicht
+  begrenzt, belegen aber einen Platz. Neue Scheduler-Entscheidung **`hub_limit`** in Planungsdiagnose, Dry-Run
+  (`capacity.hub`) und bei Cron-Terminen (`skipped_limit`). Ist der Hub nicht erreichbar, starten keine neuen automatischen
+  Runs; laufende Runs sind nie betroffen. `GET /api/v1/status` und `adispatch status` zeigen `hub`. Ohne
+  `ADISPATCH_HUB_SOCKET` ändert sich nichts.
+- **CLI:** `adispatch hub init|validate|start|status`, `hub workspace start|stop|restart|drain <id>`, `hub stop-all`,
+  `hub drain-all`, `hub pause|resume` (gegen die lokale Steuer-Schnittstelle des Hubs, einen Unix-Socket im data-dir des Hubs).
+  `hub init` legt `hub.yaml` und die Workspace-Verzeichnisse an und überschreibt nie; `hub validate` prüft zusätzlich die
+  Konfiguration jedes Workspaces. Doku: Konfigurationsreferenz §3.9, operations.md „Hub“, worker-protocol.md
+  „Slot-Protokoll“, api.md „Steuer-Schnittstelle des Hubs“.
+- Die HTTP-Übersichtsseite des Hubs folgt mit WI-36.
+
 ## [0.9.1] – 2026-10-27
 
 ### Geändert

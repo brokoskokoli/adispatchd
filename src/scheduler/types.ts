@@ -22,6 +22,7 @@ import type { FilterTrace, TraceValue } from '../filters/index.js';
  * - `locked` – an active run of the same workflow holds the item lock.
  * - `blocked` – an active retry block exists for the workflow/item.
  * - `workflow_limit` / `global_limit` – no free slot.
+ * - `hub_limit` – the shared limit of the hub (WI-35) is reached, the hub is paused or not reachable.
  * - `source_limit` – `max_concurrent_per_source` reached for the item's source (WI-20).
  * - `workflow_unavailable` – the workflow was disabled/removed/changed during the planning step.
  * - `gate_closed` – automatic starts were paused/stopped during the planning step.
@@ -42,6 +43,7 @@ export type CandidateDecision =
   | 'workflow_limit'
   | 'source_limit'
   | 'global_limit'
+  | 'hub_limit'
   | 'workflow_unavailable'
   | 'gate_closed'
   | 'start_failed';
@@ -207,6 +209,8 @@ export interface CronWorkflowStatus {
 export interface CapacityInfo {
   global: { active: number; max: number };
   workflow: { active: number; max: number };
+  /** Shared limit of the hub (WI-35); absent without a hub. */
+  hub?: { active: number; max: number; reachable: boolean; paused: boolean };
   /** `max_concurrent_per_source` (WI-20): active runs per source; absent when not configured. */
   perSource?: { max: number; active: Record<string, number> };
 }

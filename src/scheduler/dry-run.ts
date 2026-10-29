@@ -14,7 +14,7 @@
  * - Only the given workflow is considered; higher-priority workflows that
  *   would take global slots first are not simulated.
  */
-import { selectCompletionHook, systemClock, TECHNICAL_OUTCOME_HOOKS, type Clock } from '../core/index.js';
+import { selectCompletionHook, systemClock, TECHNICAL_OUTCOME_HOOKS, type Clock, type HubSlotsSnapshot } from '../core/index.js';
 import {
   resultHookOutcomes,
   triggerSourceIds,
@@ -29,6 +29,7 @@ import { notEvaluatedConditions } from './checks.js';
 import { nextSlots, parseCron } from './cron.js';
 import { candidateLinkedFields, checkEligibility, prepareSourceWorkflow, type SourceLookup } from './planner.js';
 import type { SchedulingState } from './state.js';
+import { hubLimitReason } from './hub-limit.js';
 import type { CandidateDiagnosis, CapacityInfo, CronSlotForecast, DryRunResult, GateInfo, HookRouting } from './types.js';
 
 /** Dependencies of {@link dryRunWorkflow}. */
@@ -39,6 +40,8 @@ export interface DryRunDeps {
   clock?: Clock;
   /** Controller gate; omit when no controller runs (local CLI dry-run). */
   gate?: () => GateInfo;
+  /** Last known state of the hub's shared limit (WI-35); absent without a hub. */
+  hub?: HubSlotsSnapshot;
   /** Additional notes (e.g. "no database"). */
   notes?: readonly string[];
   signal?: AbortSignal;
@@ -74,6 +77,7 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
   const capacity: CapacityInfo = {
     global: { active: globalActive, max: deps.config.maxConcurrent },
     workflow: { active: workflowActive, max: eff.maxConcurrent },
+    ...(deps.hub ? { hub: { active: deps.hub.active, max: deps.hub.max, reachable: deps.hub.reachable, paused: deps.hub.paused } } : {}),
   };
   const perSourceMax = workflow.maxConcurrentPerSource;
   if (workflow.trigger.type === 'source' && perSourceMax !== undefined) {
@@ -126,6 +130,7 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
       sources: prepared.diagnosis.sources,
     };
     let simGlobal = globalActive;
+    let simHubStarts = 0;
     let simWorkflow = workflowActive;
     const simSource = new Map(Object.entries(capacity.perSource?.active ?? {}));
     const ordered: CandidateDiagnosis[] = [];
@@ -157,7 +162,11 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
       } else if (capacity.perSource && (simSource.get(diag.sourceId) ?? 0) >= capacity.perSource.max) {
         diag.decision = 'source_limit';
         diag.reason = `limit per source reached for '${diag.sourceId}' (${simSource.get(diag.sourceId) ?? 0}/${capacity.perSource.max}, incl. candidates above)`;
+      } else if (deps.hub && hubLimitReason({ ...deps.hub, active: deps.hub.active + simHubStarts })) {
+        diag.decision = 'hub_limit';
+        diag.reason = `${hubLimitReason({ ...deps.hub, active: deps.hub.active + simHubStarts })}${simHubStarts > 0 ? ' (incl. candidates above)' : ''}`;
       } else {
+        simHubStarts++;
         simGlobal++;
         simWorkflow++;
         simSource.set(diag.sourceId, (simSource.get(diag.sourceId) ?? 0) + 1);
@@ -178,6 +187,9 @@ export async function dryRunWorkflow(deps: DryRunDeps, workflowId: string): Prom
     else if (globalActive >= capacity.global.max || workflowActive >= capacity.workflow.max) {
       forecast = 'skipped_limit';
       reason = `active runs: global ${globalActive}/${capacity.global.max}, workflow ${workflowActive}/${capacity.workflow.max}`;
+    } else if (deps.hub && hubLimitReason(deps.hub)) {
+      forecast = 'skipped_limit';
+      reason = hubLimitReason(deps.hub);
     } else if (block) {
       forecast = 'skipped_blocked';
       reason = `retry block ${block.id}: ${block.reason}`;

@@ -120,6 +120,8 @@ export interface ApiDeps {
   background(what: string, start: (signal: AbortSignal) => Promise<unknown>): Promise<unknown>;
   /** Static info for `/status`. */
   info: { version: string; startedAt: string; host: string; port: () => number | null };
+  /** Hub membership (WI-35): last known state of the shared slot limit; `null`/absent without a hub. */
+  hub?: () => { workspace: string; reachable: boolean; paused: boolean; active: number; max: number } | null;
   /** Additional allowed `Origin`s for mutating requests (besides the request's own host). */
   allowedOrigins?: readonly string[];
   /** Directory with static web UI assets (WI-11), served at `/` if present. */
@@ -536,6 +538,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     const overrides = deps.config.getOverrides();
     const state = !s.ready ? 'recovering' : s.stopping ? 'stopping' : s.draining ? 'draining' : s.paused ? 'paused' : 'running';
     const host = deps.info.host;
+    const hubInfo = deps.hub?.() ?? null;
     return {
       version: deps.info.version,
       startedAt: deps.info.startedAt,
@@ -570,6 +573,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
       },
       config: { version: cfg.version, hash: cfg.hash, loadedAt: cfg.loadedAt, configDir: cfg.configDir },
       server: { host, port: deps.info.port(), loopback: isLoopbackHost(host) },
+      ...(hubInfo ? { hub: hubInfo } : {}),
       sse: { clients: deps.events.clientCount },
       retention: deps.retention?.lastReport
         ? {

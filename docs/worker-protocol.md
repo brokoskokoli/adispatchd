@@ -199,6 +199,48 @@ mv "$tmp" "$ADISPATCH_RESULT_FILE"
   (PID + Startzeit/Boot-ID); sonst `recovery_pending` (sichtbar, kein Doppelstart). Unter systemd beendet systemd die
   Worker beim Absturz ohnehin mit der cgroup (siehe [operations.md](operations.md#systemd)).
 
+## Slot-Protokoll (Hub, seit 0.10.0)
+
+Läuft die Instanz unter einem Hub ([operations.md](operations.md#hub-mehrere-workspaces-auf-einem-server-seit-0100)), setzt der
+Hub `ADISPATCH_HUB_SOCKET` (Pfad des Unix-Sockets `<hub-data-dir>/slots.sock`, Modus `0600`) und `ADISPATCH_HUB_WORKSPACE`
+(Workspace-ID) in die Umgebung der Instanz. **Ohne `ADISPATCH_HUB_SOCKET` ändert sich nichts** (Einzelinstanz). Die Variablen
+gehören dem Daemon, nicht den Workern: Worker, Actions und Prüfskripte erhalten sie nicht (Minimalumgebung, §„Umgebung“).
+Implementierung: `src/hub/protocol.ts`, `slot-server.ts` (Hub), `slot-client.ts` (Instanz), `ledger.ts`.
+
+**Framing:** je Zeile ein JSON-Objekt (`\n`), höchstens 64 KiB. Die Instanz meldet sich mit `hello` an; danach gilt:
+
+| Instanz → Hub | Wirkung |
+|---|---|
+| `{"t":"hello","v":1,"workspace":"coder","pid":4720,"leases":["run:…"]}` | Anmeldung; `leases` = die Plätze, die die Instanz noch hält (nach einem Hub-Neustart zählt der Hub sie damit wieder – die Liste ist maßgeblich). Antwort `welcome`. Unbekannte Workspace-IDs und andere Protokollversionen werden mit `error` abgewiesen |
+| `{"t":"acquire","id":7,"lease":"a:<uuid>"}` | Platz für einen automatischen Run; Antwort `granted` oder `denied` (mit Grund) |
+| `{"t":"adopt","lease":"run:<run-id>"}` | Platz für einen Run, der nicht abgelehnt werden kann (manueller Start, Run aus der Recovery); darf das Limit überschreiten |
+| `{"t":"release","lease":"…"}` | Platz zurückgeben |
+| `{"t":"heartbeat","leases":["…"]}` | alle 2 s: Lebenszeichen; Plätze, die der Hub hält und die in der Liste fehlen, werden freigegeben, unbekannte Einträge ignoriert. Antwort `state` |
+| `{"t":"bye"}` | Abmeldung ohne laufende Runs; gibt alle Plätze frei |
+
+| Hub → Instanz | Bedeutung |
+|---|---|
+| `{"t":"welcome","active":3,"max":6,"paused":false}` | angemeldet |
+| `{"t":"granted","id":7}` / `{"t":"denied","id":7,"reason":"hub limit reached (6/6 active)","active":…,"max":…,"paused":…}` | Antwort auf `acquire` (`reason` auch `hub paused (no new automatic runs)`) |
+| `{"t":"state","active":4,"max":6,"paused":false}` | gepusht bei jeder Änderung an alle Verbindungen und als Antwort auf `heartbeat` |
+| `{"t":"error","code":"…","message":"…"}` | Protokollfehler (Verbindung wird geschlossen) |
+
+**Garantien.** (1) Der Hub vergibt per `acquire` nie mehr als `max` Plätze (Entscheidung und Buchung sind ein Schritt). Nur
+`adopt`/`hello` echter Runs können `active` über `max` heben; bis sie enden, wird kein `acquire` gewährt. (2) Plätze verfallen
+sofort, wenn der Hub sieht, dass der Kindprozess endet, und nach 15 s ohne Nachricht der Verbindung (die Verbindung wird dann
+geschlossen); eine geschlossene Verbindung hält die Plätze noch 15 s, damit sich die Instanz mit `hello` neu verbinden kann.
+(3) Die Instanz gleicht ihre Plätze bei jedem Heartbeat mit der Datenbank ab: ein aktiver Run ohne Platz bekommt einen
+(`adopt`), ein Platz ohne aktiven Run wird freigegeben; ein vergebener, aber nie einem Run zugeordneter Platz wird nach 60 s
+zurückgegeben. (4) **Sichere Seite:** Ist der Hub nicht erreichbar oder antwortet 5 s lang nicht auf `acquire`, startet die
+Instanz keinen automatischen Run (Entscheidung `hub_limit`: „hub not reachable (no new automatic runs)“); laufende Runs sind
+nie betroffen. Die Verbindung wird mit 0,5 s … 5 s Backoff neu aufgebaut.
+
+**Ablauf in der Instanz.** Source-Workflows: Kandidat prüfen (Filter, Conditions) → `acquire` → in einem synchronen
+Abschnitt Limits erneut prüfen, Run reservieren, starten → der Platz gehört dem Run und wird mit dessen Ende
+freigegeben. Scheitert etwas dazwischen (Gate zu, Lock-Konflikt, Start fehlgeschlagen), wird der Platz zurückgegeben. Cron-Termine
+gehen genauso vor. Die Vorprüfung (`capacityProblem`) nutzt den letzten gepushten Stand (`active >= max` → `hub_limit`, ohne
+Anfrage), damit ein volles Limit keine Prüfungen kostet.
+
 ## Sicherheit
 
 Worker und Shell-Actions sind **vertrauenswürdiger Konfigurationscode** mit den OS-Rechten des Dienstes – es gibt keine

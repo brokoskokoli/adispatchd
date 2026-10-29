@@ -28,6 +28,8 @@ import {
   type ContainerEngine,
   type CredentialProvider,
   type FetchLike,
+  HUB_SOCKET_ENV,
+  HUB_WORKSPACE_ENV,
   type IdentityDescription,
   type IdentityRef,
   type TokenRequestOptions,
@@ -63,6 +65,7 @@ import { ParameterOptionsService } from './parameter-options/index.js';
 import { createGitHubSourceFactory } from './sources/index.js';
 import { ViewService } from './views/index.js';
 import { AuthService, createApiServer, type UiActionLimits, EventHub, removeControlToken, writeControlToken, type AuthServiceOptions, type ReadinessReport } from './api/index.js';
+import { HubSlotClient, type HubSlotClientOptions } from './hub/index.js';
 import { createSystemProbe, ResourceMonitor, type SystemProbe } from './monitoring/index.js';
 import type { FastifyInstance } from 'fastify';
 
@@ -72,6 +75,8 @@ export const APP_VERSION = '0.9.1';
 export const DEFAULT_DRAIN_TIMEOUT_MS = 10 * 60_000;
 /** Default time for cancelled runs (incl. `on_cancel`) before hooks are interrupted. */
 export const DEFAULT_CANCEL_TIMEOUT_MS = 2 * 60_000;
+/** How long the start waits for the hub before the first planning step (WI-35). */
+const HUB_CONNECT_WAIT_MS = 3_000;
 
 // ---------------------------------------------------------------------------
 // Source adapters and credentials (shared with `workflow dry-run`)
@@ -278,6 +283,12 @@ export interface AppOptions {
   uiActionLimits?: Partial<UiActionLimits>;
   /** Resource monitor (WI-23); tests inject a fake OS probe. */
   monitoring?: { probe?: SystemProbe; primeDelayMs?: number };
+  /**
+   * Membership in a hub (WI-35). Default: from the environment variables
+   * `ADISPATCH_HUB_SOCKET` / `ADISPATCH_HUB_WORKSPACE` (set by the hub for its
+   * child processes); without them the instance runs on its own.
+   */
+  hub?: { socketPath: string; workspaceId: string } & Partial<Pick<HubSlotClientOptions, 'heartbeatMs' | 'requestTimeoutMs' | 'reconnectInitialMs' | 'reconnectMaxMs'>>;
   /** Tuning of the dashboard info tiles (WI-24; tests). */
   dashboardInfo?: Partial<Pick<DashboardInfoServiceOptions, 'maxParallel' | 'manualMinIntervalMs' | 'manualPerMinute'>>;
 }
@@ -334,6 +345,15 @@ export interface App {
   readiness(): ReadinessReport;
   /** Reload the configuration (as `POST /api/v1/config/reload`). */
   reloadConfig(): Promise<ReloadResult>;
+}
+
+/** Hub membership from the environment (`ADISPATCH_HUB_SOCKET` + `ADISPATCH_HUB_WORKSPACE`), or `undefined` for a single instance. */
+export function hubFromEnv(env: Readonly<Record<string, string | undefined>>): { socketPath: string; workspaceId: string } | undefined {
+  const socketPath = env[HUB_SOCKET_ENV]?.trim();
+  if (!socketPath) return undefined;
+  const workspaceId = env[HUB_WORKSPACE_ENV]?.trim();
+  if (!workspaceId) throw new Error(`${HUB_SOCKET_ENV} is set, but ${HUB_WORKSPACE_ENV} (the workspace ID) is missing`);
+  return { socketPath, workspaceId };
 }
 
 /** True for loopback bind addresses. */
@@ -449,7 +469,19 @@ export async function createApp(options: AppOptions): Promise<App> {
     logger,
     redact: redactor.asRedactor,
   });
+  // WI-35: shared run limit of a hub; without it the instance behaves exactly as a single instance.
+  const hubConfig = options.hub ?? hubFromEnv(options.env ?? process.env);
+  const hubClient = hubConfig
+    ? new HubSlotClient({
+        ...hubConfig,
+        activeRunIds: () => repos.runs.listActive().filter((r) => r.triggerType !== 'unblock').map((r) => r.id),
+        clock,
+        timers,
+        logger,
+      })
+    : undefined;
   const scheduler = new Scheduler({
+    ...(hubClient ? { hubSlots: hubClient } : {}),
     parameterOptions,
     config,
     repositories: repos,
@@ -649,6 +681,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     reloadConfig,
     background,
     info: { version: APP_VERSION, startedAt, host, port: () => (listening ? actualPort() : null) },
+    ...(hubClient && hubConfig ? { hub: () => ({ workspace: hubConfig.workspaceId, ...hubClient.snapshot() }) } : {}),
     ...(options.allowedOrigins ? { allowedOrigins: options.allowedOrigins } : {}),
     ...(options.uiActionLimits ? { uiActionLimits: options.uiActionLimits } : {}),
     ...(options.uiDir ? { uiDir: options.uiDir } : {}),
@@ -680,6 +713,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     events.close();
     auth.stop();
     removeControlToken(dataDir, auth.controlToken);
+    hubClient?.stop();
     if (listening) {
       await http.close().catch((err: unknown) => log.warn('closing HTTP server failed', { error: errorMessage(err) }));
     } else {
@@ -758,6 +792,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     log.info('HTTP API listening', { url });
     notifications.start();
     monitor.start();
+    hubClient?.start();
     void (async () => {
       try {
         const engines = containerEngines(config.current);
@@ -770,6 +805,9 @@ export async function createApp(options: AppOptions): Promise<App> {
           resumedActions: report.resumedActions.length,
           errors: report.errors.length,
         });
+        if (shuttingDown) return;
+        // WI-35: let the hub answer before the first planning step (otherwise it would wait one polling interval).
+        if (hubClient) await hubClient.whenConnected(HUB_CONNECT_WAIT_MS);
         if (shuttingDown) return;
         scheduler.start();
         schedulerStarted = true;
@@ -829,7 +867,7 @@ export interface SignalTarget {
  * cancel-all; a third one calls `forceExit(1)`. Returns an uninstall function.
  */
 export function installSignalHandlers(
-  app: Pick<App, 'shutdown' | 'logger'>,
+  app: { shutdown(options?: AppShutdownOptions): Promise<unknown>; logger: Logger },
   options: {
     target?: SignalTarget;
     drainTimeoutMs?: number;
