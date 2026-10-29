@@ -8,6 +8,8 @@ export type {
   ControlCliOptions,
   DryRunCliOptions,
   GlobalOptions,
+  HubControlCliOptions,
+  HubInitCliOptions,
   InitCliOptions,
   ServiceCliOptions,
   ShutdownCliOptions,
@@ -49,3 +51,15 @@ export {
   unitOptionsFromCli,
   type ServiceDeps,
 } from './service.js';
+export {
+  createHubGlobalHandler,
+  createHubInitHandler,
+  createHubStartHandler,
+  createHubStatusHandler,
+  createHubValidateHandler,
+  createHubWorkspaceHandler,
+  formatHubStatus,
+  hubYamlTemplate,
+  type HubControlDeps,
+  type HubStartDeps,
+} from './hub.js';

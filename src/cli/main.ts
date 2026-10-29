@@ -3,6 +3,7 @@
 import { createHashPasswordHandler } from './auth.js';
 import { createConfigValidateHandler } from './config-validate.js';
 import { createConfigReloadHandler, createSchedulerHandler, createShutdownHandler, createStatusHandler } from './control.js';
+import { createHubGlobalHandler, createHubInitHandler, createHubStartHandler, createHubStatusHandler, createHubValidateHandler, createHubWorkspaceHandler } from './hub.js';
 import { createInitHandler } from './init.js';
 import { createProgram, processIo } from './program.js';
 import { createServiceInstallHandler, createServiceStatusHandler, createServiceUninstallHandler } from './service.js';
@@ -25,6 +26,20 @@ await createProgram(
     serviceStatus: createServiceStatusHandler(processIo),
     serviceUninstall: createServiceUninstallHandler(processIo),
     authHashPassword: createHashPasswordHandler(processIo),
+    hubInit: createHubInitHandler(processIo),
+    hubValidate: createHubValidateHandler(processIo),
+    hubStart: createHubStartHandler(processIo),
+    hubStatus: createHubStatusHandler(processIo),
+    hubPause: createHubGlobalHandler('pause', processIo),
+    hubResume: createHubGlobalHandler('resume', processIo),
+    hubStopAll: createHubGlobalHandler('stop-all', processIo),
+    hubDrainAll: createHubGlobalHandler('drain-all', processIo),
+    hubWorkspace: {
+      start: createHubWorkspaceHandler('start', processIo),
+      stop: createHubWorkspaceHandler('stop', processIo),
+      restart: createHubWorkspaceHandler('restart', processIo),
+      drain: createHubWorkspaceHandler('drain', processIo),
+    },
   },
   processIo,
 ).parseAsync(process.argv);

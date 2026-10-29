@@ -25,7 +25,7 @@ export interface InitResult {
 }
 
 /** Create a file only if it does not exist yet. Returns false if it existed. */
-async function createExclusive(file: string, content: string, mode: number): Promise<boolean> {
+export async function createExclusive(file: string, content: string, mode: number): Promise<boolean> {
   let handle;
   try {
     handle = await open(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL, mode);

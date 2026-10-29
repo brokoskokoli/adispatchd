@@ -33,6 +33,15 @@ describe('cli program', () => {
       'config reload',
       'workflow dry-run',
       'auth hash-password',
+      'hub init',
+      'hub validate',
+      'hub start',
+      'hub status',
+      'hub pause',
+      'hub resume',
+      'hub stop-all',
+      'hub drain-all',
+      'hub workspace',
       'service install',
       'service status',
       'service uninstall',
@@ -104,5 +113,40 @@ describe('cli program', () => {
     await createProgram({}, io).parseAsync(['start'], { from: 'user' });
     expect(io.code).toBe(EXIT_NOT_IMPLEMENTED);
     expect(io.err.join('')).toContain('not implemented');
+  });
+
+  it('parses the hub commands (workspace id, repeatable --workspace, socket and global options)', async () => {
+    const io = captureIo();
+    const seen: unknown[] = [];
+    const program = createProgram(
+      {
+        hubWorkspace: {
+          restart: async (id, opts) => {
+            seen.push({ id, ...opts });
+            return 0;
+          },
+        },
+        hubInit: async (opts) => {
+          seen.push(opts);
+          return 0;
+        },
+        hubStatus: async (opts) => {
+          seen.push(opts);
+          return 0;
+        },
+      },
+      io,
+    );
+    await program.parseAsync(['--data-dir', './hub-data', 'hub', 'workspace', 'restart', 'coder', '--socket', './s.sock'], { from: 'user' });
+    await program.parseAsync(['hub', 'init', '--config-dir', './hub', '--workspace', 'a', '--workspace', 'b', '--base-port', '9000'], { from: 'user' });
+    await program.parseAsync(['hub', 'status', '--json'], { from: 'user' });
+    expect(seen).toEqual([
+      { id: 'coder', dataDir: './hub-data', socket: './s.sock' },
+      { configDir: './hub', workspace: ['a', 'b'], basePort: '9000' },
+      { json: true },
+    ]);
+    // Not wired → "not implemented" notice (exit code 70).
+    await program.parseAsync(['hub', 'workspace', 'drain', 'coder'], { from: 'user' });
+    expect(io.code).toBe(EXIT_NOT_IMPLEMENTED);
   });
 });
