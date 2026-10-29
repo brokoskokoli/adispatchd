@@ -163,7 +163,10 @@ export class WorkspaceInfoPoller {
         signal: AbortSignal.timeout(this.options.timeoutMs ?? 2_000),
       });
       if (res.status === 200) next = parseActivity(await res.json(), this.clock.now().toISOString());
-      else this.log.debug('workspace status not available', { workspace: id, status: res.status });
+      else {
+        this.log.debug('workspace status not available', { workspace: id, status: res.status });
+        await res.body?.cancel().catch(() => undefined);
+      }
     } catch (err) {
       this.log.debug('workspace status request failed', { workspace: id, error: errorMessage(err) });
     }

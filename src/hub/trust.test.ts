@@ -1,5 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
+import { FakeClock } from '../core/index.js';
 import { newHubToken, readHubToken } from './trust.js';
 import { processSpawner } from './spawner.js';
 import { HUB_TOKEN_PATTERN } from '../api/index.js';
@@ -26,6 +27,14 @@ describe('hub secret', () => {
     const p = readHubToken(input, 1_000);
     input.end(token);
     await expect(p).resolves.toBe(token);
+  });
+
+  it('times out through the injected timers', async () => {
+    const clock = new FakeClock();
+    const p = readHubToken(new PassThrough(), 5_000, clock);
+    const result = expect(p).rejects.toThrow(/within 5000 ms/);
+    await clock.advanceAsync(5_000);
+    await result;
   });
 
   it('rejects garbage, a closed input and silence', async () => {

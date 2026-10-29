@@ -25,8 +25,7 @@ import {
   type TimerHandle,
   type Timers,
 } from '../../core/index.js';
-import { AuthService, allowedHostList, type AuthServiceOptions } from '../../api/index.js';
-import { uiContentSecurityPolicy } from '../../api/csp.js';
+import { AuthService, allowedHostList, uiContentSecurityPolicy, type AuthServiceOptions } from '../../api/index.js';
 import { ResourceMonitor, createSystemProbe, type MetricsSample, type SystemProbe } from '../../monitoring/index.js';
 import type { HubConfig } from '../../config/index.js';
 import { HubError } from '../errors.js';
@@ -295,7 +294,7 @@ export async function createHubHttp(options: HubHttpOptions): Promise<HubHttp> {
     flushTimer = timers.setTimeout(flush, 50);
     (flushTimer as { unref?: () => void }).unref?.();
   };
-  // Clients that connect later get the complete snapshot: seed the "last published" state from it.
+  // Every client gets a complete snapshot on connect; afterwards only differences to the last published state are sent.
   const unsubscribe = hub.subscribe(() => notify());
 
   // --- proxy ---

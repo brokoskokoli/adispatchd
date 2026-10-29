@@ -100,6 +100,12 @@ describe('API of a hub-managed instance', () => {
     expect(open.json).toMatchObject({ user: null, role: 'admin' });
   });
 
+  it('answers UI actions of a hub without login with ui_actions_disabled, like auth.mode none', async () => {
+    const res = await env.request('GET', '/api/v1/items/repo_a/1', undefined, hubHeaders('admin'));
+    expect(res.status).toBe(403);
+    expect(res.json.error.code).toBe('ui_actions_disabled');
+  });
+
   it('rejects a wrong secret even on public routes of the API and does not accept the control token elsewhere', async () => {
     const wrong = await env.request('GET', '/api/v1/status', undefined, { ...hubHeaders('admin', 'mallory'), [HUB_TOKEN_HEADER]: 'B'.repeat(43) });
     expect(wrong.status).toBe(401);

@@ -12,7 +12,7 @@
  */
 import path from 'node:path';
 import { errorMessage, formatDuration, HUB_TRUST_ENV, isOrchestratorError, parseDuration } from '../core/index.js';
-import { readHubToken, type TokenInput } from '../hub/trust.js';
+import { readHubToken, type TokenInput } from '../hub/index.js';
 import { ConfigLoadError, formatConfigIssue } from '../config/index.js';
 import {
   DEFAULT_CANCEL_TIMEOUT_MS,

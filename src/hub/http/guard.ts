@@ -113,6 +113,11 @@ export function authorize(auth: AuthService, req: IncomingMessage, required: Hub
   }
   const actor = personOf(principal);
   if (!actor) throw new HttpRejection(401, 'authentication_required', 'Login required');
+  // The name travels to the workspace in an HTTP header, which only carries Latin-1: refuse such a login cleanly (once, here)
+  // instead of failing every pass-through request of this user.
+  if (actor.name !== null && /[^\u0000-\u00ff]/.test(actor.name)) {
+    throw new HttpRejection(403, 'login_not_supported', 'This login name contains characters beyond Latin-1 and cannot be forwarded to the workspaces');
+  }
   if (!hubRoleAllows(actor.role, required)) {
     throw new HttpRejection(403, 'forbidden', `This action requires the role "${required}" (your role: "${actor.role}")`, { requiredRole: required, role: actor.role });
   }

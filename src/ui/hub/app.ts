@@ -232,7 +232,11 @@ function renderTile(w: HubWorkspace): HTMLElement {
                 title: spec.enabled ? `${spec.label} ${w.id}` : spec.reason,
               });
               btn.setAttribute('aria-label', `${spec.label} ${w.id}`);
-              return btn;
+              if (spec.enabled || !spec.reason) return btn;
+              // The reason must not live in `title` only: screen readers get it as the button's description.
+              const reasonId = `why-${w.id}-${spec.action}`;
+              btn.setAttribute('aria-describedby', reasonId);
+              return h('span', { class: 'btn-with-reason' }, btn, h('span', { id: reasonId, class: 'sr-only' }, spec.reason));
             })
           : null,
       ),

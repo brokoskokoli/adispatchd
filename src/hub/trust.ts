@@ -10,6 +10,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { HUB_TOKEN_PATTERN } from '../api/index.js';
+import { systemTimers, type Timers } from '../core/index.js';
 
 /** A new secret for one child process. */
 export function newHubToken(): string {
@@ -23,14 +24,14 @@ export type TokenInput = NodeJS.ReadableStream;
  * Read the hub's secret: the first line of `input`. Rejects after `timeoutMs`,
  * if the input ends without a valid line, or if the line is not a token.
  */
-export function readHubToken(input: TokenInput, timeoutMs = 5_000): Promise<string> {
+export function readHubToken(input: TokenInput, timeoutMs = 5_000, timers: Timers = systemTimers): Promise<string> {
   return new Promise((resolve, reject) => {
     let buffer = '';
     let done = false;
     const finish = (err: Error | null, token?: string): void => {
       if (done) return;
       done = true;
-      clearTimeout(timer);
+      timers.clearTimeout(timer);
       input.removeListener('data', onData);
       input.removeListener('end', onEnd);
       input.removeListener('close', onEnd);
@@ -52,7 +53,7 @@ export function readHubToken(input: TokenInput, timeoutMs = 5_000): Promise<stri
     };
     const onEnd = (): void => (buffer.trim() !== '' ? check(buffer) : finish(new Error('standard input ended before the hub sent its secret')));
     const onError = (err: Error): void => finish(err);
-    const timer = setTimeout(() => finish(new Error(`no secret from the hub on standard input within ${timeoutMs} ms`)), timeoutMs);
+    const timer = timers.setTimeout(() => finish(new Error(`no secret from the hub on standard input within ${timeoutMs} ms`)), timeoutMs);
     input.on('data', onData);
     input.on('end', onEnd);
     input.on('close', onEnd);

@@ -36,7 +36,7 @@ export {
   type HubWorkspaceStatus,
 } from './hub.js';
 export { HubControlClient, HubResponseError, HubUnreachableError } from './control-client.js';
-export { readHubToken, newHubToken } from './trust.js';
+export { readHubToken, newHubToken, type TokenInput } from './trust.js';
 export { createHubHttp, type HubHttp, type HubHttpOptions, type HubHttpSource, type HubStatusView, type HubWorkspaceView, type HubResourcesView } from './http/server.js';
 export { HUB_DB_FILE, HubAuditStore, type HubAuditEntry } from './http/audit.js';
 export { HUB_ROUTE_ROLES } from './http/roles.js';
