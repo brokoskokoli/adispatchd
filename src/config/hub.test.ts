@@ -136,4 +136,46 @@ describe('loadHubConfig', () => {
     const result = await loadHubConfig(root, { dataDir: path.join(root, 'hub-data') });
     expect(errors(result).join('\n')).toContain('is nested with the data_dir of workspaces[0]');
   });
+  it('defaults auth to "none" and parses the auth section like config.yaml', async () => {
+    const none = await load(['workspaces: []', ''].join('\n'));
+    expect(none.result.ok && none.result.config.auth.mode).toBe('none');
+    const { result } = await load(
+      [
+        'auth:',
+        '  mode: password',
+        '  session_ttl: 2h',
+        '  users:',
+        '    - { name: alice, password_hash_env: HUB_PW_ALICE, role: admin }',
+        '    - { name: vic, password_hash_env: HUB_PW_VIC, role: viewer }',
+        'workspaces: []',
+        '',
+      ].join('\n'),
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.auth.mode).toBe('password');
+    expect(result.config.auth.sessionTtlMs).toBe(2 * 3_600_000);
+    expect(result.config.auth.users.map((u) => [u.name, u.role])).toEqual([
+      ['alice', 'admin'],
+      ['vic', 'viewer'],
+    ]);
+  });
+
+  it('validates the auth section: unknown keys, duplicate users, mode without users', async () => {
+    const bad = await load(
+      ['auth:', '  mode: password', '  usres: []', '  users:', '    - { name: a, password_hash_env: X, role: admin }', '    - { name: A, password_hash_env: Y, role: viewer }', 'workspaces: []', ''].join('\n'),
+    );
+    const e = errors(bad.result).join('\n');
+    expect(e).toContain('"usres" (did you mean "users"?)');
+    const dup = await load(['auth:', '  mode: password', '  users:', '    - { name: a, password_hash_env: X, role: admin }', '    - { name: A, password_hash_env: Y, role: viewer }', 'workspaces: []', ''].join('\n'));
+    expect(errors(dup.result).join('\n')).toContain('Duplicate user "A"');
+    const empty = await load(['auth:', '  mode: password', 'workspaces: []', ''].join('\n'));
+    expect(empty.result.ok).toBe(true);
+    expect(empty.result.warnings.map((w) => w.message).join('\n')).toContain('No users configured');
+  });
+
+  it('refuses the reserved hub headers as identity header', async () => {
+    const { result } = await load(['auth:', '  mode: trusted_header', '  trusted_header: { header: X-Adispatch-Hub-User }', 'workspaces: []', ''].join('\n'));
+    expect(errors(result).join('\n')).toContain('This header cannot carry the user');
+  });
 });

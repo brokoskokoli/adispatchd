@@ -28,6 +28,7 @@ import {
   type HubStatus,
 } from '../hub/index.js';
 import { EXIT_CONFIG } from '../service/index.js';
+import { resolveUiDir } from '../ui/index.js';
 import { createExclusive, initDirectories } from './init.js';
 import { parseStartFlags } from './start.js';
 import { EXIT_UNREACHABLE } from './http-client.js';
@@ -63,8 +64,16 @@ hub:
   # Limit of simultaneously running runs across ALL workspaces (a workspace's own
   # scheduler.max_concurrent stays an additional upper bound). Manual starts are not limited.
   max_concurrent: ${options.maxConcurrent}
-  # Address of the hub's own HTTP server (overview page: a later work item).
+  # Address of the hub's own HTTP server: overview page, hub API and the workspace UIs below /w/<id>/.
+  # Behind a reverse proxy add its host name to allowed_hosts.
   server: { host: 127.0.0.1, port: ${options.hubPort}, allowed_hosts: [] }
+
+# Login of the hub's web UI and API (optional; same section as in a workspace's config.yaml). Without it nobody is asked to
+# log in: keep the server on 127.0.0.1 or put an authenticating proxy in front. Hash: adispatch auth hash-password
+# auth:
+#   mode: password
+#   users:
+#     - { name: admin, password_hash_env: HUB_PW_ADMIN, role: admin }
 
 workspaces:
 ${ws}
@@ -223,7 +232,9 @@ export function createHubStartHandler(io: Io, deps: HubStartDeps = {}) {
     const cancelTimeoutMs = flags.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS;
     let hub: Hub;
     try {
-      hub = createHub({ config: loaded.config, dataDir, version: APP_VERSION, drainTimeoutMs, cancelTimeoutMs, ...(deps.hubOptions ?? {}) });
+      // The HTTP server (hub.server) always runs, unless a test explicitly passes `http: undefined`.
+      const http = deps.hubOptions && 'http' in deps.hubOptions ? deps.hubOptions.http : { uiDir: resolveUiDir() };
+      hub = createHub({ config: loaded.config, dataDir, version: APP_VERSION, drainTimeoutMs, cancelTimeoutMs, ...(deps.hubOptions ?? {}), ...(http ? { http } : { http: undefined }) });
     } catch (err) {
       if (isOrchestratorError(err, 'instance_locked')) {
         io.stderr(`hub start: ${err.message}\n`);
@@ -252,6 +263,7 @@ export function createHubStartHandler(io: Io, deps: HubStartDeps = {}) {
     const enabled = loaded.config.workspaces.filter((w) => w.enabled);
     io.stdout(
       `adispatchd hub running (config ${configDir}, data ${dataDir}): ${enabled.length} workspace(s) started, hub.max_concurrent ${loaded.config.maxConcurrent}\n` +
+        (hub.httpUrl ? `web UI and API on ${hub.httpUrl} (workspaces below ${hub.httpUrl}/w/<workspace>/)\n` : '') +
         `control socket ${hub.controlSocketPath}\n` +
         `SIGTERM/Ctrl-C: drain all workspaces (up to ${formatDuration(drainTimeoutMs)}, then cancel); a second signal cancels all runs, a third stops immediately\n`,
     );

@@ -3,6 +3,7 @@
  * the CSRF header `X-Adispatch-Request: 1` and a JSON body. A 401 (session
  * expired, WI-26) is announced with the window event `adispatch:unauthorized`.
  */
+import { appPath } from '../shared/base-path.js';
 import { UNAUTHORIZED_EVENT } from './auth.js';
 
 /** Error returned by the API (`{error:{code,message,details}}`) or the network. */
@@ -26,7 +27,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   let res: Response;
   try {
-    res = await fetch(path, {
+    res = await fetch(appPath(path), {
       method,
       headers,
       credentials: 'same-origin',

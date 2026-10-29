@@ -1,0 +1,43 @@
+/* Hub overview (WI-36). Builds on app.css (tokens, cards, buttons, badges, dialogs). */
+.top-spacer { flex: 1 1 auto; }
+a.btn { display: inline-block; text-decoration: none; }
+a.btn:hover { text-decoration: none; }
+.hub-page h1 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.hub-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 14px; margin-bottom: 14px; }
+.hub-summary > .card { margin-bottom: 0; }
+.hub-summary h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.slot-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.slot-count { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+meter.slot-meter { width: min(220px, 100%); height: 14px; flex: 1 1 120px; }
+meter.tile-meter { width: 100%; height: 8px; }
+.hub-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.res-cells { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px 16px; margin: 0; }
+.res-cell { min-width: 0; }
+.res-cell dt { color: var(--muted); font-size: 12px; }
+.res-cell dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.res-cell meter { display: block; width: 100%; height: 8px; margin-top: 3px; }
+.tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(310px, 100%), 1fr)); gap: 14px; align-items: stretch; }
+.tile { display: flex; flex-direction: column; gap: 10px; margin: 0; height: 100%; }
+.tile h2 { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0; overflow-wrap: anywhere; }
+.tile h2 a { color: var(--text); }
+.tile-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
+.tile-stats div { background: var(--surface-2); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+.tile-stats dt { color: var(--muted); font-size: 12px; }
+.tile-stats dd { margin: 0; font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tile-stats .attention dd { color: var(--warn); }
+.tile-stats .problem dd { color: var(--error); }
+.tile-slots { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 4px 10px; font-size: 13px; }
+.tile-meta { margin: 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.tile-note { margin: 0; }
+.tile-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+.sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.btn-with-reason { display: inline-flex; }
+.audit-slot { margin-top: 14px; }
+.audit summary { font-weight: 600; }
+.audit table { margin-top: 8px; }
+.failed-result { color: var(--error); }
+.unavailable { max-width: 560px; margin: 8vh auto 0; }
+@media (max-width: 480px) {
+  .tile-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .slot-count { font-size: 20px; }
+}

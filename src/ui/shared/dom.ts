@@ -11,6 +11,7 @@
  *   `http(s)` URLs or internal hash routes (`#/…`); anything else is dropped.
  * - Event listeners are attached with `addEventListener` via the `on` option.
  */
+import { isAppHref } from './base-path.js';
 import { isInternalHref, safeHttpUrl } from './format.js';
 
 /** Event listener (`any`: structural compatibility with the overloaded DOM signatures). */
@@ -63,6 +64,7 @@ export function sanitizeAttribute(name: string, value: string): string | null {
   if (!ATTR_NAME.test(n) || n.startsWith('on') || FORBIDDEN_ATTRS.has(n)) return null;
   if (URL_ATTRS.has(n)) {
     if (isInternalHref(value)) return value;
+    if (n === 'href' && isAppHref(value)) return value;
     return safeHttpUrl(value);
   }
   return value;

@@ -113,6 +113,42 @@ describe('web UI with authentication (WI-26)', () => {
   });
 });
 
+describe('hub overview UI (WI-36)', () => {
+  it('is built next to the workspace UI and every file hub.html needs is served by the hub, which does not serve the workspace index', async () => {
+    const { createHubHttp } = await import('../hub/http/testing/hub.js');
+    const hub = await createHubHttp({ uiDir: outDir });
+    try {
+      const page = await fetch(`${hub.base}/`);
+      expect(page.status).toBe(200);
+      const html = await page.text();
+      expect(html).toContain('<title>Hub');
+      expect(html).not.toMatch(/(src|href)="(https?:)?\/\//);
+      expect(html).not.toMatch(/http-equiv="Content-Security-Policy"/i);
+      expect(page.headers.get('content-security-policy')).toMatch(/^default-src 'none'; script-src 'self'; style-src 'self';/);
+      expect(page.headers.get('x-frame-options')).toBe('DENY');
+      const queue = [...html.matchAll(/(?:src|href)="([^"#]+)"/g)].map((m) => m[1]!).filter((r) => r !== './');
+      expect(queue).toEqual(expect.arrayContaining(['app.css', 'hub.css', 'js/hub/app.js']));
+      const seen = new Set<string>();
+      while (queue.length > 0) {
+        const ref = queue.shift()!;
+        if (seen.has(ref)) continue;
+        seen.add(ref);
+        const res = await fetch(`${hub.base}/${ref}`);
+        expect(res.status, ref).toBe(200);
+        if (ref.endsWith('.js')) {
+          const body = await res.text();
+          for (const m of body.matchAll(/(?:import|export)[^'"]*?from\s*['"](\.[^'"]+)['"]/g)) queue.push(path.posix.normalize(path.posix.join(path.posix.dirname(ref), m[1]!)));
+        }
+      }
+      expect(seen.has('js/shared/hub.js')).toBe(true);
+      expect((await fetch(`${hub.base}/index.html`)).status).toBe(404);
+      expect((await fetch(`${hub.base}/does-not-exist.js`)).status).toBe(404);
+    } finally {
+      await hub.close();
+    }
+  });
+});
+
 describe('resolveUiDir', () => {
   it('finds <module dir>/public or <repo>/dist/ui/public, else null', () => {
     const fake = mkdtempSync(path.join(os.tmpdir(), 'orch-ui-resolve-'));
@@ -130,7 +166,7 @@ describe('resolveUiDir', () => {
 });
 
 describe('browser sources (Spec §20.5)', () => {
-  const sources = walk(path.join(here)).filter((f) => /\/(client|shared)\/.*\.ts$/.test(f) && !f.endsWith('.test.ts'));
+  const sources = walk(path.join(here)).filter((f) => /\/(client|hub|shared)\/.*\.ts$/.test(f) && !f.endsWith('.test.ts'));
   it('never use innerHTML/outerHTML/insertAdjacentHTML/document.write/eval or browser dialogs', () => {
     expect(sources.length).toBeGreaterThan(10);
     for (const f of sources) {

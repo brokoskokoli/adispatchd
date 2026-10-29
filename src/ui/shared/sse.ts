@@ -81,6 +81,8 @@ export interface LiveConnectionOptions {
   /** Backoff for manual reconnects (default 1 s doubling up to 30 s). */
   initialDelayMs?: number;
   maxDelayMs?: number;
+  /** `event:` types to listen for (default {@link LIVE_EVENT_TYPES}; the hub stream has its own, WI-36). */
+  eventTypes?: readonly string[];
 }
 
 /** Parse one SSE message; `null` if the data is not a JSON object. */
@@ -178,7 +180,7 @@ export class LiveConnection {
         this.setState('reconnecting');
       }
     };
-    for (const type of LIVE_EVENT_TYPES) {
+    for (const type of this.opts.eventTypes ?? LIVE_EVENT_TYPES) {
       es.addEventListener(type, (ev) => {
         if (this.es !== es || this.stopped) return;
         this.handle(type, ev);

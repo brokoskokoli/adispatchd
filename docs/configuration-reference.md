@@ -1934,9 +1934,10 @@ gelesen; es gibt **keinen Reload** (Änderungen wirken nach einem Neustart des H
 | Schlüssel | Typ | Default | Bedeutung |
 |---|---|---|---|
 | `hub.max_concurrent` | Integer ≥ 1 | `5` | Limit gleichzeitig laufender **automatischer** Runs (Source, Cron) über alle Workspaces. Das lokale `scheduler.max_concurrent` und die Limits der Workflows gelten zusätzlich. Manuelle Starts werden nicht begrenzt, belegen aber einen Platz |
-| `hub.server.host` | String | `127.0.0.1` | Bind-Adresse des HTTP-Servers des Hubs (Übersichtsseite: späteres Work-Item). Nicht-Loopback → Warnung |
+| `hub.server.host` | String | `127.0.0.1` | Bind-Adresse des HTTP-Servers des Hubs: Übersichtsseite `/`, Hub-API `/api/v1/hub/…` und die durchgereichten Workspace-UIs `/w/<id>/` (seit WI-36). Nicht-Loopback → Warnung |
 | `hub.server.port` | Integer 1–65535 | `8090` | Port dieses Servers; darf kein `workspaces[].port` sein |
 | `hub.server.allowed_hosts` | Liste String | `[]` | wie `server.allowed_hosts` in §3.1 |
+| `auth` | Objekt | `mode: none` | Anmeldung des HTTP-Servers des Hubs (seit WI-36): **derselbe Abschnitt wie `auth` in `config.yaml` (§3.1)** – `mode` (`none` \| `password` \| `trusted_header`), `users`, `trusted_header`, `trusted_proxies`, `session_ttl`, `read_requires_login` – mit denselben Prüfungen (doppelte Benutzer/Logins sind Fehler, ein Modus ohne Benutzer eine Warnung). Passwort-Hashes und `proxy_secret_env` stammen aus der Umgebung des Hubs. Die `auth`-Abschnitte der Workspaces sind davon unabhängig |
 | `workspaces` | Liste | `[]` | die Workspaces; leer → Warnung |
 | `workspaces[].id` | String | – | Pflicht; Kleinbuchstaben, Ziffern und `-`, höchstens 40 Zeichen, eindeutig |
 | `workspaces[].config_dir` | Pfad | – | Pflicht; config-dir der Instanz; relative Pfade gelten ab dem config-dir des Hubs; eindeutig |
@@ -1957,6 +1958,12 @@ verwenden. `adispatch hub validate` prüft `hub.yaml` **und** die Konfiguration 
 hub:
   max_concurrent: 6                    # Gesamtlimit über alle Workspaces
   server: { host: 127.0.0.1, port: 8090, allowed_hosts: [] }
+auth:                                  # optional, wie in config.yaml (§3.1); ohne Abschnitt: mode none
+  mode: password
+  users:
+    - { name: alice, password_hash_env: HUB_PW_ALICE, role: admin }     # sieht alles inkl. Audit-Log
+    - { name: olga,  password_hash_env: HUB_PW_OLGA,  role: operator }  # darf Workspaces steuern
+    - { name: vic,   password_hash_env: HUB_PW_VIC,   role: viewer }    # darf nur lesen
 workspaces:
   - id: coder
     config_dir: /etc/adispatchd/coder
@@ -1968,6 +1975,11 @@ workspaces:
     data_dir: /var/lib/adispatchd/docs
     port: 8092
 ```
+
+Der HTTP-Server des Hubs (seit WI-36) und das Vertrauensmodell zu den Workspaces: [operations.md](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-36),
+Endpunkte: [api.md](api.md#hub-api-seit-0100-wi-36). Der Hub reicht jedem Kind außerdem beim Start ein Geheimnis auf der
+Standardeingabe (die Umgebungsvariable `ADISPATCH_HUB_TRUST` mit dem Wert `stdin` zeigt der Instanz, dass sie es lesen muss): Eine so gestartete Instanz akzeptiert nur Anfragen mit der Identität des Hubs
+oder dem Steuer-Token der CLI – **auch mit `auth.mode: none`** in ihrer eigenen `config.yaml`.
 
 Fehler in der Struktur werden zusammen gemeldet; die Eindeutigkeits- und Verschachtelungsprüfung läuft erst, wenn die
 Struktur gültig ist:
@@ -2004,6 +2016,38 @@ hub:
 workspaces:
   - { id: coder, config_dir: /etc/adispatchd/coder, data_dir: /var/lib/adispatchd/coder, port: 8091 }
   - { id: coder, config_dir: /etc/adispatchd/coder, data_dir: /var/lib/adispatchd/coder/inner, port: 8090 }
+```
+
+Fehler im Abschnitt `auth` (gleiche Meldungen wie in `config.yaml`; die Prüfung auf doppelte Benutzer läuft wie die der
+Workspaces erst nach der Strukturprüfung):
+
+```yaml
+# example: hub-invalid-auth
+# file: hub.yaml
+# invalid
+# expect: hub.yaml: auth: Unknown key(s): "usres" (did you mean "users"?)
+# expect: hub.yaml: auth.trusted_header.header: This header cannot carry the user
+# expect: hub.yaml: auth.users[0].role: Invalid option
+auth:
+  mode: trusted_header
+  usres: []
+  users:
+    - { name: alice, password_hash_env: HUB_PW_A, role: boss }
+  trusted_header: { header: X-Adispatch-Hub-User }
+workspaces: []
+```
+
+```yaml
+# example: hub-invalid-auth-users
+# file: hub.yaml
+# invalid
+# expect: hub.yaml: auth.users[1].name: Duplicate user "Alice"
+auth:
+  mode: password
+  users:
+    - { name: alice, password_hash_env: HUB_PW_A, role: admin }
+    - { name: Alice, password_hash_env: HUB_PW_B, role: viewer }
+workspaces: []
 ```
 
 **Gemeinsames Limit.** Der Scheduler jeder Instanz fragt vor **jedem automatischen Run** (Source und Cron) beim Hub einen

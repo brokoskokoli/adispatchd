@@ -16,8 +16,10 @@ import { z } from 'zod';
 import { toAbsolutePath, isWithin } from '../core/index.js';
 import { IssueCollector } from './issues.js';
 import { finish, parseWith, readYaml, type ParsedFile } from './loader.js';
-import type { ConfigIssue } from './model.js';
-import { DEFAULTS } from './schemas.js';
+import type { AuthConfig, ConfigIssue } from './model.js';
+import { normalizeAuth } from './normalize.js';
+import { authSchema, DEFAULTS } from './schemas.js';
+import { validateAuthSection } from './validate.js';
 
 /** File name of the hub configuration inside the hub config dir. */
 export const HUB_FILE = 'hub.yaml';
@@ -27,8 +29,11 @@ export const WORKSPACE_ID_PATTERN = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
 
 /** Default `hub.max_concurrent`. */
 export const DEFAULT_HUB_MAX_CONCURRENT = DEFAULTS.globalMaxConcurrent;
-/** Default `hub.server.port` (the HTTP overview of WI-36). */
+/** Default `hub.server.port` (overview page, hub API and workspace pass-through, WI-36). */
 export const DEFAULT_HUB_PORT = 8090;
+
+/** `auth:` without a section: no login (as in config.yaml). */
+export const NO_AUTH_CONFIG: AuthConfig = Object.freeze(normalizeAuth(authSchema.parse({}))) as AuthConfig;
 
 const nonEmpty = z.string().trim().min(1, 'Must not be empty');
 const port = z.number().int('Must be an integer').min(1, 'Must be between 1 and 65535').max(65535, 'Must be between 1 and 65535');
@@ -48,6 +53,8 @@ const hubFileSchema = z.strictObject({
         .prefault({}),
     })
     .prefault({}),
+  /** Login of the hub's web UI and API (same section as in config.yaml, WI-26; WI-36). */
+  auth: authSchema.prefault({}),
   workspaces: z
     .array(
       z.strictObject({
@@ -80,8 +87,10 @@ export interface HubConfig {
   configDir: string;
   /** Limit of simultaneously running runs across all workspaces. */
   maxConcurrent: number;
-  /** Bind address of the hub's own HTTP server (used by WI-36). */
+  /** Bind address of the hub's own HTTP server (overview, hub API, workspace pass-through; WI-36). */
   server: { host: string; port: number; allowedHosts: readonly string[] };
+  /** Authentication of the hub's HTTP server (WI-36); the workspaces' own `auth` is independent of it. */
+  auth: AuthConfig;
   workspaces: readonly HubWorkspaceConfig[];
 }
 
@@ -119,9 +128,11 @@ export async function loadHubConfig(configDir: string, options: LoadHubConfigOpt
       configDir: dir,
       maxConcurrent: raw.hub.max_concurrent,
       server: { host: raw.hub.server.host, port: raw.hub.server.port, allowedHosts: raw.hub.server.allowed_hosts.map((h) => h.toLowerCase()) },
+      auth: normalizeAuth(raw.auth),
       workspaces,
     };
     validateHub(config, hubDataDir, issues);
+    validateAuthSection(config.auth, HUB_FILE, issues, 'the hub CLI works locally over the control socket');
   }
   const resolved = finish(issues, files);
   if (resolved.errors.length > 0 || !config) return { ok: false, errors: resolved.errors, warnings: resolved.warnings };

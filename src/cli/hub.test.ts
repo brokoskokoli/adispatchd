@@ -129,7 +129,7 @@ describe('hub start and the control commands', () => {
     let hub!: Hub;
     const started = new Promise<void>((resolve) => {
       void createHubStartHandler(c.io, {
-        hubOptions: { spawner, logger: noopLogger, probe: async () => true, control: async () => true, output: () => undefined, probeIntervalMs: 10, baseEnv: {} },
+        hubOptions: { http: undefined, spawner, logger: noopLogger, probe: async () => true, control: async () => true, output: () => undefined, probeIntervalMs: 10, baseEnv: {} },
         signals,
         exit: () => undefined,
         onStarted: (h) => {

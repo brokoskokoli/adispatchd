@@ -192,12 +192,12 @@ const ipOrCidr = z.string().refine((value) => {
 }, 'Invalid IP address or CIDR range (e.g. 127.0.0.1, ::1, 100.64.0.0/10)');
 
 /** HTTP headers that cannot carry the user of `auth.mode: trusted_header`. */
-const RESERVED_AUTH_HEADERS = new Set(['host', 'cookie', 'origin', 'content-type', 'content-length', 'x-adispatch-request', 'x-adispatch-control-token', 'x-adispatch-proxy-secret', 'x-forwarded-for', 'x-forwarded-proto']);
+const RESERVED_AUTH_HEADERS = new Set(['host', 'cookie', 'origin', 'content-type', 'content-length', 'x-adispatch-request', 'x-adispatch-control-token', 'x-adispatch-proxy-secret', 'x-adispatch-hub-token', 'x-adispatch-hub-user', 'x-adispatch-hub-role', 'x-forwarded-for', 'x-forwarded-proto']);
 
 const authRole = z.enum(AUTH_ROLES);
 
-/** `auth:` (WI-26). */
-const authSchema = z.strictObject({
+/** `auth:` (WI-26); also the `auth:` section of `hub.yaml` (WI-36). */
+export const authSchema = z.strictObject({
   mode: z.enum(AUTH_MODES).default(DEFAULTS.authMode),
   users: z
     .array(

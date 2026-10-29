@@ -26,6 +26,7 @@ import type { HubConfig } from '../config/index.js';
 import { acquireInstanceLock, type InstanceLock } from '../persistence/index.js';
 import { ControlServer, type HubControl } from './control-server.js';
 import { HubError } from './errors.js';
+import { createHubHttp, type HubHttp, type HubHttpOptions } from './http/server.js';
 import { SlotLedger } from './ledger.js';
 import { SlotServer } from './slot-server.js';
 import { processSpawner, type WorkspaceSpawner } from './spawner.js';
@@ -87,6 +88,11 @@ export interface HubOptions {
   killGraceMs?: number;
   /** Heartbeat silence after which a workspace's slots expire. */
   leaseTtlMs?: number;
+  /**
+   * The hub's HTTP server (`hub.server`: overview, hub API, workspace pass-through; WI-36).
+   * Absent = no HTTP server (library use and most tests); `adispatch hub start` always sets it.
+   */
+  http?: Omit<HubHttpOptions, 'config' | 'hub' | 'dataDir' | 'version' | 'clock' | 'timers' | 'logger' | 'env'>;
 }
 
 /** Options of {@link Hub.shutdown}. */
@@ -111,6 +117,14 @@ export interface Hub extends HubControl {
   readonly controlSocketPath: string;
   /** Resolves when the hub has fully stopped (children gone, sockets removed, lock released). */
   readonly stopped: Promise<HubStopResult>;
+  /** Address of the HTTP server once it listens (`null` without one). */
+  readonly httpUrl: string | null;
+  /** The HTTP server (login service, audit log), `null` without one. */
+  readonly httpServer: HubHttp | null;
+  /** Secret of a workspace's current child process (for the identity channel of the HTTP server); never part of a status. */
+  trustTokenOf(id: string): string | null;
+  /** Be told about every change of workspace states and slots; returns the unsubscribe function. */
+  subscribe(listener: () => void): () => void;
   /** Create the sockets and start the enabled workspaces. */
   start(): Promise<void>;
   /** Stop all workspaces and the hub. Repeated calls escalate (drain → cancel). */
@@ -138,12 +152,26 @@ export function createHub(options: HubOptions): Hub {
   const controlSocketPath = path.join(dataDir, HUB_CONTROL_SOCKET);
   const startedAt = clock.now().toISOString();
 
+  const listeners = new Set<() => void>();
+  const changed = (): void => {
+    for (const l of [...listeners]) {
+      try {
+        l();
+      } catch (err) {
+        log.warn('change listener failed', { error: errorMessage(err) });
+      }
+    }
+  };
+  let httpServer: HubHttp | null = null;
+  let httpUrl: string | null = null;
+
   const ledger = new SlotLedger(config.maxConcurrent);
   const workspaceIds = new Set(config.workspaces.map((w) => w.id));
   const slots = new SlotServer({
     socketPath: slotSocketPath,
     ledger,
     workspaceIds: () => workspaceIds,
+    onChange: changed,
     clock,
     timers,
     logger,
@@ -161,6 +189,7 @@ export function createHub(options: HubOptions): Hub {
         (stream === 'stderr' ? process.stderr : process.stdout).write(`[${id}] ${line}\n`);
       }),
     onExit: (id) => slots.dropWorkspace(id),
+    onChange: changed,
     clock,
     timers,
     logger,
@@ -191,7 +220,7 @@ export function createHub(options: HubOptions): Hub {
       state: shuttingDown ? 'stopping' : state,
       paused: ledger.paused,
       slots: { max: ledger.max, active: ledger.active, byWorkspace: ledger.byWorkspace() },
-      server: { host: config.server.host, port: config.server.port },
+      server: { host: config.server.host, port: httpUrl ? Number(new URL(httpUrl).port) : config.server.port },
       workspaces: supervisor.status().map((w) => ({
         ...w,
         url: `http://127.0.0.1:${w.port}`,
@@ -236,6 +265,7 @@ export function createHub(options: HubOptions): Hub {
   const controlServer = new ControlServer({ socketPath: controlSocketPath, logger, control });
 
   const teardown = async (error?: string): Promise<HubStopResult> => {
+    await httpServer?.close().catch((err: unknown) => log.warn('closing the HTTP server failed', { error: errorMessage(err) }));
     await controlServer.close().catch((err: unknown) => log.warn('closing the control socket failed', { error: errorMessage(err) }));
     await slots.close().catch((err: unknown) => log.warn('closing the slot socket failed', { error: errorMessage(err) }));
     lock.release();
@@ -245,7 +275,7 @@ export function createHub(options: HubOptions): Hub {
     return result;
   };
 
-  return {
+  const self: Hub = {
     logger,
     slotSocketPath,
     controlSocketPath,
@@ -256,6 +286,17 @@ export function createHub(options: HubOptions): Hub {
     stopAll: control.stopAll,
     drainAll: control.drainAll,
     workspace: control.workspace,
+    get httpUrl() {
+      return httpUrl;
+    },
+    get httpServer() {
+      return httpServer;
+    },
+    trustTokenOf: (id) => supervisor.trustTokenOf(id),
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
     async start() {
       if (started) throw new Error('hub already started');
       started = true;
@@ -263,16 +304,31 @@ export function createHub(options: HubOptions): Hub {
       try {
         await slots.listen();
         await controlServer.listen();
+        if (options.http) {
+          // Before any workspace starts: a port that is taken must fail the start, not leave children behind.
+          httpServer = await createHubHttp({
+            ...options.http,
+            config,
+            hub: self,
+            dataDir,
+            version: options.version,
+            clock,
+            timers,
+            logger,
+            ...(options.baseEnv ? { env: options.baseEnv } : {}),
+          });
+          httpUrl = (await httpServer.listen()).url;
+        }
       } catch (err) {
         await teardown(errorMessage(err));
         throw err;
       }
       if (shuttingDown) {
         // A signal arrived while the sockets were created: nothing was started, finish the stop.
-        await Promise.all([slots.close(), controlServer.close()]).catch(() => undefined);
+        await Promise.all([slots.close(), controlServer.close(), httpServer?.close()]).catch(() => undefined);
         return;
       }
-      log.info('hub started', { maxConcurrent: config.maxConcurrent, workspaces: config.workspaces.length, slotSocket: slotSocketPath });
+      log.info('hub started', { maxConcurrent: config.maxConcurrent, workspaces: config.workspaces.length, slotSocket: slotSocketPath, ...(httpUrl ? { url: httpUrl } : {}) });
       supervisor.startEnabled();
     },
     shutdown(shutdownOptions = {}) {
@@ -300,4 +356,5 @@ export function createHub(options: HubOptions): Hub {
       await supervisor.forceStop();
     },
   };
+  return self;
 }

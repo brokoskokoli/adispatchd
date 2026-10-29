@@ -4,6 +4,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { acquireInstanceLock } from '../persistence/index.js';
 import { createStartHandler, parseStartFlags } from './start.js';
@@ -120,5 +121,21 @@ describe('start command', () => {
     const io = { stdout: (t: string) => out.push(t), stderr: (t: string) => out.push(t) };
     expect(await createStartHandler(io)({ configDir: '/nonexistent', cancelTimeout: 'x' })).toBe(2);
     expect(out.join('')).toContain('invalid --cancel-timeout');
+  });
+
+  it('exits with 78 instead of running open when the hub secret does not arrive (WI-36)', async () => {
+    const out: string[] = [];
+    const io = { stdout: (t: string) => out.push(t), stderr: (t: string) => out.push(t) };
+    const { configDir, dataDir } = tempConfig(1);
+    const empty = new PassThrough();
+    empty.end();
+    const env = { ADISPATCH_HUB_TRUST: 'stdin' };
+    expect(await createStartHandler(io, { env, stdin: empty })({ configDir, dataDir })).toBe(78);
+    expect(out.join('')).toContain('standard input ended before the hub sent its secret');
+    out.length = 0;
+    const bad = new PassThrough();
+    bad.end('nonsense\n');
+    expect(await createStartHandler(io, { env, stdin: bad })({ configDir, dataDir })).toBe(78);
+    expect(out.join('')).toContain('invalid secret');
   });
 });

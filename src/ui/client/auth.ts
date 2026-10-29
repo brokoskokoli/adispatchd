@@ -2,6 +2,7 @@
  * Login state of the web UI (WI-26): `GET /api/v1/auth/me` once at start
  * (and after login/logout), role checks for buttons.
  */
+import { appPath } from '../shared/base-path.js';
 import { denyReason, parseAuthMe, UNKNOWN_ME, type AuthMe, type Role } from '../shared/auth.js';
 
 let me: AuthMe = UNKNOWN_ME;
@@ -14,7 +15,7 @@ export function currentAuth(): AuthMe {
 /** Load `/api/v1/auth/me` (no CSRF needed, never throws). */
 export async function loadAuth(): Promise<AuthMe> {
   try {
-    const res = await fetch('/api/v1/auth/me', { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+    const res = await fetch(appPath('/api/v1/auth/me'), { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
     me = res.ok ? parseAuthMe(await res.json()) : UNKNOWN_ME;
   } catch {
     me = UNKNOWN_ME;

@@ -11,6 +11,8 @@ export interface SpawnSpec {
   args: string[];
   /** Complete environment of the child. */
   env: Record<string, string | undefined>;
+  /** Written to the child's standard input, which is then closed (WI-36: the hub's secret). Without it stdin is not connected. */
+  input?: string;
 }
 
 /** A started child process. */
@@ -51,7 +53,8 @@ export function processSpawner(options: ProcessSpawnerOptions = {}): WorkspaceSp
       if (!entry) throw new Error('cannot determine the CLI entry point for workspace processes');
       const child = spawn(options.execPath ?? process.execPath, [...(options.execArgv ?? process.execArgv), entry, ...spec.args], {
         env: spec.env as NodeJS.ProcessEnv,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        // stdin is `null` (not connected) without an input; the type only reflects the output pipes.
+        stdio: [spec.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'],
         detached: true,
       });
       let exited = false;
@@ -67,6 +70,11 @@ export function processSpawner(options: ProcessSpawnerOptions = {}): WorkspaceSp
         setTimeout(() => notify(code, signal), 1_000).unref();
       });
       child.on('error', (err) => notify(null, null, err.message));
+      if (spec.input !== undefined && child.stdin) {
+        // A child that exits before reading its input must not crash the hub (EPIPE).
+        child.stdin.on('error', () => undefined);
+        child.stdin.end(spec.input);
+      }
       child.stdout.setEncoding('utf8');
       child.stderr.setEncoding('utf8');
       return {

@@ -18,6 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { hashPassword } from '../api/password.js';
 import { FakeGitHub } from '../sources/github/testing/index.js';
 import { HubControlClient } from './control-client.js';
 import type { HubStatus } from './hub.js';
@@ -150,6 +151,12 @@ function startHub(): { exited: Promise<number | null> } {
   return { exited: new Promise((resolve) => proc.on('exit', (code) => resolve(code))) };
 }
 
+/** Status of a workspace instance, read directly with its local control token (the instance refuses everything else, WI-36). */
+async function instanceStatus(id: 'w1' | 'w2'): Promise<any> {
+  const token = JSON.parse(readFileSync(path.join(root, 'hub', 'workspaces', id, 'data', 'control.token'), 'utf8')) as { token: string };
+  return (await fetch(`http://127.0.0.1:${ports[id]}/api/v1/status`, { headers: { 'x-adispatch-control-token': token.token } })).json();
+}
+
 const status = async (): Promise<HubStatus> => {
   const s = await ctl.status();
   for (const w of s.workspaces) if (w.pid) knownPids.add(w.pid);
@@ -214,6 +221,7 @@ beforeAll(async () => {
     ].join('\n'),
   );
   chmodSync(script, 0o755);
+  for (const [name, password] of [['ALICE', 'alice-pw'], ['OLGA', 'olga-pw'], ['VICTOR', 'victor-pw']] as const) env[`HUB_PW_${name}`] = await hashPassword(password);
   hubCfg = path.join(root, 'hub');
   hubData = path.join(root, 'hub-data');
   mkdirSync(hubCfg, { recursive: true });
@@ -225,6 +233,13 @@ beforeAll(async () => {
       'hub:',
       '  max_concurrent: 2',
       `  server: { host: 127.0.0.1, port: ${ports.hub} }`,
+      // Login of the hub's HTTP server (WI-36)
+      'auth:',
+      '  mode: password',
+      '  users:',
+      '    - { name: alice, password_hash_env: HUB_PW_ALICE, role: admin }',
+      '    - { name: olga, password_hash_env: HUB_PW_OLGA, role: operator }',
+      '    - { name: victor, password_hash_env: HUB_PW_VICTOR, role: viewer }',
       'workspaces:',
       ...(['w1', 'w2'] as const).flatMap((id) => [
         `  - id: ${id}`,
@@ -260,7 +275,7 @@ describe('hub with real workspace processes (WI-35)', () => {
     expect(runningWorkers()).toHaveLength(2);
     expect(Object.values(held.slots.byWorkspace).reduce((a, b) => a + b, 0)).toBe(2);
     // The workspaces report the hub limit in their own status.
-    const w1Status = await (await fetch(`http://127.0.0.1:${ports.w1}/api/v1/status`)).json() as any;
+    const w1Status = await instanceStatus('w1');
     expect(w1Status.hub).toMatchObject({ workspace: 'w1', reachable: true, max: 2 });
     expect(maxConcurrentSeen()).toBe(2);
 
@@ -342,7 +357,7 @@ describe('hub with real workspace processes (WI-35)', () => {
 
     // The workspaces notice the outage: no new automatic runs although the limit would not matter any more.
     const outage = await until('workspaces report the hub as unreachable', async () => {
-      const s = (await (await fetch(`http://127.0.0.1:${ports.w1}/api/v1/status`)).json()) as any;
+      const s = await instanceStatus('w1');
       return s.hub?.reachable === false ? s : undefined;
     });
     expect(outage.hub.reachable).toBe(false);
@@ -372,5 +387,119 @@ describe('hub with real workspace processes (WI-35)', () => {
     for (const pid of childPids) process.kill(pid, 'SIGTERM');
     await until('orphans gone', () => (childPids.every((p) => !alive(p)) && workers.every((p) => !alive(p))) || undefined, 30_000);
     hubProc!.kill('SIGTERM');
+  });
+
+  it('serves the hub API and the workspace UIs/APIs of two real processes under one port, with roles, audit and drain/stop/pause end to end (WI-36)', { timeout: 300_000 }, async () => {
+    await boot();
+    const base = `http://127.0.0.1:${ports.hub}`;
+    const call = async (method: string, target: string, opts: { cookie?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<{ status: number; json: any; headers: Headers }> => {
+      const res = await fetch(`${base}${target}`, {
+        method,
+        headers: { ...(method !== 'GET' ? { 'x-adispatch-request': '1', 'content-type': 'application/json' } : {}), ...(opts.cookie ? { cookie: opts.cookie } : {}), ...(opts.headers ?? {}) },
+        ...(method !== 'GET' ? { body: JSON.stringify(opts.body ?? {}) } : {}),
+      });
+      const text = await res.text();
+      let json: any = null;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        json = text;
+      }
+      return { status: res.status, json, headers: res.headers };
+    };
+    const login = async (name: string, password: string): Promise<string> => {
+      const res = await call('POST', '/api/v1/auth/login', { body: { name, password } });
+      expect(res.status).toBe(200);
+      return String(res.headers.get('set-cookie')).split(';')[0]!;
+    };
+    const alice = await login('alice', 'alice-pw');
+    const olga = await login('olga', 'olga-pw');
+    const victor = await login('victor', 'victor-pw');
+
+    // Overview: both real workspaces with live numbers read from the instances.
+    expect((await call('GET', '/api/v1/hub/status')).status).toBe(401);
+    const overview = await until('both workspaces report their activity and the 2 slots are in use', async () => {
+      const list = (await call('GET', '/api/v1/hub/workspaces', { cookie: victor })).json.workspaces as any[];
+      const st = (await call('GET', '/api/v1/hub/status', { cookie: victor })).json;
+      return list.length === 2 && list.every((w) => w.activity && w.state === 'running') && st.slots.active === 2 && list.reduce((n, w) => n + w.activity.activeRuns, 0) === 2 ? { list, st } : undefined;
+    });
+    expect(overview.st).toMatchObject({ state: 'running', slots: { max: 2, active: 2 }, workspaces: { total: 2, running: 2 } });
+    expect(overview.list.map((w) => [w.id, w.slots, w.activity.activeRuns]).sort()).toEqual(overview.list.map((w) => [w.id, w.slots, w.slots]).sort());
+    const resources = await until('the hub measured the server', async () => (await call('GET', '/api/v1/hub/status', { cookie: victor })).json.resources ?? undefined, 30_000);
+    expect(resources).toMatchObject({ cpu: { cores: expect.any(Number) }, memory: { totalBytes: expect.any(Number) } });
+
+    // Pass-through: the workspace API and SSE below /w/<id>/, the UI shell is public, the API needs a login.
+    expect((await call('GET', '/w/w1/api/v1/status')).status).toBe(401);
+    const wsStatus = await call('GET', '/w/w1/api/v1/status', { cookie: victor });
+    expect(wsStatus.status).toBe(200);
+    expect(wsStatus.json.hub).toMatchObject({ workspace: 'w1', reachable: true, max: 2 });
+    const sse = await fetch(`${base}/w/w2/api/v1/events`, { headers: { cookie: victor, accept: 'text/event-stream' } });
+    expect(sse.status).toBe(200);
+    const reader = sse.body!.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain('retry:');
+    await reader.cancel();
+    expect((await call('GET', '/w/w1/api/v1/auth/me', { cookie: olga })).json).toMatchObject({ user: { name: 'olga', role: 'operator' } });
+    expect((await call('GET', '/w/nope/api/v1/status', { cookie: victor })).status).toBe(404);
+
+    // Roles reach the instance: a viewer cannot pause a workspace, an operator can; the instance audits the user.
+    const denied = await call('POST', '/w/w1/api/v1/scheduler/pause', { cookie: victor });
+    expect(denied.status).toBe(403);
+    expect(denied.json.error.code).toBe('forbidden');
+    expect((await call('POST', '/w/w1/api/v1/scheduler/pause', { cookie: olga })).status).toBe(200);
+    expect((await instanceStatus('w1')).scheduler.paused).toBe(true);
+    expect((await call('POST', '/w/w1/api/v1/scheduler/resume', { cookie: olga })).status).toBe(200);
+
+    // The instances do not answer anybody else: no secret, no identity.
+    for (const id of ['w1', 'w2'] as const) {
+      const direct = await fetch(`http://127.0.0.1:${ports[id]}/api/v1/status`);
+      expect(direct.status).toBe(401);
+      const forged = await fetch(`http://127.0.0.1:${ports[id]}/api/v1/status`, { headers: { 'x-adispatch-hub-token': 'A'.repeat(43), 'x-adispatch-hub-role': 'admin', 'x-adispatch-hub-user': 'alice' } });
+      expect(forged.status).toBe(401);
+      expect((await fetch(`http://127.0.0.1:${ports[id]}/api/v1/auth/me`)).status).toBe(200); // public; says "use the hub"
+    }
+    // The hub's own secret never shows up in what the hub tells us.
+    expect(JSON.stringify([overview, wsStatus.json])).not.toMatch(/(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])/);
+
+    // Hub-wide pause over HTTP is seen by both workspaces.
+    expect((await call('POST', '/api/v1/hub/pause', { cookie: victor })).status).toBe(403);
+    expect((await call('POST', '/api/v1/hub/pause', { cookie: olga })).json.status.state).toBe('paused');
+    expect((await status()).paused).toBe(true);
+    await until('workspaces see the pause', async () => ((await instanceStatus('w1')).hub?.paused && (await instanceStatus('w2')).hub?.paused ? true : undefined));
+    expect((await call('POST', '/api/v1/hub/resume', { cookie: olga })).json.status.state).toBe('running');
+
+    // Drain all: runs keep going (gate closed), the workspaces show "draining", and stop on their own once the runs are done.
+    expect((await call('POST', '/api/v1/hub/drain-all', { cookie: olga })).status).toBe(200);
+    await until('both workspaces drain', async () => (await status()).workspaces.every((w) => w.transition === 'draining') || undefined);
+    expect(runningWorkers()).toHaveLength(2);
+    const draining = (await call('GET', '/api/v1/hub/workspaces', { cookie: victor })).json.workspaces as any[];
+    expect(draining.every((w) => w.transition === 'draining')).toBe(true);
+    openGate();
+    await until('workspaces stopped after the drain', async () => ((await status()).workspaces.every((w) => w.state === 'stopped' && w.pid === null) ? true : undefined), 120_000);
+    expect((await call('GET', '/w/w1/', { headers: { accept: 'text/html' } })).status).toBe(503);
+    expect((await call('GET', '/w/w1/api/v1/status', { cookie: victor })).json.error.code).toBe('workspace_unavailable');
+
+    // Start again, then stop all: the running runs are cancelled and no process is left behind.
+    rmSync(path.join(marks, 'gate'), { force: true });
+    for (const id of ['w1', 'w2']) expect((await call('POST', `/api/v1/hub/workspaces/${id}/start`, { cookie: olga })).status).toBe(200);
+    await until('both running and connected again', async () => ((await status()).workspaces.every((w) => w.state === 'running' && w.connected) ? true : undefined));
+    for (const repo of ['example/a', 'example/b']) github.createIssue(repo, { number: nextIssue, labels: ['ready-for-coding'] });
+    nextIssue += 1;
+    await until('a run is active again', async () => ((await status()).slots.active > 0 ? true : undefined));
+    const workers = runningWorkers();
+    expect(workers.length).toBeGreaterThan(0);
+    const pids = (await status()).workspaces.map((w) => w.pid!).filter(Boolean);
+    expect((await call('POST', '/api/v1/hub/stop-all', { cookie: olga })).status).toBe(200);
+    await until('workspaces stopped, workers gone', async () => ((await status()).workspaces.every((w) => w.state === 'stopped') && workers.every((p) => !alive(p)) && pids.every((p) => !alive(p)) ? true : undefined), 60_000);
+
+    // Everything an operator did is in the audit log of the hub, with the user.
+    expect((await call('GET', '/api/v1/hub/audit', { cookie: olga })).status).toBe(403);
+    const audit = await call('GET', '/api/v1/hub/audit?limit=50', { cookie: alice });
+    const rows = (audit.json.entries as any[]).map((e) => `${e.actor}:${e.action}:${e.workspace ?? '-'}:${e.result}`).reverse();
+    expect(rows).toEqual(['olga:hub.pause:-:ok', 'olga:hub.resume:-:ok', 'olga:hub.drain-all:-:ok', 'olga:workspace.start:w1:ok', 'olga:workspace.start:w2:ok', 'olga:hub.stop-all:-:ok']);
+    expect((audit.json.entries as any[])[0]).toMatchObject({ role: 'operator', via: 'password' });
+
+    hubProc!.kill('SIGTERM');
+    await until('hub stopped', () => hubProc!.exitCode !== null || undefined, 30_000);
   });
 });

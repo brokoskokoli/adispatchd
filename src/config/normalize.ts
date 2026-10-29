@@ -6,7 +6,9 @@ import path from 'node:path';
 import { dataPaths, HOOK_NAMES, parseSize, resultHookName, type FilterNode, type HookName } from '../core/index.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssuePath } from './issues.js';
+import type { z } from 'zod';
 import type {
+  AuthConfig,
   ExecuteConfig,
   GlobalConfig,
   HooksConfig,
@@ -33,6 +35,7 @@ import type {
   RawView,
   RawViewSortKey,
   RawWorkflow,
+  authSchema,
 } from './schemas.js';
 import { DEFAULTS, MAX_DEFAULT_MONITORING_INTERVAL_MS, MIN_MONITORING_INTERVAL_MS, PARAMETER_OPTIONS_DEFAULTS } from './schemas.js';
 
@@ -113,19 +116,7 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
         embed: link.embed,
       })),
     },
-    auth: {
-      mode: raw.auth.mode,
-      users: raw.auth.users.map((u) => ({ name: u.name, passwordHashEnv: u.password_hash_env, role: u.role })),
-      trustedHeader: {
-        header: raw.auth.trusted_header.header.toLowerCase(),
-        trustedProxies: raw.auth.trusted_header.trusted_proxies.map((p) => p.trim()),
-        proxySecretEnv: raw.auth.trusted_header.proxy_secret_env ?? null,
-        users: raw.auth.trusted_header.users.map((u) => ({ login: u.login.toLowerCase(), role: u.role })),
-      },
-      trustedProxies: raw.auth.trusted_proxies.map((p) => p.trim()),
-      sessionTtlMs: raw.auth.session_ttl,
-      readRequiresLogin: raw.auth.read_requires_login,
-    },
+    auth: normalizeAuth(raw.auth),
   };
 }
 
@@ -433,4 +424,21 @@ function normalizeViewSort(sort: RawViewSortKey | readonly RawViewSortKey[] | un
   if (sort === undefined) return [];
   const keys: readonly RawViewSortKey[] = Array.isArray(sort) ? sort : [sort as RawViewSortKey];
   return keys.map((k) => ({ field: k.field, direction: k.direction, order: k.order ? [...k.order] : null }));
+}
+
+/** Normalize an `auth:` section (`config.yaml`, `hub.yaml`). */
+export function normalizeAuth(raw: z.output<typeof authSchema>): AuthConfig {
+  return {
+    mode: raw.mode,
+    users: raw.users.map((u) => ({ name: u.name, passwordHashEnv: u.password_hash_env, role: u.role })),
+    trustedHeader: {
+      header: raw.trusted_header.header.toLowerCase(),
+      trustedProxies: raw.trusted_header.trusted_proxies.map((p) => p.trim()),
+      proxySecretEnv: raw.trusted_header.proxy_secret_env ?? null,
+      users: raw.trusted_header.users.map((u) => ({ login: u.login.toLowerCase(), role: u.role })),
+    },
+    trustedProxies: raw.trusted_proxies.map((p) => p.trim()),
+    sessionTtlMs: raw.session_ttl,
+    readRequiresLogin: raw.read_requires_login,
+  };
 }

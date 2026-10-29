@@ -595,8 +595,9 @@ Ein **Hub** betreibt mehrere unabhängige Projekte (Workspaces) auf einem Server
 gleichzeitige Runs. Ein Workspace ist eine vollständige, unveränderte Instanz (eigenes config-dir, data-dir, eigene Workflows,
 Sources, Identities, Datenbank und eigener Port); der Hub ist ein eigener Prozess, der jede Instanz als Kindprozess startet
 (`adispatch start …`), überwacht und neu startet. Die Isolation ist die Prozessgrenze – es gibt keine gemeinsamen Tabellen.
-Format von `hub.yaml`: [Konfigurationsreferenz §3.9](configuration-reference.md#39-hubyaml-hub-seit-0100). Eine
-Übersichtsseite im Browser gibt es in diesem Stand noch nicht (späteres Work-Item); bedient wird der Hub mit der CLI.
+Format von `hub.yaml`: [Konfigurationsreferenz §3.9](configuration-reference.md#39-hubyaml-hub-seit-0100). Bedient wird der
+Hub mit der CLI (Unix-Socket) **oder** im Browser: eine Übersichtsseite, die Workspace-UIs unter demselben Port und die
+Hub-API (Abschnitt [Weboberfläche des Hubs](#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-36)).
 
 ```bash
 # Einmalig: hub.yaml und je Workspace ein vollständiges Beispiel-config-dir/data-dir anlegen (überschreibt nie)
@@ -675,7 +676,106 @@ Container-Executor (`user`, [Abschnitt „Container-Executor“](#container-exec
 und Actions der Workspaces laufen unter demselben Benutzer und könnten sich daher verbinden (`hub.sock` erlaubt `pause`, `stop-all`
 …) – dieselbe Vertrauensgrenze wie bei `control.token` und dem Dienstbenutzer insgesamt (Spec §20.2). Die Umgebungsvariablen
 `ADISPATCH_HUB_SOCKET`/`ADISPATCH_HUB_WORKSPACE` erhalten Worker, Actions und Prüfskripte nicht (Minimalumgebung); den
-Socket-Pfad kennt ein Worker also nur, wenn er die Dienstumgebung über `/proc` liest.
+Socket-Pfad kennt ein Worker also nur, wenn er die Dienstumgebung über `/proc` liest. Der HTTP-Server des Hubs ist mit
+`auth.mode: none` **ungeschützt** (wie eine Einzelinstanz): bei `127.0.0.1` bleiben, sonst `auth:` in `hub.yaml` setzen
+oder einen authentifizierenden Proxy davorstellen; ein Bind außerhalb von Loopback warnt beim Start.
+
+### Weboberfläche des Hubs, Durchreichen und Vertrauensmodell (seit 0.10.0, WI-36)
+
+`adispatch hub start` startet zusätzlich einen **HTTP-Server** auf `hub.server.host`/`hub.server.port` (Default
+`127.0.0.1:8090`; schlägt das Binden fehl, startet der Hub gar keinen Workspace). Er liefert unter **einem Port**:
+
+| Pfad | Inhalt |
+|---|---|
+| `/` | **Übersicht**: Kachel je Workspace (Zustand, laufende Runs, blockierte Items, fehlgeschlagene Actions, belegte Plätze, Version, Neustarts), Gesamtleiste „Slots n/m“, Serverressourcen (CPU, RAM, fülltester Datenträger, Load), live per SSE |
+| `/w/<workspace>/…` | die **Web-UI und API des Workspaces**, durchgereicht an dessen Loopback-Port (HTTP, SSE, Downloads); „← Hub“ in der Kopfzeile führt zurück |
+| `/api/v1/hub/…` | die Hub-API ([api.md](api.md#hub-api-seit-0100-wi-36)): Status, Workspaces, Start/Stop/Restart/Drain, Alle drainen/stoppen/pausieren, Audit, SSE |
+
+**Anmeldung und Rollen** wie bei einer Instanz (Abschnitt „Anmeldung“): Der Abschnitt `auth:` steht in `hub.yaml`
+(`mode: none` \| `password` \| `trusted_header`, derselbe Aufbau wie in `config.yaml`, Passwort-Hashes mit
+`adispatch auth hash-password` in der Umgebung des Hubs). Der Hub meldet **einmal** an; die Anmeldung gilt für die Übersicht
+und für alle Workspace-UIs (`/w/<id>/api/v1/auth/login|logout|me` beantwortet der Hub selbst). Lesen verlangt `viewer`; die
+Schaltflächen **Start/Stop/Restart/Drain** und **Pausieren/Alle drainen/Alle stoppen** (jeweils mit Bestätigung) sieht nur,
+wer `operator` oder `admin` ist; den Audit-Log sieht nur `admin`. Die Rolle gilt auch **in** den Workspaces: Der Hub schickt sie
+mit, die Instanz setzt sie je Endpunkt durch (ein `viewer` kann dort keinen Run abbrechen, ein `admin` kann UI-Aktionen
+nutzen – `identities.<id>.ui_actions`, die Warnung „disabled with auth.mode none“ der Instanz-Validierung gilt unter einem Hub
+nicht). Eine eigene `auth`-Konfiguration einer Instanz bleibt für den **direkten** Zugriff auf deren Port gültig, ist über den
+Hub aber nicht nötig.
+
+**Audit.** Jede Verwaltungsaktion des Hubs (`workspace.start|stop|restart|drain`, `hub.pause|resume|stop-all|drain-all`)
+steht – auch wenn sie fehlschlägt – mit Zeit, Benutzer, Rolle, `via` und Ergebnis in der Tabelle `hub_audit` der Datei
+`hub.db` im **data-dir des Hubs** (die neuesten 10 000 Einträge; keine Bodies, keine Secrets; `GET /api/v1/hub/audit`,
+Übersicht → „Audit log“) und im Log des Hubs (`hub action`). Aktionen **in** einem Workspace (Run abbrechen, manueller Start …)
+protokolliert die Instanz wie sonst – jetzt mit dem Namen des Hub-Benutzers (`audit.user_action`, `clearedBy`). Befehle der
+CLI über `hub.sock` sind nicht Teil dieser Tabelle (lokaler Benutzer des Hubs, Log des Hubs).
+
+**Hinter einem Reverse Proxy.** Der Hub spricht HTTP; TLS und – falls gewünscht – die Anmeldung übernimmt der Proxy davor
+(Tailscale Serve, oauth2-proxy, nginx; siehe Abschnitt „Anmeldung“). Es gelten dieselben Regeln wie bei einer Instanz:
+Host-Name des Proxys in `hub.server.allowed_hosts` eintragen (sonst `421`), der Hub bindet an `127.0.0.1`, `Origin` muss zum
+`Host` passen, mutierende Anfragen brauchen `X-Adispatch-Request: 1`. Die UIs verwenden **seitenrelative URLs**
+(`./api/v1/…`): Sie laufen unverändert unter `/w/<id>/` und auch unter einem zusätzlichen Pfadpräfix des Proxys
+(`https://host/adispatch/w/coder/`), solange der Proxy das Präfix abschneidet und Pfade sonst unverändert weiterreicht
+(`/w/<id>` wird mit einem **relativen** `Location` auf `/w/<id>/` umgeleitet). Für SSE muss der Proxy Antworten **ungepuffert**
+durchreichen und Verbindungen mindestens 60 s offen halten (der Hub sendet alle 15 s einen Heartbeat und
+`X-Accel-Buffering: no`).
+
+```nginx
+location /adispatch/ {
+    proxy_pass http://127.0.0.1:8090/;      # schneidet /adispatch ab
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_buffering off;
+    proxy_read_timeout 1h;
+}
+```
+
+**Was der Hub durchreicht – und was nicht.** Pfade unterhalb von `/w/<id>/` werden segmentweise geprüft (`.`/`..`, kodierte
+Schrägstriche und Backslashes, NUL, doppelte Kodierung → `400`; unbekannte Workspace-ID → `404`); ein Request verlässt den
+Präfix nie und erreicht nie einen anderen Workspace. Von den Request-Headern kommt nur eine **Allow-List** an (Accept,
+Content-Type/-Length, Bedingungs-Header, Range, Last-Event-ID, User-Agent, `X-Adispatch-Request`); Cookies, `Authorization`,
+`Origin`, `Referer`, `X-Forwarded-*`, Identitäts-Header eines Proxys und alle `X-Adispatch-Hub-*`/`-Control-Token`-Header des
+Clients werden **nicht** weitergegeben (ein Client, der bei aktivierter Anmeldung Hub-Header mitsendet, wird mit `401` abgewiesen, sonst werden sie verworfen). Bei Antworten
+entfallen Hop-by-Hop-Header und `Set-Cookie`; ein absoluter Pfad in `Location` wird unter `/w/<id>/` gehalten, ein
+Verweis auf einen anderen Ursprung entfernt. Anfragekörper über 2 MiB werden mit `413` und `Connection: close` abgewiesen (die Verbindung wird danach geschlossen); `GET`/`HEAD` geben `Content-Length`/`Content-Type` nicht weiter. Die statische UI-Hülle eines Workspaces ist (wie bei einer Instanz) ohne Anmeldung abrufbar, damit die Login-Seite lädt; dabei zählt der
+**dekodierte** Pfad (`%61pi` ist `api`), alles außer `GET`/`HEAD` auf Nicht-API-Pfaden braucht `viewer`. **Ohne Anmeldung sichtbar** ist
+damit nur: welche Workspace-IDs es gibt und ob ein Workspace antwortet (Statuscode `200` der Hülle bzw. `503`); die 503-Seite nennt
+dann nur „not available“ – Zustand, Meldungen des Supervisors, Ports und Hinweise mit Pfaden erscheinen erst ab `viewer`.
+**Gemeinsamer Ursprung:** Hub, Übersicht und alle Workspace-UIs teilen jetzt **einen Origin und eine Sitzung** (vorher je ein Origin pro
+Port). Eine Schwachstelle in einer Workspace-UI hätte damit Zugriff auf die Hub-Sitzung und alle anderen Workspaces. Schutz: die UI
+rendert nie HTML aus Daten (kein `innerHTML`, Element-Builder mit Allow-List, per Test erzwungen), CSP `script-src 'self'`
+(kein Inline-Skript), Downloads als `attachment` mit Sandbox-CSP, Cookie `HttpOnly; SameSite=Strict`. Wer Workspaces mit
+unterschiedlichem Vertrauen betreibt, nimmt getrennte Instanzen/Hubs. Ein
+Workspace, der nicht Ein Workspace, der nicht
+`running` ist, liefert eine klare **503-Seite** („Workspace unavailable“ mit Zustand, Grund und Link zur Übersicht; lädt sich
+alle 5 s neu; für API-Clients JSON `workspace_unavailable` mit `Retry-After: 5`), ein Workspace, der die Verbindung verweigert
+oder 120 s schweigt, `503` bzw. `504 workspace_timeout`. **Cookies** gelten pro Host-Name, nicht pro Port: Läuft der Hub unter
+`localhost:8090` und eine Einzelinstanz unter `localhost:8787`, überschreiben sich die gleichnamigen Session-Cookies
+(`adispatch_session`) gegenseitig – eigene Host-Namen verwenden oder über HTTPS gehen (`__Host-`-Cookie).
+
+**Vertrauensmodell zwischen Hub und Workspace.** Entscheidung: Der Hub **authentifiziert** die Benutzer und gibt ihre
+Identität an die Instanz weiter; die Instanz glaubt sie nur dem Hub, der sie gestartet hat.
+
+1. Bei **jedem Start** eines Kindes erzeugt der Hub ein neues Geheimnis (32 Zufallsbytes) und übergibt es **auf der Standardeingabe**
+   des Kindes (eine Zeile; `ADISPATCH_HUB_TRUST=stdin` zeigt der Instanz, dass sie es lesen muss). Das Geheimnis steht nie in
+   Umgebung, Argumenten, Dateien, Logs, Status oder API-Antworten – diese können Worker desselben Benutzers lesen
+   (`/proc/<pid>/environ`, Dateien). Kommt es nicht an, endet die Instanz mit Exit 78 (`failed`) statt offen zu laufen.
+2. Der Hub sendet an die Instanz `X-Adispatch-Hub-Token` (das Geheimnis), `X-Adispatch-Hub-User` (Name, nur bei einer
+   angemeldeten Person) und `X-Adispatch-Hub-Role`. Die Instanz glaubt diese Identität nur mit dem richtigen Geheimnis und nur von
+   Loopback; ein falsches Geheimnis → `401 invalid_hub_token`. Eine Person gilt als **interaktiv** (für UI-Aktionen
+   zählt sie wie `password`); ohne Anmeldung am Hub (`mode: none`) kommt kein Name, die Rolle `admin` und keine Interaktivität.
+3. Eine Instanz, die von einem Hub gestartet wurde, ist **nie offen**: Auch mit `auth.mode: none` lehnt sie jede Anfrage ohne
+   Hub-Identität oder Steuer-Token ab (`401`; die statische UI-Hülle bleibt abrufbar und zeigt „This workspace is managed by a
+   hub“). Direkte Zugriffe auf `127.0.0.1:<Workspace-Port>` – andere lokale Benutzer, Skripte, ein Browser – sehen also nichts.
+   Die CLI-Befehle (`adispatch status|pause|drain|… --url http://127.0.0.1:<port> --data-dir <workspace-data-dir>`) funktionieren
+   weiter mit dem Steuer-Token der Instanz (Abschnitt „Anmeldung“, nur die dort genannten Routen).
+4. Grenzen: Die Instanz läuft unter demselben Benutzer wie ihre Worker. Wer als dieser Benutzer beliebigen Code ausführen und
+   den Speicher von Prozessen lesen darf (Linux ohne Yama-`ptrace_scope`), kann das Geheimnis beschaffen – dieselbe
+   Vertrauensgrenze wie bei `control.token` (Spec §20.2: Konfigurationscode und Skripte sind vertrauenswürdig). Das Geheimnis
+   schützt vor anderen Benutzern, vor Skripten, die nur Umgebung und Dateien lesen, und vor Headern, die von außen kommen.
+5. Verworfene Alternativen: Geheimnis in der Umgebung oder in einer Datei (für Worker lesbar); Rollen nur im Hub prüfen
+   (die Instanz bliebe auf Loopback für jeden lokalen Benutzer offen, und die Instanz könnte den Benutzer nicht im Audit nennen);
+   Unix-Socket statt TCP-Port zur Instanz (größerer Umbau des Instanz-Servers, möglicher Folgeschritt).
 
 **Hinweise.** `hub.yaml` wird nur beim Start gelesen (kein Reload); die Konfiguration der Workspaces lädt jede Instanz selbst
 (`adispatch config reload --url http://127.0.0.1:<port> --data-dir <workspace-data-dir>`). Der Slot-Socket liegt im

@@ -314,6 +314,18 @@ export function originMatchesHost(origin: string, host: string): boolean {
   return (o.port ?? defaultPort) === (h.port ?? defaultPort);
 }
 
+/**
+ * Host names a server bound to `bindHost` accepts in the `Host` header:
+ * loopback names, the bind address (unless it is a wildcard or loopback) and
+ * the configured extra names (`server.allowed_hosts`, reverse proxies).
+ */
+export function allowedHostList(bindHost: string, extra: readonly string[]): readonly string[] {
+  const bind = bindHost.toLowerCase();
+  const bindName = bind.includes(':') && !bind.startsWith('[') ? `[${bind}]` : bind;
+  const wildcard = bind === '0.0.0.0' || bind === '::' || bind === '[::]';
+  return [...LOOPBACK_HOST_NAMES, ...(wildcard || isLoopbackHost(bind) ? [] : [bindName]), ...extra];
+}
+
 function isLoopbackHost(host: string): boolean {
   const h = host.replace(/^\[|\]$/g, '');
   return h === 'localhost' || h === '::1' || h.startsWith('127.');
@@ -340,13 +352,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
   });
 
   // --- Security hooks -------------------------------------------------------
-  const allowedHosts = (): readonly string[] => {
-    const bind = deps.info.host.toLowerCase();
-    const extra = deps.config.current.global.server.allowedHosts;
-    const bindName = bind.includes(':') && !bind.startsWith('[') ? `[${bind}]` : bind;
-    const wildcard = bind === '0.0.0.0' || bind === '::' || bind === '[::]';
-    return [...LOOPBACK_HOST_NAMES, ...(wildcard || isLoopbackHost(bind) ? [] : [bindName]), ...extra];
-  };
+  const allowedHosts = (): readonly string[] => allowedHostList(deps.info.host, deps.config.current.global.server.allowedHosts);
   app.addHook('onRequest', async (req) => {
     // DNS-rebinding protection for ALL requests (incl. GET, SSE, static UI): the Host header must name this server.
     const host = req.headers.host;
@@ -409,7 +415,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
       throw new ApiError(resolved.status, resolved.code, resolved.message);
     }
     let principal = resolved.principal;
-    if (!principal && !auth.config.readRequiresLogin && (req.method === 'GET' || req.method === 'HEAD')) {
+    if (!principal && !auth.readRequiresLogin && (req.method === 'GET' || req.method === 'HEAD')) {
       principal = { name: 'anonymous', role: 'viewer', via: 'anonymous' };
     }
     req.principal = principal;
@@ -425,7 +431,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     }
   });
   /** The authenticated user behind a request (never the anonymous reader). */
-  const actorOf = (req: FastifyRequest): Principal | null => (req.principal && req.principal.via !== 'anonymous' ? req.principal : null);
+  const actorOf = (req: FastifyRequest): Principal | null => (req.principal && req.principal.via !== 'anonymous' && req.principal.via !== 'hub_open' ? req.principal : null);
   /** Audit (WI-26): record the user on the run's events. */
   const auditRun = (req: FastifyRequest, runId: string, action: string, extra: Record<string, unknown> = {}): void => {
     const actor = actorOf(req);
@@ -513,13 +519,19 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     if (!auth || !auth.enabled) return { mode: 'none', readRequiresLogin: false, user: null, role: 'admin', expiresAt: null, error: null };
     const resolved = auth.resolve(authRequest(req));
     const p = req.principal;
+    // A hub-managed instance without login of its own only answers the hub: direct visitors get "access denied" (proxy-style).
+    const hubOnly = auth.hubManaged && auth.config.mode === 'none';
     return {
-      mode: auth.config.mode,
-      readRequiresLogin: auth.config.readRequiresLogin,
-      user: p && p.via !== 'anonymous' ? { name: p.name, role: p.role, via: p.via } : null,
+      mode: hubOnly ? 'trusted_header' : auth.config.mode,
+      readRequiresLogin: auth.readRequiresLogin,
+      user: p && p.via !== 'anonymous' && p.via !== 'hub_open' ? { name: p.name, role: p.role, via: p.via } : null,
       role: p?.role ?? null,
       expiresAt: auth.sessionExpiry(p),
-      error: resolved.ok ? null : { status: resolved.status, code: resolved.code, message: resolved.message },
+      error: resolved.ok
+        ? hubOnly && !p
+          ? { status: 401, code: 'hub_required', message: 'This workspace is managed by a hub: open it through the hub (/w/<workspace>/)' }
+          : null
+        : { status: resolved.status, code: resolved.code, message: resolved.message },
     };
   });
 

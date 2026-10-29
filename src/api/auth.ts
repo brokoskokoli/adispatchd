@@ -15,6 +15,13 @@
  *   if `proxy_secret_env` is set – the proxy sends the shared secret in
  *   `X-Adispatch-Proxy-Secret`.
  *
+ * Hub (WI-36): an instance started by a hub receives a secret from it (standard
+ * input, `hubToken`). The hub authenticates the browser users itself and forwards
+ * their identity with `X-Adispatch-Hub-Token` (the secret), `-User` and `-Role`;
+ * only the holder of the secret is believed, and only from loopback. Such an
+ * instance additionally refuses every request without hub, control token or
+ * (if configured) its own login, even with `mode: none`.
+ *
  * In every mode except `none`, the local control token (random, written to
  * `<data-dir>/control.token`, 0600, with port and pid) grants `operator` to
  * loopback connections, and only on the routes the CLI control commands use
@@ -26,7 +33,7 @@ import { closeSync, fsyncSync, openSync, readFileSync, renameSync, unlinkSync, w
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { noopLogger, systemClock, systemTimers, type Clock, type Logger, type TimerHandle, type Timers } from '../core/index.js';
-import type { AuthConfig, AuthRole } from '../config/index.js';
+import { AUTH_ROLES, type AuthConfig, type AuthRole } from '../config/index.js';
 import { dummyHash, nodeScrypt, parsePasswordHash, verifyPassword, type ParsedHash, type ScryptFn } from './password.js';
 
 /** Session cookie name over plain HTTP. */
@@ -37,6 +44,12 @@ export const SECURE_SESSION_COOKIE = `__Host-${SESSION_COOKIE}`;
 export const CONTROL_TOKEN_HEADER = 'x-adispatch-control-token';
 /** Header carrying the shared proxy secret (`auth.trusted_header.proxy_secret_env`). */
 export const PROXY_SECRET_HEADER = 'x-adispatch-proxy-secret';
+/** Headers of the identity a hub forwards to the instance it started (WI-36). */
+export const HUB_TOKEN_HEADER = 'x-adispatch-hub-token';
+export const HUB_USER_HEADER = 'x-adispatch-hub-user';
+export const HUB_ROLE_HEADER = 'x-adispatch-hub-role';
+/** Pattern of the secret a hub hands to an instance (32 random bytes, base64url). */
+export const HUB_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 /** File name of the control token in the data dir. */
 export const CONTROL_TOKEN_FILE = 'control.token';
 
@@ -65,7 +78,7 @@ const SWEEP_INTERVAL_MS = 60_000;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 /** How a principal was authenticated. */
-export type AuthVia = 'password' | 'trusted_header' | 'control_token' | 'anonymous';
+export type AuthVia = 'password' | 'trusted_header' | 'control_token' | 'anonymous' | 'hub' | 'hub_open';
 
 /** The authenticated caller of a request. */
 export interface Principal {
@@ -81,9 +94,13 @@ export interface Principal {
   sessionKey?: string;
 }
 
-/** True for a person who logged in (password) or was identified by the proxy (trusted_header). */
+/**
+ * True for a person who logged in (password), was identified by the proxy
+ * (trusted_header) or by the hub (`hub`). `hub_open` (hub without login or
+ * anonymous reader) is never a person.
+ */
 export function isInteractive(principal: Principal | null | undefined): boolean {
-  return principal?.via === 'password' || principal?.via === 'trusted_header';
+  return principal?.via === 'password' || principal?.via === 'trusted_header' || principal?.via === 'hub';
 }
 
 /** What the request carries, independent of Fastify. */
@@ -119,6 +136,8 @@ export interface AuthServiceOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Fixed control token (tests); default random. */
   controlToken?: string;
+  /** Secret of the hub that started this instance (WI-36): its forwarded identities are believed. */
+  hubToken?: string;
   /** Soft cap of the rate-limit stores (tests). */
   limiterMaxKeys?: number;
 }
@@ -281,6 +300,7 @@ export function secretEquals(a: string, b: string): boolean {
 /** Session/login/proxy logic; one instance per app. */
 export class AuthService {
   readonly controlToken: string;
+  private readonly hubToken: string | undefined;
   private readonly sessions = new Map<string, Session>();
   private readonly streams = new Set<Stream>();
   private readonly userIpLimiter: FailureLimiter;
@@ -305,6 +325,7 @@ export class AuthService {
     this.sleep = options.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)));
     this.env = options.env ?? process.env;
     this.controlToken = options.controlToken ?? randomBytes(32).toString('base64url');
+    this.hubToken = options.hubToken;
     const cap = options.limiterMaxKeys ?? MAX_LIMITER_KEYS;
     this.userIpLimiter = new FailureLimiter(LOGIN_LIMITS.perUserIp, LOGIN_LIMITS.windowMs, cap);
     this.userLimiter = new FailureLimiter(LOGIN_LIMITS.perUser, LOGIN_LIMITS.windowMs, cap);
@@ -315,9 +336,19 @@ export class AuthService {
     return this.options.config();
   }
 
-  /** Authentication active (`mode` ≠ `none`). */
+  /** Authentication active (`mode` ≠ `none`, or the instance is managed by a hub). */
   get enabled(): boolean {
-    return this.config.mode !== 'none';
+    return this.hubManaged || this.config.mode !== 'none';
+  }
+
+  /** The instance was started by a hub (WI-36): anonymous access is never allowed, reading needs a login or the hub. */
+  get hubManaged(): boolean {
+    return this.hubToken !== undefined;
+  }
+
+  /** `auth.read_requires_login`; always `true` for a hub-managed instance with `mode: none`. */
+  get readRequiresLogin(): boolean {
+    return this.config.readRequiresLogin || (this.hubManaged && this.config.mode === 'none');
   }
 
   /** Number of live sessions (status/tests). */
@@ -396,7 +427,7 @@ export class AuthService {
    */
   resolve(req: AuthRequest): ResolveResult {
     const cfg = this.config;
-    if (cfg.mode === 'none') return { ok: true, principal: null };
+    if (cfg.mode === 'none' && !this.hubManaged) return { ok: true, principal: null };
     const token = header(req, CONTROL_TOKEN_HEADER);
     if (token !== undefined) {
       if (!isLoopbackAddress(req.remoteAddress)) {
@@ -407,6 +438,8 @@ export class AuthService {
       }
       return { ok: true, principal: { name: 'control-token', role: 'operator', via: 'control_token' } };
     }
+    if (req.headers[HUB_TOKEN_HEADER] !== undefined) return this.resolveHub(req);
+    if (cfg.mode === 'none') return { ok: true, principal: null };
     if (cfg.mode === 'password') {
       const id = sessionIdOf(header(req, 'cookie'));
       if (!id || !TOKEN_PATTERN.test(id)) return { ok: true, principal: null };
@@ -447,6 +480,24 @@ export class AuthService {
     const user = cfg.trustedHeader.users.find((u) => u.login === login);
     if (!user) return { ok: false, status: 403, code: 'login_not_allowed', message: 'This login is not allowed to use adispatchd (auth.trusted_header.users)' };
     return { ok: true, principal: { name: user.login, role: user.role, via: 'trusted_header' } };
+  }
+
+  /** Identity forwarded by the hub that started this instance (WI-36). */
+  private resolveHub(req: AuthRequest): ResolveResult {
+    const sent = header(req, HUB_TOKEN_HEADER);
+    if (this.hubToken === undefined || sent === undefined || !isLoopbackAddress(req.remoteAddress) || !secretEquals(sent, this.hubToken)) {
+      return { ok: false, status: 401, code: 'invalid_hub_token', message: 'Invalid hub token (only the hub that started this instance may forward identities)' };
+    }
+    const role = header(req, HUB_ROLE_HEADER);
+    if (role === undefined || !(AUTH_ROLES as readonly string[]).includes(role)) {
+      return { ok: false, status: 401, code: 'invalid_hub_identity', message: 'The hub did not send a valid role' };
+    }
+    const user = header(req, HUB_USER_HEADER);
+    if (user === undefined) return { ok: true, principal: { name: 'hub', role: role as AuthRole, via: 'hub_open' } };
+    if (user === '' || user.length > 320 || /[\s,\x00-\x1f\x7f]/.test(user)) {
+      return { ok: false, status: 401, code: 'invalid_hub_identity', message: 'The hub sent a malformed user name' };
+    }
+    return { ok: true, principal: { name: user, role: role as AuthRole, via: 'hub' } };
   }
 
   /** Password login. */
@@ -551,9 +602,11 @@ export class AuthService {
       case 'trusted_header':
         return cfg.mode === 'trusted_header' && cfg.trustedHeader.users.some((u) => u.login === p.name);
       case 'anonymous':
-        return !cfg.readRequiresLogin;
+        return !this.readRequiresLogin;
       case 'control_token':
-        return true;
+      case 'hub':
+      case 'hub_open':
+        return true; // the hub ends the stream itself when its own session ends
     }
   }
 

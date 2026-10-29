@@ -735,12 +735,128 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 - Langsame Clients: mehr als 1 MiB ungesendete Daten → Verbindung wird getrennt (Client reconnectet mit `Last-Event-ID`);
   die Logerfassung wird nie blockiert.
 
+## Hub-API (seit 0.10.0, WI-36)
+
+Der HTTP-Server des Hubs (`hub.server` in `hub.yaml`, Default `127.0.0.1:8090`; [Betrieb](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-36))
+bedient drei Dinge unter **einem** Port: die Übersichtsseite (`/`), die Hub-API (`/api/v1/hub/…`) und die durchgereichten
+Workspaces (`/w/<id>/…`, [unten](#durchreichen-wworkspace)). Es gelten dieselben Regeln wie für eine Instanz: Host-/Origin-Allowlist
+(`hub.server.allowed_hosts`), CSRF-Header für mutierende Requests, JSON-Bodies, Fehlerform `{"error": {"code", "message",
+"details"?}}`, Header von `/api/*` (`no-store`, `nosniff`, `X-Frame-Options: DENY`, kein CORS), CSP der UI, und die
+Anmeldung des Abschnitts [Anmeldung und Rollen](#anmeldung-und-rollen-seit-040-wi-26) mit dem Abschnitt `auth:` der
+`hub.yaml` (Modi `none`, `password`, `trusted_header`; `/api/v1/auth/login|logout|me` wie dort beschrieben, auch unter
+`/w/<id>/api/v1/auth/…`). Der Steuer-Token der Instanzen gilt am Hub **nicht** (`403 control_token_not_allowed`).
+
+### Mindestrolle je Hub-Endpunkt
+
+`public` = ohne Anmeldung. Die Tabelle wird von `src/hub/http/http.test.ts` gegen die registrierten Routen geprüft.
+
+| Methode | Pfad | Mindestrolle | Antwort |
+|---|---|---|---|
+| GET | `/health` | public | `{"status":"ok","time"}` |
+| POST | `/api/v1/auth/login` | public | wie bei der Instanz |
+| POST | `/api/v1/auth/logout` | public | wie bei der Instanz |
+| GET | `/api/v1/auth/me` | public | wie bei der Instanz |
+| GET | `/api/v1/hub/status` | viewer | `HubStatusView` |
+| GET | `/api/v1/hub/workspaces` | viewer | `{"workspaces": [HubWorkspaceView]}` |
+| GET | `/api/v1/hub/workspaces/:id` | viewer | `HubWorkspaceView` (`404 unknown_workspace`) |
+| GET | `/api/v1/hub/events` | viewer | SSE `hub.*` ([unten](#sse-getapiv1hubevents)) |
+| POST | `/api/v1/hub/workspaces/:id/start` | operator | `{"ok":true,"workspace": HubWorkspaceView}` |
+| POST | `/api/v1/hub/workspaces/:id/stop` | operator | wie `start` |
+| POST | `/api/v1/hub/workspaces/:id/restart` | operator | wie `start` |
+| POST | `/api/v1/hub/workspaces/:id/drain` | operator | wie `start` |
+| POST | `/api/v1/hub/pause` | operator | `{"ok":true,"status": HubStatusView,"workspaces":[…]}` |
+| POST | `/api/v1/hub/resume` | operator | wie `pause` |
+| POST | `/api/v1/hub/stop-all` | operator | wie `pause` |
+| POST | `/api/v1/hub/drain-all` | operator | wie `pause` |
+| GET | `/api/v1/hub/audit?limit=&offset=` | admin | `{"entries":[HubAuditEntry],"total","limit","offset"}` (neueste zuerst; `limit` 1–500, Default 100) |
+| GET | `/` | public | die Übersichtsseite (enthält keine Daten) |
+| GET | `/*` | public | ihre statischen Dateien (CSS, JS; nicht die `index.html` der Workspace-UI) |
+
+Die Wirkung der Aktionen entspricht den gleichnamigen Befehlen der Steuer-Schnittstelle (unten): `pause`/`resume` – keine neuen
+**automatischen** Runs hub-weit; `stop`/`stop-all` – `cancel-all`, danach bleibt der Workspace gestoppt; `drain`/`drain-all` –
+aktive Runs laufen zu Ende, dann stoppt der Workspace; `restart` – Drain (begrenzt durch `--drain-timeout`), dann neu starten;
+`start` – gestoppten, fehlgeschlagenen oder deaktivierten Workspace starten. Alle Aktionen kehren zurück, sobald die
+Anforderung verschickt ist; `transition` im Workspace zeigt den Verlauf. Fehler: `404 unknown_workspace`, `409 invalid_state`
+(z. B. `start` eines laufenden Workspaces), `409 shutting_down`, `400 invalid_request`. **Jede** dieser Aktionen – auch eine
+fehlgeschlagene – steht im Audit-Log des Hubs.
+
+```json
+// HubStatusView (GET /api/v1/hub/status)
+{ "version": "0.10.0", "startedAt": "…", "time": "…", "state": "running|paused|stopping", "paused": false,
+  "slots": { "max": 6, "active": 3, "byWorkspace": { "coder": 2, "docs": 1 } },
+  "resources": { "at": "…", "cpu": { "percent": 12.5, "cores": 8, "load": [0.4, 0.3, 0.3] },
+                 "memory": { "usedBytes": 4294967296, "totalBytes": 17179869184 },
+                 "disks": [ { "path": "/var/lib/adispatchd-hub", "freeBytes": 1, "totalBytes": 2 } ] },   // null bis zur ersten Messung
+  "workspaces": { "total": 3, "running": 2, "failed": 0, "stopped": 1, "starting": 0, "backoff": 0 } }
+
+// HubWorkspaceView (GET /api/v1/hub/workspaces[/:id])
+{ "id": "coder", "enabled": true, "state": "starting|running|backoff|stopped|failed", "transition": null,
+  "port": 8091, "path": "/w/coder/", "startedAt": "…", "restarts": 0, "crashes": 0,
+  "lastExit": { "code": null, "signal": "SIGKILL", "at": "…" }, "nextRestartAt": null, "message": null,
+  "slots": 2, "connected": true,
+  "activity": { "version": "0.10.0", "activeRuns": 2, "supervisedRuns": 2, "recoveryPending": 0,
+                "activeBlocks": 1, "failedActions": 0, "failedNotifications": 0,
+                "scheduler": { "state": "running", "paused": false, "draining": false }, "ownLimit": 5, "at": "…" } }  // null, solange der Workspace nicht läuft/antwortet
+
+// HubAuditEntry
+{ "id": 12, "at": "…", "actor": "olga", "role": "operator", "via": "password|trusted_header|none|anonymous",
+  "action": "workspace.stop|…|hub.pause|…", "workspace": "coder", "result": "ok|failed", "error": null }
+```
+
+`activity` liest der Hub alle 3 s von `GET /api/v1/status` der laufenden Instanzen (über den Vertrauenskanal, Rolle `viewer`);
+`activeRuns` zählt alle aktiven Runs, `activeBlocks` die aktiven Retry-Blocks („blockiert“), `failedActions` die wartenden
+fehlgeschlagenen Lifecycle-Actions. Eine Warteschlange gibt es in der Instanz nicht (Kandidaten warten in der Source); wartet ein
+Workspace auf einen freien Platz, steht das in dessen Planungsdiagnose (`hub_limit`). Die API enthält **keine** Pfade, PIDs,
+Geheimnisse oder Prozessdetails der Workspaces; `port` ist der Loopback-Port der Instanz (sie antwortet dort nur dem Hub).
+`slots` zählt die gehaltenen Plätze, `connected` = Slot-Verbindung steht. `audit.via` ist `none`, wenn der Hub ohne
+Anmeldung läuft (dann `actor` und `role` `null`).
+
+### Durchreichen: `/w/<id>/…`
+
+`/w/<id>/` ist die Web-UI des Workspaces `<id>`, `/w/<id>/api/v1/…` seine API **einschließlich** `GET …/api/v1/events` (SSE,
+ohne Pufferung weitergereicht, Ende bei Logout/Ablauf der Hub-Session). Methoden `GET HEAD POST PATCH PUT DELETE`; die
+Antworten sind die der Instanz (Statuscodes, JSON, Fehlerform). Regeln:
+
+| Fall | Antwort |
+|---|---|
+| `/w/<id>` (ohne `/`) | `308` mit **relativem** `Location: <id>/` |
+| unbekannte ID, `/w`, `/w/` | `404 unknown_workspace` / `404 not_found` |
+| `..`, `.`, `%2e%2e`, `%2f`, `%5c`, NUL, doppelte Kodierung, ungültiges Prozent-Escape, ungültige ID | `400 invalid_path` |
+| Host nicht erlaubt / Origin fremd / CSRF-Header fehlt / Cross-Site / kein JSON | `421` / `403` / `403` / `403` / `415` (wie überall) |
+| keine Anmeldung (API-Pfade und `/health`, `/ready`; die UI-Hülle und ihre Dateien sind öffentlich) | `401 authentication_required` |
+| Rolle reicht für die Route der **Instanz** nicht | `403 forbidden` (von der Instanz, mit der Rolle des Hubs) |
+| Workspace nicht `running` (`starting`, `backoff`, `stopped`, `failed`) | `503` – HTML-Seite für Browser (`Accept: text/html`), sonst `{"error":{"code":"workspace_unavailable","details":{workspace,state}}}`, `Retry-After: 5` |
+| Instanz verweigert die Verbindung / schweigt 120 s | `503 workspace_unavailable` / `504 workspace_timeout` |
+| Body über 2 MiB | `413 payload_too_large` |
+
+Identität: Der Hub setzt `X-Adispatch-Hub-Token`, `-User`, `-Role` aus seiner Anmeldung (siehe
+[Vertrauensmodell](operations.md#weboberfläche-des-hubs-durchreichen-und-vertrauensmodell-seit-0100-wi-36)); alle gleichnamigen
+Header des Clients und ein mitgesendeter `X-Adispatch-Control-Token` führen zu `401` bzw. werden verworfen. Eine **hubverwaltete
+Instanz** (gestartet von `hub start`) beantwortet ohne diese Identität nur `/health`, `/ready`, `GET /api/v1/auth/me` (mit
+`mode: "trusted_header"` und `error.code: "hub_required"`) und die statische UI-Hülle; alles andere `401` – auch mit
+`auth.mode: none`. Neue Fehlercodes der Instanz: `401 invalid_hub_token`, `401 invalid_hub_identity`; neue `via`-Werte: `hub`
+(Person, vom Hub angemeldet; zählt für UI-Aktionen wie `password`) und `hub_open` (Hub ohne Anmeldung; nie eine Person).
+
+### SSE: `GET /api/v1/hub/events`
+
+`text/event-stream`, Nachricht `event: <type>` / `data: {"type","time","payload"}`, **ohne `id`** (kein Replay; nach einem
+Reconnect kommt ein neuer Snapshot). Heartbeat `: heartbeat …` alle 15 s, `retry: 3000`, Verbindungen mit mehr als 512 KiB
+ungesendeten Daten werden getrennt.
+
+| `event` | Payload |
+|---|---|
+| `stream.open` | `{}` (erste Nachricht) |
+| `hub.snapshot` | `{"status": HubStatusView, "workspaces": [HubWorkspaceView]}` – gleich danach |
+| `hub.status` | `HubStatusView` ohne `resources` (Zustand, Pause, Plätze, Zähler geändert) |
+| `hub.workspace` | `HubWorkspaceView` eines Workspaces (Zustand, `transition`, Plätze, `activity` geändert) |
+| `hub.resources` | Serverressourcen (`resources` wie in `HubStatusView`), je Messung (alle 10 s) |
+
 ## Steuer-Schnittstelle des Hubs (seit 0.10.0)
 
-Der Hub (`adispatch hub start`, WI-35) hat **keine HTTP-API auf einem TCP-Port** – die Übersichtsseite und das Durchreichen der
-Workspace-UIs folgen in einem späteren Work-Item (WI-36), das auf derselben Schnittstelle (`HubControl` in
-`src/hub/control-server.ts`) aufbaut. Für die CLI gibt es einen kleinen JSON-über-HTTP-Server auf einem **Unix-Socket**
-`<hub-data-dir>/hub.sock` (Modus `0600`, nur der Benutzer des Hubs; deshalb keine Anmeldung und kein CSRF-Header).
+Für die CLI (`adispatch hub status|pause|…`, WI-35) gibt es einen kleinen JSON-über-HTTP-Server auf einem **Unix-Socket**
+`<hub-data-dir>/hub.sock` (Modus `0600`, nur der Benutzer des Hubs; deshalb keine Anmeldung und kein CSRF-Header). Die HTTP-API
+des Hubs für Browser und Skripte (seit WI-36) ist [oben](#hub-api-seit-0100-wi-36) beschrieben; beide rufen dieselben
+Operationen (`HubControl` in `src/hub/control-server.ts`) im Hub auf.
 
 | Methode | Pfad | Wirkung |
 |---|---|---|

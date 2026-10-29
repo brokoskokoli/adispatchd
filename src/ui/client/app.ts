@@ -5,6 +5,7 @@
  */
 import { api, ApiError } from './api.js';
 import { currentAuth, loadAuth, UNAUTHORIZED_EVENT } from './auth.js';
+import { appPath, hubOverviewHref } from '../shared/base-path.js';
 import { authScreen, deniedPage, loginPage, userEntry } from '../shared/auth.js';
 import { h, replaceChildren, $ } from './dom.js';
 import { parseHash, type Route } from '../shared/route.js';
@@ -37,6 +38,7 @@ const main = $('#main');
 const nav = $('#nav');
 const liveIndicator = $('#live');
 const userSlot = $('#user');
+const hubBack = $('#hub-back');
 let current: Page | null = null;
 let appStarted = false;
 
@@ -139,9 +141,18 @@ const renderCount = (el: HTMLElement, n: number, tone: 'warn' | 'error'): void =
   replaceChildren(el, n > 0 ? badge(String(n), tone) : null);
 };
 
+/** Hub (WI-36): below `/w/<id>/` a link leads back to the overview. */
+const updateHubBack = (workspace: string | null | undefined): void => {
+  const href = hubOverviewHref(location.pathname, workspace);
+  if (href) hubBack.setAttribute('href', href);
+  else hubBack.removeAttribute('href');
+  hubBack.hidden = href === null;
+};
+
 const loadNav = async (): Promise<void> => {
   try {
     const [status, views] = await Promise.all([api.get<Status>('/api/v1/status'), api.get<{ views: ViewDef[] }>('/api/v1/views')]);
+    updateHubBack(status.hub?.workspace);
     renderCount(counters.blocks, status.counts.activeBlocks, 'warn');
     renderCount(counters.actions, status.counts.failedActions, 'error');
     const direct = views.views.length <= MAX_DIRECT_VIEWS ? views.views : [];
@@ -242,7 +253,7 @@ function render(): void {
 const STATE_LABEL: Record<LiveState, string> = { connecting: 'connecting…', open: 'live', reconnecting: 'reconnecting…', closed: 'offline' };
 let live: LiveConnection | null = null;
 const createLive = (): LiveConnection => new LiveConnection({
-  url: '/api/v1/events',
+  url: appPath('/api/v1/events'),
   // The DOM EventSource is structurally compatible (handler parameter types differ only nominally).
   create: (url) => new EventSource(url) as unknown as EventSourceLike,
   onMessage: (msg) => {

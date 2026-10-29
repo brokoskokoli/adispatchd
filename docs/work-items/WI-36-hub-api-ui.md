@@ -32,8 +32,8 @@
 
 ## Acceptance Criteria
 
-- [ ] API-Tests für alle Endpunkte inkl. Rollenprüfung und Auth-Modi; Verwaltungsaktionen auditiert.
-- [ ] Durchreichen: UI, API und SSE eines Workspaces funktionieren unter `/w/<id>/` (auch hinter zusätzlichem Reverse-Proxy-Präfix); direkter Zugriff auf das Kind von außen ist nicht möglich bzw. dokumentiert eingeschränkt.
-- [ ] Ungültige/fremde Pfade, `..`, falsche Hosts und fehlende Rechte werden abgewiesen; ein Workspace kann nicht auf andere zugreifen.
-- [ ] Übersicht zeigt Zustand und Zahlen korrekt, aktualisiert live, „alle drainen/stoppen/pausieren“ funktionieren end-to-end mit zwei Kindprozessen.
-- [ ] Im Browser geprüft (eigene Hub-Instanz, hell/dunkel, schmal); `npm run check` grün.
+- [x] API-Tests für alle Endpunkte inkl. Rollenprüfung und Auth-Modi; Verwaltungsaktionen auditiert (`src/hub/http/http.test.ts`: Modi `none`, `password`, `trusted_header`, Rollenmatrix, Audit inkl. fehlgeschlagener Aktionen; Routen-/Rollentabelle gegen `docs/api.md`).
+- [x] Durchreichen: UI, API und SSE eines Workspaces funktionieren unter `/w/<id>/` (auch hinter zusätzlichem Reverse-Proxy-Präfix); direkter Zugriff auf das Kind von außen ist nicht möglich bzw. dokumentiert eingeschränkt (API/SSE: `http.test.ts`, `hub.e2e.test.ts` mit zwei echten Kindprozessen; UI im Browser über `/w/<id>/` und über einen Präfix-Proxy `/adispatch/…` manuell geprüft, Auflösung der relativen URLs: `base-path.test.ts`; direkter Zugriff: `auth-hub.test.ts`, E2E).
+- [x] Ungültige/fremde Pfade, `..`, falsche Hosts und fehlende Rechte werden abgewiesen; ein Workspace kann nicht auf andere zugreifen (`http.test.ts`: Traversal-Katalog, Host-/Origin-/CSRF-Regeln, Rollen, Isolation der Workspaces).
+- [x] Übersicht zeigt Zustand und Zahlen korrekt, aktualisiert live, „alle drainen/stoppen/pausieren“ funktionieren end-to-end mit zwei Kindprozessen (`hub.e2e.test.ts` „WI-36“ über die HTTP-API; Übersicht live in zwei Browsern geprüft; Anzeige-Logik: `src/ui/shared/hub.test.ts`).
+- [ ] Im Browser geprüft (eigene Hub-Instanz, hell/dunkel, schmal) – erledigt; `npm run check` grün: **offen** – in der Sandbox 9 bekannte umgebungsbedingte rote Tests (wie auf `main`, siehe Handoff); Linux-Container `node:24`, macOS und `test:pack` vor dem Release.
