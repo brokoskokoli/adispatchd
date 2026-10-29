@@ -90,6 +90,12 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
   Audit-Log (Default 365 Tage aufbewahrt, `retention.ui_actions`); nur mit Anmeldung, nie über den CLI-Steuer-Token.
 - **Dry-Run:** `adispatch workflow dry-run <id>` zeigt, welche Items starten würden und warum die anderen nicht – ohne
   etwas zu starten.
+- **Hub für mehrere Projekte (seit 0.10.0):** `adispatch hub start` betreibt mehrere unabhängige Workspaces (je eine vollständige
+  Instanz mit eigener Konfiguration, Datenbank und eigenem Port) als Kindprozesse mit Neustart nach Absturz unter **einem
+  gemeinsamen Limit** für automatische Runs. Eine Übersichtsseite zeigt alle Workspaces (Zustand, laufende Runs, blockierte
+  Items, Slot-Auslastung, Serverressourcen), die Workspace-UIs liegen unter `/w/<id>/` auf demselben Port, mit einer
+  Anmeldung und Rollen für alle. Eine systemd-Unit (`service install --hub`) statt einer je Projekt; eine bestehende
+  Einzelinstanz zieht ohne Kopieren von Daten ein.
 - **Robust:** technische Fehler vs. fachliches `failure`, Retry-Blocks, Aktions-Retries, Cancel/Timeout per
   Prozessgruppe, Drain, Crash-Recovery, systemd-Integration.
 
@@ -132,6 +138,22 @@ npm install -g ./adispatchd-0.10.0.tgz   # feste Version aus dem Tarball (für D
 # lokal ohne globale Installation: npm run build && node dist/cli/main.js <kommando> …
 ```
 
+## Mehrere Projekte: der Hub
+
+```bash
+adispatch hub init     --config-dir ./hub --data-dir ./hub-data --workspace coder --workspace docs
+adispatch hub validate --config-dir ./hub --data-dir ./hub-data
+adispatch hub start    --config-dir ./hub --data-dir ./hub-data   # Übersicht unter http://127.0.0.1:8090/, Workspaces unter /w/<id>/
+adispatch hub status   --data-dir ./hub-data
+```
+
+`hub.yaml` führt die Workspaces und das gemeinsame `hub.max_concurrent`; jeder Workspace behält seine eigene Konfiguration.
+Auf einem Linux-Server läuft der Hub als **eine** systemd-Unit
+(`sudo adispatch service install --hub --dry-run --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub`);
+eine bestehende Einzelinstanz wird mit unverändertem config-dir/data-dir und neuem Port als Workspace eingetragen. Alle
+Workspaces laufen unter demselben Dienstbenutzer (für getrennte Rechte: Container-Executor `user` oder getrennte Hubs).
+Ablauf, Layout, Backup, Update und Verhalten bei Ausfall: [Betrieb → Hub](docs/operations.md#hub-mehrere-workspaces-auf-einem-server-seit-0100).
+
 ## Quickstart (lokal)
 
 ```bash
@@ -170,7 +192,9 @@ adispatch start --config-dir ./config --data-dir ./data     # Vordergrund, Ctrl-
 | `config reload` | laufende Instanz lädt die Konfiguration atomar neu (ungültig → alte bleibt aktiv) |
 | `workflow dry-run <id> [--json] [--local]` | Kandidatenauswahl ohne Start/Actions/Shell-Prüfungen; gegen die laufende Instanz, sonst lokal |
 | `auth hash-password` | scrypt-Hash eines Passworts für `auth.users[].password_hash_env` (Abfrage ohne Echo oder stdin) |
-| `service install\|status\|uninstall [--dry-run]` | systemd-Dienst (Linux), siehe [Betrieb](docs/operations.md#installation-als-systemd-dienst-linux) |
+| `service install\|status\|uninstall [--dry-run]` | systemd-Dienst (Linux), siehe [Betrieb](docs/operations.md#installation-als-systemd-dienst-linux); mit `--hub` die Unit eines Hubs |
+| `hub init [--workspaces-data-dir D] [--empty]`, `hub validate`, `hub start` | `hub.yaml` und Workspaces anlegen / prüfen / Hub im Vordergrund betreiben (SIGTERM = alle Workspaces drainen) |
+| `hub status`, `hub pause`, `hub resume`, `hub drain-all`/`stop-all [--wait] [--timeout T]`, `hub workspace start\|stop\|restart\|drain <id>` | laufenden Hub steuern (lokaler Steuer-Socket im data-dir des Hubs) |
 
 HTTP-Kommandos finden die Instanz über `--url` oder Host/Port aus `config.yaml` von `--config-dir` (Default
 `http://127.0.0.1:8787`). Exit-Codes: 0 ok, 1 Fehler, 2 Aufruffehler, 3 Instanz nicht erreichbar, 4 `--wait`-Timeout.
@@ -312,13 +336,13 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 |---|---|
 | [Konfigurationsreferenz](docs/configuration-reference.md) | alle Dateien, Felder, Defaults, Filter, Platzhalter, Auswertungsablauf; Beispiele per Test geprüft |
 | [Worker-Protokoll](docs/worker-protocol.md) | Umgebung, Kontext- und Ergebnisdatei, Events, Token-Dateien, Container |
-| [Betrieb](docs/operations.md) | systemd, Updates, Backups, Recovery, Reverse Proxy, Container-Rechte |
+| [Betrieb](docs/operations.md) | systemd, Hub (mehrere Workspaces, Migration), Updates, Backups, Recovery, Reverse Proxy, Container-Rechte |
 | [HTTP-API/SSE](docs/api.md) | Endpunkte und Live-Events |
 | [Cron-Semantik](docs/cron-semantics.md) | Zeitpläne, Zeitzonen, verpasste Slots, Sommerzeit |
 | [Spezifikation](docs/spec-v0.1.md) | technische Spezifikation |
 | [Änderungen](CHANGELOG.md) | Release-Notizen |
 | [Projektstand](docs/status.md) | Testabdeckung und offene Punkte |
-| Manuelle Tests | [systemd](docs/manual-tests/systemd.md), [Prozess-Supervision](docs/manual-tests/process-supervision.md), [GitHub](docs/manual-tests/github.md) |
+| Manuelle Tests | [systemd](docs/manual-tests/systemd.md), [Hub unter systemd](docs/manual-tests/hub-systemd.md), [Prozess-Supervision](docs/manual-tests/process-supervision.md), [GitHub](docs/manual-tests/github.md) |
 
 ## Sicherheit
 
@@ -342,7 +366,7 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 - **Keine Isolation zwischen Runs desselben Dienstes:** `0700`/`0600` schützt nur vor anderen Systembenutzern. Alle
   Worker laufen als derselbe Dienstbenutzer und können Token-Dateien (vorhersagbare Pfade) bzw. unter Linux die Umgebung
   (`/proc/<pid>/environ`) paralleler Runs lesen. Hoch- und niedrig-privilegierte Workflows in getrennten Instanzen unter
-  getrennten Benutzern oder in Containern (WI-19) betreiben. Mit `execute.type: container` sieht ein Worker nur die eigenen
+  getrennten Benutzern oder in Containern (WI-19) betreiben – das gilt auch für die Workspaces eines Hubs (ein Dienstbenutzer für alle). Mit `execute.type: container` sieht ein Worker nur die eigenen
   Mounts (Workspace, Kontext, Ausgabeverzeichnis, eigene Token-Dateien); Zugriff auf den Docker-Daemon entspricht root.
 - GitHub-Apps mit minimalen Rechten; fehlende Rechte bei Cross-Repo-Abhängigkeiten führen zu `unknown` (kein Start), nicht zu „0“.
 - Event-, Result- und Log-Inhalte werden in der UI nur als Text dargestellt.
@@ -354,6 +378,9 @@ Kurzfassung – Details in [docs/operations.md](docs/operations.md):
 - **systemd:** `sudo adispatch service install --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd --create-user`
   (vorher `--dry-run`). Unit mit absolutem Node-/Paketpfad, dediziertem Benutzer, `Restart=on-failure`, `KillMode=mixed`,
   `TimeoutStopSec` > Drain + Cancel + Grace. Secrets in `/etc/default/adispatchd`.
+- **Hub (mehrere Workspaces):** `sudo adispatch service install --hub --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub --create-user`
+  (vorher `--dry-run`): eine Unit `adispatchd-hub` für `hub start`, ebenfalls `KillMode=mixed`; `TimeoutStopSec` berücksichtigt das größte
+  `cancel_grace` aller Workspaces. Geplante Stopps/Updates: `adispatch hub drain-all --wait`, dann `systemctl stop`.
 - **Geplante Stopps/Updates:** `adispatch drain --wait`, dann die neue Version installieren (`npm install -g adispatchd@<neu>` oder Tarball), starten.
   Migrationen laufen automatisch mit Backup in `data-dir/backups/`; config-dir und data-dir bleiben erhalten.
 - **Backups:** config-dir (git), Env-Datei, `adispatchd.sqlite` per `sqlite3 … ".backup …"`, `logs/`, `runs/`.
@@ -363,7 +390,7 @@ Kurzfassung – Details in [docs/operations.md](docs/operations.md):
 
 ## Projektstand und Roadmap
 
-Version 0.5.0. Alle geplanten Work-Items sind umgesetzt und durch eine automatisierte Testsuite abgedeckt (CI auf
+Version 0.10.0. Alle geplanten Work-Items sind umgesetzt und durch eine automatisierte Testsuite abgedeckt (CI auf
 Node 22 und 24). Die manuelle Prüfung gegen echte GitHub-Repositories und systemd unter Linux steht noch aus – was vor
 dem Produktivbetrieb offen ist, steht in [docs/status.md](docs/status.md), Release-Notizen in [CHANGELOG.md](CHANGELOG.md).
 
