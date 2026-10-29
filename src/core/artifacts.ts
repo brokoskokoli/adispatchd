@@ -7,6 +7,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import { systemClock, type Clock } from './clock.js';
+import { keepPatternError } from './glob.js';
 import { formatCompactTimestamp } from './ids.js';
 import { sanitizeSegment } from './paths.js';
 
@@ -92,4 +93,49 @@ export function artifactInputRelPath(record: Pick<ArtifactRecord, 'name' | 'kind
 /** UI route of an artifact. */
 export function artifactRoute(id: string): string {
   return `#/artifacts/${encodeURIComponent(id)}`;
+}
+
+/** Max. length of a rendered artifact name. */
+export const ARTIFACT_NAME_MAX_LENGTH = 200;
+/** Max. length of an artifact type. */
+export const ARTIFACT_TYPE_MAX_LENGTH = 64;
+
+/**
+ * Why `path` is not a valid `execute.artifacts[].path`, or `null`: a literal,
+ * relative `/`-separated workspace path (no wildcards, no `..`, not absolute).
+ */
+export function artifactPathError(path: string): string | null {
+  const error = keepPatternError(path);
+  if (error) return error.replace(/^Pattern/, 'Path').replace('only files inside the workspace can be kept', 'only paths inside the workspace can be collected');
+  if (/[*?]/.test(path)) return 'Path must be a literal file or folder (no "*" or "?")';
+  return null;
+}
+
+/** A configured path without the leading `./`. */
+export function normalizeArtifactPath(path: string): string {
+  let p = path;
+  while (p.startsWith('./')) p = p.slice(2);
+  return p;
+}
+
+/**
+ * `{item.name}` / `{item.type}` / `{item.path}` of an artifact item from its
+ * field values (see the artifacts source). `workspacePath` is the workspace as
+ * the consumer sees it; without it there is no `path`.
+ */
+export function artifactTemplateItem(
+  fields: Readonly<Record<string, unknown>>,
+  workspacePath?: string,
+): { name?: string; type?: string; path?: string } {
+  const name = typeof fields.name === 'string' ? fields.name : undefined;
+  const type = typeof fields.type === 'string' ? fields.type : undefined;
+  const kind = fields.kind === 'folder' ? 'folder' : 'file';
+  const fileName = typeof fields.file_name === 'string' ? fields.file_name : '';
+  return {
+    ...(name !== undefined ? { name } : {}),
+    ...(type !== undefined ? { type } : {}),
+    ...(name !== undefined && workspacePath !== undefined
+      ? { path: `${workspacePath.replace(/\/+$/, '')}/${artifactInputRelPath({ name, kind, fileName })}` }
+      : {}),
+  };
 }

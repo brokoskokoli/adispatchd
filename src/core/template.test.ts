@@ -224,3 +224,32 @@ describe('source variables {source.vars.<name>} (WI-20)', () => {
     expect(validateTemplate('{source.vars.a.b}', { mode: 'text', scope: { source: true } })[0]?.code).toBe('unknown_placeholder');
   });
 });
+
+describe('artifact placeholders (WI-35)', () => {
+  const values = buildTemplateValues({
+    workflow: { id: 'w' },
+    workspace: { baseDir: '/base', path: '/base/w/run-1' },
+    item: { id: 'art-1', name: 'Weekly report', type: 'report', path: '/base/w/run-1/inputs/Weekly_report.pdf' },
+    now: new Date('2026-10-29T00:00:00Z'),
+  });
+
+  it('are scoped: name/type need `artifact`, path needs `artifactInput`', () => {
+    expect(validateTemplate('{item.name} {item.type}', { mode: 'text', scope: { source: true } })).toMatchObject([
+      { code: 'unavailable_placeholder', placeholder: 'item.name' },
+      { code: 'unavailable_placeholder', placeholder: 'item.type' },
+    ]);
+    expect(validateTemplate('{item.name} {item.type}', { mode: 'text', scope: { source: true, artifact: true } })).toEqual([]);
+    expect(validateTemplate('{item.path}', { mode: 'text', scope: { source: true, artifact: true } })).toMatchObject([
+      { code: 'unavailable_placeholder', placeholder: 'item.path' },
+    ]);
+    expect(validateTemplate('{item.path}', { mode: 'text', scope: { source: true, artifact: true, artifactInput: true } })).toEqual([]);
+  });
+
+  it('render verbatim in text mode and as one safe segment in path mode', () => {
+    const scope = { source: true, artifact: true, artifactInput: true };
+    expect(renderTemplate('{item.name}|{item.type}|{item.path}', values, { mode: 'text', scope })).toBe(
+      'Weekly report|report|/base/w/run-1/inputs/Weekly_report.pdf',
+    );
+    expect(renderTemplate('/w/{item.name}', values, { mode: 'path', scope: { source: true, artifact: true } })).toBe('/w/Weekly_report');
+  });
+});

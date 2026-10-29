@@ -4,6 +4,8 @@
  * "Platzhalter-Scopes") and the JSON context handed to `shell` actions.
  */
 import {
+  ARTIFACT_SOURCE_TYPE,
+  artifactTemplateItem,
   WORKER_PROTOCOL_VERSION,
   buildTemplateValues,
   isRetryBlockHook,
@@ -17,7 +19,7 @@ import {
   type TemplateScope,
   type TemplateValues,
 } from '../core/index.js';
-import { WORKFLOW_SNAPSHOT_VERSION, type LifecycleActionConfig, type WorkflowSnapshot } from '../config/index.js';
+import { WORKFLOW_SNAPSHOT_VERSION, sourceLocation, type LifecycleActionConfig, type WorkflowSnapshot } from '../config/index.js';
 import type { RunRecord } from '../persistence/index.js';
 import { LifecycleError } from './errors.js';
 
@@ -54,6 +56,11 @@ export function isSourceWorkflow(snapshot: WorkflowSnapshot): boolean {
   return snapshot.workflow.trigger.type === 'source';
 }
 
+/** True for workflows whose run item is an artifact (WI-35). */
+export function isArtifactWorkflow(snapshot: WorkflowSnapshot): boolean {
+  return snapshot.source?.type === ARTIFACT_SOURCE_TYPE;
+}
+
 /**
  * Write identity of an action: action `identity` (only `source.comment`) →
  * workflow `identity` → source `identity` (WI-02, Spec §5.2).
@@ -75,6 +82,8 @@ export function hookTemplateScope(snapshot: WorkflowSnapshot, hook: HookName): T
     source: isSourceWorkflow(snapshot),
     result: hasResult(hook),
     linked: isSourceWorkflow(snapshot),
+    artifact: isArtifactWorkflow(snapshot),
+    artifactInput: isArtifactWorkflow(snapshot) && hook !== 'on_start',
     parameters: Object.keys(snapshot.workflow.parameters ?? {}),
     block: isRetryBlockHook(hook),
     blockCleared: hook === 'on_retry_unblock',
@@ -156,7 +165,7 @@ export function buildHookTemplateValues(input: HookValueInput): TemplateValues {
           source: {
             id: source.id,
             type: source.type,
-            repository: input.repository ?? `${source.owner}/${source.repository}`,
+            repository: input.repository ?? sourceLocation(source),
             // `vars` is missing in snapshots written before 0.3.0 (WI-20).
             vars: source.vars ?? {},
           },
@@ -171,6 +180,7 @@ export function buildHookTemplateValues(input: HookValueInput): TemplateValues {
             ...(item.url ? { url: item.url } : {}),
             ...(typeof title === 'string' ? { title } : {}),
             ...linkedTemplateItem(input.linked),
+            ...(isArtifactWorkflow(snapshot) ? artifactTemplateItem(item.fields, run.workspacePath ?? undefined) : {}),
           },
         }
       : {}),

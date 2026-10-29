@@ -8,7 +8,9 @@ import { statSync } from 'node:fs';
 import path from 'node:path';
 import { Cron } from 'croner';
 import {
+  ARTIFACT_SOURCE_TYPE,
   CONTAINER_PATHS,
+  artifactPathError,
   formatDuration,
   isContainerEngineEnvName,
   extractPlaceholders,
@@ -239,7 +241,16 @@ function validateUiActions(input: SemanticInput, issues: IssueCollector): void {
 }
 
 function validateSources(input: SemanticInput, issues: IssueCollector): void {
+  const artifactSources = Object.values(input.sources).filter((s) => s.type === ARTIFACT_SOURCE_TYPE);
+  artifactSources.slice(1).forEach((source) =>
+    issues.error(
+      SOURCES_FILE,
+      ['sources', source.id],
+      `Only one source of type "${ARTIFACT_SOURCE_TYPE}" is allowed (already defined: "${artifactSources[0]?.id ?? ''}")`,
+    ),
+  );
   for (const source of Object.values(input.sources)) {
+    if (source.identity === null) continue; // artifacts source: no identity
     if (!input.identities[source.identity]) {
       issues.error(SOURCES_FILE, ['sources', source.id, 'identity'], `Unknown identity "${source.identity}"`);
     }
@@ -390,6 +401,8 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
       ),
     );
   }
+  // Artifact items (WI-35): `{item.name}`, `{item.type}`, `{item.path}`.
+  const artifact = triggerSources.length > 0 && triggerSources.every((s) => s.type === ARTIFACT_SOURCE_TYPE);
   // `{item.work_branch}` / `{item.work_pr}` need adapters that provide the linked fields (WI-21) – every trigger source.
   const linked = triggerSources.length > 0 && triggerSources.every((s) => providesLinkedFields(s.type));
   // `{source.vars.<name>}` must be defined in every (known) source of the workflow (WI-20).
@@ -420,7 +433,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   );
   wf.conditions.item.forEach((c, i) =>
     c.args.forEach((arg, j) =>
-      checkTemplate(arg, 'text', { source: true, sourceVar }, issues, file, ['conditions', 'item', i, 'args', j]),
+      checkTemplate(arg, 'text', { source: true, sourceVar, artifact }, issues, file, ['conditions', 'item', i, 'args', j]),
     ),
   );
 
@@ -433,7 +446,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   // Execute
   const exec = wf.execute;
   const wdIssues = issues.items.length;
-  checkTemplate(exec.workingDirectory, 'path', { run: true, source: isSource, sourceVar, linked, parameters: parameterNames }, issues, file, [
+  checkTemplate(exec.workingDirectory, 'path', { run: true, source: isSource, sourceVar, linked, artifact, parameters: parameterNames }, issues, file, [
     'execute',
     'working_directory',
   ]);
@@ -455,7 +468,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   ) {
     issues.error(file, ['execute', 'working_directory'], 'Must be absolute: start with "/" or "{workspace.base_dir}"');
   }
-  const runScope: TemplateScope = { run: true, workspace: true, source: isSource, sourceVar, linked, parameters: parameterNames };
+  const runScope: TemplateScope = { run: true, workspace: true, source: isSource, sourceVar, linked, artifact, artifactInput: artifact, parameters: parameterNames };
   if (exec.type === 'shell') {
     exec.args.forEach((arg, i) => checkTemplate(arg, 'text', runScope, issues, file, ['execute', 'args', i]));
   } else {
@@ -471,6 +484,13 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
   exec.keep.forEach((pattern, i) => {
     const error = keepPatternError(pattern);
     if (error) issues.error(file, ['execute', 'keep', i], error);
+  });
+  exec.artifacts.forEach((entry, i) => {
+    const at: IssuePath = ['execute', 'artifacts', i];
+    const error = artifactPathError(entry.path);
+    if (error) issues.error(file, [...at, 'path'], error);
+    checkTemplate(entry.name, 'text', runScope, issues, file, [...at, 'name']);
+    if (/[\u0000-\u001f\u007f]/.test(entry.type)) issues.error(file, [...at, 'type'], 'Type must not contain control characters');
   });
   const { maxDurationMs, idleTimeoutMs } = exec.timeout;
   if (maxDurationMs !== null && idleTimeoutMs !== null && idleTimeoutMs > maxDurationMs) {
@@ -491,7 +511,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
         issues.error(file, [...at, 'id'], `Duplicate action ID "${action.id}" (also used at ${previous})`);
       }
       actionIds.set(action.id, where);
-      validateAction(action, hook, at, { isSource, sourceVar, linked, sources: triggerSources }, parameterNames, input, issues, file);
+      validateAction(action, hook, at, { isSource, sourceVar, linked, sources: triggerSources, artifact }, parameterNames, input, issues, file);
     });
   }
   validateHookRouting(wf, issues, file);
@@ -628,6 +648,8 @@ interface ActionSourceContext {
   linked: boolean;
   /** Known trigger sources (several for multi-source workflows, WI-20). */
   sources: readonly SourceConfig[];
+  /** Workflow runs on artifact items (WI-35): `{item.name}`, `{item.type}`, `{item.path}`. */
+  artifact: boolean;
 }
 
 function validateAction(
@@ -649,12 +671,18 @@ function validateAction(
     // `on_retry_unblock` (WI-30) runs in a lifecycle run without worker: no result (like `on_start`).
     result: hook !== 'on_start' && hook !== 'on_retry_unblock',
     linked: sourceCtx.linked,
+    artifact: sourceCtx.artifact,
+    // The input is staged right before the worker starts: not available in `on_start`.
+    artifactInput: sourceCtx.artifact && hook !== 'on_start',
     parameters: parameterNames,
     block: isRetryBlockHook(hook),
     blockCleared: hook === 'on_retry_unblock',
   };
   if ((action.type === 'source.update' || action.type === 'source.comment') && !isSource) {
     issues.error(file, [...at, 'type'], `"${action.type}" needs a source item; the workflow has no source trigger`);
+  }
+  if ((action.type === 'source.update' || action.type === 'source.comment') && sourceCtx.artifact) {
+    issues.error(file, [...at, 'type'], `"${action.type}" is not supported for artifact items: the artifacts source has nothing to update or comment on`);
   }
   switch (action.type) {
     case 'source.update':

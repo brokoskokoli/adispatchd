@@ -38,8 +38,22 @@ export type TemplateMode = 'text' | 'path';
  *   only in `execute` and lifecycle actions of source-bound workflows.
  * - `block`: the retry block (WI-30), only in `on_retry_block` and `on_retry_unblock`
  * - `block_cleared`: removal of the retry block (WI-30), only in `on_retry_unblock`
+ * - `artifact`: name and type of the artifact item (WI-35), only for workflows triggered by the artifacts source
+ * - `artifact_input`: path of the artifact input in the workspace (WI-35), only there and only
+ *   once the input is staged (not in `working_directory` and `on_start`)
  */
-export type PlaceholderGroup = 'always' | 'run' | 'workspace' | 'source' | 'result' | 'parameters' | 'linked' | 'block' | 'block_cleared';
+export type PlaceholderGroup =
+  | 'always'
+  | 'run'
+  | 'workspace'
+  | 'source'
+  | 'result'
+  | 'parameters'
+  | 'linked'
+  | 'block'
+  | 'block_cleared'
+  | 'artifact'
+  | 'artifact_input';
 
 /** Definition of a whitelisted placeholder. */
 export interface PlaceholderDefinition {
@@ -70,6 +84,9 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'item.title', group: 'source', description: 'Item title' },
   { name: 'item.work_branch', group: 'linked', description: 'Work branch of the item (field work_branch, GitHub); empty if none' },
   { name: 'item.work_pr', group: 'linked', description: 'Number of the open PR of the item (field work_pr, GitHub); empty if none' },
+  { name: 'item.name', group: 'artifact', description: 'Name of the artifact (artifacts source)' },
+  { name: 'item.type', group: 'artifact', description: 'Type of the artifact (artifacts source)' },
+  { name: 'item.path', group: 'artifact_input', description: 'Path of the read-only artifact input in the workspace (inputs/<name>)' },
   { name: 'result.status', group: 'result', description: 'Technical final status' },
   { name: 'result.result', group: 'result', description: 'Business result (success|failure|empty)' },
   { name: 'result.message', group: 'result', description: 'Message from the worker result file' },
@@ -251,6 +268,10 @@ export interface TemplateScope {
   result?: boolean;
   /** `{item.work_branch}` / `{item.work_pr}` (WI-21). */
   linked?: boolean;
+  /** `{item.name}` / `{item.type}` of an artifact item (WI-35). */
+  artifact?: boolean;
+  /** `{item.path}` of an artifact item (WI-35). */
+  artifactInput?: boolean;
   /** Declared parameter names usable as `{parameters.<name>}`. */
   parameters?: readonly string[];
   /** `{block.id|failures|created_at|last_status}` (WI-30: `on_retry_block`, `on_retry_unblock`). */
@@ -266,7 +287,7 @@ export interface TemplateScope {
 }
 
 /** Scope with every group enabled (parameters: none). */
-export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true, linked: true, block: true, blockCleared: true };
+export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true, linked: true, artifact: true, artifactInput: true, block: true, blockCleared: true };
 
 /** True if `name` is on the whitelist (parameters: any syntactically valid name). */
 export function isKnownPlaceholder(name: string): boolean {
@@ -308,6 +329,20 @@ function checkAvailability(name: string, scope: TemplateScope): TemplateIssue | 
       placeholder: name,
     };
   }
+  if (def.group === 'artifact' && !scope.artifact) {
+    return {
+      code: 'unavailable_placeholder',
+      message: `Placeholder "{${name}}" is only available in workflows triggered by the artifacts source`,
+      placeholder: name,
+    };
+  }
+  if (def.group === 'artifact_input' && !scope.artifactInput) {
+    return {
+      code: 'unavailable_placeholder',
+      message: `Placeholder "{${name}}" is only available once the artifact input is in the workspace (not in "working_directory" and "on_start") of workflows triggered by the artifacts source`,
+      placeholder: name,
+    };
+  }
   if (def.group === 'block' || def.group === 'block_cleared') {
     const available = def.group === 'block' ? scope.block : scope.blockCleared;
     if (available) return undefined;
@@ -320,7 +355,7 @@ function checkAvailability(name: string, scope: TemplateScope): TemplateIssue | 
       placeholder: name,
     };
   }
-  if (def.group !== 'always' && def.group !== 'parameters' && !scope[def.group]) {
+  if (def.group !== 'always' && def.group !== 'parameters' && def.group !== 'artifact' && def.group !== 'artifact_input' && !scope[def.group]) {
     return {
       code: 'unavailable_placeholder',
       message: `Placeholder "{${name}}" is not available in this context`,
@@ -460,6 +495,10 @@ export interface TemplateInput {
     workBranch?: string | null;
     /** Resolved `work_pr` (`null` = none); omit when not resolved. */
     workPr?: number | null;
+    /** Artifact items (WI-35): name, type and path of the input in the workspace. */
+    name?: string;
+    type?: string;
+    path?: string;
   };
   result?: { status?: TerminalStatus; result?: BusinessResult; message?: string; outcome?: string };
   /** Retry block (WI-30, `on_retry_block` / `on_retry_unblock`). */
@@ -490,6 +529,9 @@ export function buildTemplateValues(input: TemplateInput): TemplateValues {
     'item.title': input.item?.title,
     'item.work_branch': input.item?.workBranch,
     'item.work_pr': input.item?.workPr,
+    'item.name': input.item?.name,
+    'item.type': input.item?.type,
+    'item.path': input.item?.path,
     'result.status': input.result?.status,
     'result.result': input.result?.result ?? undefined,
     'result.message': input.result?.message,

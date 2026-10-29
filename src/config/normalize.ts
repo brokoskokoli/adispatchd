@@ -3,7 +3,7 @@
  * normalized model (`model.ts`). Pure; semantic checks live in `validate.ts`.
  */
 import path from 'node:path';
-import { dataPaths, HOOK_NAMES, parseSize, resultHookName, type FilterNode, type HookName } from '../core/index.js';
+import { dataPaths, HOOK_NAMES, normalizeArtifactPath, parseSize, resultHookName, type FilterNode, type HookName } from '../core/index.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssuePath } from './issues.js';
 import type {
@@ -82,6 +82,7 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
       maxLogSizePerRunBytes: raw.retention.max_log_size_per_run,
       cleanupIntervalMs: raw.retention.cleanup_interval,
       uiActionsMs: raw.retention.ui_actions,
+      artifactsMs: raw.retention.artifacts,
     },
     notifications: {
       on: [...raw.notifications.on],
@@ -133,6 +134,10 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
 export function normalizeSources(raw: RawSourcesFile): Record<string, SourceConfig> {
   const out: Record<string, SourceConfig> = {};
   for (const [id, source] of Object.entries(raw.sources)) {
+    if (source.type === 'artifacts') {
+      out[id] = { id, type: 'artifacts', identity: null, project: null, vars: { ...(source.vars ?? {}) } };
+      continue;
+    }
     out[id] = {
       id,
       type: source.type,
@@ -287,6 +292,8 @@ function normalizeExecute(exec: RawWorkflow['execute'], global: GlobalConfig, co
     cancelGraceMs: exec.cancel_grace,
     keep: [...exec.keep],
     keepMaxSizeBytes: exec.keep_max_size ?? parseSize(DEFAULTS.keepMaxSize),
+    artifacts: exec.artifacts.map((a) => ({ name: a.name, type: a.type, path: normalizeArtifactPath(a.path), required: a.required })),
+    artifactsMaxSizeBytes: exec.artifacts_max_size ?? parseSize(DEFAULTS.artifactsMaxSize),
   };
   if (exec.type === 'shell') {
     return { type: 'shell', command: resolveCommand(configDir, exec.command), args: [...exec.args], ...common };

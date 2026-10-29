@@ -99,13 +99,14 @@ describe('ArtifactRepository (WI-35)', () => {
     const { p, cleanup } = openTestPersistence();
     try {
       p.artifacts.insert({ id: 'art-1', ...base });
-      expect(p.artifacts.activeRunsUsing(['artifacts:art-1'])).toEqual([]);
+      expect(p.artifacts.activeRunsUsing('art-1')).toEqual([]);
       const run = reserveSource(p, 'summarize', 'artifacts:art-1');
-      expect(p.artifacts.activeRunsUsing(['artifacts:art-1'])).toEqual([run.id]);
-      expect(p.artifacts.activeRunsUsing(['other:art-1'])).toEqual([]);
-      expect(p.artifacts.activeRunsUsing([])).toEqual([]);
+      reserveSource(p, 'summarize', 'artifacts:art-10');
+      expect(p.artifacts.activeRunsUsing('art-1')).toEqual([run.id]);
+      expect(p.artifacts.activeRunsUsing('art-_')).toEqual([]);
+      expect(p.artifacts.activeRunsUsing('art-%')).toEqual([]);
       completeRun(p, run.id, SUCCESS);
-      expect(p.artifacts.activeRunsUsing(['artifacts:art-1'])).toEqual([]);
+      expect(p.artifacts.activeRunsUsing('art-1')).toEqual([]);
     } finally {
       cleanup();
     }

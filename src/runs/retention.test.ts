@@ -20,7 +20,7 @@ describe('RetentionService', () => {
   beforeEach(() => {
     ({ p, clock, dir, cleanup } = openTestPersistence());
     baseDir = path.join(dir, 'workspaces');
-    settings = { completedRunsMs: 30 * DAY, failedRunsMs: 90 * DAY, blockedRunsMs: null, maxLogSizePerRunBytes: 1024, cleanupIntervalMs: DAY, uiActionsMs: 365 * DAY };
+    settings = { completedRunsMs: 30 * DAY, failedRunsMs: 90 * DAY, blockedRunsMs: null, maxLogSizePerRunBytes: 1024, cleanupIntervalMs: DAY, uiActionsMs: 365 * DAY, artifactsMs: null };
   });
   afterEach(() => cleanup());
 

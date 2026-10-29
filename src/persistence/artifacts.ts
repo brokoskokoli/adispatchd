@@ -166,16 +166,15 @@ export class ArtifactRepository implements ArtifactCatalog {
   }
 
   /**
-   * Active (not yet terminal) runs that use the artifact as their item.
-   * `sourceItemKey` is `<artifact source id>:<artifact id>`.
+   * Active (not yet terminal) runs that use the artifact as their item (item
+   * key `<artifact source id>:<artifact id>`; matched by the ID, so a renamed
+   * source does not hide a run).
    */
-  activeRunsUsing(sourceItemKeys: readonly string[]): string[] {
-    if (sourceItemKeys.length === 0) return [];
+  activeRunsUsing(artifactId: string): string[] {
     return all(
       this.db,
-      `SELECT id FROM runs WHERE source_item_key IN (${placeholders(sourceItemKeys.length)})
-         AND status IN (${placeholders(ACTIVE_STATUSES.length)}) ORDER BY created_at`,
-      [...sourceItemKeys, ...ACTIVE_STATUSES],
+      `SELECT id FROM runs WHERE source_item_key LIKE ? ESCAPE '\\' AND status IN (${placeholders(ACTIVE_STATUSES.length)}) ORDER BY created_at`,
+      [`%:${artifactId.replace(/[\\%_]/g, (c) => `\\${c}`)}`, ...ACTIVE_STATUSES],
     ).map((r) => String(r.id));
   }
 

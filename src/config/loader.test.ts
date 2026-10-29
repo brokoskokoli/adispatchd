@@ -120,6 +120,7 @@ describe('loadConfig – spec examples', () => {
       retention: {
         completedRunsMs: 30 * 86_400_000,
         uiActionsMs: 365 * 86_400_000,
+        artifactsMs: null,
         failedRunsMs: 90 * 86_400_000,
         blockedRunsMs: null,
         maxLogSizePerRunBytes: 100 * 1024 * 1024,

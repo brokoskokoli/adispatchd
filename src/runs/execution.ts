@@ -28,7 +28,7 @@ import {
   type TemplateValues,
   type WorkerContext,
 } from '../core/index.js';
-import { linkedFieldUsage as workflowLinkedFieldUsage, type ContainerExecuteConfig, type WorkflowSnapshot } from '../config/index.js';
+import { linkedFieldUsage as workflowLinkedFieldUsage, sourceLocation, type ContainerExecuteConfig, type WorkflowSnapshot } from '../config/index.js';
 import type { TokenFileRequest } from '../executors/index.js';
 import type { RunRecord } from '../persistence/index.js';
 import { RunControllerError } from './errors.js';
@@ -116,7 +116,7 @@ export function executionTemplateValues(input: ExecutionInput, workspacePath?: s
           source: {
             id: source.id,
             type: source.type,
-            repository: input.repository ?? `${source.owner}/${source.repository}`,
+            repository: input.repository ?? sourceLocation(source),
             // `vars` is missing in snapshots written before 0.3.0 (WI-20).
             vars: source.vars ?? {},
           },
