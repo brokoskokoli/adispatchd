@@ -32,7 +32,7 @@ export interface WorkspaceSpawner {
 export interface ProcessSpawnerOptions {
   /** Node executable (default: the running one). */
   execPath?: string;
-  /** Node options before the entry point (tests: `['--import', 'tsx']`). */
+  /** Node options before the entry point (default: those of the running process, e.g. `--import tsx` in development). */
   execArgv?: readonly string[];
   /** CLI entry point (default: the entry point of the running process). */
   entry?: string;
@@ -49,7 +49,7 @@ export function processSpawner(options: ProcessSpawnerOptions = {}): WorkspaceSp
     spawn(spec) {
       const entry = options.entry ?? process.argv[1];
       if (!entry) throw new Error('cannot determine the CLI entry point for workspace processes');
-      const child = spawn(options.execPath ?? process.execPath, [...(options.execArgv ?? []), entry, ...spec.args], {
+      const child = spawn(options.execPath ?? process.execPath, [...(options.execArgv ?? process.execArgv), entry, ...spec.args], {
         env: spec.env as NodeJS.ProcessEnv,
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: true,
