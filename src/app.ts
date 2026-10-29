@@ -867,7 +867,7 @@ export interface SignalTarget {
  * cancel-all; a third one calls `forceExit(1)`. Returns an uninstall function.
  */
 export function installSignalHandlers(
-  app: Pick<App, 'shutdown' | 'logger'>,
+  app: { shutdown(options?: AppShutdownOptions): Promise<unknown>; logger: Logger },
   options: {
     target?: SignalTarget;
     drainTimeoutMs?: number;
