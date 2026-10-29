@@ -35,3 +35,6 @@ export const FAST_AUTH = { auth: { scrypt: fakeScrypt, sleep: async () => undefi
 export function authEnvSetup(env: Pick<AppEnv, 'env'>): void {
   Object.assign(env.env, HASHES);
 }
+
+/** The password hashes by environment variable name (PW_ALICE, PW_OLGA, PW_VICTOR). */
+export { HASHES as AUTH_HASHES };

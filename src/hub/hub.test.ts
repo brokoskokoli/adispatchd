@@ -197,4 +197,91 @@ describe('createHub', () => {
     expect(spawner.children.filter((c) => c.spec.env.ADISPATCH_HUB_WORKSPACE).length).toBe(2); // only the first hub's children
     await expect(stat(early.slotSocketPath)).rejects.toThrow();
   });
+
+  describe('HTTP server (WI-36)', () => {
+    const getJson = async (hub: Hub, target: string, init: RequestInit = {}): Promise<{ status: number; json: any }> => {
+      const res = await fetch(`${hub.httpUrl}${target}`, init);
+      return { status: res.status, json: await res.json().catch(() => null) };
+    };
+    const post = (hub: Hub, target: string) =>
+      getJson(hub, target, { method: 'POST', headers: { 'x-adispatch-request': '1', 'content-type': 'application/json' }, body: '{}' });
+
+    it('listens before any workspace starts, serves the status of the live hub and controls it', async () => {
+      const hub = make({ http: { port: 0, uiDir: null, monitoring: false, info: { intervalMs: 60_000 } } });
+      expect(hub.httpUrl).toBeNull();
+      await hub.start();
+      expect(hub.httpUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+      expect(hub.status().server.port).toBe(Number(new URL(hub.httpUrl!).port));
+      await until('running', () => hub.status().workspaces[0]?.state === 'running');
+      const slot = slotClient(hub, 'coder');
+      await until('connected', () => slot.snapshot().reachable);
+      await slot.acquire();
+      await until('slot', () => hub.status().slots.active === 1);
+      const status = await getJson(hub, '/api/v1/hub/status');
+      expect(status.json).toMatchObject({ state: 'running', slots: { max: 2, active: 1 }, workspaces: { total: 3, running: 2, stopped: 1 } });
+      expect((await post(hub, '/api/v1/hub/pause')).json.status.paused).toBe(true);
+      await until('paused', () => slot.snapshot().paused);
+      expect(hub.status().paused).toBe(true);
+      expect((await post(hub, '/api/v1/hub/resume')).status).toBe(200);
+      expect((await post(hub, '/api/v1/hub/workspaces/off/start')).json.workspace).toMatchObject({ id: 'off', state: 'starting' });
+      expect(spawner.last('off')).toBeDefined();
+      // Hub-side secret per child: handed over on stdin, visible to the identity channel, absent from every status.
+      const token = hub.trustTokenOf('coder');
+      expect(spawner.last('coder').spec.input).toBe(`${token}\n`);
+      expect(JSON.stringify(await getJson(hub, '/api/v1/hub/workspaces'))).not.toContain(token as string);
+      expect(JSON.stringify(hub.status())).not.toContain(token as string);
+      expect((await post(hub, '/api/v1/hub/stop-all')).status).toBe(200);
+    });
+
+    it('notifies subscribers about state changes and slot changes', async () => {
+      const hub = make();
+      let n = 0;
+      const off = hub.subscribe(() => n++);
+      await hub.start();
+      await until('running', () => hub.status().workspaces[0]?.state === 'running');
+      const slot = slotClient(hub, 'coder');
+      await until('connected', () => slot.snapshot().reachable);
+      const before = n;
+      await slot.acquire();
+      await until('notified', () => n > before);
+      off();
+      const frozen = n;
+      await hub.pause();
+      expect(n).toBe(frozen);
+    });
+
+    it('fails the start before any workspace is spawned when the port is taken', async () => {
+      const blocker = http.createServer();
+      await new Promise<void>((resolve) => blocker.listen(0, '127.0.0.1', resolve));
+      const port = (blocker.address() as import('node:net').AddressInfo).port;
+      try {
+        const hub = createHub({
+          config: { ...config(), server: { host: '127.0.0.1', port, allowedHosts: [] } },
+          dataDir: path.join(dir, 'busy'),
+          version: 'test',
+          logger: noopLogger,
+          spawner,
+          baseEnv: {},
+          http: { uiDir: null, monitoring: false },
+        });
+        await expect(hub.start()).rejects.toThrow(/EADDRINUSE/);
+        expect(spawner.children).toHaveLength(0);
+        await hub.stopped;
+      } finally {
+        blocker.close();
+      }
+    });
+
+    it('keeps serving while the workspaces drain at shutdown and closes the port afterwards', async () => {
+      const hub = make({ http: { port: 0, uiDir: null, monitoring: false } });
+      await hub.start();
+      const url = hub.httpUrl!;
+      const stopping = hub.shutdown();
+      await until('stopping', () => spawner.children.every((c) => c.signals.includes('SIGTERM')));
+      expect((await getJson(hub, '/api/v1/hub/status')).json.state).toBe('stopping');
+      for (const c of spawner.children) c.exit(0);
+      await stopping;
+      await expect(fetch(`${url}/health`)).rejects.toThrow();
+    });
+  });
 });
