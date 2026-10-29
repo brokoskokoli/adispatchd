@@ -1,0 +1,17 @@
+# workflows/summarize-report.yaml (WI-35): processes every "report" artifact exactly once.
+id: summarize-report
+name: Summarize report
+trigger: { type: source, source: artifacts }
+filter:
+  all:
+    - { field: type, operator: equals, value: report }
+    # consumed_by lists the workflows that processed the artifact successfully (run completed + success)
+    - not: { field: consumed_by, operator: contains, value: summarize-report }
+execute:
+  type: shell
+  command: /etc/adispatchd/scripts/artifacts/summarize-report.sh
+  # The artifact is copied read-only to <workspace>/inputs/<name>; {item.path} is that path.
+  args: ['{item.path}']
+  timeout: { max_duration: 10m }
+  artifacts:
+    - { name: 'Summary of {item.name}', type: summary, path: out/summary.txt }

@@ -68,6 +68,12 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   streamed via Server-Sent Events; plus a JSON HTTP API. Optional toolbar links to other local tools
   (e.g. the [claude-inspect](https://github.com/brokoskokoli/claude_inspect) dashboard), opened in a new tab or embedded
   (`ui.external_links`).
+- **Artifacts** – a workflow lists files or folders in `execute.artifacts`; after the run they are stored as immutable
+  artifacts (no symlinks, size-limited, secrets redacted), listed on the **Artifacts** page with file tree, download
+  (folders as `.zip`) and delete. Artifacts are also the items of the source `type: artifacts`: another workflow
+  processes them automatically – exactly once per artifact via the built-in field `consumed_by` – or by a manual start,
+  and sees a read-only copy below `inputs/` (`{item.path}`). Chains such as *produce → process* need no pipeline engine
+  (`retention.artifacts`, API `/api/v1/artifacts`; since 0.10.0).
 - **Item history** – since 0.9.0 one page per issue/PR shows its way through the workflows: the current state (read
   fresh from GitHub), the **path** of all runs with their results and a filterable **timeline** of run starts and
   ends, hook chains with what each action changed (labels added/removed, project field `old → new`, comment link,

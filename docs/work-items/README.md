@@ -33,6 +33,7 @@ Zerlegung der Spec v0.1 in umsetzbare Pakete. **Status: alle Work-Items umgesetz
 | [27](WI-27-act-as-identity.md) | In der UI als App-Identität handeln (Kommentar, Labels, Projektfelder) | §10, §16, §20 | 26 | 14 |
 | [28](WI-28-view-sort-sections.md) | Views: Wertereihenfolge, mehrere Sortierschlüssel, Abschnitte | §17 | 27 | 15 (0.5.0) |
 | [29](WI-29-dashboard-resources-tab.md) | Dashboard: kompakte Ressourcenleiste, Reiter „Resources“ | §16 | 27 | 15 (0.5.0) |
+| [35](WI-35-artifacts.md) | Artefakte: Workflows erzeugen Dateien/Ordner, Artefakt-Seite, Artefakte als Workflow-Eingabe (Source `artifacts`) | §5, §9, §12, §15, §16 | 22, 33 | 0.10.0 |
 
 Ablauf je Work-Item: Coder-Agent (eigener Branch/Worktree) → Reviewer-Agent (prüft gegen Acceptance Criteria + Spec) → ggf. Fix-Runde → Merge nach `main`.
 

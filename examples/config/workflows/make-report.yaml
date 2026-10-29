@@ -1,0 +1,20 @@
+# workflows/make-report.yaml (WI-35): produces artifacts – a file and a folder.
+# Start it manually; workflows/summarize-report.yaml then processes the report automatically, exactly once.
+id: make-report
+name: Make report
+trigger: { type: manual }
+execute:
+  type: shell
+  command: /etc/adispatchd/scripts/artifacts/make-report.sh
+  timeout: { max_duration: 10m }
+  # Stored after the run (and its completion hook) from the workspace, before the cleanup. A missing path is a
+  # warning in the run; "required: true" makes it a technical failure. Redacted like logs, no symlinks followed.
+  artifacts:
+    - name: 'Report {timestamp}'      # placeholders allowed
+      type: report                    # free type, for filters
+      path: out/report.txt            # a file ...
+    - name: Report pages
+      type: site
+      path: out/site                  # ... or a folder (downloaded as .zip)
+      required: false
+  # artifacts_max_size: 100MB         # total per run (default 100MB)
