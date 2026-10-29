@@ -48,6 +48,11 @@ export interface WorkerContext {
     url: string;
     /** Cheap item fields at start time (e.g. title, labels). */
     attributes: Record<string, unknown>;
+    /**
+     * Artifact items only (WI-35): the read-only copy of the artifact in the
+     * workspace (`inputs/<name>`); `path` is absolute as the worker sees it.
+     */
+    input?: { path: string; kind: 'file' | 'folder'; name: string };
   };
   /** Validated manual-start parameters. */
   parameters: Record<string, string | number | boolean>;

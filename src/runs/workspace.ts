@@ -6,6 +6,7 @@ import { lstat, realpath, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { isWithin, resolveStrictlyWithin, type BusinessResult, type TerminalStatus } from '../core/index.js';
 import type { WorkspaceCleanup } from '../config/index.js';
+import { makeTreeWritable } from '../artifacts/index.js';
 
 /** True if the policy asks to delete the workspace of a run with this outcome. */
 export function shouldCleanupWorkspace(policy: WorkspaceCleanup, status: TerminalStatus, businessResult: BusinessResult): boolean {
@@ -44,7 +45,14 @@ export async function removeWorkspace(baseDir: string, workspacePath: string): P
       return { removed: false, path: target, reason: 'outside_base_dir', message: `resolves to ${realTarget}` };
     }
     // `rm` does not follow symlinks inside the tree; it removes the links themselves.
-    await rm(realTarget, { recursive: true, force: true });
+    try {
+      await rm(realTarget, { recursive: true, force: true });
+    } catch (err) {
+      // The read-only artifact input (WI-35, `inputs/`) cannot be emptied: make the directories writable and retry once.
+      if ((err as NodeJS.ErrnoException).code !== 'EACCES' && (err as NodeJS.ErrnoException).code !== 'EPERM') throw err;
+      await makeTreeWritable(realTarget);
+      await rm(realTarget, { recursive: true, force: true });
+    }
     return { removed: true, path: target };
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;

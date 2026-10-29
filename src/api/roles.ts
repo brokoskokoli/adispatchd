@@ -83,6 +83,13 @@ export const ROUTE_ROLES: Readonly<Record<string, RouteRule>> = {
   'POST /api/v1/items/:source/:item/labels': 'admin',
   'POST /api/v1/items/:source/:item/project': 'admin',
   'GET /api/v1/ui-actions': 'admin',
+  // Artifacts (WI-35)
+  'GET /api/v1/artifacts': 'viewer',
+  'GET /api/v1/artifacts/:id': 'viewer',
+  'GET /api/v1/artifacts/:id/files/*': 'viewer',
+  'GET /api/v1/artifacts/:id/download': 'viewer',
+  'POST /api/v1/artifacts/:id/start': 'operator',
+  'DELETE /api/v1/artifacts/:id': 'admin',
   // Server resources (WI-23)
   'GET /api/v1/system/metrics': 'viewer',
   // SSE

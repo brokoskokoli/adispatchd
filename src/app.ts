@@ -38,6 +38,7 @@ import {
   type SourceAdapterDeps,
   type Timers,
 } from './core/index.js';
+import { ArtifactService } from './artifacts/index.js';
 import { ConfigManager, isIdentityForgeableLocally, type IdentityConfig, type LoadedConfig, type ReloadResult } from './config/index.js';
 import {
   CompositeCredentialProvider,
@@ -324,6 +325,8 @@ export interface App {
   readonly notifications: NotificationService;
   readonly views: ViewService;
   readonly retention: RetentionService;
+  /** Artifacts (WI-35). */
+  readonly artifacts: ArtifactService;
   /** Dashboard info tiles (WI-24). */
   readonly dashboard: DashboardInfoService;
   readonly events: EventHub;
@@ -388,16 +391,26 @@ export async function createApp(options: AppOptions): Promise<App> {
   }
   const repos = persistence;
 
+  const bus = new RunEventBus(logger);
+  // Artifacts (WI-35): metadata in SQLite, contents below data-dir/artifacts; also the catalogue of the artifacts source.
+  const artifacts = new ArtifactService({
+    repositories: repos,
+    dataDir,
+    clock,
+    logger,
+    onCreated: (artifact) => bus.publish({ type: 'artifact.created', artifact }),
+    onDeleted: (artifact) => bus.publish({ type: 'artifact.deleted', artifact }),
+  });
   const sources = new SourceRegistry(config.current, {
     clock,
     redactor,
     logger,
+    artifacts,
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.env ? { env: options.env } : {}),
   });
   const sourceLookup = (id: string): SourceAdapter | undefined => sources.get(id);
 
-  const bus = new RunEventBus(logger);
   const publisher = new PersistedEventPublisher(repos, bus);
   const events = new EventHub({
     bus,
@@ -450,6 +463,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     notifier: notifications,
     maxLogBytesPerRun: () => config.current.global.retention.maxLogSizePerRunBytes,
     secretValues: () => redactor.values(),
+    artifacts,
   });
   // WI-31: run-time options of enum parameters (GitHub branches/tags, scripts) for the start form and the start check.
   const parameterOptions = new ParameterOptionsService({
@@ -493,6 +507,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     repositories: repos,
     dataDir,
     settings: () => config.current.global.retention,
+    artifacts,
     clock,
     timers,
     logger,
@@ -641,6 +656,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     views,
     notifications,
     retention,
+    artifacts,
     dashboard,
     events,
     monitor,
@@ -811,6 +827,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     notifications,
     views,
     retention,
+    artifacts,
     dashboard,
     events,
     auth,

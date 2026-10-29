@@ -132,7 +132,7 @@ on_success:
       const run = env.p.runs.require(env.finalizeSuccess(env.reserve(snapshot).id).id);
       const withParams = { ...run, parameters: { mode: 'fast' } };
       const scope = hookTemplateScope(snapshot, 'on_success');
-      expect(scope).toEqual({ run: true, workspace: true, source: true, result: true, linked: true, parameters: ['mode'], block: false, blockCleared: false });
+      expect(scope).toEqual({ run: true, workspace: true, source: true, result: true, linked: true, artifact: false, artifactInput: false, parameters: ['mode'], block: false, blockCleared: false });
       expect(hookTemplateScope(snapshot, 'on_start').result).toBe(false);
       // WI-30: block.* only in the retry-block hooks, block.cleared_* and no result in on_retry_unblock.
       expect(hookTemplateScope(snapshot, 'on_retry_block')).toMatchObject({ result: true, block: true, blockCleared: false });

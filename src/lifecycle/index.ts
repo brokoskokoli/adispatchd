@@ -21,6 +21,7 @@ export {
   parseRunSnapshot,
   resolveActionIdentity,
   hookTemplateScope,
+  itemFromRun,
   buildHookTemplateValues,
   buildShellActionContext,
   renderHookText,

@@ -16,8 +16,10 @@
  * - A process is only ever signalled after verifying its start identity
  *   (recovery); on doubt the run becomes `recovery_pending` and keeps its lock.
  */
+import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  ARTIFACT_SOURCE_TYPE,
   containerInstanceId,
   containerName,
   runIdOfContainer,
@@ -30,6 +32,7 @@ import {
   noopLogger,
   outcomeOfHook,
   parseSourceItemKey,
+  renderTemplate,
   selectCompletionHook,
   systemClock,
   systemTimers,
@@ -61,6 +64,7 @@ import {
   TOKEN_DIR_NAME,
   TokenFileSession,
   classifyOutcome,
+  ensureWorkspaceWithin,
   isTokenDirInWorkspace,
   processGroupExists,
   removeTokenDirs,
@@ -69,7 +73,16 @@ import {
   type ProcessInspector,
   type TokenFileRequest,
 } from '../executors/index.js';
-import { parseRunSnapshot, type HookResult, type LifecycleEngine, type SourceResolver } from '../lifecycle/index.js';
+import { ArtifactError, inspectArtifactPath, type ArtifactService } from '../artifacts/index.js';
+import {
+  buildHookTemplateValues,
+  hookTemplateScope,
+  itemFromRun,
+  parseRunSnapshot,
+  type HookResult,
+  type LifecycleEngine,
+  type SourceResolver,
+} from '../lifecycle/index.js';
 import {
   RUN_STATUS_EVENT,
   finalizationTarget,
@@ -112,6 +125,8 @@ export const RUN_EVENTS = {
   outcomeWarning: 'run.outcome_warning',
   /** Files kept from the workspace (`execute.keep`, WI-22): a {@link KeepReport}. */
   keptFiles: 'run.kept_files',
+  /** Artifacts collected after the completion hook (`execute.artifacts`, WI-35): a {@link CollectionReport}. */
+  artifacts: 'run.artifacts',
   /** Recovery stopped a left-over container of the run (WI-19): `{engine, container, result}`. */
   containerStopped: 'recovery.container_stopped',
   /** API write by an authenticated user (WI-26 audit): `{action, actor, role, via, ...}`. */
@@ -217,6 +232,8 @@ export interface RunControllerOptions {
    * keys); redacted in kept files together with the run's own secrets (WI-22).
    */
   secretValues?: () => Iterable<string>;
+  /** Artifacts (WI-35): collection of `execute.artifacts`, input of artifact items, `consumed_by`. */
+  artifacts?: ArtifactService;
   /** `retention.max_log_size_per_run` in bytes (value or getter for the live config). */
   maxLogBytesPerRun?: number | (() => number | undefined);
   clock?: Clock;
@@ -1384,6 +1401,20 @@ export class RunController {
     }
     if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: true, ...ctx });
 
+    // 3a. Artifact input (WI-35): the artifact of the item is copied read-only to `inputs/<name>` in the workspace.
+    if (item && snapshot.source?.type === ARTIFACT_SOURCE_TYPE) {
+      try {
+        await this.stageArtifactInput(item, prepared);
+      } catch (err) {
+        if (entry.cancelRequested) return this.finalize(runId, snapshot, cancelled(entry.cancelReason), { hooks: true, ...ctx });
+        return this.finalize(runId, snapshot, startError(`artifact input could not be staged: ${errorMessage(err)}`), {
+          hooks: true,
+          ...ctx,
+          update: { error: errorInfo(err) },
+        });
+      }
+    }
+
     // 3b. Token files (`delivery: file`, WI-18): written below the run directory, renewed while the worker runs.
     let spec = prepared.spec;
     if (prepared.tokenFiles.length > 0) {
@@ -1471,11 +1502,20 @@ export class RunController {
     const outcome = await proc.wait();
     await this.closeTokenFiles(entry);
     const classification = classifyOutcome(outcome);
-    const target: FinalizationTarget =
+    let target: FinalizationTarget =
       classification.status === 'cancelled'
         ? cancelled(entry.cancelReason)
         : { status: classification.status, businessResult: classification.businessResult, reason: classification.reason };
-    const resultWarnings = classification.status === 'completed' && outcome.resultFile.state === 'valid' ? (outcome.resultFile.warnings ?? []) : [];
+    let error: Record<string, unknown> | undefined =
+      classification.status !== 'completed' || outcome.logs.truncated ? outcomeError(outcome, classification.reason) : undefined;
+    // `required: true` artifacts (WI-35): a completed run without such a file or folder is a technical failure.
+    const missing = classification.status === 'completed' ? await this.missingRequiredArtifact(runId, snapshot) : null;
+    if (missing !== null) {
+      target = { status: 'crashed', businessResult: null, reason: missing };
+      error = { code: 'run_required_artifact_missing', message: missing };
+    }
+    const completed = target.status === 'completed';
+    const resultWarnings = completed && outcome.resultFile.state === 'valid' ? (outcome.resultFile.warnings ?? []) : [];
     return this.finalize(runId, snapshot, target, {
       hooks: true,
       ...ctx,
@@ -1484,8 +1524,8 @@ export class RunController {
         exitCode: outcome.exitCode,
         result: classification.result,
         // Named outcome (WI-17): only a completed run's valid result file counts.
-        outcome: classification.status === 'completed' ? (classification.result?.outcome ?? null) : null,
-        ...(classification.status !== 'completed' || outcome.logs.truncated ? { error: outcomeError(outcome, classification.reason) } : {}),
+        outcome: completed ? (classification.result?.outcome ?? null) : null,
+        ...(error ? { error } : {}),
       },
     });
   }
@@ -1650,10 +1690,16 @@ export class RunController {
       }
     }
     if (snapshot) {
+      await this.collectArtifacts(runId, snapshot, target, options.item);
       await this.keepFiles(runId, snapshot);
       await this.cleanupWorkspace(runId, snapshot, target.status, target.businessResult);
     }
-    const finished = this.repos.runs.finish(runId);
+    // `consumed_by` (WI-35) is recorded with the end of the run, in the same transaction as the release of its lock.
+    const finished = this.repos.transaction(() => {
+      const done = this.repos.runs.finish(runId);
+      this.markArtifactConsumed(done, snapshot, target);
+      return done;
+    });
     this.runSecrets.delete(runId);
     this.publisher.flush();
     return finished;
@@ -1694,6 +1740,89 @@ export class RunController {
       this.repos.runs.finish(runId);
     });
     this.publisher.flush();
+  }
+
+  /** Message if a `required` artifact of the workflow is not available in the workspace, else `null` (WI-35). */
+  private async missingRequiredArtifact(runId: string, snapshot: WorkflowSnapshot): Promise<string | null> {
+    const required = ((snapshot.workflow.execute.artifacts as readonly { name: string; path: string; required: boolean }[] | undefined) ?? []).filter((a) => a.required);
+    if (required.length === 0) return null;
+    const workspace = this.repos.runs.require(runId).workspacePath;
+    for (const spec of required) {
+      const found = workspace ? await inspectArtifactPath(workspace, spec.path) : null;
+      if (found === null || !found.ok) {
+        return `required artifact "${spec.path}" is not available: ${found === null ? 'the run has no workspace' : found.message}`;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Store the artifacts the workflow declares (`execute.artifacts`, WI-35) after
+   * the completion hook and before the cleanup – only for runs that completed
+   * (success or failure). Runs once per run: a resumed finalization skips it
+   * when the event already exists. Problems are warnings in the event, never a failure.
+   */
+  private async collectArtifacts(runId: string, snapshot: WorkflowSnapshot, target: FinalizationTarget, item: SourceItem | null | undefined): Promise<void> {
+    // Snapshots of runs started before 0.10.0 have no `artifacts`.
+    const specs = (snapshot.workflow.execute.artifacts as WorkflowSnapshot['workflow']['execute']['artifacts'] | undefined) ?? [];
+    if (specs.length === 0 || target.status !== 'completed') return;
+    const run = this.repos.runs.require(runId);
+    if (!run.workspacePath) return;
+    if (this.repos.events.listForRun(runId).some((e) => e.type === RUN_EVENTS.artifacts)) return;
+    if (!this.options.artifacts) {
+      this.appendEvent(runId, RUN_EVENTS.artifacts, { message: 'artifacts are not available in this instance', created: [], warnings: [], bytes: 0 });
+      return;
+    }
+    const resolvedItem = item ?? (await this.rereadItem(run));
+    const now = this.clock.now();
+    const values = buildHookTemplateValues({ run, snapshot, hook: 'on_start', item: resolvedItem, now });
+    // Names see the same placeholders as the worker; the input path is only known once it was staged (always true here).
+    const scope = { ...hookTemplateScope(snapshot, 'on_success'), result: false, linked: false, artifactInput: snapshot.source?.type === ARTIFACT_SOURCE_TYPE };
+    const parentId = snapshot.source?.type === ARTIFACT_SOURCE_TYPE && run.sourceItemKey ? parseSourceItemKey(run.sourceItemKey).itemId : null;
+    const report = await this.options.artifacts.collect({
+      runId,
+      workflowId: run.workflowId,
+      workspace: run.workspacePath,
+      specs,
+      maxBytes: snapshot.workflow.execute.artifactsMaxSizeBytes,
+      renderName: (template) => renderTemplate(template, values, { mode: 'text', scope }),
+      parentId,
+      // Best effort like kept files: the run's injected secrets plus everything the shared redactor knows.
+      secrets: [...(this.runSecrets.get(runId) ?? []), ...(this.options.secretValues?.() ?? [])],
+    });
+    if (report.warnings.length > 0) {
+      this.logger.warn('artifacts incomplete', { runId, warnings: report.warnings.map((w) => `${w.path}: ${w.reason}`) });
+    }
+    this.appendEvent(runId, RUN_EVENTS.artifacts, { ...report });
+  }
+
+  /** The item of a run read again for a resumed finalization; `null` if it cannot be read. */
+  private async rereadItem(run: RunRecord): Promise<SourceItem | null> {
+    if (!run.sourceItemKey) return null;
+    try {
+      const { sourceId, itemId } = parseSourceItemKey(run.sourceItemKey);
+      const adapter = this.options.sources(run.sourceId ?? sourceId);
+      return (await adapter?.getItem(itemId)) ?? itemFromRun(run);
+    } catch {
+      return itemFromRun(run);
+    }
+  }
+
+  /** Record that a successful run processed its artifact item (`consumed_by`, WI-35). */
+  private markArtifactConsumed(run: RunRecord, snapshot: WorkflowSnapshot | null, target: FinalizationTarget): void {
+    if (snapshot?.source?.type !== ARTIFACT_SOURCE_TYPE || !run.sourceItemKey) return;
+    if (target.status !== 'completed' || target.businessResult !== 'success') return;
+    this.repos.artifacts.markConsumed(parseSourceItemKey(run.sourceItemKey).itemId, run.workflowId);
+  }
+
+  /** Create the workspace and copy the artifact of `item` read-only to `inputs/` (WI-35). */
+  private async stageArtifactInput(item: SourceItem, prepared: Awaited<ReturnType<typeof buildExecutionSpec>>): Promise<void> {
+    const artifacts = this.options.artifacts;
+    if (!artifacts) throw new ArtifactError('artifacts_unavailable', 'artifacts are not available in this instance');
+    const dir = prepared.spec.workingDirectory;
+    if (prepared.workspaceBaseDir !== undefined) await ensureWorkspaceWithin(prepared.workspaceBaseDir, dir, prepared.spec.createDirectory);
+    else if (prepared.spec.createDirectory) await mkdir(dir, { recursive: true });
+    await artifacts.stageInput(item.itemId, dir);
   }
 
   /**

@@ -28,8 +28,8 @@ describe('schema v6 – item history (WI-33)', () => {
 
     const p = openPersistence(tmp.dir, { clock });
     try {
-      expect(schemaVersion(p.db)).toBe(6);
-      expect(p.migration.applied).toEqual([6]);
+      expect(schemaVersion(p.db)).toBeGreaterThanOrEqual(6);
+      expect(p.migration.applied[0]).toBe(6);
       expect(existsSync(p.migration.backupPath!)).toBe(true);
       expect(p.actions.get(11)).toMatchObject({ status: 'succeeded', effect: null });
       const indexes = p.db.prepare(`SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'blocks'`).all().map((r) => r.name);
