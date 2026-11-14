@@ -95,7 +95,12 @@ export interface NotificationServiceOptions {
   slack?: SlackWebClient;
   /** Source adapters (WI-39): reminders re-read the item to evaluate `remind_while`. */
   sources?: (sourceId: string) => SourceAdapter | undefined;
+  /** Upper bound of one `remind_while` evaluation (item read + fields), default 15 s; the dispatcher never waits longer. */
+  reminderTimeoutMs?: number;
 }
+
+/** Default upper bound of one reminder evaluation. */
+export const DEFAULT_REMINDER_TIMEOUT_MS = 15_000;
 
 interface DeliveryFailure {
   message: string;
@@ -456,7 +461,30 @@ export class NotificationService implements Notifier, ChatNotifier {
     }
   }
 
+  /**
+   * `remind_while` of a reminder, bounded by {@link NotificationServiceOptions.reminderTimeoutMs}: a slow source must
+   * not hold up the deliveries (the dispatcher is serial). Timeout → `unknown` (no reminder, logged); the read is aborted.
+   */
   private async evaluateReminder(reminder: ReminderRecord): Promise<{ value: TriValue; reason: string | null }> {
+    const limit = this.options.reminderTimeoutMs ?? DEFAULT_REMINDER_TIMEOUT_MS;
+    const controller = new AbortController();
+    this.inflight.add(controller);
+    let timer: TimerHandle | undefined;
+    const timeout = new Promise<{ value: TriValue; reason: string | null }>((resolve) => {
+      timer = this.timers.setTimeout(() => {
+        controller.abort(new Error('timeout'));
+        resolve({ value: 'unknown', reason: `item could not be evaluated within ${limit} ms` });
+      }, limit);
+    });
+    try {
+      return await Promise.race([this.evaluateReminderNow(reminder, controller.signal), timeout]);
+    } finally {
+      if (timer) this.timers.clearTimeout(timer);
+      this.inflight.delete(controller);
+    }
+  }
+
+  private async evaluateReminderNow(reminder: ReminderRecord, signal: AbortSignal): Promise<{ value: TriValue; reason: string | null }> {
     const channel = this.options.settings().channels.find((c) => c.id === reminder.channelId);
     if (!channel) return { value: false, reason: `channel '${reminder.channelId}' is no longer configured` };
     if (!reminder.filter) return { value: true, reason: null };
@@ -465,14 +493,14 @@ export class NotificationService implements Notifier, ChatNotifier {
     if (!adapter) return { value: 'unknown', reason: `source '${sourceId}' is not available` };
     let item;
     try {
-      item = await adapter.getItem(reminder.itemKey.slice(sourceId.length + 1));
+      item = await adapter.getItem(reminder.itemKey.slice(sourceId.length + 1), { signal });
     } catch (err) {
       return { value: 'unknown', reason: `item could not be read: ${this.redactor.redact(errorMessage(err))}` };
     }
     if (!item) return { value: false, reason: 'item no longer exists' };
     const fields = createItemFieldSource(item, {
       definitions: adapter.fieldDefinitions(),
-      resolveFields: (i, f) => adapter.resolveFields(i, f),
+      resolveFields: (i, f) => adapter.resolveFields(i, f, { signal }),
       wantedFields: collectFields(reminder.filter),
     });
     const result = await evaluateFilter(reminder.filter, fields);

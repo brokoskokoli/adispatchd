@@ -1760,7 +1760,8 @@ Die Action ist erfolgreich, sobald die Zustellung **angelegt** ist (eine Benachr
 einer Zustellung auf den Kanal; weder `notifications.on` noch das `on` des Kanals filtern sie) – die Hook-Kette wartet
 nie auf Slack. Ein Wiederholungsversuch derselben Action (Recovery) legt keine zweite Nachricht an. Fehlzustellungen
 erscheinen wie bei Webhooks in der UI (Config → Notifications). Die Erinnerung kommt höchstens einmal, nur wenn
-`remind_while` dann `true` ist (`false`/`unknown` → keine Erinnerung, Log); eine Antwort im Thread hebt sie auf.
+`remind_while` dann `true` ist (`false`/`unknown` → keine Erinnerung, Log; das Lesen des Items ist auf 15 s begrenzt,
+danach gilt `unknown`, damit eine langsame Source die übrigen Zustellungen nicht aufhält); eine Antwort im Thread hebt sie auf.
 Workflows ohne Item: `notify` erlaubt, die Nachricht geht ohne Thread in den Channel (keine Antworten, kein
 `remind_after`).
 

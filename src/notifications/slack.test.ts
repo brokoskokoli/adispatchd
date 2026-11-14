@@ -324,6 +324,30 @@ describe('NotificationService – Slack channels (WI-39)', () => {
       expect(p.reminders.listDue(clock.now())).toEqual([]);
     });
 
+    it('a source that does not answer cannot hold up the deliveries: skipped after the timeout, the next message goes out', async () => {
+      let reads = 0;
+      const stuck = {
+        ...adapter(),
+        getItem: (_id: string, options?: { signal?: AbortSignal }) => {
+          reads++;
+          return new Promise<never>((_resolve, reject) => options?.signal?.addEventListener('abort', () => reject(new Error('aborted'))));
+        },
+      } as unknown as SourceAdapter;
+      svc = create(undefined, () => stuck);
+      svc.start();
+      const a = svc.enqueueMessage(message({ reminder: { afterMs: 60_000, filter } }));
+      await svc.whenIdle();
+      const before = slack.messages.length;
+      clock.advance(60_000);
+      svc.kick();
+      await until(() => reads === 1);
+      svc.enqueueMessage(message({ text: 'meanwhile' }));
+      clock.advance(15_000);
+      await until(() => slack.messages.length === before + 1);
+      expect(slack.messages.at(-1)?.text).toBe('meanwhile');
+      expect(p.reminders.forNotification(a.notificationId)).toMatchObject({ state: 'skipped', reason: 'item could not be evaluated within 15000 ms' });
+    });
+
     it('is skipped when the item no longer matches, when the filter is unknown, and after a reply', async () => {
       svc = create(undefined, sources());
       svc.start();

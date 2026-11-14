@@ -9,6 +9,7 @@ export {
   NotificationService,
   DEFAULT_NOTIFICATION_RETRY_DELAYS_MS,
   DEFAULT_NOTIFICATION_TIMEOUT_MS,
+  DEFAULT_REMINDER_TIMEOUT_MS,
   summarize,
   slackText,
   webhookBody,
