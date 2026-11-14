@@ -92,7 +92,8 @@ printf '{"schema_version":1,"result":"success","message":"ok"}' > "$ADISPATCH_RE
   cookie = String(res.headers['set-cookie']).split(';')[0] as string;
   // The items arrive after the first planning step of the start (like new issues on GitHub).
   remote.commit(items, 'Add items');
-});
+  // Starting the app and the git commands of the setup need more than the default 10 s on a loaded machine.
+}, 30_000);
 
 afterAll(async () => {
   await env?.cleanup();
