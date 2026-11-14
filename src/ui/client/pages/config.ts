@@ -186,7 +186,7 @@ export const configPage = (ctx: PageContext): Page => {
         channels.length > 0
           ? section(
               'Channels',
-              h('p', { class: 'hint' }, 'Slack channels receive replies in their threads via Socket Mode when app_token_env is set (WI-39).'),
+              h('p', { class: 'hint' }, 'Slack channels receive replies in their threads via Socket Mode when app_token_env is set.'),
               table(
                 ['Channel', 'Type', 'Replies', 'Connection', ''],
                 channels.map((c) => [
