@@ -17,7 +17,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from 'vitest';
 import { hashPassword } from '../api/password.js';
 import { FakeGitHub } from '../sources/github/testing/index.js';
 import { HubControlClient } from './control-client.js';
@@ -344,7 +344,6 @@ describe('hub with real workspace processes (WI-36)', () => {
     expect(existsSync(path.join(hubData, 'slots.sock'))).toBe(false);
   });
 
-  // Known flaky (0.10.0 gate): failed once in the Linux container node:24 under the full parallel suite, green alone and in three further full runs; cause not yet analysed.
   it('a crashed hub leaves the workspaces and their runs alone, nothing new starts, and the slots are counted again after the hub is back', { timeout: 240_000 }, async () => {
     await boot();
     // A slot is taken before the run starts its worker (workspace, on_start): wait for both.
@@ -352,6 +351,13 @@ describe('hub with real workspace processes (WI-36)', () => {
     const before = await status();
     const childPids = before.workspaces.map((w) => w.pid!);
     const workers = runningWorkers();
+    // The orphaned workspaces keep the instance locks of their data directories: if this test fails before its own
+    // cleanup below, they must not survive into the next test (its hub could not start them and would time out).
+    onTestFinished(({ task }) => {
+      if (task.result?.state !== 'fail') return;
+      if (hubProc && hubProc.exitCode === null) hubProc.kill('SIGKILL');
+      for (const pid of [...childPids, ...workers]) if (alive(pid)) process.kill(pid, 'SIGKILL');
+    });
     expect(workers).toHaveLength(2);
 
     hubProc!.kill('SIGKILL'); // hub crash: no clean shutdown
@@ -377,7 +383,8 @@ describe('hub with real workspace processes (WI-36)', () => {
     startHub();
     const back = await until('slots counted again', async () => {
       const s = await status();
-      return s.slots.active === 2 && s.workspaces.every((w) => w.state === 'failed') ? s : undefined;
+      // Both slots may sit in one workspace: the other one (no run) reconnects independently, so wait for it too.
+      return s.slots.active === 2 && s.workspaces.every((w) => w.state === 'failed' && w.connected) ? s : undefined;
     });
     expect(back.workspaces.every((w) => w.state === 'failed')).toBe(true);
     expect(back.workspaces.every((w) => w.connected)).toBe(true);
@@ -394,7 +401,6 @@ describe('hub with real workspace processes (WI-36)', () => {
     hubProc!.kill('SIGTERM');
   });
 
-  // Known flaky (0.10.0 gate): failed once in the Linux container node:24 under the full parallel suite, green alone and in three further full runs; cause not yet analysed.
   it('serves the hub API and the workspace UIs/APIs of two real processes under one port, with roles, audit and drain/stop/pause end to end (WI-37)', { timeout: 300_000 }, async () => {
     await boot();
     const base = `http://127.0.0.1:${ports.hub}`;
