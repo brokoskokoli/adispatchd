@@ -163,9 +163,20 @@ describe('GitFilesSourceAdapter – reading', () => {
     expect(adapter.parseItemRef('#0042')).toBe('42');
     expect(adapter.parseItemRef('issues/0042-fix.md')).toBe('42');
     expect(adapter.parseItemRef('https://git.example.invalid/acme/app-meta/blob/main/issues/0042-fix.md')).toBe('42');
+    expect(adapter.parseItemRef('https://GIT.example.invalid/Acme/app-meta/blob/0123abc/issues/0042-fix.md?plain=1')).toBe('42');
+    // URLs of another repository or host are not items of this source, even with the same folder.
+    expect(adapter.parseItemRef('https://git.example.invalid/acme/other/blob/main/issues/0042-fix.md')).toBeNull();
+    expect(adapter.parseItemRef('https://evil.example.invalid/acme/app-meta/blob/main/issues/0042-fix.md')).toBeNull();
+    expect(adapter.parseItemRef('https://git.example.invalid/acme/app-meta/blob/main/other/0042-fix.md')).toBeNull();
     expect(adapter.parseItemRef('other/0042-fix.md')).toBeNull();
     expect(adapter.parseItemRef('0')).toBeNull();
     expect(adapter.parseItemRef('abc')).toBeNull();
+  });
+
+  it('accepts no URL without web_url', () => {
+    const { adapter } = setup({ 'issues/0001-a.md': ISSUE(1, '') }, { webUrl: null });
+    expect(adapter.parseItemRef('https://git.example.invalid/acme/app-meta/blob/main/issues/0042-fix.md')).toBeNull();
+    expect(adapter.parseItemRef('issues/0042-fix.md')).toBe('42');
   });
 
   it('fetches at most once per interval', async () => {

@@ -961,6 +961,15 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
   ignoriert. Ein Wert, der nicht zum Typ seines Felds passt (z. B. `priority: high` bei `priority: number`), macht
   nur dieses Feld des Items **unknown** (fail closed, §4.3).
 - **Listing:** wie bei GitHub nur offene Items, außer der Filter wählt oben `state` (`equals`/`in`) aus (§4.5).
+- **Item-Referenzen** (manueller Start, Suche der UI): Nummer (`42`, `#42`, `0042`), Dateiname oder Pfad
+  (`issues/0042-fix-login.md`, der Ordner muss zu `path` passen) oder die Web-URL der Datei – eine URL nur, wenn sie
+  mit dem festen Anfang von `web_url` beginnt (bis `{ref}`/`{path}`, ohne Groß-/Kleinschreibung); ohne `web_url`
+  keine URLs. Zwei Sources mit demselben Ordnernamen beanspruchen so nie dieselbe URL.
+- **`{source.repository}`** ist der Ort des Repositories (`owner/name` bei github.com, sonst die URL bzw. der Pfad
+  ohne Zugangsdaten) – wie bei GitHub-Sources, z. B. für `git clone`. Die Item-Nummer gehört aber zur Datei, nicht zu
+  einem GitHub-Issue: `{source.repository}#{item.number}` verweist auf GitHub auf ein **anderes** Objekt (Issue/PR mit
+  dieser Nummer). Für Verweise auf das Item `{item.url}` oder `{item.key}` verwenden; die UI zeigt solche Items als
+  `<source>#<nr>`.
 - **Schreiben** (`source.update` mit `labels` und `fields`, §3.4.11; `source.comment`): jede Action = **ein
   Commit** (Nachricht `<source> #<nr>: <Änderung>` mit Trailern `Adispatchd-Run`, `Adispatchd-Action`,
   `Adispatchd-Identity`) und ein Push. Frontmatter-Änderungen schreiben nur das Frontmatter neu (Reihenfolge der
@@ -2948,7 +2957,7 @@ Workflows über mehrere `git_files`-Sources nur die, die **alle** Sources mit de
 | `{workspace.path}` | absoluter Workspace-Pfad des Runs | in `on_start`; in Abschluss-Hooks, wenn der Worker nie gespawnt wurde |
 | `{source.id}` | Source-ID | Run ohne Item |
 | `{source.type}` | `github` | Run ohne Item |
-| `{source.repository}` | `owner/repository` | Run ohne Item |
+| `{source.repository}` | `owner/repository`; `git_files`: Ort des Repositories (`owner/name` bei github.com, sonst URL/Pfad ohne Zugangsdaten) – `{source.repository}#{item.number}` ist dort **kein** Verweis auf das Item (§3.2.2) | Run ohne Item |
 | `{source.vars.<name>}` | Variable `vars.<name>` der Source des Items (§3.2, seit 0.3.0) | Run ohne Item |
 | `{item.id}` | Item-ID (GitHub: Nummer als String) | Run ohne Item |
 | `{item.number}` | Nummer (nur bei numerischer Item-ID) | Run ohne Item |

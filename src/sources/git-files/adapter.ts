@@ -226,12 +226,22 @@ export class GitFilesSourceAdapter implements SourceAdapter {
     return entry ? this.toItem(entry, state) : null;
   }
 
-  /** `42`, `#42`, `0042`, a file name/path (`issues/0042-x.md`) or a web URL of the file. */
+  /**
+   * `42`, `#42`, `0042`, a file name/path (`issues/0042-x.md`) or a web URL of
+   * the file. A URL counts only if it starts like this source's `web_url`
+   * (up to `{ref}`/`{path}`, case-insensitively), so that two sources with
+   * the same folder name never both claim a link to another repository.
+   */
   parseItemRef(ref: string): string | null {
     const trimmed = ref.trim();
     const bare = /^#?(\d{1,9})$/.exec(trimmed);
     if (bare) return normalizeNumber(bare[1] as string);
-    const withoutQuery = trimmed.replace(/[?#].*$/, '');
+    let withoutQuery = trimmed.replace(/[?#].*$/, '');
+    if (/^[a-z][a-z0-9+.-]*:/i.test(withoutQuery)) {
+      const prefix = this.webUrlPrefix();
+      if (prefix === null || !withoutQuery.toLowerCase().startsWith(prefix.toLowerCase())) return null;
+      withoutQuery = `/${withoutQuery.slice(prefix.length)}`;
+    }
     const base = withoutQuery.split('/').pop() ?? '';
     const file = ITEM_FILE_PATTERN.exec(safeDecode(base) ?? '');
     if (!file) return null;
@@ -761,6 +771,14 @@ export class GitFilesSourceAdapter implements SourceAdapter {
 
   private absolute(rel: string): string {
     return rel === '' ? this.clone.dir : path.join(this.clone.dir, ...rel.split('/'));
+  }
+
+  /** Fixed start of `web_url` (before the first `{ref}`/`{path}`), or `null` without `web_url`. */
+  private webUrlPrefix(): string | null {
+    const template = this.config.webUrl;
+    if (!template) return null;
+    const at = Math.min(...['{ref}', '{path}'].map((p) => template.indexOf(p)).filter((i) => i >= 0));
+    return Number.isFinite(at) ? template.slice(0, at) : template;
   }
 
   private fileUrl(file: string, ref: string): string | null {
