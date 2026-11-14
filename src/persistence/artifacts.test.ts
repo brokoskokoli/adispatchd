@@ -25,8 +25,10 @@ describe('schema v7 – artifacts (WI-35)', () => {
     clock.set('2026-10-29T11:00:00.000Z');
     const p = openPersistence(tmp.dir, { clock });
     try {
-      expect(schemaVersion(p.db)).toBe(7);
-      expect(p.migration).toMatchObject({ fromVersion: 6, toVersion: 7, applied: [7] });
+      // Later migrations (v8, WI-39) run in the same open.
+      expect(schemaVersion(p.db)).toBe(MIGRATIONS.at(-1)!.version);
+      expect(p.migration).toMatchObject({ fromVersion: 6 });
+      expect(p.migration.applied[0]).toBe(7);
       expect(p.migration.backupPath).not.toBeNull();
       expect(existsSync(p.migration.backupPath!)).toBe(true);
       expect(p.runs.get('run-1')).not.toBeNull();

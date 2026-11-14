@@ -6,6 +6,7 @@ import { systemClock, type Clock } from '../core/index.js';
 import { ActionRepository } from './actions.js';
 import { ArtifactRepository } from './artifacts.js';
 import { BlockRepository } from './blocks.js';
+import { ChatThreadRepository, ReminderRepository, ReplyRepository } from './chat.js';
 import { CronFiringRepository } from './cron-firings.js';
 import { openDatabase, type MigrationResult, type OpenDatabaseOptions } from './database.js';
 import { EventRepository } from './events.js';
@@ -28,6 +29,12 @@ export interface Repositories {
   uiActions: UiActionRepository;
   /** Artifact metadata (WI-35). */
   artifacts: ArtifactRepository;
+  /** Chat threads per (channel, workflow, item) (WI-39). */
+  threads: ChatThreadRepository;
+  /** Chat replies until their lifecycle run (WI-39). */
+  replies: ReplyRepository;
+  /** Reminders of `notify` (WI-39). */
+  reminders: ReminderRepository;
   /** Run `fn` in one transaction (nested repository calls join it via savepoints). */
   transaction<T>(fn: () => T): T;
   /**
@@ -52,6 +59,9 @@ export function createRepositories(db: DatabaseSync, options: { clock?: Clock } 
     retention: new RetentionRepository(db, clock),
     uiActions: new UiActionRepository(db, clock),
     artifacts: new ArtifactRepository(db, clock),
+    threads: new ChatThreadRepository(db, clock),
+    replies: new ReplyRepository(db, clock),
+    reminders: new ReminderRepository(db, clock),
     transaction: (fn) => transaction(db, fn),
     afterCommit: (cb) => afterCommit(db, cb),
   };

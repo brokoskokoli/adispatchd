@@ -27,10 +27,10 @@ export function redactExternalLinkUrl(value: string): string {
  */
 export function toPublicConfig(config: LoadedConfig): LoadedConfig {
   const copy = JSON.parse(JSON.stringify(config)) as LoadedConfig;
-  const channels = copy.global.notifications.channels.map((channel) => ({
-    ...channel,
-    url: channel.url === null ? null : REDACTED,
-  }));
+  // Slack channels (WI-39) carry only names of environment variables, never tokens.
+  const channels = copy.global.notifications.channels.map((channel) =>
+    channel.type === 'webhook' ? { ...channel, url: channel.url === null ? null : REDACTED } : channel,
+  );
   const externalLinks = copy.global.ui.externalLinks
     .filter((link) => link.enabled)
     .map((link) => ({ ...link, url: redactExternalLinkUrl(link.url) }));

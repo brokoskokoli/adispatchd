@@ -10,6 +10,8 @@ export {
   DEFAULT_ACTION_RETRY,
   actionConfig,
   aggregateLifecycleStatus,
+  hookActions,
+  type JournalActionConfig,
   stoppedAt,
   type HookContext,
   type HookResult,
@@ -26,7 +28,9 @@ export {
   buildShellActionContext,
   renderHookText,
   type HookBlockInfo,
+  type HookReplyInfo,
   type ShellActionContext,
 } from './context.js';
-export type { SourceResolver } from './performers.js';
+export type { SourceResolver, ReplyCheckActionConfig } from './performers.js';
+export { REPLY_CHECK_REASON_MAX } from './performers.js';
 export { failureEffect, mergeEffects, neutralizeHtmlComments, updateEffect } from './performers.js';

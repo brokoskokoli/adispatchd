@@ -12,6 +12,7 @@
  * - Lifecycle runs of removed blocks (trigger `unblock`, WI-30): `item:<key>`
  *   for item-scoped blocks (holds the item lock while `on_retry_unblock`
  *   runs), `unblock:<runId>` for workflow-scoped blocks.
+ * - Reply runs (trigger `reply`, WI-39): `item:<key>` (threads exist per item only).
  *
  * Prefixes keep the namespaces disjoint (a source could be named `cron`).
  * The retry-block / failure-counter scope is separate: the source item key,
@@ -45,6 +46,9 @@ export function lockKeyFor(input: LockKeyInput): string {
     case 'unblock':
       // Lifecycle run of a removed workflow-scoped block (WI-30); item-scoped ones take the item lock above.
       return `unblock:${input.runId}`;
+    case 'reply':
+      // Reply runs (WI-39) always have an item (threads exist only per item).
+      throw new TypeError('Reply runs require a sourceItemKey');
   }
 }
 

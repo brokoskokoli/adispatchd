@@ -49,6 +49,21 @@ export class UnblockRunActiveError extends OrchestratorError {
   }
 }
 
+/**
+ * WI-39: refused because a chat reply of the item waits for its lifecycle run
+ * (trigger `reply`); no other run of (workflow, item) may overtake it.
+ */
+export class ReplyPendingError extends OrchestratorError {
+  readonly replyId: number;
+
+  constructor(workflowId: string, itemKey: string, replyId: number) {
+    super('reply_pending', `Workflow '${workflowId}': reply ${replyId} for '${itemKey}' is waiting for its on_reply run`, {
+      details: { workflowId, itemKey, replyId },
+    });
+    this.replyId = replyId;
+  }
+}
+
 /** An active block already exists for the workflow/scope. */
 export class BlockExistsError extends OrchestratorError {
   readonly blockId: number;

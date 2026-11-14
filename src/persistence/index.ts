@@ -60,7 +60,19 @@ export {
   type NotificationDeliveryRecord,
   type DeliveryAttemptOutcome,
   type DeliveryState,
+  type DeliveryTarget,
 } from './notifications.js';
+export {
+  ChatThreadRepository,
+  ReplyRepository,
+  ReminderRepository,
+  type ChatThreadRecord,
+  type ReplyRecord,
+  type ReplyStatus,
+  type NewReply,
+  type ReminderRecord,
+  type ReminderState,
+} from './chat.js';
 export {
   CronFiringRepository,
   type CronFiringRecord,
@@ -81,6 +93,7 @@ export {
   LockConflictError,
   BlockedError,
   UnblockRunActiveError,
+  ReplyPendingError,
   BlockExistsError,
   InvalidTransitionError,
   NotFoundError,

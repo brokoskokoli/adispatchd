@@ -72,8 +72,9 @@ export function resolveActionIdentity(action: LifecycleActionConfig, snapshot: W
 
 /**
  * Placeholder scope of hook actions (WI-02): `result` everywhere except
- * `on_start` and `on_retry_unblock`; `block.*` only in the retry-block hooks
- * (WI-30), `block.cleared_*` only in `on_retry_unblock`.
+ * `on_start`, `on_retry_unblock` and `on_reply`; `block.*` only in the
+ * retry-block hooks (WI-30), `block.cleared_*` only in `on_retry_unblock`,
+ * `reply.*` only in `on_reply` (WI-39).
  */
 export function hookTemplateScope(snapshot: WorkflowSnapshot, hook: HookName): TemplateScope {
   return {
@@ -87,12 +88,24 @@ export function hookTemplateScope(snapshot: WorkflowSnapshot, hook: HookName): T
     parameters: Object.keys(snapshot.workflow.parameters ?? {}),
     block: isRetryBlockHook(hook),
     blockCleared: hook === 'on_retry_unblock',
+    reply: hook === 'on_reply',
   };
 }
 
-/** Hooks that see the run's result (`result.*`): all but `on_start` and `on_retry_unblock` (WI-30). */
+/** Hooks that see the run's result (`result.*`): all but `on_start`, `on_retry_unblock` (WI-30) and `on_reply` (WI-39). */
 function hasResult(hook: HookName): boolean {
-  return hook !== 'on_start' && hook !== 'on_retry_unblock';
+  return hook !== 'on_start' && hook !== 'on_retry_unblock' && hook !== 'on_reply';
+}
+
+/** Chat reply of a reply run (WI-39) as rendered into `{reply.*}` and the shell context. */
+export interface HookReplyInfo {
+  /** Plain text; empty once the reply was processed (texts are not kept). */
+  text: string;
+  user: string;
+  userName: string | null;
+  ts: string;
+  permalink: string | null;
+  channel: string;
 }
 
 /** Retry block of a hook action (WI-30) as rendered into `{block.*}` and the shell context. */
@@ -144,6 +157,8 @@ export interface HookValueInput {
   linked?: Readonly<Record<string, FieldResolution>>;
   /** Retry block of `on_retry_block` / `on_retry_unblock` (WI-30). */
   block?: HookBlockInfo | null;
+  /** Chat reply of `on_reply` (WI-39). */
+  reply?: HookReplyInfo | null;
 }
 
 /** Placeholder values for a hook action of `run`. Result values only outside `on_start`. */
@@ -196,6 +211,7 @@ export function buildHookTemplateValues(input: HookValueInput): TemplateValues {
           },
         }
       : {}),
+    ...(input.reply && hook === 'on_reply' ? { reply: input.reply } : {}),
     ...(hasResult(hook)
       ? {
           result: {
@@ -254,7 +270,9 @@ export type ShellActionContext = {
     cleared_at: string | null;
     cleared_by: string | null;
   };
-  /** Final run outcome and worker result; `null` in `on_start` and `on_retry_unblock`. */
+  /** Chat reply (WI-39): only in `on_reply`. */
+  reply?: { text: string; user: string; user_name: string; ts: string; permalink: string | null; channel: string };
+  /** Final run outcome and worker result; `null` in `on_start`, `on_retry_unblock` and `on_reply`. */
   result: {
     status: string | null;
     result: string | null;
@@ -278,6 +296,8 @@ export function buildShellActionContext(input: {
   linked?: Readonly<Record<string, FieldResolution>>;
   /** Retry block of `on_retry_block` / `on_retry_unblock` (WI-30). */
   block?: HookBlockInfo | null;
+  /** Chat reply of `on_reply` (WI-39). */
+  reply?: HookReplyInfo | null;
 }): ShellActionContext {
   const { run, snapshot, hook, item } = input;
   const result = runResult(run);
@@ -316,6 +336,18 @@ export function buildShellActionContext(input: {
             last_status: input.block.lastStatus,
             cleared_at: hook === 'on_retry_unblock' ? input.block.clearedAt : null,
             cleared_by: hook === 'on_retry_unblock' ? clearedByOf(input.block) : null,
+          },
+        }
+      : {}),
+    ...(input.reply && hook === 'on_reply'
+      ? {
+          reply: {
+            text: input.reply.text,
+            user: input.reply.user,
+            user_name: input.reply.userName ?? input.reply.user,
+            ts: input.reply.ts,
+            permalink: input.reply.permalink,
+            channel: input.reply.channel,
           },
         }
       : {}),

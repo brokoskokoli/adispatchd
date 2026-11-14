@@ -117,8 +117,13 @@ export class RetentionRepository {
 
   /** Delete delivered/failed notifications created before `olderThan`. Pending ones are kept. Returns count. */
   deleteNotifications(olderThan: Date | string): number {
-    return run(this.db, `DELETE FROM notifications WHERE delivery_state <> 'pending' AND created_at < ?`, [iso(olderThan)])
-      .changes;
+    // WI-39: a `notify` notification with a pending reminder is kept until the reminder is done.
+    return run(
+      this.db,
+      `DELETE FROM notifications WHERE delivery_state <> 'pending' AND created_at < ?
+         AND NOT EXISTS (SELECT 1 FROM notification_reminders m WHERE m.notification_id = notifications.id AND m.state = 'pending')`,
+      [iso(olderThan)],
+    ).changes;
   }
 
   /** Delete cron firings recorded before `olderThan`, keeping each workflow's latest one. Returns count. */

@@ -52,6 +52,16 @@ describe('ShellCheckRunner', () => {
     expect(err).toMatchObject({ value: 'unknown', exitCode: 2, error: 'check error: exit code 2', stderr: 'broken\n' });
   });
 
+  it('passes stdin to the check (WI-39 reply_check); a check that ignores it does not fail', async () => {
+    const r = runner();
+    const echo = await r.run({ command: await script('stdin.sh', 'read line; echo "got:$line"; [ "$line" = ok ]'), timeoutMs: 5000, stdin: 'ok\n' }, {});
+    expect(echo).toMatchObject({ value: true, stdout: 'got:ok\n' });
+    const rejected = await r.run({ command: await script('stdin-no.sh', 'cat >/dev/null; echo "not allowed"; exit 1'), timeoutMs: 5000, stdin: 'x'.repeat(200_000) }, {});
+    expect(rejected).toMatchObject({ value: false, stdout: 'not allowed\n' });
+    const ignores = await r.run({ command: await script('stdin-ignore.sh', 'exit 0'), timeoutMs: 5000, stdin: 'y'.repeat(200_000) }, {});
+    expect(ignores).toMatchObject({ value: true });
+  });
+
   it('timeout → unknown and the process group is killed', async () => {
     // Deterministic (no wall-clock bounds): the script records its own PID and the background
     // child's PID. If the runner had waited for `sleep 5` to end instead of killing the group,

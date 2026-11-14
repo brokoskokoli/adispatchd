@@ -38,6 +38,7 @@ export type TemplateMode = 'text' | 'path';
  *   only in `execute` and lifecycle actions of source-bound workflows.
  * - `block`: the retry block (WI-30), only in `on_retry_block` and `on_retry_unblock`
  * - `block_cleared`: removal of the retry block (WI-30), only in `on_retry_unblock`
+ * - `reply`: the chat reply of a reply run (WI-39), only in `on_reply` and `reply_check`
  * - `artifact`: name and type of the artifact item (WI-35), only for workflows triggered by the artifacts source
  * - `artifact_input`: path of the artifact input in the workspace (WI-35), only there and only
  *   once the input is staged (not in `working_directory` and `on_start`)
@@ -52,6 +53,7 @@ export type PlaceholderGroup =
   | 'linked'
   | 'block'
   | 'block_cleared'
+  | 'reply'
   | 'artifact'
   | 'artifact_input';
 
@@ -71,7 +73,7 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'workspace.base_dir', group: 'always', description: 'Configured workspace base directory', pathRoot: true },
   { name: 'timestamp', group: 'always', description: 'Current UTC time, compact (YYYYMMDDTHHMMSSZ)' },
   { name: 'run.id', group: 'run', description: 'Run ID' },
-  { name: 'run.trigger', group: 'run', description: 'Trigger type (source|schedule|manual|unblock)' },
+  { name: 'run.trigger', group: 'run', description: 'Trigger type (source|schedule|manual|unblock|reply)' },
   { name: 'run.started_at', group: 'run', description: 'Run start time (ISO-8601)' },
   { name: 'workspace.path', group: 'workspace', description: 'Absolute workspace path of the run', pathRoot: true },
   { name: 'source.id', group: 'source', description: 'Source ID' },
@@ -97,6 +99,12 @@ export const PLACEHOLDERS: readonly PlaceholderDefinition[] = [
   { name: 'block.last_status', group: 'block', description: 'Technical final status of the run that created the block' },
   { name: 'block.cleared_at', group: 'block_cleared', description: 'Removal time of the block (ISO-8601, UTC)' },
   { name: 'block.cleared_by', group: 'block_cleared', description: 'Who removed the block: logged-in user, else the client name (ui/api)' },
+  { name: 'reply.text', group: 'reply', description: 'Text of the chat reply as plain text (untrusted, at most 8 KiB)' },
+  { name: 'reply.user', group: 'reply', description: 'Chat user ID of the author (e.g. Slack U0123456789)' },
+  { name: 'reply.user_name', group: 'reply', description: 'Display name of the author (best effort; the user ID if unknown)' },
+  { name: 'reply.ts', group: 'reply', description: 'Message timestamp of the reply (Slack ts)' },
+  { name: 'reply.permalink', group: 'reply', description: 'Link to the reply (best effort; empty if unknown)' },
+  { name: 'reply.channel', group: 'reply', description: 'Chat channel ID of the reply (e.g. Slack C0123456789)' },
 ];
 
 /**
@@ -278,6 +286,8 @@ export interface TemplateScope {
   block?: boolean;
   /** `{block.cleared_at|cleared_by}` (WI-30: `on_retry_unblock` only). */
   blockCleared?: boolean;
+  /** `{reply.*}` (WI-39: `on_reply` and `reply_check` only). */
+  reply?: boolean;
   /**
    * Check of a source variable `{source.vars.<name>}` (WI-20, needs `source`):
    * returns a problem (e.g. "not defined in source b") or `undefined`.
@@ -287,7 +297,7 @@ export interface TemplateScope {
 }
 
 /** Scope with every group enabled (parameters: none). */
-export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true, linked: true, artifact: true, artifactInput: true, block: true, blockCleared: true };
+export const FULL_TEMPLATE_SCOPE: Readonly<TemplateScope> = { run: true, workspace: true, source: true, result: true, linked: true, artifact: true, artifactInput: true, block: true, blockCleared: true, reply: true };
 
 /** True if `name` is on the whitelist (parameters: any syntactically valid name). */
 export function isKnownPlaceholder(name: string): boolean {
@@ -352,6 +362,13 @@ function checkAvailability(name: string, scope: TemplateScope): TemplateIssue | 
         def.group === 'block'
           ? `Placeholder "{${name}}" is only available in "on_retry_block" and "on_retry_unblock"`
           : `Placeholder "{${name}}" is only available in "on_retry_unblock"`,
+      placeholder: name,
+    };
+  }
+  if (def.group === 'reply' && !scope.reply) {
+    return {
+      code: 'unavailable_placeholder',
+      message: `Placeholder "{${name}}" is only available in "on_reply" and "reply_check"`,
       placeholder: name,
     };
   }
@@ -503,6 +520,8 @@ export interface TemplateInput {
   result?: { status?: TerminalStatus; result?: BusinessResult; message?: string; outcome?: string };
   /** Retry block (WI-30, `on_retry_block` / `on_retry_unblock`). */
   block?: { id: number; failures: number; createdAt: string; lastStatus?: string | null; clearedAt?: string | null; clearedBy?: string | null };
+  /** Chat reply (WI-39, `on_reply` / `reply_check`). */
+  reply?: { text: string; user: string; userName?: string | null; ts: string; permalink?: string | null; channel: string };
   parameters?: Readonly<Record<string, string | number | boolean>>;
   /** Time used for `{timestamp}`. */
   now: Date;
@@ -542,6 +561,12 @@ export function buildTemplateValues(input: TemplateInput): TemplateValues {
     'block.last_status': input.block?.lastStatus ?? undefined,
     'block.cleared_at': input.block?.clearedAt ?? undefined,
     'block.cleared_by': input.block ? (input.block.clearedAt ? (input.block.clearedBy ?? 'anonymous') : undefined) : undefined,
+    'reply.text': input.reply?.text,
+    'reply.user': input.reply?.user,
+    'reply.user_name': input.reply ? (input.reply.userName ?? input.reply.user) : undefined,
+    'reply.ts': input.reply?.ts,
+    'reply.permalink': input.reply?.permalink ?? undefined,
+    'reply.channel': input.reply?.channel,
   };
   for (const [name, value] of Object.entries(input.parameters ?? {})) {
     values[`${PARAMETER_PLACEHOLDER_PREFIX}${name}`] = value;

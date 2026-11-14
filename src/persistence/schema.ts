@@ -403,6 +403,166 @@ CREATE INDEX artifacts_parent ON artifacts (parent_id);
 CREATE UNIQUE INDEX artifacts_run_ordinal ON artifacts (run_id, ordinal);
 `;
 
+/**
+ * v8 (WI-39): chat threads and replies. `runs.trigger_type` additionally
+ * accepts `reply` and `run_actions.hook` accepts `on_reply` (table rebuilds,
+ * SQLite cannot alter CHECK constraints). `notification_threads` maps
+ * (channel, workflow, item) to a chat thread (`thread_ts` of the head message,
+ * `NULL` until it is posted); deliveries into a thread reference it and are
+ * delivered in order. `notification_replies` holds a reply from receipt until
+ * its lifecycle run (the text only until it is processed); `(chat_channel, ts)`
+ * is unique so a redelivered chat event never runs twice. Reminders of
+ * `notify` live in `notification_reminders` (due time, filter snapshot).
+ * `notifications.dedupe_key` makes the `notify` action idempotent per
+ * (run, action). No downgrade.
+ */
+const V8_DDL = `
+CREATE TABLE runs_v8 (
+  id                      TEXT PRIMARY KEY,
+  workflow_id             TEXT NOT NULL,
+  trigger_type            TEXT NOT NULL CHECK (trigger_type IN ('source','schedule','manual','unblock','reply')),
+  source_id               TEXT,
+  source_item_key         TEXT,
+  source_url              TEXT,
+  lock_key                TEXT NOT NULL,
+  scheduled_for           TEXT,
+  config_snapshot         TEXT NOT NULL,
+  parameters_json         TEXT,
+  identity                TEXT,
+  command                 TEXT,
+  status                  TEXT NOT NULL CHECK (status IN ('reserved','starting','running','cancelling','finalizing',
+                            'completed','crashed','start_error','timed_out','cancelled','recovery_pending')),
+  final_status            TEXT CHECK (final_status IN ('completed','crashed','start_error','timed_out','cancelled')),
+  business_result         TEXT CHECK (business_result IN ('success','failure')),
+  final_reason            TEXT,
+  exit_code               INTEGER,
+  pid                     INTEGER,
+  process_start_identity  TEXT,
+  workspace_path          TEXT,
+  status_message          TEXT,
+  result_json             TEXT,
+  error_json              TEXT,
+  lifecycle_status        TEXT CHECK (lifecycle_status IN ('pending','running','succeeded','failed')),
+  block_generation        INTEGER,
+  counted_technical_failure INTEGER NOT NULL DEFAULT 0 CHECK (counted_technical_failure IN (0,1)),
+  created_at              TEXT NOT NULL,
+  started_at              TEXT,
+  finalizing_at           TEXT,
+  finished_at             TEXT,
+  updated_at              TEXT NOT NULL,
+  outcome                 TEXT,
+  completion_hook         TEXT,
+  retry_block_hook        INTEGER NOT NULL DEFAULT 0 CHECK (retry_block_hook IN (0,1))
+);
+INSERT INTO runs_v8 SELECT id, workflow_id, trigger_type, source_id, source_item_key, source_url, lock_key, scheduled_for,
+         config_snapshot, parameters_json, identity, command, status, final_status, business_result,
+         final_reason, exit_code, pid, process_start_identity, workspace_path, status_message, result_json,
+         error_json, lifecycle_status, block_generation, counted_technical_failure, created_at, started_at,
+         finalizing_at, finished_at, updated_at, outcome, completion_hook, retry_block_hook FROM runs;
+DROP TABLE runs;
+ALTER TABLE runs_v8 RENAME TO runs;
+CREATE INDEX runs_workflow_created ON runs (workflow_id, created_at DESC);
+CREATE INDEX runs_item_created ON runs (source_item_key, created_at DESC);
+CREATE INDEX runs_status ON runs (status);
+CREATE INDEX runs_finished ON runs (finished_at);
+CREATE INDEX runs_created ON runs (created_at DESC);
+CREATE UNIQUE INDEX runs_active_lock ON runs (workflow_id, lock_key) WHERE status IN ${ACTIVE_STATUS_SQL};
+
+CREATE TABLE run_actions_v8 (
+  id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id              TEXT NOT NULL REFERENCES runs (id) ON DELETE CASCADE,
+  hook                TEXT NOT NULL CHECK (
+                        hook IN ('on_start','on_success','on_failure','on_crash','on_start_error','on_cancel','on_timeout','on_error',
+                                 'on_retry_block','on_retry_unblock','on_reply')
+                        OR hook GLOB 'on_result.?*'),
+  ordinal             INTEGER NOT NULL CHECK (ordinal >= 0),
+  action_type         TEXT NOT NULL,
+  action_name         TEXT,
+  action_config_json  TEXT NOT NULL,
+  status              TEXT NOT NULL CHECK (status IN ('pending','running','succeeded','failed','skipped')),
+  external_key        TEXT,
+  attempts            INTEGER NOT NULL DEFAULT 0,
+  last_error_json     TEXT,
+  created_at          TEXT NOT NULL,
+  updated_at          TEXT NOT NULL,
+  effect_json         TEXT,
+  UNIQUE (run_id, hook, ordinal)
+);
+INSERT INTO run_actions_v8 (id, run_id, hook, ordinal, action_type, action_name, action_config_json, status, external_key,
+                            attempts, last_error_json, created_at, updated_at, effect_json)
+  SELECT id, run_id, hook, ordinal, action_type, action_name, action_config_json, status, external_key,
+         attempts, last_error_json, created_at, updated_at, effect_json FROM run_actions;
+DROP TABLE run_actions;
+ALTER TABLE run_actions_v8 RENAME TO run_actions;
+CREATE INDEX run_actions_status ON run_actions (status);
+
+ALTER TABLE notifications ADD COLUMN dedupe_key TEXT;
+CREATE UNIQUE INDEX notifications_dedupe ON notifications (dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+CREATE TABLE notification_threads (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id       TEXT NOT NULL,
+  workflow_id      TEXT NOT NULL,
+  source_id        TEXT,
+  item_key         TEXT NOT NULL,
+  chat_channel     TEXT NOT NULL,
+  thread_ts        TEXT,
+  created_at       TEXT NOT NULL,
+  last_message_at  TEXT NOT NULL
+);
+CREATE INDEX notification_threads_item ON notification_threads (channel_id, workflow_id, item_key, id);
+CREATE UNIQUE INDEX notification_threads_ts ON notification_threads (chat_channel, thread_ts) WHERE thread_ts IS NOT NULL;
+CREATE INDEX notification_threads_last ON notification_threads (last_message_at);
+
+ALTER TABLE notification_deliveries ADD COLUMN thread_id INTEGER REFERENCES notification_threads (id) ON DELETE SET NULL;
+ALTER TABLE notification_deliveries ADD COLUMN message_ts TEXT;
+CREATE INDEX notification_deliveries_thread ON notification_deliveries (thread_id, state, id);
+
+CREATE TABLE notification_replies (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel_id       TEXT NOT NULL,
+  chat_channel     TEXT NOT NULL,
+  ts               TEXT NOT NULL,
+  thread_id        INTEGER REFERENCES notification_threads (id) ON DELETE SET NULL,
+  workflow_id      TEXT NOT NULL,
+  source_id        TEXT,
+  item_key         TEXT NOT NULL,
+  user_id          TEXT NOT NULL,
+  user_name        TEXT,
+  permalink        TEXT,
+  text             TEXT,
+  config_snapshot  TEXT,
+  status           TEXT NOT NULL CHECK (status IN ('pending','running','done','rejected','failed')),
+  reason           TEXT,
+  run_id           TEXT REFERENCES runs (id) ON DELETE CASCADE,
+  received_at      TEXT NOT NULL,
+  updated_at       TEXT NOT NULL,
+  UNIQUE (chat_channel, ts)
+);
+CREATE INDEX notification_replies_pending ON notification_replies (status, workflow_id, item_key, id);
+CREATE INDEX notification_replies_run ON notification_replies (run_id);
+CREATE INDEX notification_replies_item ON notification_replies (item_key, received_at);
+
+CREATE TABLE notification_reminders (
+  id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+  notification_id           INTEGER NOT NULL REFERENCES notifications (id) ON DELETE CASCADE,
+  thread_id                 INTEGER NOT NULL REFERENCES notification_threads (id) ON DELETE CASCADE,
+  channel_id                TEXT NOT NULL,
+  workflow_id               TEXT NOT NULL,
+  source_id                 TEXT,
+  item_key                  TEXT NOT NULL,
+  due_at                    TEXT NOT NULL,
+  filter_json               TEXT,
+  state                     TEXT NOT NULL CHECK (state IN ('pending','sent','cancelled','skipped')),
+  reason                    TEXT,
+  reminder_notification_id  INTEGER REFERENCES notifications (id) ON DELETE SET NULL,
+  created_at                TEXT NOT NULL,
+  updated_at                TEXT NOT NULL
+);
+CREATE INDEX notification_reminders_due ON notification_reminders (state, due_at);
+CREATE INDEX notification_reminders_thread ON notification_reminders (thread_id, state);
+`;
+
 /** All built-in migrations, in order. */
 export const MIGRATIONS: readonly Migration[] = [
   {
@@ -454,6 +614,14 @@ export const MIGRATIONS: readonly Migration[] = [
     name: 'artifacts',
     up(db) {
       db.exec(V7_DDL);
+    },
+  },
+  {
+    version: 8,
+    name: 'chat_threads_replies',
+    disableForeignKeys: true,
+    up(db) {
+      db.exec(V8_DDL);
     },
   },
 ];
