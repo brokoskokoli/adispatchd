@@ -148,6 +148,15 @@ describe('ChatReplyService (WI-39)', () => {
     expect(logger.records.filter((r) => r.msg === 'reply ignored').every((r) => r.level === 'debug')).toBe(true);
   });
 
+  it('a reply with attached files counts with its text only; files without text are ignored', () => {
+    thread();
+    handle('f1', reply({ subtype: 'file_share', text: 'see screenshot', files: [{ id: 'F1', name: 'screen.png' }] }));
+    handle('f2', reply({ ts: '100.3', subtype: 'file_share', text: '', files: [{ id: 'F2' }] }));
+    const recorded = p.replies.listForItem('repo_a:7');
+    expect(recorded.map((r) => [r.ts, r.text])).toEqual([['100.2', 'see screenshot']]);
+    expect(logger.records.some((r) => r.fields?.reason === 'file without text')).toBe(true);
+  });
+
   it('a reply cancels pending reminders – also when the workflow has no on_reply (P6, no reaction)', async () => {
     const t = thread();
     const n = p.notifications.createWithDeliveries('workflow_notify', {}, [{ channelId: 'team', threadId: t.id }]);

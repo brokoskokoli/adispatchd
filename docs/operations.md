@@ -652,7 +652,7 @@ erscheinen im Item-Verlauf („Reply in Slack from …“, ohne Text) und als Li
 | `… failed: invalid_auth` / `missing_scope` | falsches/abgelaufenes Token bzw. Scope fehlt (oben, Schritt 2) → App neu installieren, Token ersetzen. |
 | Kanalstatus `disconnected`: `app-level token is not set` | `app_token_env` nennt eine Variable, die fehlt. |
 | `apps.connections.open failed: … not_allowed_token_type` | in `app_token_env` steht das Bot-Token statt des App-Level-Tokens (`xapp-…`). |
-| Antwort im Thread, aber nichts passiert | Person nicht in `allowed_users`, Workflow ohne `on_reply`, Event `message.channels`/`message.groups` nicht abonniert, oder eine zweite Instanz nutzt dieselbe App (Log `reply ignored` auf `debug`). |
+| Antwort im Thread, aber nichts passiert | nur eine Datei ohne Text gesendet (Dateien werden ignoriert, nur der Text zählt), Person nicht in `allowed_users`, Workflow ohne `on_reply`, Event `message.channels`/`message.groups` nicht abonniert, oder eine zweite Instanz nutzt dieselbe App (Log `reply ignored` auf `debug`). |
 
 Manuelle Prüfung mit einer echten App: [manual-tests/slack.md](manual-tests/slack.md).
 

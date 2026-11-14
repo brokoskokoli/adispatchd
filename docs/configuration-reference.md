@@ -1612,8 +1612,9 @@ Slack-Thread eines Items, kann eine Person aus `allowed_users` dort antworten; d
 Typisch: die Antwort als Kommentar an das Issue (die Agenten lesen nur dort) und das Übergabe-Label entfernen.
 
 - **Was zählt:** Kanal (Slack-App) und Channel stimmen, `thread_ts` gehört einem gespeicherten Thread dieses Kanals,
-  Absender in `allowed_users`, Nachricht neu (kein `subtype` außer `thread_broadcast`, kein Bot – auch nicht die
-  eigene App). Ignoriert (Log `debug`, kein Run): fremde Nutzer, andere Channels, unbekannte Threads,
+  Absender in `allowed_users`, Nachricht neu (kein `subtype` außer `thread_broadcast` und `file_share`, kein Bot –
+  auch nicht die eigene App). Eine Antwort mit angehängten Dateien (`file_share`) zählt nur mit ihrem Text – die
+  Dateien werden ignoriert; Dateien ohne Text zählen nicht. Ignoriert (Log `debug`, kein Run): fremde Nutzer, andere Channels, unbekannte Threads,
   Nachrichten außerhalb von Threads, `message_changed`, `message_deleted`, `bot_message`. Hat der Workflow kein (oder
   ein leeres) `on_reply`, wird die Antwort ignoriert; eine ausstehende Erinnerung hebt sie trotzdem auf.
 - **Genau einmal:** Jede Antwort wird beim Eingang gespeichert (eindeutig je Slack-Channel + `ts`), dann bestätigt,

@@ -714,7 +714,7 @@ Menschen übergibt, meldet das aktiv; die Antwort landet als Kommentar in der So
 - **Orchestrator-Ereignisse** dürfen auf einen `slack`-Kanal; mit Item gehen sie in den Thread `(Workflow, Item)`
   (Thread bei Bedarf angelegt), sonst als Top-Level-Nachricht.
 - **Antworten** (`notification_replies`): Eine Antwort zählt nur bei passendem Kanal/Channel, bekanntem Thread, Absender
-  in `allowed_users` und neuer Nachricht (kein `subtype` außer `thread_broadcast`, kein Bot). Reihenfolge beim Eingang:
+  in `allowed_users` und neuer Nachricht (kein `subtype` außer `thread_broadcast` und `file_share` mit Text – Dateien werden ignoriert –, kein Bot). Reihenfolge beim Eingang:
   prüfen → **synchron speichern** (eindeutig je Channel + `ts`) → Ack an Slack → verarbeiten; ignorierte Ereignisse werden
   ebenfalls bestätigt. Secret-artiger Text (Prüfung aus WI-27) wird nicht gespeichert, sondern abgelehnt (Grund im
   Thread, ❌). `{reply.*}` (Text als Klartext, max. 8 KiB, `<!--` entschärft; Benutzer, Anzeigename, `ts`, Permalink,

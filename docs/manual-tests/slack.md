@@ -99,6 +99,7 @@ als Befund an den Maintainer.
 | S9 | Antwort mit einem Fake-Token `ghp_` + 36 Zeichen | ❌, „Reply rejected: looks like it contains a secret (GitHub token ×1) …“; Datenbank enthält den Text nicht (`sqlite3 slack-data/adispatchd.sqlite "select text from notification_replies"` → leer). |
 | S10 | Antwort einer Person **nicht** in `allowed_users` | Keine Reaktion, kein Run (Log `reply ignored` auf `debug` mit `user not in allowed_users`). |
 | S11 | Nachricht im Channel **außerhalb** des Threads | ignoriert. |
+| S11a | Im Thread mit Text **und** Screenshot antworten; danach nur einen Screenshot ohne Text | Erste Antwort zählt mit ihrem Text (Datei ignoriert, Event `subtype: file_share`); die reine Datei wird ignoriert (Log `file without text`). |
 | S12 | Während ein Run des Items läuft (Worker mit `sleep 60`), im Thread antworten; parallel „Start“ in der UI für dasselbe Item | Antwort bekommt ⏳, Reply-Run startet erst nach Ende des Runs; der manuelle Start wird mit `409 reply_pending` abgelehnt, solange die Antwort wartet; Planung zeigt `locked: reply … pending`. |
 | S13 | Socket trennen: Netzwerk kurz weg (z. B. WLAN aus, 30 s) | Kanalstatus `disconnected` mit Fehler und „next attempt“; danach automatisch `connected`. Eine Antwort, die während der Trennung geschrieben wurde, kommt nach dem Reconnect an (Slack liefert nach) und läuft genau einmal. |
 | S14 | Instanz während eines Reply-Runs hart beenden (`kill -9` während `reply_check` mit `sleep 5`) und neu starten | Recovery setzt den Reply-Run fort; genau ein Kommentar am Issue. |

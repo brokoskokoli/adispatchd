@@ -14,7 +14,7 @@
  * processed (⏳ reaction, the run controller is woken). A reply counts only
  * if channel and Slack channel match, `thread_ts` belongs to a stored thread
  * of that channel, the author is in `allowed_users` and the message is new
- * (no `subtype` except `thread_broadcast`, no bot). Everything else is
+ * (no `subtype` except `thread_broadcast` and `file_share` with text – files are ignored – and no bot). Everything else is
  * acknowledged and ignored (log on debug). A reply that counts cancels the
  * pending reminders of its thread – also when the workflow has no
  * `on_reply` (then it is ignored otherwise, P6). Texts that look like a
@@ -233,7 +233,9 @@ export class ChatReplyService implements ChatReplyFeedback {
       .channels.filter((c): c is SlackChannelConfig => c.type === 'slack' && c.appTokenEnv === appTokenEnv && c.channel === chatChannel);
     if (channels.length === 0) return ignore('other channel');
     if (!ts || !threadTs || threadTs === ts) return ignore('not a reply in a thread');
-    if (event.subtype !== undefined && event.subtype !== 'thread_broadcast') return ignore(`subtype ${String(event.subtype)}`);
+    if (event.subtype !== undefined && event.subtype !== 'thread_broadcast' && event.subtype !== 'file_share') return ignore(`subtype ${String(event.subtype)}`);
+    // A reply with attached files counts with its text only (files are ignored); files without text do not count.
+    if (event.subtype === 'file_share' && (typeof event.text !== 'string' || event.text.trim() === '')) return ignore('file without text');
     if (event.bot_id !== undefined) return ignore('bot message');
     const user = typeof event.user === 'string' ? event.user : '';
     if (!user) return ignore('no user');
