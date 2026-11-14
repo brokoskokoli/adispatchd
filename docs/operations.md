@@ -524,7 +524,8 @@ Sicherheit und Verhalten:
 - Kommentare werden **nicht automatisch wiederholt**; derselbe Text am selben Item innerhalb von 60 s wird abgewiesen.
   Bei `github_outcome_unknown` erst auf GitHub nachsehen, ob der Kommentar schon da ist.
 - Je Benutzer höchstens 20 Aktionen und 60 Item-Abrufe pro Minute (`429 ui_actions_throttled`).
-- Der Link „Open on GitHub“ öffnet das Item in einem neuen Tab – dort liest und schreibt man als man selbst.
+- Der Link „Open on GitHub“ öffnet das Item in einem neuen Tab – dort liest und schreibt man als man selbst. Bei
+  `git_files`-Sources heißt er „Open file“ (Datei über `web_url`) und fehlt, wenn die Source keine `web_url` hat.
 
 **Audit:** Tabelle `ui_actions` in der Datenbank (Schema v4): Zeit, Benutzer, Identity, Item, Art, Ergebnis/Fehler, bei
 Kommentaren die URL (nie der Text; Labels/Feldwerte maskiert). Anzeige auf der Seite „UI Actions“ und im Item-Panel, API

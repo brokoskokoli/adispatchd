@@ -9,6 +9,7 @@ import { h, replaceChildren, rerender } from '../dom.js';
 import type { Page, PageContext } from '../page.js';
 import { isStateChange, messageRunId } from '../page.js';
 import { createRefresher } from '../../shared/throttle.js';
+import { itemLinkText, itemRefText, safeHttpUrl } from '../../shared/format.js';
 import {
   ENTRY_KINDS,
   entryItem,
@@ -167,8 +168,12 @@ export const historyPage = (ctx: PageContext, source: string, itemId: string): P
       // Live refresh never shrinks the list: older pages already loaded stay.
       ({ entries, nextBefore } = refreshEntries(entries, nextBefore, parsed.entries, parsed.nextBefore));
       const it = parsed.item;
-      if (it?.ok) ctx.setTitle(`History ${it.repository ?? source}#${itemId}`);
-      rerender(head, headSection(h, parsed, render), h('p', { class: 'history-links' }, it?.ok && it.url ? externalLink(it.url, 'Open on GitHub') : null, ' ', itemPanelLink(source, itemId)));
+      if (it?.ok) ctx.setTitle(`History ${itemRefText({ source, itemId, repository: it.repository, sourceType: it.sourceType })}`);
+      rerender(
+        head,
+        headSection(h, parsed, render),
+        h('p', { class: 'history-links' }, it?.ok && safeHttpUrl(it.url) ? externalLink(it.url, itemLinkText(it.sourceType)) : null, ' ', itemPanelLink(source, itemId)),
+      );
       replaceChildren(pathEl, pathSection(h, parsed, render));
       replaceChildren(notes, historyNotes(h, parsed));
       drawTimeline();

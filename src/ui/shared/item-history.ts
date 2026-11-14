@@ -6,7 +6,7 @@
  * builder. Everything from the API or GitHub is rendered as text.
  */
 import type { Child, ElementLike, HFn, Listener } from './dom.js';
-import { formatDuration, type Tone } from './format.js';
+import { formatDuration, itemRefText, type Tone } from './format.js';
 
 /** Kinds of timeline entries (filter checkboxes); `github` = external GitHub events. */
 export const ENTRY_KINDS = ['run_started', 'run_finished', 'hook', 'block_created', 'block_cleared', 'ui_action', 'reply', 'github'] as const;
@@ -123,6 +123,8 @@ export type HistoryItem =
       ok: true;
       url: string;
       type: string;
+      /** Type of the source (`github`, `git_files`, …); `null` from older servers. */
+      sourceType: string | null;
       repository: string | null;
       title: string;
       state: string | null;
@@ -299,6 +301,7 @@ function parseItem(v: unknown): HistoryItem | null {
     ok: true,
     url: s(i.url),
     type: s(i.type, 40),
+    sourceType: sn(i.sourceType, 40),
     repository: sn(i.repository, 200),
     title: s(i.title),
     state: sn(i.state, 40),
@@ -541,7 +544,7 @@ export function headSection<E extends ElementLike>(h: HFn<E>, d: HistoryData, r:
     'section',
     { class: 'card history-head' },
     h('h1', null, item.url ? r.link(item.url, item.title || `${d.source}:${d.itemId}`) : item.title || `${d.source}:${d.itemId}`),
-    h('p', { class: 'muted' }, `${item.repository ?? d.source}#${d.itemId} · source ${d.source}`),
+    h('p', { class: 'muted' }, `${itemRefText({ source: d.source, itemId: d.itemId, repository: item.repository, sourceType: item.sourceType })} · source ${d.source}`),
     h('dl', { class: 'kv' }, rows),
     activeRuns,
     blocks,

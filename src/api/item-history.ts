@@ -537,6 +537,8 @@ export type ItemHead =
       key: string;
       url: string;
       type: SourceItem['type'];
+      /** Type of the source (`github`, `git_files`, …). */
+      sourceType: string;
       repository: string | null;
       title: string;
       state: string | null;
@@ -573,7 +575,7 @@ export function registerItemHistoryRoutes(app: FastifyInstance, deps: ItemHistor
     try {
       item = await adapter.getItem(itemId);
     } catch (err) {
-      const mapped = githubError(err, deps.config.current.sources[sourceId]?.identity ?? 'source', 'source identity');
+      const mapped = githubError(err, deps.config.current.sources[sourceId]?.identity ?? 'source', 'source identity', adapter.type);
       return fail(mapped?.code ?? 'read_failed', mapped?.message ?? errorMessage(err));
     }
     if (!item || item.sourceId !== sourceId) return fail('item_not_found', `Item ${itemId} not found in source "${sourceId}" (deleted, transferred or not visible)`);
@@ -611,6 +613,7 @@ export function registerItemHistoryRoutes(app: FastifyInstance, deps: ItemHistor
       key: item.key,
       url: /^https?:\/\//i.test(item.url) ? item.url : '',
       type: item.type,
+      sourceType: adapter.type,
       repository: adapter.repository ?? null,
       // Artifact items (WI-35) have a name instead of a title.
       title: typeof f.title === 'string' ? f.title : typeof f.name === 'string' ? f.name : '',

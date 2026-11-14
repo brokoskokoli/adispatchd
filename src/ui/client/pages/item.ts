@@ -28,6 +28,7 @@ import {
 } from '../../shared/item-panel.js';
 import { ApiError } from '../api.js';
 import { historyHash } from '../../shared/item-history.js';
+import { itemRefText } from '../../shared/format.js';
 import { confirmDialog, errorBox, externalLink, loading, routeLink, time, toast } from '../ui.js';
 
 /** Hash of the item panel (WI-33: below the item history route). */
@@ -187,7 +188,13 @@ export const itemPage = (ctx: PageContext, source: string, itemId: string): Page
           message: h(
             'div',
             null,
-            h('p', null, `These labels do not exist in ${it.repository ?? it.source} yet and will be created there:`),
+            h(
+              'p',
+              null,
+              it.sourceType === 'git_files'
+                ? `No item of source ${it.source} uses these labels yet; they will be added to the item file:`
+                : `These labels do not exist in ${it.repository ?? it.source} yet and will be created there:`,
+            ),
             h('pre', { class: 'confirm-line' }, created.join('\n')),
           ),
           confirmLabel: 'Create and continue',
@@ -269,7 +276,7 @@ export const itemPage = (ctx: PageContext, source: string, itemId: string): Page
         state.removeLabels = previous.removeLabels;
         state.fields = previous.fields;
       }
-      ctx.setTitle(`${parsed.repository ?? parsed.source}#${parsed.itemId}`);
+      ctx.setTitle(itemRefText(parsed));
       render();
     } catch (err) {
       replaceChildren(body, errorBox(err), h('section', { class: 'card' }, h('h2', null, 'Open another item'), searchForm(ctx, `${source}:${itemId}`)));

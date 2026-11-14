@@ -8,9 +8,11 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { SourceError } from '../core/index.js';
 import { CONTROL_TOKEN_HEADER } from './auth.js';
 import { authEnvSetup, AUTH_PASSWORDS, FAST_AUTH, PASSWORD_AUTH_CONFIG } from './testing/auth.js';
 import { REPO_A, REPO_B, startAppEnv, type AppEnv } from './testing/helpers.js';
+import { githubError } from './ui-actions.js';
 import type { FakeProject } from '../sources/github/testing/index.js';
 
 let env: AppEnv;
@@ -399,6 +401,25 @@ describe('per-user rate limits', () => {
       expect((await limited.request('GET', '/api/v1/items/repo_a/1', undefined, cookie)).json.error.code).toBe('ui_actions_throttled');
     } finally {
       await limited.cleanup();
+    }
+  });
+});
+
+describe('githubError texts per source type (WI-40)', () => {
+  it('keeps the codes and names the repository instead of GitHub for git_files sources', () => {
+    const cases: Array<[SourceError, string]> = [
+      [new SourceError('auth', 'x'), 'github_auth_failed'],
+      [new SourceError('forbidden', 'x'), 'github_forbidden'],
+      [new SourceError('not_found', 'x'), 'github_not_found'],
+      [new SourceError('transient', 'x'), 'github_unavailable'],
+      [new SourceError('transient', 'x', { outcomeUnknown: true }), 'github_outcome_unknown'],
+      [new SourceError('invalid', 'x'), 'github_rejected'],
+    ];
+    for (const [err, code] of cases) {
+      const files = githubError(err, 'bot', undefined, 'git_files');
+      expect(files?.code).toBe(code);
+      expect(files?.message).not.toContain('GitHub');
+      expect(githubError(err, 'bot', undefined, 'github')?.message).toContain('GitHub');
     }
   });
 });
