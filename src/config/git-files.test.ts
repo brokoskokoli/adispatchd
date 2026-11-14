@@ -105,6 +105,21 @@ describe('config: git_files sources (WI-40)', () => {
     expect(http.errors.join('\n')).toContain('sources.plain.identity: A token would be sent unencrypted');
   });
 
+  it('warns when the identity cannot be used for the repository (ssh, scp-like, local path)', async () => {
+    const remotes = ['ssh://git@git.example.invalid/acme/x.git', 'git@git.example.invalid:acme/x.git', 'git://git.example.invalid/acme/x.git', '../meta-repo', 'file:///srv/git/x.git'];
+    for (const repository of remotes) {
+      const res = await load({ 'sources.yaml': `sources:\n  s: { type: git_files, repository: "${repository}", identity: maintainer }\n` });
+      expect(res.errors, repository).toEqual([]);
+      expect(res.warnings.join('\n'), repository).toContain('sources.s.identity: "identity" is only used for https:// repositories');
+      await t?.cleanup();
+      t = undefined;
+    }
+    const https = await load({ 'sources.yaml': 'sources:\n  s: { type: git_files, repository: "https://git.example.invalid/acme/x.git", identity: maintainer }\n' });
+    expect(https.warnings.join('\n')).not.toContain('only used for https');
+    const none = await load({ 'sources.yaml': 'sources:\n  s: { type: git_files, repository: "../meta-repo" }\n' });
+    expect(none.warnings.join('\n')).not.toContain('only used for https');
+  });
+
   it('accepts declared and built-in fields in filters, priorities and views; rejects unknown ones', async () => {
     const good = await load({
       'workflows/w.yaml': workflow(

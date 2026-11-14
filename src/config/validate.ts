@@ -300,6 +300,13 @@ function validateGitFilesSource(source: Extract<SourceConfig, { type: 'git_files
   if (repo) issues.error(SOURCES_FILE, at('repository'), `"repository" ${repo}`);
   else if (source.identity !== null && /^http:\/\//i.test(source.repository)) {
     issues.error(SOURCES_FILE, at('identity'), 'A token would be sent unencrypted: use an https:// repository URL with "identity"');
+  } else if (source.identity !== null && !/^https:\/\//i.test(source.repository)) {
+    // ssh, git://, scp-like and local paths: git never asks for an http credential, the token is not used.
+    issues.warning(
+      SOURCES_FILE,
+      at('identity'),
+      '"identity" is only used for https:// repositories; this repository is reached without it (ssh agent, local path); remove "identity" or use an https:// URL',
+    );
   }
   const branch = branchProblem(source.branch);
   if (branch) issues.error(SOURCES_FILE, at('branch'), `"${source.branch}" ${branch}`);
