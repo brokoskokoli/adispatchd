@@ -571,6 +571,12 @@ export interface IdentityDescription {
 /** Desired value of a project field in a {@link SourceUpdate}: option name, text, number, `YYYY-MM-DD`, iteration title; `null` clears. */
 export type ProjectFieldUpdateValue = string | number | null;
 
+/** Source type `git_files` (WI-40): items are Markdown files with YAML frontmatter in a git repository. */
+export const GIT_FILES_SOURCE_TYPE = 'git_files';
+
+/** Desired value of a frontmatter field of a `git_files` item (WI-40); `null` removes the key. */
+export type FieldUpdateValue = string | number | boolean | null | readonly string[];
+
 /** Declarative change to an item (`source.update`, Spec §10). Labels are applied first, then project fields. */
 export interface SourceUpdate {
   labels?: {
@@ -579,6 +585,8 @@ export interface SourceUpdate {
   };
   /** Project fields (WI-16): declared field name (without `project.`) → desired value. */
   project?: Readonly<Record<string, ProjectFieldUpdateValue>>;
+  /** Frontmatter fields of a `git_files` item (WI-40): key → desired value, `null` removes the key. */
+  fields?: Readonly<Record<string, FieldUpdateValue>>;
 }
 
 /** What {@link SourceAdapter.applyUpdate} actually changed (action journal). */
@@ -595,6 +603,10 @@ export interface SourceUpdateApplied {
    * name in `projectFields` whose old value was read.
    */
   projectFieldsPrevious?: Record<string, ProjectFieldUpdateValue>;
+  /** Frontmatter fields that were changed (`git_files`, WI-40): key → new value (`null` = removed). */
+  fields?: Record<string, FieldUpdateValue>;
+  /** Values of the changed frontmatter fields before the change (`null` = absent). */
+  fieldsPrevious?: Record<string, FieldUpdateValue>;
 }
 
 /**
@@ -608,6 +620,8 @@ export interface ActionEffect {
   labelsRemoved?: string[];
   /** `source.update`: changed project fields; `from` absent = old value unknown. */
   projectFields?: Array<{ name: string; from?: ProjectFieldUpdateValue; to: ProjectFieldUpdateValue }>;
+  /** `source.update`: changed frontmatter fields (`git_files`, WI-40); `from` absent = old value unknown. */
+  fields?: Array<{ name: string; from?: FieldUpdateValue; to: FieldUpdateValue }>;
   /** `source.update`: the item was added to the project first. */
   projectItemAdded?: boolean;
   /** `source.update`: the item already had the desired state. */
@@ -814,6 +828,11 @@ export interface ListRefsOptions {
 
 /** Options of {@link SourceAdapter.applyUpdate}. */
 export interface SourceUpdateOptions {
+  /**
+   * Where the change comes from (WI-40, `git_files`: commit message
+   * trailers): the run and the action ID. Absent for UI actions.
+   */
+  origin?: { runId?: string; actionId?: string };
   /**
    * Write everything with exactly `identity` (WI-27 UI actions): an explicit
    * project write identity of the source (`project.identity`) is NOT used.
