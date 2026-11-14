@@ -16,10 +16,11 @@ import {
   type HookName,
   type ListHookName,
   type NotificationEventType,
+  type FieldUpdateValue,
   type ProjectFieldUpdateValue,
   type ResultHookName,
 } from '../core/index.js';
-import type { ProjectFieldKind } from '../sources/index.js';
+import type { GitFilesFieldType, ProjectFieldKind } from '../sources/index.js';
 
 // ---------------------------------------------------------------------------
 // Global settings (config.yaml, Spec §5.1)
@@ -264,12 +265,42 @@ export interface ArtifactsSourceConfig {
   vars: Readonly<Record<string, string>>;
 }
 
+/**
+ * Issues as Markdown files with YAML frontmatter in a git repository (WI-40),
+ * defaults resolved. `project` is always `null` (no GitHub project).
+ */
+export interface GitFilesSourceConfig {
+  id: string;
+  type: 'git_files';
+  /** Remote URL, or the local path resolved against the config dir. */
+  repository: string;
+  branch: string;
+  /** Folder of the item files relative to the repository root, POSIX separators; `''` = root. */
+  path: string;
+  /** Identity whose token is used for fetch/push; `null` = no credentials. */
+  identity: string | null;
+  project: null;
+  commitAuthor: { name: string; email: string };
+  /** Frontmatter key → values (one match closes the item). */
+  closedWhen: Readonly<Record<string, readonly string[]>>;
+  commentsHeading: string;
+  /** Declared frontmatter keys → type. */
+  fields: Readonly<Record<string, GitFilesFieldType>>;
+  /** Web URL template of a file (`{ref}`, `{path}`), `null` = none (items link to their history page). */
+  webUrl: string | null;
+  /** `{source.repository}`: `owner/name` for github.com URLs, else the repository without credentials. */
+  location: string;
+  vars: Readonly<Record<string, string>>;
+}
+
 /** A configured source. */
-export type SourceConfig = GithubSourceConfig | ArtifactsSourceConfig;
+export type SourceConfig = GithubSourceConfig | ArtifactsSourceConfig | GitFilesSourceConfig;
 
 /** Human-readable location of a source (`{source.repository}`): `owner/name`, `artifacts` for artifacts. */
 export function sourceLocation(source: SourceConfig): string {
-  return source.type === 'github' ? `${source.owner}/${source.repository}` : source.type;
+  if (source.type === 'github') return `${source.owner}/${source.repository}`;
+  if (source.type === 'git_files') return source.location;
+  return source.type;
 }
 
 /** GitHub App identity. The private key is read from `privateKeyEnv` at runtime. */
@@ -577,6 +608,8 @@ export interface SourceUpdateActionConfig extends ActionBase {
   labels: { add: readonly string[]; remove: readonly string[] };
   /** Project fields to set: declared name (without `project.`) → value, `null` = clear. Absent = none. */
   project?: Readonly<Record<string, ProjectFieldUpdateValue>>;
+  /** Frontmatter fields to set (`git_files`, WI-40): key → value, `null` = remove. Absent = none. */
+  fields?: Readonly<Record<string, FieldUpdateValue>>;
 }
 
 /**

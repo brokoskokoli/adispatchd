@@ -22,13 +22,21 @@ import {
   type FilterPredicate,
 } from '../core/index.js';
 import { parseIsoDate } from '../filters/index.js';
-import { ARTIFACT_FIELD_DEFINITIONS, GITHUB_FIELD_DEFINITIONS, PROJECT_FIELD_PREFIX, projectFieldDefinitions } from '../sources/index.js';
+import {
+  ARTIFACT_FIELD_DEFINITIONS,
+  GIT_FILES_FIELD_DEFINITIONS,
+  GITHUB_FIELD_DEFINITIONS,
+  PROJECT_FIELD_PREFIX,
+  gitFilesDeclaredFieldDefinitions,
+  projectFieldDefinitions,
+} from '../sources/index.js';
 import type { SourceConfig } from './model.js';
 
 /** Static field catalogue per source adapter type. */
 export const FIELD_CATALOG: Readonly<Record<string, readonly FieldDefinition[]>> = {
   github: GITHUB_FIELD_DEFINITIONS,
   artifacts: ARTIFACT_FIELD_DEFINITIONS,
+  git_files: GIT_FILES_FIELD_DEFINITIONS,
 };
 
 /**
@@ -52,6 +60,13 @@ const LISTING_FIELDS: Readonly<Record<string, ListingField>> = {
     operators: ['equals', 'in'],
     values: ['open', 'closed'],
     defaultDescription: 'only open issues/PRs',
+    defaultValues: ['open'],
+  },
+  git_files: {
+    field: 'state',
+    operators: ['equals', 'in'],
+    values: ['open', 'closed'],
+    defaultDescription: 'only open items',
     defaultValues: ['open'],
   },
 };
@@ -85,9 +100,19 @@ function definitions(ctx: FieldContext): readonly FieldDefinition[] | undefined 
   return [...base, ...(ctx.extra ?? []), ...(ctx.view ? [...VIEW_RUN_FIELDS, ...VIEW_ITEM_FIELDS] : [])];
 }
 
+/** Declared frontmatter fields of a `git_files` source (WI-40); `[]` for other sources. */
+function declaredFields(source: SourceConfig | undefined): FieldDefinition[] {
+  return source?.type === 'git_files' ? gitFilesDeclaredFieldDefinitions(source.fields) : [];
+}
+
+/** Declared frontmatter fields common to all `sources` (same name and type, WI-40). */
+function commonDeclaredFields(sources: readonly SourceConfig[]): FieldDefinition[] {
+  return declaredFields(sources[0]).filter((def) => sources.every((s) => declaredFields(s).some((d) => d.name === def.name && d.type === def.type)));
+}
+
 /** Field context of a workflow triggered by `source`. */
 export function sourceFieldContext(source: SourceConfig): FieldContext {
-  const extra = source.project ? projectFieldDefinitions(source.project.fields) : [];
+  const extra = [...(source.project ? projectFieldDefinitions(source.project.fields) : []), ...declaredFields(source)];
   return {
     sourceType: source.type,
     view: false,
@@ -137,7 +162,7 @@ export function viewFieldContext(sources: readonly SourceConfig[]): FieldContext
   return {
     sourceType: sources[0]?.type ?? '',
     view: true,
-    extra: commonProjectFields(sources),
+    extra: [...commonProjectFields(sources), ...commonDeclaredFields(sources)],
     projectHint: (field) => commonProjectHint(sources, field, 'view'),
     projectDeclared: (field) => declaredBySome(sources, field),
   };
@@ -154,7 +179,7 @@ export function workflowFieldContext(sources: readonly SourceConfig[]): FieldCon
   return {
     sourceType: sources[0]?.type ?? '',
     view: false,
-    extra: commonProjectFields(sources),
+    extra: [...commonProjectFields(sources), ...commonDeclaredFields(sources)],
     projectHint: (field) => commonProjectHint(sources, field, 'workflow'),
     projectDeclared: (field) => declaredBySome(sources, field),
   };
