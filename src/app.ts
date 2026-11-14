@@ -68,7 +68,7 @@ import {
 import { Scheduler } from './scheduler/index.js';
 import { DashboardInfoService, type DashboardInfoServiceOptions } from './dashboard/index.js';
 import { ParameterOptionsService } from './parameter-options/index.js';
-import { createArtifactSourceFactory, createGitFilesSourceFactory, createGitHubSourceFactory, KeyedSerializer } from './sources/index.js';
+import { createArtifactSourceFactory, createGitFilesSourceFactory, createGitHubSourceFactory, findOrphanedClones, KeyedSerializer } from './sources/index.js';
 import { ViewService } from './views/index.js';
 import { AuthService, createApiServer, type UiActionLimits, EventHub, removeControlToken, writeControlToken, type AuthServiceOptions, type ReadinessReport } from './api/index.js';
 import { HubSlotClient, type HubSlotClientOptions } from './hub/index.js';
@@ -305,6 +305,28 @@ export async function checkContainerEngines(client: ContainerEngineClient, engin
     const result = await client.check(engine);
     if (result.ok) log.info('container engine available', { engine, version: result.version });
     else log.warn('container engine not available: container runs will end with start_error', { engine, error: result.error });
+  }
+}
+
+/**
+ * Log clones of `git_files` sources that are no longer configured (WI-40,
+ * removed or renamed sources). Only reported: deleting them is safe once no
+ * run of the old source is active, but left to the operator.
+ */
+export async function reportOrphanedClones(clonesDir: string, config: LoadedConfig, log: Logger): Promise<void> {
+  try {
+    const ids = Object.values(config.sources)
+      .filter((s) => s.type === 'git_files')
+      .map((s) => s.id);
+    const orphaned = await findOrphanedClones(clonesDir, ids);
+    if (orphaned.length > 0) {
+      log.info('clones of git_files sources that are no longer configured (safe to delete when no run of them is active)', {
+        dir: clonesDir,
+        clones: orphaned,
+      });
+    }
+  } catch (err) {
+    log.warn('could not check the clones of git_files sources', { dir: clonesDir, error: errorMessage(err) });
   }
 }
 
@@ -939,6 +961,7 @@ export async function createApp(options: AppOptions): Promise<App> {
         const engines = containerEngines(config.current);
         for (const e of engines) checkedEngines.add(e);
         await checkContainerEngines(containers, engines, log);
+        await reportOrphanedClones(dataPaths(dataDir).sourcesDir, config.current, log);
         const report = await controller.recover();
         log.info('recovery finished', {
           finalized: report.finalized.length,

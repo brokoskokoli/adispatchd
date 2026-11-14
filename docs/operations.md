@@ -270,7 +270,7 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 | `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
 | `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal; `runs/<id>/kept/` enthält die per `execute.keep` gesicherten Dateien); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien; nur diese, nicht jedes `secrets/`-Verzeichnis, z. B. in Workspaces) |
 | `artifacts/` | normale Dateikopie, zusammen mit `adispatchd.sqlite` (die Tabelle `artifacts` kennt die Verzeichnisse `artifacts/<id>/content`); Verzeichnisse ohne Datenbankeintrag und älter als 24 h räumt die Retention weg |
-| `sources/` | nicht nötig: Klone der `git_files`-Sources (seit 0.11.0), ein Spiegel des Remotes, der bei Bedarf neu angelegt wird |
+| `sources/` | nicht nötig: Klone der `git_files`-Sources (seit 0.11.0), ein Spiegel des Remotes, der bei Bedarf neu angelegt wird. Wird eine Source entfernt oder umbenannt, bleibt ihr Klon `sources/<alte-id>/` liegen; der Daemon löscht ihn nicht selbst, meldet ihn aber beim Start (Info `clones of git_files sources that are no longer configured …` mit den Namen). Er kann gefahrlos gelöscht werden, sobald kein Run der alten Source mehr läuft (ein Klon einer konfigurierten Source wird beim nächsten Lesen ebenfalls neu angelegt) |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
 **`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
