@@ -72,6 +72,7 @@ export const ROUTE_ROLES: Readonly<Record<string, RouteRule>> = {
   'POST /api/v1/dashboard/info/:id/refresh': 'operator',
   // Notifications
   'GET /api/v1/notifications': 'viewer',
+  'GET /api/v1/notifications/channels': 'viewer',
   'POST /api/v1/notifications/:id/retry': 'operator',
   // Item history (WI-33): readable by every viewer
   'GET /api/v1/items/:source/:item/history': 'viewer',

@@ -31,6 +31,7 @@ import {
   type FetchLike,
   HUB_SOCKET_ENV,
   HUB_WORKSPACE_ENV,
+  isLifecycleTrigger,
   type IdentityDescription,
   type IdentityRef,
   type TokenRequestOptions,
@@ -51,7 +52,7 @@ import {
 } from './identities/index.js';
 import { ContainerEngineClient } from './executors/index.js';
 import { LifecycleEngine } from './lifecycle/index.js';
-import { NotificationService } from './notifications/index.js';
+import { ChatReplyService, NotificationService, SlackWebClient, type WebSocketFactory } from './notifications/index.js';
 import { acquireInstanceLock, openPersistence, type InstanceLock, type Persistence } from './persistence/index.js';
 import {
   PersistedEventPublisher,
@@ -284,6 +285,11 @@ export interface AppOptions {
   /** Delay of the first retention pass after readiness (default 60 s). */
   retentionInitialDelayMs?: number;
   notifications?: { retryDelaysMs?: readonly number[]; timeoutMs?: number };
+  /**
+   * Slack (WI-39; tests): Web API base URL of a fake Slack (HTTP via
+   * `notificationFetch`), WebSocket factory for Socket Mode, reconnect tuning.
+   */
+  slack?: { baseUrl?: string; webSocket?: WebSocketFactory; socket?: { minBackoffMs?: number; maxBackoffMs?: number; helloTimeoutMs?: number } };
   sse?: { heartbeatMs?: number; maxBufferBytes?: number; maxReplay?: number };
   viewCacheTtlMs?: number;
   /** Extra run controller options (tests: recovery tuning, injected probes). */
@@ -334,6 +340,8 @@ export interface App {
   readonly scheduler: Scheduler;
   readonly lifecycle: LifecycleEngine;
   readonly notifications: NotificationService;
+  /** Replies in chat threads, Socket Mode connections (WI-39). */
+  readonly replies: ChatReplyService;
   readonly views: ViewService;
   readonly retention: RetentionService;
   /** Artifacts (WI-35). */
@@ -440,6 +448,14 @@ export async function createApp(options: AppOptions): Promise<App> {
     logger,
     ...(options.sse ?? {}),
   });
+  // WI-39: one Slack Web API client for messages, reactions and Socket Mode.
+  const slack = new SlackWebClient({
+    ...(options.notificationFetch ? { fetch: options.notificationFetch } : {}),
+    timers,
+    redactor,
+    ...(options.notifications?.timeoutMs !== undefined ? { timeoutMs: options.notifications.timeoutMs } : {}),
+    ...(options.slack?.baseUrl ? { baseUrl: options.slack.baseUrl } : {}),
+  });
   const notifications = new NotificationService({
     repositories: repos,
     settings: () => config.current.global.notifications,
@@ -447,10 +463,39 @@ export async function createApp(options: AppOptions): Promise<App> {
     timers,
     logger,
     redactor,
+    slack,
+    sources: sourceLookup,
     ...(options.env ? { env: options.env } : {}),
     ...(options.notificationFetch ? { fetch: options.notificationFetch } : {}),
     ...(options.notifications ?? {}),
     onChange: (n) => events.publish('notification', n),
+  });
+  // Replies in threads (WI-39): recorded on receipt, processed as lifecycle runs by the controller.
+  let wakeReplies: () => void = () => undefined;
+  const replies = new ChatReplyService({
+    repositories: repos,
+    settings: () => config.current.global.notifications,
+    target: (workflowId, sourceId) => {
+      const wf = config.getWorkflow(workflowId);
+      if (!wf) return { ignore: `workflow '${workflowId}' is no longer configured` };
+      if ((wf.config.hooks.on_reply ?? []).length === 0) return { ignore: `workflow '${workflowId}' has no on_reply` };
+      try {
+        return { snapshot: config.snapshotWorkflow(workflowId, sourceId ?? undefined) };
+      } catch (err) {
+        return { ignore: `no snapshot of workflow '${workflowId}': ${errorMessage(err)}` };
+      }
+    },
+    notifications,
+    slack,
+    onReply: () => wakeReplies(),
+    onStatus: (channels) => events.publish('notification.channels', { channels }),
+    clock,
+    timers,
+    logger,
+    redactor,
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.slack?.webSocket ? { webSocket: options.slack.webSocket } : {}),
+    ...(options.slack?.socket ? { socket: options.slack.socket } : {}),
   });
   const lifecycle = new LifecycleEngine({
     repositories: repos,
@@ -463,6 +508,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     logger,
     redact: redactor.asRedactor,
     credentials: sources,
+    chat: notifications,
   });
   const containers = options.controller?.containers ?? new ContainerEngineClient({ logger });
   /** Engines whose binary was checked (startup, reloads). */
@@ -481,10 +527,12 @@ export async function createApp(options: AppOptions): Promise<App> {
     publisher,
     credentials: sources,
     notifier: notifications,
+    chatReplies: replies,
     maxLogBytesPerRun: () => config.current.global.retention.maxLogSizePerRunBytes,
     secretValues: () => redactor.values(),
     artifacts,
   });
+  wakeReplies = () => controller.processReplies();
   // WI-31: run-time options of enum parameters (GitHub branches/tags, scripts) for the start form and the start check.
   const parameterOptions = new ParameterOptionsService({
     sources: sourceLookup,
@@ -502,7 +550,7 @@ export async function createApp(options: AppOptions): Promise<App> {
   const hubClient = hubConfig
     ? new HubSlotClient({
         ...hubConfig,
-        activeRunIds: () => repos.runs.listActive().filter((r) => r.triggerType !== 'unblock').map((r) => r.id),
+        activeRunIds: () => repos.runs.listActive().filter((r) => !isLifecycleTrigger(r.triggerType)).map((r) => r.id),
         clock,
         timers,
         logger,
@@ -616,6 +664,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       auth.sweep();
       warnAuthUsers();
       notifications.refreshSecrets();
+      replies.refresh();
       events.publish('config.reloaded', {
         version: res.config.version,
         hash: res.config.hash,
@@ -687,6 +736,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     lifecycle,
     views,
     notifications,
+    replies,
     retention,
     artifacts,
     dashboard,
@@ -738,6 +788,7 @@ export async function createApp(options: AppOptions): Promise<App> {
       ]);
     }
     await retention.stop().catch(() => undefined);
+    replies.stop();
     await notifications.stop().catch(() => undefined);
     await monitor.stop().catch(() => undefined);
     events.close();
@@ -821,6 +872,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     url = `http://${host.includes(':') ? `[${host}]` : host}:${p ?? port}`;
     log.info('HTTP API listening', { url });
     notifications.start();
+    replies.start();
     monitor.start();
     hubClient?.start();
     void (async () => {
@@ -863,6 +915,7 @@ export async function createApp(options: AppOptions): Promise<App> {
     scheduler,
     lifecycle,
     notifications,
+    replies,
     views,
     retention,
     artifacts,

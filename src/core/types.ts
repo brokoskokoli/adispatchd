@@ -341,6 +341,33 @@ export interface Notifier {
   notify(type: NotificationEventType, payload: Record<string, unknown>): void;
 }
 
+/** The part of a recorded chat reply the chat side needs (WI-39). */
+export interface ChatReplyRef {
+  id: number;
+  channelId: string;
+  chatChannel: string;
+  ts: string;
+  threadId: number | null;
+  workflowId: string;
+  itemKey: string;
+  userId: string;
+}
+
+/** Final outcome of a reply (WI-39). */
+export type ReplyOutcome = 'done' | 'rejected' | 'failed';
+
+/**
+ * Chat side of reply runs (WI-39), implemented by the notifications
+ * component: author details when the run starts and the feedback when it
+ * ends (reactions, a short answer in the thread). Best effort, never throws.
+ */
+export interface ChatReplyFeedback {
+  /** Display name (`users.info`) and permalink of the reply; `null` where unknown. */
+  describe(reply: ChatReplyRef): Promise<{ userName: string | null; permalink: string | null }>;
+  /** The reply was processed (✅) or rejected/failed (❌ plus a short answer without internals). */
+  finished(reply: ChatReplyRef, outcome: ReplyOutcome, detail: string | null, runId: string | null): void;
+}
+
 /** A message of the lifecycle action `notify` (WI-39), see {@link ChatNotifier}. */
 export interface WorkflowMessage {
   /** Idempotency key (run + journaled action): the same key never creates a second message. */

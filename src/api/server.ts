@@ -44,7 +44,7 @@ import {
 import { readFileNoFollow } from '../executors/index.js';
 import { activeExternalLinks, DEFAULT_DASHBOARD_LAYOUT, externalLinkFrameOrigins, loadConfig, toPublicConfig, type ConfigManager, type ReloadResult } from '../config/index.js';
 import type { LifecycleEngine } from '../lifecycle/index.js';
-import type { NotificationService } from '../notifications/index.js';
+import type { ChatReplyService, NotificationService } from '../notifications/index.js';
 import type { Repositories, RunRecord } from '../persistence/index.js';
 import { listKeptFiles, RUN_EVENTS, type RetentionService, type RunController } from '../runs/index.js';
 import type { ArtifactService } from '../artifacts/index.js';
@@ -59,7 +59,7 @@ import { acceptsControlToken, roleAllows, routeAccess, routeKey, type RouteAcces
 import { ApiError, toErrorResponse } from './errors.js';
 import { attachmentDisposition, keptContentType, keptPathSegments, openKeptFile } from './kept.js';
 import { readLogPage } from './logs.js';
-import { runDetailFields, toBlockView, toRunSummary, toWorkflowView, type ActionView } from './serialize.js';
+import { runDetailFields, toBlockView, toReplyView, toRunSummary, toWorkflowView, type ActionView } from './serialize.js';
 import type { EventHub } from './sse.js';
 import { registerArtifactRoutes, toArtifactView } from './artifacts.js';
 import { registerItemHistoryRoutes } from './item-history.js';
@@ -103,6 +103,8 @@ export interface ApiDeps {
   lifecycle: LifecycleEngine;
   views: ViewService;
   notifications: NotificationService;
+  /** Replies in chat threads (WI-39): channel status; absent = no Slack status. */
+  replies?: ChatReplyService;
   retention?: RetentionService;
   /** Artifacts (WI-35); absent = the artifact routes answer 503. */
   artifacts?: ArtifactService;
@@ -587,6 +589,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
         activeBlocks: repos.blocks.listActive().length,
         failedActions: repos.actions.listFailed().length,
         notifications: repos.notifications.countByState(),
+        replies: repos.replies.countByStatus(),
       },
       config: { version: cfg.version, hash: cfg.hash, loadedAt: cfg.loadedAt, configDir: cfg.configDir },
       server: { host, port: deps.info.port(), loopback: isLoopbackHost(host) },
@@ -760,6 +763,8 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     );
     const block = repos.blocks.activeFor(run.workflowId, run.sourceItemKey);
     const retryBlock = run.triggerType === 'unblock' ? repos.blocks.clearedByRun(id) : repos.blocks.createdByRun(id);
+    // WI-39: the chat reply processed by a reply run (never its text).
+    const reply = run.triggerType === 'reply' ? repos.replies.forRun(id) : null;
     const keptEvent = allEvents.findLast((e) => e.type === RUN_EVENTS.keptFiles);
     // Artifacts (WI-35): what the run produced, and the artifact it processed as its item.
     const artifactsEvent = allEvents.findLast((e) => e.type === RUN_EVENTS.artifacts);
@@ -783,6 +788,7 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
         block: block ? toBlockView(block, { affectedRunIds: repos.blocks.affectedRunIds(block.id), sourceUrl: run.sourceUrl, workflowName: null }) : null,
         // WI-30: the block whose removal started this lifecycle run, or the block this run created.
         retryBlock: retryBlock ? toBlockView(retryBlock, { affectedRunIds: repos.blocks.affectedRunIds(retryBlock.id), sourceUrl: run.sourceUrl, workflowName: null }) : null,
+        reply: reply ? toReplyView(reply) : null,
         kept: keptEvent ? keptSummary(keptEvent.payload) : null,
         artifacts: {
           created: repos.artifacts.query({ runId: id, limit: 100 }).artifacts.map(toArtifactView),
@@ -947,6 +953,8 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     );
     const error = await earlyError(op);
     if (error) throw error;
+    // WI-39: a reply whose chain went through after the retry/skip is processed now (✅ in the thread).
+    void op.then(() => deps.controller.afterReplyChainChanged(action.runId)).catch(() => undefined);
     auditRun(req, action.runId, kind === 'retry' ? 'action_retry' : 'action_skip', { actionId: id });
     return accepted(reply, { accepted: true, action: repos.actions.get(id) });
   };
@@ -1052,8 +1060,11 @@ export async function createApiServer(deps: ApiDeps): Promise<FastifyInstance> {
     return {
       notifications: deps.notifications.list({ ...(q.state ? { state: q.state } : {}), limit: q.limit ?? 100, offset: q.offset ?? 0 }),
       counts: repos.notifications.countByState(),
+      // WI-39: Socket Mode state of the Slack channels.
+      channels: redactValue(deps.replies?.status() ?? [], redact),
     };
   });
+  app.get('/api/v1/notifications/channels', async () => ({ channels: redactValue(deps.replies?.status() ?? [], redact) }));
   app.post('/api/v1/notifications/:id/retry', async (req, reply) => {
     const { id } = parse(numericIdParam, req.params, 'path');
     parse(emptyBody, req.body, 'body');
