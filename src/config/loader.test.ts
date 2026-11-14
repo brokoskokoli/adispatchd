@@ -67,7 +67,10 @@ describe('loadConfig – spec examples', () => {
     const result = await loadConfig(EXAMPLE_CONFIG_DIR, { dataDir: '/var/lib/adispatchd' });
     const config = expectOk(result);
     expect(result.warnings).toEqual([]);
-    expect(Object.keys(config.workflows).sort()).toEqual(['coder-project-a', 'deploy', 'make-report', 'nightly-maintenance', 'release', 'reviewer-project-b', 'summarize-report']);
+    expect(Object.keys(config.workflows).sort()).toEqual(['agent-handover', 'coder-project-a', 'deploy', 'make-report', 'nightly-maintenance', 'release', 'reviewer-project-b', 'summarize-report']);
+    // WI-39: Slack channel, notify and on_reply.
+    expect(config.global.notifications.channels.map((c) => [c.id, c.type])).toEqual([['team', 'slack']]);
+    expect(config.workflows['agent-handover']?.hooks.on_reply?.map((a) => a.type)).toEqual(['source.comment', 'source.update']);
     // WI-35: artifacts as a source; the chain make-report → summarize-report.
     expect(config.sources.artifacts).toMatchObject({ type: 'artifacts', identity: null });
     expect(config.workflows['make-report']?.execute.artifacts.map((a) => a.type)).toEqual(['report', 'site']);
@@ -129,8 +132,12 @@ describe('loadConfig – spec examples', () => {
         blockedRunsMs: null,
         maxLogSizePerRunBytes: 100 * 1024 * 1024,
         cleanupIntervalMs: 86_400_000,
+        notificationThreadsMs: 90 * 86_400_000,
       },
-      notifications: { on: ['retry_block_created', 'lifecycle_action_failed', 'recovery_failed'], channels: [] },
+      notifications: {
+        on: ['retry_block_created', 'lifecycle_action_failed', 'recovery_failed'],
+        channels: [{ id: 'team', type: 'slack', botTokenEnv: 'SLACK_BOT_TOKEN', appTokenEnv: 'SLACK_APP_TOKEN', channel: 'C0123456789', allowedUsers: ['U0123456789'] }],
+      },
     });
     const coder = config.workflows['coder-project-a'];
     expect(coder).toMatchObject({

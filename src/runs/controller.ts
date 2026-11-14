@@ -881,6 +881,8 @@ export class RunController {
       if (!run || !isTerminalStatus(run.status)) continue;
       try {
         await this.resumeTerminalRunActions(run);
+        // WI-39: a manually retried on_reply chain that went through now marks its reply done.
+        if (run.triggerType === 'reply') this.afterReplyChainChanged(run.id);
         report.resumedActions.push(runId);
       } catch (err) {
         this.logger.error('resuming lifecycle actions failed', { runId, error: err });

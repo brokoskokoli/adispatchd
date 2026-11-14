@@ -367,14 +367,23 @@ export async function performNotify(deps: PerformerDeps, input: AttemptInput, co
   }
   const scope = hookTemplateScope(snapshot, hook);
   const resolved = await resolveLinkedForTemplates(deps, input, [config.message]);
-  const item = resolved?.target.item ?? input.item ?? itemFromRun(run);
+  // Title and URL of the thread head: the given item, else read it (best effort; the message never fails for it).
+  let target = resolved?.target ?? null;
+  if (!target && !input.item && isSourceWorkflow(snapshot)) {
+    try {
+      target = await resolveSourceTarget(deps, run, snapshot, undefined);
+    } catch {
+      target = null;
+    }
+  }
+  const item = target?.item ?? input.item ?? itemFromRun(run);
   const values = buildHookTemplateValues({
     run,
     snapshot,
     hook,
     item,
     now: input.now,
-    ...(resolved?.target.adapter.repository ? { repository: resolved.target.adapter.repository } : {}),
+    ...(target?.adapter.repository ? { repository: target.adapter.repository } : {}),
     ...(resolved?.linked ? { linked: resolved.linked } : {}),
     block: input.block ?? null,
     reply: input.reply ?? null,

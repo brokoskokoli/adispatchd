@@ -8,7 +8,7 @@ import { createRefresher } from '../../shared/throttle.js';
 import { buildHash } from '../../shared/route.js';
 import { formatDuration, stateTone } from '../../shared/format.js';
 import type { Page, PageContext } from '../page.js';
-import type { ConfigIssue, Notification, Status } from '../types.js';
+import type { ChannelStatus, ConfigIssue, Notification, Status } from '../types.js';
 import { act, badge, button, confirmDialog, errorBox, jsonBlock, kv, loading, section, table, text, time, toast } from '../ui.js';
 
 function issuesList(issues: ConfigIssue[]): HTMLElement {
@@ -171,7 +171,10 @@ export const configPage = (ctx: PageContext): Page => {
   let notifState = ctx.route.query.state === 'all' ? '' : 'failed';
   const loadNotifications = async (): Promise<void> => {
     try {
-      const res = await api.get<{ notifications: Notification[]; counts: Record<string, number> }>(`/api/v1/notifications${qs({ state: notifState, limit: 200 })}`);
+      const res = await api.get<{ notifications: Notification[]; counts: Record<string, number>; channels?: ChannelStatus[] }>(
+        `/api/v1/notifications${qs({ state: notifState, limit: 200 })}`,
+      );
+      const channels = res.channels ?? [];
       const stateSel = h(
         'select',
         { class: 'input', 'aria-label': 'Delivery state', on: { change: () => { notifState = stateSel.value; void loadNotifications(); } } },
@@ -180,9 +183,31 @@ export const configPage = (ctx: PageContext): Page => {
       ) as HTMLSelectElement;
       rerender(
         body,
+        channels.length > 0
+          ? section(
+              'Channels',
+              h('p', { class: 'hint' }, 'Slack channels receive replies in their threads via Socket Mode when app_token_env is set (WI-39).'),
+              table(
+                ['Channel', 'Type', 'Replies', 'Connection', ''],
+                channels.map((c) => [
+                  h('span', null, h('code', null, c.id), c.channel ? h('span', { class: 'muted' }, ` ${c.channel}`) : null),
+                  c.type,
+                  c.type === 'slack' ? (c.replies ? `yes (${c.allowedUsers} allowed user${c.allowedUsers === 1 ? '' : 's'})` : 'no (send only)') : '—',
+                  c.state === null ? '—' : badge(c.state, channelTone(c.state)),
+                  h(
+                    'span',
+                    null,
+                    c.lastConnectedAt ? h('div', { class: 'muted' }, 'last connected ', time(c.lastConnectedAt)) : null,
+                    c.lastError && c.state !== 'connected' ? h('div', { class: 'error-text' }, c.lastError) : null,
+                    c.nextAttemptAt ? h('div', { class: 'muted' }, 'next attempt ', time(c.nextAttemptAt)) : null,
+                  ),
+                ]),
+              ),
+            )
+          : null,
         section(
           'Orchestrator notifications',
-          h('p', { class: 'hint' }, 'Central notifications (retry block created, lifecycle action failed, recovery failed) and their delivery attempts per channel.'),
+          h('p', { class: 'hint' }, 'Central notifications (retry block created, lifecycle action failed, recovery failed), messages of notify actions, reminders and reply answers, with their delivery attempts per channel.'),
           h('div', { class: 'filters' }, stateSel),
           table(
             ['#', 'Event', 'Created', 'State', 'Deliveries', ''],
@@ -234,9 +259,17 @@ export const configPage = (ctx: PageContext): Page => {
   return {
     el,
     onLive: (msg) => {
-      if (msg.type === 'config.reloaded' || (tab === 'notifications' && msg.type === 'notification')) refresher.trigger();
+      if (msg.type === 'config.reloaded' || (tab === 'notifications' && (msg.type === 'notification' || msg.type === 'notification.channels'))) refresher.trigger();
     },
     onResync: () => void refresher.now(),
     dispose: () => refresher.dispose(),
   };
 };
+
+/** Badge tone of a Socket Mode state (WI-39). */
+function channelTone(state: NonNullable<ChannelStatus['state']>): 'ok' | 'warn' | 'error' | 'info' {
+  if (state === 'connected') return 'ok';
+  if (state === 'connecting') return 'info';
+  if (state === 'disabled' || state === 'stopped') return 'info';
+  return 'error';
+}

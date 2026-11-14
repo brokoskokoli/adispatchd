@@ -12,9 +12,11 @@ import { historyLinkForKey } from './item.js';
 
 const PAGE_SIZE = 50;
 
-/** Trigger column: lifecycle runs of removed blocks (WI-30) as a badge. */
+/** Trigger column: lifecycle runs of removed blocks (WI-30) and of chat replies (WI-39) as a badge. */
 export function triggerLabel(trigger: string): HTMLElement | string {
-  return trigger === 'unblock' ? badge('unblock', 'info', 'Lifecycle run of a removed retry block (on_retry_unblock)') : trigger;
+  if (trigger === 'unblock') return badge('unblock', 'info', 'Lifecycle run of a removed retry block (on_retry_unblock)');
+  if (trigger === 'reply') return badge('reply', 'info', 'Lifecycle run of a reply in a chat thread (reply_check + on_reply)');
+  return trigger;
 }
 
 export const runsPage = (ctx: PageContext): Page => {
@@ -41,7 +43,7 @@ export const runsPage = (ctx: PageContext): Page => {
   const trSelect = h(
     'select',
     { class: 'input', 'aria-label': 'Trigger', on: { change: () => go({ trigger: trSelect.value }) } },
-    [['', 'All triggers'], ['source', 'source'], ['schedule', 'schedule'], ['manual', 'manual'], ['unblock', 'unblock (lifecycle)']].map(([v, l]) => h('option', { value: v!, selected: v === trigger }, l!)),
+    [['', 'All triggers'], ['source', 'source'], ['schedule', 'schedule'], ['manual', 'manual'], ['unblock', 'unblock (lifecycle)'], ['reply', 'reply (lifecycle)']].map(([v, l]) => h('option', { value: v!, selected: v === trigger }, l!)),
   ) as HTMLSelectElement;
   const resSelect = h(
     'select',

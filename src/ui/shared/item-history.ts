@@ -9,7 +9,7 @@ import type { Child, ElementLike, HFn, Listener } from './dom.js';
 import { formatDuration, type Tone } from './format.js';
 
 /** Kinds of timeline entries (filter checkboxes); `github` = external GitHub events. */
-export const ENTRY_KINDS = ['run_started', 'run_finished', 'hook', 'block_created', 'block_cleared', 'ui_action', 'github'] as const;
+export const ENTRY_KINDS = ['run_started', 'run_finished', 'hook', 'block_created', 'block_cleared', 'ui_action', 'reply', 'github'] as const;
 export type EntryKind = (typeof ENTRY_KINDS)[number];
 
 /** Labels of the filter checkboxes. */
@@ -20,6 +20,7 @@ export const ENTRY_KIND_LABELS: Record<EntryKind, string> = {
   block_created: 'Retry block created',
   block_cleared: 'Retry block removed',
   ui_action: 'UI actions',
+  reply: 'Replies in Slack',
   github: 'GitHub events',
 };
 
@@ -36,6 +37,10 @@ export interface Effect {
   comment: { url: string | null; reconciled: boolean } | null;
   exitCode?: number | null;
   signal?: string | null;
+  /** `notify` (WI-39): message recorded for this channel. */
+  notification?: { channel: string } | null;
+  /** `reply_check` (WI-39): the reply was rejected. */
+  rejected?: boolean;
 }
 
 export interface HistoryAction {
@@ -102,6 +107,10 @@ export interface Entry {
   errorCode?: string | null;
   errorMessage?: string | null;
   effect?: Effect | null;
+  // reply (WI-39): who answered, status; never the text
+  userId?: string;
+  channelId?: string;
+  permalink?: string | null;
   // github
   github?: GitHubEvent;
 }
@@ -190,6 +199,8 @@ export function parseEffect(v: unknown): Effect | null {
     comment: comment ? { url: sn(comment.url), reconciled: comment.reconciled === true } : null,
     ...('exitCode' in e ? { exitCode: n(e.exitCode) } : {}),
     ...('signal' in e ? { signal: sn(e.signal, 40) } : {}),
+    ...(obj(e.notification) ? { notification: { channel: s(obj(e.notification)?.channel, 64) } } : {}),
+    ...(e.rejected === true ? { rejected: true } : {}),
   };
 }
 
@@ -260,6 +271,9 @@ function parseEntry(v: unknown): Entry | null {
   if ('errorCode' in e) out.errorCode = sn(e.errorCode, 100);
   if ('errorMessage' in e) out.errorMessage = sn(e.errorMessage);
   if ('effect' in e) out.effect = parseEffect(e.effect);
+  if (typeof e.userId === 'string') out.userId = s(e.userId, 40);
+  if (typeof e.channelId === 'string') out.channelId = s(e.channelId, 64);
+  if ('permalink' in e) out.permalink = sn(e.permalink, 1000);
   return out;
 }
 
@@ -389,6 +403,8 @@ export function effectLines(effect: Effect | null | undefined, type?: string): s
   for (const f of effect.projectFields) lines.push(`${f.name}: ${'from' in f ? `${value(f.from)} → ` : ''}${value(f.to)}`);
   if (effect.comment) lines.push(effect.comment.reconciled ? 'comment found again (written before)' : 'comment written');
   if (effect.unchanged) lines.push('no change (already in this state)');
+  if (effect.notification) lines.push(`message to ${effect.notification.channel} recorded`);
+  if (effect.rejected) lines.push('reply rejected (nothing else ran)');
   if ('exitCode' in effect || 'signal' in effect) {
     if (effect.signal) lines.push(`terminated by ${effect.signal}`);
     else if (effect.exitCode !== null && effect.exitCode !== undefined) lines.push(`exit ${effect.exitCode}`);
@@ -402,6 +418,7 @@ export function triggerText(trigger: string | undefined, user: string | null | u
   const t = trigger ?? '?';
   if (t === 'manual') return user ? `manual (by ${user})` : 'manual';
   if (t === 'unblock') return user ? `unblock (block removed by ${user})` : 'unblock (lifecycle run)';
+  if (t === 'reply') return user ? `reply (answer in Slack by ${user})` : 'reply (lifecycle run)';
   return t;
 }
 
@@ -628,6 +645,16 @@ export function entryItem<E extends ElementLike>(h: HFn<E>, e: Entry, r: History
         h('div', { class: 'muted' }, `by ${e.actor ?? '?'} as ${e.identity ?? '?'}`),
         lines.length > 0 || e.effect?.comment?.url ? h('ul', { class: 'effect' }, lines.map((l) => h('li', null, l)), e.effect?.comment?.url ? h('li', null, r.link(e.effect.comment.url, 'open comment')) : null) : null,
         e.errorMessage ? h('div', { class: 'error-text' }, e.errorMessage) : null,
+      );
+    }
+    case 'reply': {
+      const tone: Tone = e.status === 'done' ? 'ok' : e.status === 'pending' || e.status === 'running' ? 'info' : 'error';
+      return h(
+        'li',
+        { class: 'entry entry-reply' },
+        head(`Reply in Slack from ${e.user ?? e.userId ?? '?'}`, ' ', r.badge(e.status ?? '?', tone), e.runId ? [' · ', r.runLink(e.runId, 'lifecycle run')] : null),
+        h('div', { class: 'muted' }, `to ${workflowLabel(e)}`, e.channelId ? ` · channel ${e.channelId}` : '', e.reason ? ` · ${e.reason}` : ''),
+        e.permalink ? h('div', null, r.link(e.permalink, 'open in Slack')) : null,
       );
     }
     case 'github': {
