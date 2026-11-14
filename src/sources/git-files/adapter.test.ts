@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -521,5 +521,18 @@ describe('GitFilesSourceAdapter – abort and failing fetches', () => {
     // `hash-object --stdin` waits for its input, which never closes.
     const run = execGit(['hash-object', '--stdin'], { cwd: tmpdir(), env: { PATH: process.env.PATH ?? '' }, timeoutMs: 60_000, signal: controller.signal });
     await expect(run).rejects.toBe(reason);
+  });
+});
+
+describe('GitClone – isolation from the user and system git setup', () => {
+  it('ignores git attributes of the home directory (core.attributesFile default) and the system', async () => {
+    const home = mkdtempSync(path.join(tmpdir(), 'adispatchd-home-'));
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+    mkdirSync(path.join(home, '.config', 'git'), { recursive: true });
+    // Would turn every checked-out Markdown file into CRLF.
+    writeFileSync(path.join(home, '.config', 'git', 'attributes'), '*.md text eol=crlf\n');
+    const { adapter, cloneDir } = setup({ 'issues/0001-a.md': ISSUE(1, 'status: todo\n') }, {}, { env: { PATH: process.env.PATH, HOME: home } });
+    await adapter.listCandidates();
+    expect(readFileSync(path.join(cloneDir, 'issues', '0001-a.md'), 'utf8')).toBe(ISSUE(1, 'status: todo\n'));
   });
 });

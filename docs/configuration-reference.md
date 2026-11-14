@@ -942,7 +942,8 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
   bekommen bis zum nächsten Versuch denselben Fehler (Warnung `Fetching the repository failed …` einmal je Versuch),
   der Abstand wächst mit jedem weiteren Fehlschlag in Folge (5 s, 10 s, 20 s … höchstens 60 s); Schreibvorgänge holen
   immer selbst, ein erfolgreicher fetch beendet das Warten. Die Remote-URL steht nicht in
-  der Konfiguration des Klons (kein `origin`), Git läuft ohne System-/Benutzer-Git-Konfiguration, ohne Hooks und ohne
+  der Konfiguration des Klons (kein `origin`), Git läuft ohne System-/Benutzer-Git-Konfiguration und -Attribute (die
+  `.gitattributes` des Repositories gelten), ohne Hooks und ohne
   Terminal-Abfrage.
 - **Zugangsdaten:** Mit `identity` holt der Daemon deren Token (GitHub-App-Installationstoken bzw. `github_token`)
   und gibt es **nur über die Umgebung** des Git-Prozesses (`ADISPATCH_GIT_TOKEN`) an einen Inline-Credential-Helper

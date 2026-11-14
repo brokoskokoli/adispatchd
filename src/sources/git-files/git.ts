@@ -9,8 +9,8 @@
  *   process (`ADISPATCH_GIT_TOKEN`), read by an inline credential helper that
  *   contains no secret itself. It never appears in a URL, an argument, the
  *   clone's config, a log line or an error message (messages are scrubbed).
- * - Git runs with a minimal environment, without system/global git config,
- *   without hooks and without terminal prompts.
+ * - Git runs with a minimal environment, without system/global git config
+ *   and attributes, without hooks and without terminal prompts.
  */
 import { execFile } from 'node:child_process';
 import { mkdir, stat } from 'node:fs/promises';
@@ -112,6 +112,8 @@ const BASE_CONFIG = [
   '-c', 'core.hooksPath=/dev/null',
   '-c', 'commit.gpgsign=false',
   '-c', 'core.autocrlf=false',
+  // GIT_CONFIG_GLOBAL does not cover the default attributes file (~/.config/git/attributes): no eol/filter rules from home.
+  '-c', 'core.attributesFile=/dev/null',
   '-c', 'core.quotepath=false',
   '-c', 'advice.detachedHead=false',
   '-c', 'init.defaultBranch=adispatchd',
@@ -142,6 +144,8 @@ export class GitClone {
       LC_ALL: 'C',
       GIT_TERMINAL_PROMPT: '0',
       GIT_CONFIG_NOSYSTEM: '1',
+      // No system-wide attributes ($(prefix)/etc/gitattributes) either; the repository's own .gitattributes still apply.
+      GIT_ATTR_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_ASKPASS: '/bin/false',
       SSH_ASKPASS: '/bin/false',
