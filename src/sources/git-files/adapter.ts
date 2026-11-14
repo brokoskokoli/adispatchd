@@ -188,7 +188,7 @@ export class GitFilesSourceAdapter implements SourceAdapter {
       dir: options.cloneDir,
       remote: config.repository,
       branch: config.branch,
-      token: async () => (config.identity ? (await this.credentials.getToken(config.identity)).token : null),
+      token: async (signal) => (config.identity ? (await this.credentials.getToken(config.identity, signal ? { signal } : {})).token : null),
       ...(options.exec ? { exec: options.exec } : {}),
       ...(options.env ? { env: options.env } : {}),
       ...(options.redact ? { redact: options.redact } : {}),
@@ -206,17 +206,17 @@ export class GitFilesSourceAdapter implements SourceAdapter {
 
   async listCandidates(options: ListCandidatesOptions = {}): Promise<SourceItem[]> {
     const states = listedStates(options.filter);
-    const state = await this.read();
+    const state = await this.read(options.signal);
     return [...state.byId.values()]
       .sort((a, b) => a.id - b.id)
       .map((e) => this.toItem(e, state))
       .filter((item) => states.has(item.fields.state as string));
   }
 
-  async getItem(itemId: string): Promise<SourceItem | null> {
+  async getItem(itemId: string, options: { signal?: AbortSignal } = {}): Promise<SourceItem | null> {
     const id = itemNumber(itemId);
     if (id === null) return null;
-    const state = await this.read();
+    const state = await this.read(options.signal);
     const entry = state.byId.get(id);
     return entry ? this.toItem(entry, state) : null;
   }
@@ -236,8 +236,8 @@ export class GitFilesSourceAdapter implements SourceAdapter {
     return normalizeNumber(file[1] as string);
   }
 
-  async resolveFields(item: SourceItem, fields: readonly string[]): Promise<Record<string, FieldResolution>> {
-    const fresh = item.sourceId === this.sourceId ? await this.getItem(item.itemId) : null;
+  async resolveFields(item: SourceItem, fields: readonly string[], options: { signal?: AbortSignal } = {}): Promise<Record<string, FieldResolution>> {
+    const fresh = item.sourceId === this.sourceId ? await this.getItem(item.itemId, options) : null;
     const out: Record<string, FieldResolution> = {};
     for (const name of fields) {
       if (!fresh) out[name] = { known: false, reason: `item ${item.key} is no longer a valid item of source "${this.sourceId}"` };
@@ -302,8 +302,8 @@ export class GitFilesSourceAdapter implements SourceAdapter {
   }
 
   /** Labels used by any item of the source (UI suggestions; adding a new one needs `create: true`). */
-  async listLabels(): Promise<string[]> {
-    const state = await this.read();
+  async listLabels(options: { signal?: AbortSignal } = {}): Promise<string[]> {
+    const state = await this.read(options.signal);
     const seen = new Map<string, string>();
     for (const entry of state.byId.values()) {
       for (const label of labelValues(entry.data.labels) ?? []) if (!seen.has(label.toLowerCase())) seen.set(label.toLowerCase(), label);
@@ -461,26 +461,35 @@ export class GitFilesSourceAdapter implements SourceAdapter {
     this.lastFetchAt = this.clock.now().getTime();
   }
 
-  /** Current state for reads (fetch only when the last one is older than the interval). */
-  private read(): Promise<ParsedState> {
-    return this.locks.run(this.clone.dir, async () => {
-      await this.syncLocked(false);
-      return this.parsedLocked();
-    });
+  /**
+   * Current state for reads (fetch only when the last one is older than the
+   * interval). An aborted `signal` stops waiting for the clone's lock and the
+   * fetch, and rejects with the abort reason.
+   */
+  private read(signal?: AbortSignal): Promise<ParsedState> {
+    return this.locks.run(
+      this.clone.dir,
+      async () => {
+        await this.syncLocked(false, signal);
+        return this.parsedLocked();
+      },
+      signal,
+    );
   }
 
-  private async syncLocked(force: boolean): Promise<void> {
+  /** Writers pass no signal: a write runs to its end once it holds the lock (a cut-off push has an unknown outcome). */
+  private async syncLocked(force: boolean, signal?: AbortSignal): Promise<void> {
     const now = this.clock.now().getTime();
     if (!force && this.lastFetchAt !== null && now - this.lastFetchAt < this.minFetchIntervalMs) return;
     try {
       try {
-        await this.clone.sync();
+        await this.clone.sync(signal);
       } catch (err) {
         // A stale token: GitHub answers "authentication failed", for private repositories also "not found".
         const credentialProblem = err instanceof SourceError && (err.kind === 'auth' || err.kind === 'not_found');
         if (!credentialProblem || !this.config.identity || !this.credentials.invalidate) throw err;
         this.credentials.invalidate(this.config.identity);
-        await this.clone.sync();
+        await this.clone.sync(signal);
       }
     } catch (err) {
       this.lastFetchAt = null;

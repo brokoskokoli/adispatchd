@@ -935,7 +935,10 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
 
 - **Eigener Klon:** Der Daemon hält einen Klon unter `<data-dir>/sources/<source-id>/` – nur ein Spiegel: vor jedem
   Lesen und Schreiben `fetch` des Branches und `reset --hard`. Lesen holt höchstens alle **5 s** neu (gleichzeitige
-  Leser eines Planungsschritts teilen sich einen fetch) und parst dann alle Dateien. Die Remote-URL steht nicht in
+  Leser eines Planungsschritts teilen sich einen fetch) und parst dann alle Dateien. Bricht der Aufrufer ab (Abbruch
+  eines Run-Starts, Herunterfahren, Zeitgrenze von `remind_while`, geschlossene Ansicht), beendet der Adapter einen
+  laufenden Lese-fetch bzw. wartet nicht weiter auf die Sperre des Klons; Schreibvorgänge laufen dagegen zu Ende
+  (ein abgebrochener Push hätte einen unklaren Ausgang). Die Remote-URL steht nicht in
   der Konfiguration des Klons (kein `origin`), Git läuft ohne System-/Benutzer-Git-Konfiguration, ohne Hooks und ohne
   Terminal-Abfrage.
 - **Zugangsdaten:** Mit `identity` holt der Daemon deren Token (GitHub-App-Installationstoken bzw. `github_token`)

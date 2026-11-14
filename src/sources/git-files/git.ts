@@ -16,6 +16,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { SourceError } from '../../core/index.js';
+import { abortReason } from './lock.js';
 
 /** Environment variable of the git child process that carries the token. */
 export const GIT_TOKEN_ENV = 'ADISPATCH_GIT_TOKEN';
@@ -52,8 +53,8 @@ export class GitCommandError extends Error {
   }
 }
 
-/** Runs git (injectable for tests). */
-export type GitExec = (args: readonly string[], options: { cwd: string; env: Record<string, string>; timeoutMs: number }) => Promise<GitResult>;
+/** Runs git (injectable for tests); an aborted `signal` terminates the process. */
+export type GitExec = (args: readonly string[], options: { cwd: string; env: Record<string, string>; timeoutMs: number; signal?: AbortSignal }) => Promise<GitResult>;
 
 /** Default {@link GitExec}: `git` from `PATH`. */
 export const execGit: GitExec = (args, options) =>
@@ -61,9 +62,21 @@ export const execGit: GitExec = (args, options) =>
     execFile(
       'git',
       [...args],
-      { cwd: options.cwd, env: options.env, timeout: options.timeoutMs, maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', windowsHide: true },
+      {
+        cwd: options.cwd,
+        env: options.env,
+        timeout: options.timeoutMs,
+        maxBuffer: 64 * 1024 * 1024,
+        encoding: 'utf8',
+        windowsHide: true,
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
       (err, stdout, stderr) => {
         if (err) {
+          if (options.signal?.aborted) {
+            reject(abortReason(options.signal));
+            return;
+          }
           const code = typeof (err as { code?: unknown }).code === 'number' ? ((err as { code: number }).code as number) : null;
           // stdout too: `push --porcelain` reports rejected refs there.
           reject(new GitCommandError(err.killed ? 'git timed out' : `git exited with ${code ?? 'an error'}`, code, `${String(stderr ?? '')}\n${String(stdout ?? '')}`));
@@ -82,7 +95,7 @@ export interface GitCloneOptions {
   remote: string;
   branch: string;
   /** Token for fetch/push, or `null` (local path, ssh with an agent, public repository). */
-  token: () => Promise<string | null>;
+  token: (signal?: AbortSignal) => Promise<string | null>;
   /** Scrub secrets from texts (the shared redactor; the token is scrubbed in any case). */
   redact?: (text: string) => string;
   exec?: GitExec;
@@ -141,13 +154,21 @@ export class GitClone {
     return this.options.dir;
   }
 
-  /** Run git in the clone; `remote: true` adds the credential helper and the token (fetch/push). */
-  async git(args: readonly string[], options: { remote?: boolean; cwd?: string } = {}): Promise<GitResult> {
+  /**
+   * Run git in the clone; `remote: true` adds the credential helper and the
+   * token (fetch/push). An aborted `signal` terminates git and rejects with
+   * the abort reason (only passed for fetches of reads: local steps are short,
+   * and a push must not be cut off, or its outcome is unknown).
+   */
+  async git(args: readonly string[], options: { remote?: boolean; cwd?: string; signal?: AbortSignal } = {}): Promise<GitResult> {
+    const signal = options.signal;
+    if (signal?.aborted) throw abortReason(signal);
     const env: Record<string, string> = { ...this.baseEnv };
     let token: string | null = null;
     const credential: string[] = [];
     if (options.remote) {
-      token = await this.options.token();
+      token = await this.options.token(signal);
+      if (signal?.aborted) throw abortReason(signal);
       // An empty helper first resets any helper from other config levels; redirects never carry credentials elsewhere.
       credential.push('-c', 'credential.helper=', '-c', 'http.followRedirects=false');
       const origin = credentialOrigin(this.options.remote);
@@ -158,8 +179,14 @@ export class GitClone {
       }
     }
     try {
-      return await this.exec([...BASE_CONFIG, ...credential, ...args], { cwd: options.cwd ?? this.options.dir, env, timeoutMs: this.timeoutMs });
+      return await this.exec([...BASE_CONFIG, ...credential, ...args], {
+        cwd: options.cwd ?? this.options.dir,
+        env,
+        timeoutMs: this.timeoutMs,
+        ...(signal ? { signal } : {}),
+      });
     } catch (err) {
+      if (signal?.aborted) throw abortReason(signal);
       if (err instanceof GitCommandError) {
         const scrub = (text: string): string => this.scrub(text, token);
         throw new GitCommandError(scrub(`git ${args[0] ?? ''}: ${err.message}: ${lastLines(err.stderr)}`), err.exitCode, scrub(err.stderr));
@@ -185,17 +212,20 @@ export class GitClone {
 
   /**
    * Fetch the remote branch and reset the working tree to it (the clone is a
-   * mirror: unpushed local commits and stray files are discarded).
+   * mirror: unpushed local commits and stray files are discarded). An aborted
+   * `signal` stops the fetch (git removes its lock files on termination).
    */
-  async sync(): Promise<void> {
+  async sync(signal?: AbortSignal): Promise<void> {
     await this.ensure();
     try {
       await this.git(['fetch', '-q', '--no-tags', '--prune', '--', this.options.remote, `+refs/heads/${this.options.branch}:refs/remotes/upstream/${this.options.branch}`], {
         remote: true,
+        ...(signal ? { signal } : {}),
       });
     } catch (err) {
       throw classifyFetchError(err, this.options.branch);
     }
+    // The reset is local and short; it is not cut off (no half-reset working tree).
     await this.reset();
   }
 

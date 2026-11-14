@@ -408,3 +408,52 @@ describe('GitFilesSourceAdapter – credentials', () => {
     expect(err.message).toContain('[REDACTED]');
   });
 });
+
+describe('GitFilesSourceAdapter – abort and failing fetches', () => {
+  /** git that hangs on fetch until its signal aborts (a remote that does not answer). */
+  const hangingFetch = (fetches: { count: number; started?: () => void }): GitExec => (args, options) => {
+    if (!args.includes('fetch')) return execGit(args, options);
+    fetches.count++;
+    fetches.started?.();
+    return new Promise((_resolve, reject) => {
+      options.signal?.addEventListener('abort', () => reject(new Error('killed')), { once: true });
+    });
+  };
+
+  it('stops a hanging fetch when the signal aborts and rejects with the abort reason', async () => {
+    const controller = new AbortController();
+    const reason = new Error('run cancelled');
+    const fetches = { count: 0, started: () => setTimeout(() => controller.abort(reason), 20) };
+    const { adapter } = setup({ 'issues/0001-a.md': ISSUE(1, '') }, {}, { exec: hangingFetch(fetches) });
+    await expect(adapter.getItem('1', { signal: controller.signal })).rejects.toBe(reason);
+    expect(fetches.count).toBe(1);
+  });
+
+  it('a reader aborted while waiting for the clone lock does not wait any longer and never fetches', async () => {
+    let fetchStarted!: () => void;
+    const started = new Promise<void>((resolve) => (fetchStarted = resolve));
+    const fetches = { count: 0, started: () => fetchStarted() };
+    const { adapter } = setup({ 'issues/0001-a.md': ISSUE(1, '') }, {}, { exec: hangingFetch(fetches) });
+    const first = new AbortController();
+    const firstRead = adapter.listCandidates({ signal: first.signal }).catch((e: unknown) => e);
+    const second = new AbortController();
+    const secondRead = adapter.resolveFields({ sourceId: 'issues', itemId: '1', key: 'issues#1', url: '', type: 'issue', fields: {} }, ['status'], { signal: second.signal });
+    await expect(adapter.listLabels({ signal: AbortSignal.abort(new Error('already')) })).rejects.toThrow('already');
+    await started;
+    // The first reader hangs in its fetch and holds the lock; the second waits for it.
+    second.abort(new Error('view closed'));
+    await expect(secondRead).rejects.toThrow('view closed');
+    first.abort(new Error('shutdown'));
+    expect(((await firstRead) as Error).message).toBe('shutdown');
+    expect(fetches.count).toBe(1);
+  });
+
+  it('terminates the git process on abort (execGit)', async () => {
+    const controller = new AbortController();
+    const reason = new Error('stop');
+    setTimeout(() => controller.abort(reason), 50);
+    // `hash-object --stdin` waits for its input, which never closes.
+    const run = execGit(['hash-object', '--stdin'], { cwd: tmpdir(), env: { PATH: process.env.PATH ?? '' }, timeoutMs: 60_000, signal: controller.signal });
+    await expect(run).rejects.toBe(reason);
+  });
+});
