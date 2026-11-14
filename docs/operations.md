@@ -9,7 +9,7 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
 |---|---|---|
 | `/etc/adispatchd/` (config-dir) | `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/`, `views/`, `scripts/` | `root:adispatchd`, Verzeichnisse 0750, Dateien 0640, Skripte 0750 |
 | `/etc/default/adispatchd` | Secrets als Umgebungsvariablen (GitHub-App-Keys, GitHub-Tokens, Webhook-URLs) | `root:adispatchd`, 0640 |
-| `/var/lib/adispatchd/` (data-dir) | `adispatchd.sqlite` (+ `-wal`/`-shm`), `adispatchd.lock`, `logs/`, `runs/`, `artifacts/`, `workspaces/`, `backups/` | `adispatchd`, 0750 |
+| `/var/lib/adispatchd/` (data-dir) | `adispatchd.sqlite` (+ `-wal`/`-shm`), `adispatchd.lock`, `logs/`, `runs/`, `artifacts/`, `sources/` (Klone der `git_files`-Sources, seit 0.11.0), `workspaces/`, `backups/` | `adispatchd`, 0750 |
 | Paket, z. B. `/usr/lib/node_modules/adispatchd/` | Code (`dist/`), wird bei Updates ersetzt | `root`, nur lesbar für den Dienst |
 
 Verzeichnisse eines Hubs (mehrere Workspaces): Abschnitt [Verzeichnisse eines Hubs](#verzeichnisse-eines-hubs).
@@ -72,8 +72,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.10.1
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.10.1.tgz
+sudo npm install -g adispatchd@0.11.0
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.11.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -265,6 +265,7 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 | `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
 | `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal; `runs/<id>/kept/` enthält die per `execute.keep` gesicherten Dateien); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien; nur diese, nicht jedes `secrets/`-Verzeichnis, z. B. in Workspaces) |
 | `artifacts/` | normale Dateikopie, zusammen mit `adispatchd.sqlite` (die Tabelle `artifacts` kennt die Verzeichnisse `artifacts/<id>/content`); Verzeichnisse ohne Datenbankeintrag und älter als 24 h räumt die Retention weg |
+| `sources/` | nicht nötig: Klone der `git_files`-Sources (seit 0.11.0), ein Spiegel des Remotes, der bei Bedarf neu angelegt wird |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
 **`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
@@ -809,7 +810,7 @@ Der Hub ist der **einzige** Dienst: Die Workspaces sind seine Kindprozesse und h
 bei der Einzelinstanz (Abschnitt „Installation als systemd-Dienst“: systemweites Node, feste Version global installieren, kein `npx`).
 
 ```bash
-sudo npm install -g adispatchd@0.10.1
+sudo npm install -g adispatchd@0.11.0
 
 # 1. Hub und Workspaces anlegen (überschreibt nie bestehende Dateien); Layout: Abschnitt „Verzeichnisse eines Hubs“
 sudo adispatch hub init --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub \

@@ -21,7 +21,8 @@
    [identities.yaml](#33-identitiesyaml), [workflows/*.yaml](#34-workflowsyaml), [views/*.yaml](#35-viewsyaml),
    [filters/*.yaml](#36-filtersyaml), [dashboard.yaml](#37-dashboardyaml), [Grenzen](#38-bekannte-grenzen-v1),
    [hub.yaml](#39-hubyaml-hub-seit-0100);
-   Artefakte: [Source `artifacts`](#321-source-artifacts-seit-0100), [`execute.artifacts`](#348-execute), [Felder](#49-feldkatalog-der-source-artifacts-seit-0100)
+   Artefakte: [Source `artifacts`](#321-source-artifacts-seit-0100), [`execute.artifacts`](#348-execute), [Felder](#49-feldkatalog-der-source-artifacts-seit-0100);
+   Issues als Dateien: [Source `git_files`](#322-source-git_files-seit-0110), [Felder](#410-feldkatalog-der-source-git_files-seit-0110)
 4. [Filter-Sprache](#4-filter-sprache)
 5. [Platzhalter-Referenz](#5-platzhalter-referenz)
 6. [Auswertungsablauf](#6-auswertungsablauf)
@@ -592,7 +593,7 @@ sources:
 | Schlüssel | Typ | Pflicht | Regeln | Bedeutung |
 |---|---|---|---|---|
 | `sources` | Map Source-ID → Source | nein (Default `{}`) | Schlüssel = Konfigurations-ID | alle Sources |
-| `<id>.type` | `github` \| `artifacts` | ja | `artifacts` seit 0.10.0, höchstens eine Source dieses Typs (§3.2.1) | Adapter |
+| `<id>.type` | `github` \| `artifacts` \| `git_files` | ja | `artifacts` seit 0.10.0, höchstens eine Source dieses Typs (§3.2.1); `git_files` seit 0.11.0 (§3.2.2) | Adapter |
 | `<id>.owner` | String | ja | nicht leer (Format nicht geprüft) | Owner/Organisation |
 | `<id>.repository` | String | ja | nicht leer | Repository-Name; `{source.repository}` und Feld `repository` = `owner/repository` in der hier geschriebenen Schreibweise |
 | `<id>.identity` | Identity-ID | ja | muss in `identities.yaml` existieren | liest Issues/PRs/Dependencies; Fallback für Schreibaktionen (§6.10) |
@@ -743,6 +744,177 @@ execute:
   sind unveränderlich; weder Upload noch Versionierung noch Tags gehören dazu.
 - **Anzeige und API:** Seite „Artifacts“ der Web-UI (Liste, Filter, Dateibaum, Download, Löschen, Workflow starten),
   Verlinkung im Run, `GET /api/v1/artifacts` & Co. ([api.md](api.md)), SSE `artifact.created`/`artifact.deleted`.
+
+#### 3.2.2 Source `git_files` (seit 0.11.0)
+
+Issues als **Markdown-Dateien mit YAML-Frontmatter** in einem Git-Repository – z. B. ein privates Repository, das
+den Issue-Tracker eines Projekts als Dateien führt. Eine Datei je Item, Name `NNNN-<slug>.md` (oder `NNNN.md`) im
+Ordner `path`; die Zahl ist die Item-Nummer. Für die Items gelten alle Regeln wie bei GitHub-Issues: Filter,
+`item_priority`, Views, Platzhalter (`{item.number}`, `{item.title}`, `{item.work_branch}`, `{item.work_pr}`),
+Locks, Retry-Blocks, Item-Verlauf, `source.update` und `source.comment`.
+
+```yaml
+# example: git-files
+# extends: minimal
+# file: sources.yaml
+sources:
+  tracker:
+    type: git_files
+    repository: https://github.com/acme/app-meta.git   # URL (https, ssh, git@host:…, file://) oder lokaler Pfad
+    branch: main                     # Default main
+    path: issues                     # Ordner der Item-Dateien im Repository, Default issues ("." = Wurzel)
+    identity: coordinator            # optional: Token dieser Identity für fetch/push
+    commit_author: { name: adispatchd, email: adispatchd@example.invalid }
+    closed_when: { status: [done, closed] }   # Default; Frontmatter-Schlüssel → Werte, ein Treffer = closed
+    comments_heading: "## Log"       # Default; Überschrift des Kommentar-Abschnitts am Dateiende
+    fields:                          # weitere Frontmatter-Schlüssel mit Typ (Filter, Views, Sortierung)
+      priority: number
+      area: string
+      reviewers: string[]
+    vars: { base_branch: main }
+```
+
+```yaml
+# example: git-files
+# file: identities.yaml
+identities:
+  coordinator:
+    type: github_token
+    token_env: TRACKER_TOKEN         # fine-grained Token: Contents Read and write auf acme/app-meta
+```
+
+Eine Item-Datei (`issues/0042-fix-login.md`):
+
+```markdown
+---
+id: 42                     # optional; muss sonst zur Zahl im Dateinamen passen
+title: Fix the login
+status: todo
+labels: [bug, agent]
+priority: 2
+blocked_by: [17]           # Nummern von Items derselben Source
+branch: wi-42-fix-login    # → work_branch, {item.work_branch}
+pr: 128                    # → work_pr (auch "#128" oder eine PR-URL)
+---
+Beschreibung in Markdown …
+
+## Log
+
+### 2026-11-14T10:00:00Z — coordinator
+
+Coding started (run-20261114T100000000Z-3fa2c91b).
+
+<!-- adispatchd:run-20261114T100000000Z-3fa2c91b:a12 -->
+```
+
+| Schlüssel | Typ | Pflicht | Regeln | Bedeutung |
+|---|---|---|---|---|
+| `repository` | String | ja | URL mit Schema `https`, `http`, `ssh`, `git`, `file`, scp-artig `git@host:o/r.git` oder Pfad (relativ zum config-dir); **keine Zugangsdaten in der URL**; nicht mit `-` beginnend | Remote des Klons |
+| `branch` | String | nein | Default `main`; gültiger Branch-Name | gelesener und beschriebener Branch |
+| `path` | String | nein | Default `issues`; relativ, ohne `..`/`.git`, `/` als Trenner; `.` = Wurzel | Ordner der Item-Dateien (Unterordner werden nicht gelesen) |
+| `identity` | Identity-ID | nein | muss existieren (`github_app` oder `github_token`) | Token für fetch/push; ohne: Git ohne Zugangsdaten (lokaler Pfad, ssh mit Agent, öffentliches Repository) |
+| `commit_author` | `{ name, email }` | nein | Default `adispatchd <adispatchd@users.noreply.invalid>`; einzeilig, ohne `<`/`>` | Autor der Commits |
+| `closed_when` | Map Schlüssel → Wert(e) | nein | Default `{ status: [done, closed] }`; Schlüssel = Frontmatter-Schlüssel (nicht abgeleitete Felder wie `state`) | Feld `state`: `closed`, wenn ein Wert passt (ohne Groß-/Kleinschreibung, bei Listen wie `labels` ein Element), sonst `open` |
+| `comments_heading` | String | nein | Default `## Log`; eine Markdown-Überschrift | Abschnitt am Dateiende für `source.comment` (z. B. `## Verlauf`) |
+| `fields` | Map Name → Typ | nein | Name `[A-Za-z_][A-Za-z0-9_-]*`, kein eingebautes Feld; Typ `string`, `number`, `boolean`, `date`, `string[]` | weitere Frontmatter-Schlüssel als Felder (§4.10) |
+| `web_url` | String | nein | http(s)-URL mit `{path}` (und meist `{ref}`); Default für github.com-Repositories `https://github.com/<o>/<r>/blob/{ref}/{path}` | Feld `url` (Link der Items) und Link von Kommentaren; ohne: Item-Verlauf der UI |
+| `vars` | Map | nein | wie bei `github` | `{source.vars.<Name>}` |
+
+- **Eigener Klon:** Der Daemon hält einen Klon unter `<data-dir>/sources/<source-id>/` – nur ein Spiegel: vor jedem
+  Lesen und Schreiben `fetch` des Branches und `reset --hard`. Lesen holt höchstens alle **5 s** neu (gleichzeitige
+  Leser eines Planungsschritts teilen sich einen fetch) und parst dann alle Dateien. Die Remote-URL steht nicht in
+  der Konfiguration des Klons (kein `origin`), Git läuft ohne System-/Benutzer-Git-Konfiguration, ohne Hooks und ohne
+  Terminal-Abfrage.
+- **Zugangsdaten:** Mit `identity` holt der Daemon deren Token (GitHub-App-Installationstoken bzw. `github_token`)
+  und gibt es **nur über die Umgebung** des Git-Prozesses (`ADISPATCH_GIT_TOKEN`) an einen Inline-Credential-Helper
+  (Benutzer `x-access-token`) – nie in URL, Argumenten, Klon-Konfiguration, Logs oder Fehlermeldungen. Rechte:
+  GitHub App mit **Contents: Read and write** auf dem Repository, bzw. ein Token mit diesem Recht (fine-grained) oder
+  `repo` (klassisch). Für ssh-Remotes ohne `identity` nutzt Git den ssh-Agent (`SSH_AUTH_SOCK`) des Daemons.
+- **Ungültige Dateien** (kein oder fehlerhaftes Frontmatter, kein Mapping, doppelte Schlüssel, `id` keine positive
+  ganze Zahl oder ≠ Zahl im Dateinamen, dieselbe Nummer in mehreren Dateien, Symlink, größer als 1 MiB) werden
+  übersprungen und einmal je Datei und Problem als Warnung `Skipping malformed item file` geloggt; der
+  Planungsschritt läuft mit den übrigen Items weiter. `.md`-Dateien ohne Nummernpräfix (`README.md`) werden still
+  ignoriert. Ein Wert, der nicht zum Typ seines Felds passt (z. B. `priority: high` bei `priority: number`), macht
+  nur dieses Feld des Items **unknown** (fail closed, §4.3).
+- **Listing:** wie bei GitHub nur offene Items, außer der Filter wählt oben `state` (`equals`/`in`) aus (§4.5).
+- **Schreiben** (`source.update` mit `labels` und `fields`, §3.4.11; `source.comment`): jede Action = **ein
+  Commit** (Nachricht `<source> #<nr>: <Änderung>` mit Trailern `Adispatchd-Run`, `Adispatchd-Action`,
+  `Adispatchd-Identity`) und ein Push. Frontmatter-Änderungen schreiben nur das Frontmatter neu (Reihenfolge der
+  Schlüssel und YAML-Kommentare bleiben erhalten), Kommentare werden nur am Dateiende angehängt; der Body bleibt
+  bytegleich, sodass nebenläufige Änderungen von Menschen sauber mergen. Wird der Push abgelehnt (jemand hat
+  inzwischen gepusht), holt der Adapter den neuen Stand, setzt den Klon darauf zurück und wendet die Änderung **neu**
+  an (Labels/Felder nur, wenn noch nötig; ein Kommentar nur, wenn sein Marker fehlt) – höchstens 5 Versuche, danach
+  scheitert der Versuch wiederholbar (`lifecycle.action_retry`). Alle Git-Operationen eines Klons laufen
+  nacheinander.
+- **Kommentare:** Eintrag `### <ISO-Zeit> — <Identity>`, Text, Marker `<!-- adispatchd:<run>:<action> -->` als letzte
+  Zeile; der Abschnitt `comments_heading` wird angelegt, wenn er fehlt. HTML-Kommentare im Text werden entschärft,
+  Zeilen, die wie ein Eintragskopf aussehen, mit `\` maskiert. Kommentar-ID ist der SHA des Commits; ein Retry
+  findet einen schon geschriebenen Eintrag an seinem Marker (`findCommentByMarker`). Auch Menschen können Einträge
+  im selben Format schreiben (`### 2026-11-14 10:00 - alice` wird ebenfalls erkannt); sie erscheinen im Feld
+  `comments`.
+- **Identity:** Fetch/Push laufen immer mit der Source-`identity`; die Identity der Action (§6.10) erscheint als
+  Autor im Kommentarkopf und im Commit-Trailer. Ohne jede Identity ist der Autor `commit_author.name`.
+- **Worker-Kontext:** `context.json` enthält in `source.attributes` alle billigen Felder – hier also auch `body`
+  und `comments` (bei GitHub nicht) sowie alle nicht deklarierten Frontmatter-Schlüssel (Skalare und Listen von
+  Strings wörtlich, andere Werte als JSON-Text).
+- **UI:** Kommentar und Labels im Item-Panel gehen über denselben Schreibpfad (Labelvorschläge = alle in der Source
+  verwendeten Labels; ein neues Label braucht `create: true` wie bei GitHub). Frontmatter-Felder lassen sich in der
+  UI (noch) nicht setzen.
+- **Items aus Skripten anlegen:** `adispatch source create-item <source-id> --config-dir <dir> --title <text>
+  [--body <text> | --body-file <datei>|-] [--field key=value …] [--label <name> …] [--identity <name>] [--json]`
+  legt `NNNN-<slug>.md` mit der nächsten freien Nummer (höchste vorhandene + 1, auch über ungültige Dateien hinweg)
+  an, committet und pusht; bei einem abgelehnten Push wird neu nummeriert. Der Befehl arbeitet in einem temporären
+  Klon (kein Konflikt mit dem Klon eines laufenden Daemons) und braucht die Zugangsdaten der Source-Identity in der
+  Umgebung wie der Daemon. `--field` nimmt nur schreibbare Felder (§3.4.11), Listen kommagetrennt. Exit-Codes: 0
+  angelegt, 1 Konfigurations- oder Source-Fehler, 2 falsche Aufrufparameter.
+
+Ein Workflow auf der Source (Status-Fluss im Frontmatter, Abhängigkeiten, Kommentar):
+
+```yaml
+# example: git-files
+# file: workflows/coder.yaml
+id: coder
+trigger: { type: source, source: tracker }
+filter:
+  all:
+    - { field: status, operator: equals, value: todo }
+    - { field: labels, operator: contains, value: agent }
+    - { field: dependencies.blocked_by_open, operator: equals, value: 0 }   # unbekannter Blocker → unknown
+item_priority:
+  rules:
+    - { when: { field: priority, operator: less_than, value: 2 }, value: 100 }
+execute:
+  type: shell
+  command: scripts/hello.sh
+  args: ['{item.number}', '{item.title}', '{item.work_branch}']
+on_start:
+  - type: source.update
+    fields: { status: coding }
+on_success:
+  - type: source.comment
+    message: 'Done in {run.id}'
+  - type: source.update
+    fields: { status: review, pr: null }
+    labels: { remove: [agent] }
+```
+
+Typische Fehler:
+
+```yaml
+# example: git-files-invalid
+# extends: minimal
+# file: sources.yaml
+# invalid
+# expect: sources.yaml: sources.tracker.repository: "repository" must not contain credentials
+# expect: sources.yaml: sources.tracker.path: "path" must be a folder relative to the repository root
+# expect: sources.yaml: sources.tracker.fields.title: "title" is a built-in field of git_files sources and cannot be declared
+sources:
+  tracker:
+    type: git_files
+    repository: https://bot:secret@github.com/acme/app-meta.git
+    path: ../elsewhere
+    fields: { title: string }
+```
 
 ### 3.3 identities.yaml
 
@@ -1511,9 +1683,10 @@ Gemeinsame Schlüssel aller Actions:
 |---|---|---|---|
 | `labels.add` | Liste String | nein (`[]`) | kein Label in `add` und `remove` |
 | `labels.remove` | Liste String | nein (`[]`) | |
-| `project` | Map Feldname → Wert | nein | seit 0.3.0; mind. ein Eintrag; Schlüssel = Name aus `project.fields` der Trigger-Source (ohne `project.`-Präfix); Wert je Art (Tabelle unten), `null` = Feld leeren |
+| `project` | Map Feldname → Wert | nein | seit 0.3.0; nur `github`-Sources; mind. ein Eintrag; Schlüssel = Name aus `project.fields` der Trigger-Source (ohne `project.`-Präfix); Wert je Art (Tabelle unten), `null` = Feld leeren |
+| `fields` | Map Schlüssel → Wert | nein | seit 0.11.0; nur `git_files`-Sources (§3.2.2); mind. ein Eintrag; Schlüssel = schreibbares Frontmatter-Feld: `title`, `status`, `milestone`, `blocked_by`, `branch`, `pr`, `spec`, `files`, `created_at` oder unter `fields` der Source deklariert; Wert passend zum Typ (String, Zahl, `true`/`false`, Datum, Liste), `null` = Schlüssel entfernen |
 
-Mindestens ein Label in `labels.add`/`labels.remove` **oder** ein `project`-Eintrag ist Pflicht. Kein Template:
+Mindestens ein Label in `labels.add`/`labels.remove` **oder** ein `project`- bzw. `fields`-Eintrag ist Pflicht. Kein Template:
 Labels und Projektwerte werden wörtlich übernommen. Vor dem Schreiben wird das Item neu gelesen; nur fehlende Labels
 werden hinzugefügt, nur vorhandene entfernt (Vergleich ohne Groß-/Kleinschreibung) → idempotent. Schreib-Identity:
 Workflow → Source (§6.10).
@@ -1567,7 +1740,17 @@ on_success:
   Zusammenfassung, z. B. `on_success on_success.0 failed (+ready-for-review, -coding)`). `projectItemAdded` wird nur
   gemeldet, wenn das Item nachweislich fehlte (alle Projekt-Mitgliedschaften gelesen).
 
-`source.comment` – Kommentar am Issue/PR (nur Source-Workflows; Konversationskommentar, kein Review):
+**Frontmatter-Felder setzen** (`git_files`, seit 0.11.0): Labels und Felder werden in **einem** Commit geschrieben;
+nur was abweicht, wird geändert (Labels ohne Groß-/Kleinschreibung, ein Label in `add` und `remove` wird
+hinzugefügt) – ein zweiter Lauf erzeugt keinen Commit. Abgeleitete Felder (`number`, `id`, `state`, `body`,
+`comments`, `path`, `url`, `dependencies.*`, `work_*`) sind nicht schreibbar (Konfigurationsfehler `Field "state"
+cannot be set: it is derived and cannot be set`); `labels` nur über `labels: { add, remove }`; `project` bei einer
+`git_files`-Source ist ein Fehler (`"project" is only available for github sources`), `fields` bei einer
+`github`-Source ebenso. Journal: `details.applied.fields` (neuer Wert) und `fieldsPrevious` (alter Wert, `null` =
+fehlte), im Item-Verlauf als `status: todo → coding`. Ablauf und Konflikte: §3.2.2.
+
+`source.comment` – Kommentar am Issue/PR (nur Source-Workflows; Konversationskommentar, kein Review; bei `git_files`
+ein Eintrag am Dateiende, §3.2.2):
 
 | Schlüssel | Typ | Pflicht | Bedeutung |
 |---|---|---|---|
@@ -2514,6 +2697,43 @@ Wert (`parent` ohne Eltern-Artefakt) ist `null`.
 | `consumed_by` | string[] | IDs der Workflows, die das Artefakt mit Erfolg verarbeitet haben (Run `completed` + `success`, §3.2.1) |
 | `attempted_by` | string[] | IDs der Workflows, deren Run auf dem Artefakt abgeschlossen wurde (`completed`, Erfolg oder fachliches `failure`) – Retry-Schutz (§3.2.1) |
 | `url` | string | UI-Route `#/artifacts/<id>` (Link-Ziel von `name` in Views) |
+
+### 4.10 Feldkatalog der Source `git_files` (seit 0.11.0)
+
+Alle Felder sind billig (die Dateien liegen im Klon), Pushdown nur für `state` (§4.5). Ein fehlender
+Frontmatter-Schlüssel ist `null` (Listen `[]`); ein Wert vom falschen Typ ist für dieses Item **unknown**.
+Zusätzlich stehen die unter `fields` der Source deklarierten Schlüssel mit ihrem Typ zur Verfügung; bei Views und
+Workflows über mehrere `git_files`-Sources nur die, die **alle** Sources mit demselben Typ deklarieren.
+
+| Feld | Typ | Bedeutung |
+|---|---|---|
+| `number` | number | Item-Nummer (Frontmatter `id`, sonst die Zahl im Dateinamen); Link-Ziel `url` |
+| `id` | number | wie `number` |
+| `title` | string | Frontmatter `title` (`''` ohne) |
+| `state` | string | `open` \| `closed` aus `closed_when` der Source; Listing-Selektor wie bei GitHub |
+| `status` | string | Frontmatter `status` |
+| `labels` | string[] | Frontmatter `labels` (Vergleich ohne Groß-/Kleinschreibung) |
+| `milestone` | string | Frontmatter `milestone` |
+| `blocked_by` | string[] | Frontmatter `blocked_by`: Nummern von Items derselben Source (`7`, `"#7"`, `"0007"` → `"7"`) |
+| `branch` | string | Frontmatter `branch` |
+| `pr` | number | Frontmatter `pr`: Zahl, `"#123"` oder PR-URL |
+| `spec` | string | Frontmatter `spec` |
+| `files` | string[] | Frontmatter `files` |
+| `created_at` | date | Frontmatter `created_at` oder `created` (auch Tie-Breaker der Planung) |
+| `body` | string | Markdown nach dem Frontmatter ohne den Kommentar-Abschnitt |
+| `comments` | object[] | Einträge des Kommentar-Abschnitts `{ at, author, text }`, älteste zuerst (nicht filterbar) |
+| `path` | string | Datei relativ zur Repository-Wurzel |
+| `url` | string | Web-URL der Datei (`web_url`), sonst der Item-Verlauf der UI |
+| `dependencies.blocked_by_total` | number | Anzahl der Einträge in `blocked_by` |
+| `dependencies.blocked_by_open` | number | Blocker, die nicht `closed` sind; **unknown**, wenn ein Blocker kein gültiges Item der Source ist (fehlt, ungültig, Nummer doppelt) |
+| `dependencies.blocked` | boolean | mindestens ein Blocker offen; unknown wie `blocked_by_open` |
+| `dependencies.status` | string | `ok`, wenn alle Blocker gefunden wurden, sonst `unknown` |
+| `work_branch` | string | wie `branch` (`{item.work_branch}`) |
+| `work_pr` | number | wie `pr` (`{item.work_pr}`); Link-Ziel `work_pr_url` |
+| `work_pr_url` | string | die PR-URL, wenn `pr` als URL angegeben ist, sonst `null` |
+
+`{item.work_branch}`/`{item.work_pr}` (§5.3) lesen bei `git_files` die Datei frisch aus dem Klon (kein GraphQL);
+`linked_branches` und `closing_prs` gibt es nicht.
 
 ---
 

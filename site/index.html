@@ -37,7 +37,7 @@
   "description": "Configuration-driven dispatcher and orchestrator for shell processes and AI agents, with GitHub issues as task source.",
   "applicationCategory": "DeveloperApplication",
   "operatingSystem": "Linux, macOS",
-  "softwareVersion": "0.10.1",
+  "softwareVersion": "0.11.0",
   "license": "https://opensource.org/licenses/MIT",
   "url": "https://brokoskokoli.github.io/adispatchd/",
   "image": "https://brokoskokoli.github.io/adispatchd/assets/og-image.png",
@@ -250,7 +250,7 @@
     <div class="wrap">
       <svg class="logo" viewBox="0 0 32 32" role="img" aria-label="adispatchd logo"><rect width="32" height="32" rx="6" fill="#2563eb"/><circle cx="10" cy="16" r="4" fill="#fff"/><circle cx="22" cy="9" r="3" fill="#fff"/><circle cx="22" cy="23" r="3" fill="#fff"/><path d="M13 14l6-4M13 18l6 4" stroke="#fff" stroke-width="2"/></svg>
       <h1>adispatchd</h1>
-      <p class="sub">Agent Dispatch Daemon · v0.10.1 · MIT</p>
+      <p class="sub">Agent Dispatch Daemon · v0.11.0 · MIT</p>
       <p class="tagline">
         <span data-l="en">Turn GitHub issues into supervised runs of your shell scripts and AI agents – declaratively, observably, on your own machine.</span>
         <span data-l="de" lang="de">Aus GitHub-Issues werden überwachte Runs deiner Shell-Skripte und KI-Agenten – deklarativ, nachvollziehbar, auf deinem eigenen Rechner.</span>
@@ -327,6 +327,11 @@
           <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 8l-9-5-9 5 9 5z"/><path d="M3 8v8l9 5 9-5V8"/></svg></span><span data-l="en">Artifacts</span><span data-l="de" lang="de">Artefakte</span></h3>
           <p data-l="en">Workflows produce files or folders (<code>execute.artifacts</code>); they get an Artifacts page with file tree, download and delete, and are the items of their own source – so the next workflow processes each artifact exactly once (<code>consumed_by</code>), with a read-only copy in its workspace. No pipeline engine.</p>
           <p data-l="de" lang="de">Workflows erzeugen Dateien oder Ordner (<code>execute.artifacts</code>); sie erscheinen auf einer Artifacts-Seite mit Dateibaum, Download und Löschen und sind die Items einer eigenen Source – der nächste Workflow verarbeitet jedes Artefakt genau einmal (<code>consumed_by</code>), mit einer schreibgeschützten Kopie im Workspace. Ohne Pipeline-Engine.</p>
+        </article>
+        <article class="card">
+          <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M8 13h8M8 17h5"/></svg></span><span data-l="en">Issues as files in git</span><span data-l="de" lang="de">Issues als Dateien in Git</span></h3>
+          <p data-l="en">Keep your tracker as Markdown files with YAML frontmatter in a (private) repository (<code>type: git_files</code>). Filters, priorities, dependencies and views work on the frontmatter; status changes and comments become one commit and push each, safe against concurrent edits.</p>
+          <p data-l="de" lang="de">Den Tracker als Markdown-Dateien mit YAML-Frontmatter in einem (privaten) Repository führen (<code>type: git_files</code>). Filter, Prioritäten, Abhängigkeiten und Views arbeiten auf dem Frontmatter; Statuswechsel und Kommentare werden je ein Commit und Push, sicher bei nebenläufigen Änderungen.</p>
         </article>
         <article class="card">
           <h3><span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 8v4l3 2"/><path d="M3.05 11a9 9 0 1 1 .5 4M3 4v7h7"/></svg></span><span data-l="en">Item history</span><span data-l="de" lang="de">Item-Verlauf</span></h3>

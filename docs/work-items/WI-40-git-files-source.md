@@ -48,7 +48,7 @@ sources:
    `work_branch` (= `branch`), `work_pr` (= `pr`, Zahl), `work_pr_url` (wenn `pr` eine URL ist). **Weitere
    Frontmatter-Schlüssel** werden unter `fields:` mit Typ (`string`, `number`, `boolean`, `date`, `string[]`)
    deklariert, damit die Konfigurationsprüfung offline Feldnamen, Operatoren und Werttypen prüfen kann (wie
-   `project.fields` bei GitHub). Nicht deklarierte Schlüssel stehen trotzdem in `context.json` (`attributes.frontmatter`).
+   `project.fields` bei GitHub). Nicht deklarierte Schlüssel stehen trotzdem als eigene Attribute in `context.json` (`source.attributes`; Skalare und Listen von Strings wörtlich, sonst JSON-Text), sind aber nicht filterbar.
    Ein Wert, der nicht zum Typ passt, ist für dieses Item **unbekannt** (fail closed).
 2. **Abhängigkeiten.** `blocked_by_open` zählt Blocker, die nicht `closed` sind. Ist ein Blocker unbekannt (keine
    Datei, ungültige Datei, doppelte ID), sind `blocked_by_open` und `blocked` **unbekannt** und `status` ist `unknown`

@@ -106,7 +106,9 @@ Datei bereitstellen und erneuern:
 }
 ```
 
-`source.attributes` enthält die billigen Item-Felder; bei Artefakt-Items (seit 0.10.0) die Artefaktfelder (`id`, `name`,
+`source.attributes` enthält die billigen Item-Felder; bei `git_files`-Items (seit 0.11.0) auch `body` (Markdown
+ohne Kommentar-Abschnitt), `comments` (`[{ "at", "author", "text" }]`), `path` und alle Frontmatter-Schlüssel
+(nicht deklarierte als Skalar, Liste von Strings oder JSON-Text); bei Artefakt-Items (seit 0.10.0) die Artefaktfelder (`id`, `name`,
 `type`, `kind`, `size`, `file_count`, `workflow`, `run_id`, `parent`, `consumed_by`, …) und zusätzlich
 `source.input = { "path": "<workspace>/inputs/<Name>", "kind": "file"|"folder", "name": "<Artefaktname>" }`
 (bei Containern der Pfad im Container); bei GitHub-Items zusätzlich `linked_branches`, `closing_prs`
