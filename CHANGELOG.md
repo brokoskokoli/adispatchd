@@ -5,6 +5,35 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
+## [0.11.0] – 2026-11-14
+
+### Hinzugefügt
+
+- **Source `git_files`** (WI-40): Issues als Markdown-Dateien mit YAML-Frontmatter in einem Git-Repository (eine Datei
+  `NNNN-<slug>.md` je Item), z. B. ein privater Tracker neben dem Code.
+  - `sources.yaml`: `type: git_files` mit `repository` (URL oder Pfad), `branch`, `path`, optional `identity` (Token
+    für fetch/push), `commit_author`, `closed_when` (Default `{ status: [done, closed] }` → Feld `state`),
+    `comments_heading` (Default `## Log`), `fields` (weitere Frontmatter-Schlüssel mit Typ) und `web_url`.
+  - Felder: `number`, `title`, `state`, `status`, `labels`, `milestone`, `blocked_by`, `branch`, `pr`, `spec`,
+    `files`, `created_at`, `body`, `comments`, `path`, `url`, `dependencies.*` (unbekannte Blocker → unknown),
+    `work_branch`/`work_pr`/`work_pr_url` sowie die deklarierten Felder – in Filtern, `item_priority`, Views und
+    Platzhaltern (`{item.number}`, `{item.title}`, `{item.work_branch}`, `{item.work_pr}`); `context.json` enthält
+    zusätzlich `body` und `comments`.
+  - Eigener Klon unter `<data-dir>/sources/<id>/` (Spiegel, höchstens ein fetch je 5 s beim Lesen); ungültige
+    Dateien werden mit einer Warnung übersprungen.
+  - Schreiben: `source.update` mit neuem `fields: { status: coding }` (nur `git_files`; `null` entfernt den
+    Schlüssel) und `labels`, `source.comment` als Eintrag am Dateiende mit Marker – je ein Commit mit Item, Änderung
+    und Run in der Nachricht plus Push; abgelehnter Push → fetch und Neuanwendung (höchstens 5 Versuche). Nur das
+    Frontmatter bzw. das Dateiende wird geändert, der Body bleibt bytegleich.
+  - Zugangsdaten: Token der Source-Identity nur über die Umgebung eines Inline-Credential-Helpers – nie in URL,
+    Klon-Konfiguration oder Logs.
+  - UI: Kommentar und Labels im Item-Panel auch für `git_files`-Items.
+  - CLI: `adispatch source create-item <source> --title … [--body-file …] [--field k=v] [--label …]` legt ein Item
+    mit der nächsten freien Nummer an (temporärer Klon, Commit, Push).
+- Konfigurationsprüfung: `source.update.project` nur bei `github`-Sources, `fields` nur bei `git_files`-Sources,
+  Typprüfung der Werte, abgeleitete Felder sind nicht schreibbar.
+- Item-Verlauf und Run-Events zeigen geänderte Frontmatter-Felder (`status: todo → coding`).
+
 ## [0.10.1] – 2026-10-29
 
 ### Geändert
