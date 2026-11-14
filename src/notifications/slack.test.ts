@@ -217,6 +217,32 @@ describe('NotificationService – Slack channels (WI-39)', () => {
     expect(JSON.stringify(svc.list())).not.toContain(BOT);
   });
 
+  it('stop aborts a hanging Slack call: the delivery stays pending without a recorded attempt', async () => {
+    let called = 0;
+    const hanging: typeof slack.fetch = (_input, init) => {
+      called++;
+      return new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted'))));
+    };
+    svc = new NotificationService({
+      repositories: p,
+      settings: () => settings,
+      env: { SLACK_BOT_TOKEN: BOT },
+      clock,
+      timers: clock,
+      logger,
+      redactor,
+      slack: new SlackWebClient({ fetch: hanging, timers: clock, redactor, baseUrl: FAKE_SLACK_URL, timeoutMs: 60_000 }),
+    });
+    svc.start();
+    const { notificationId } = svc.enqueueMessage(message());
+    await until(() => called === 1);
+    const stopped = svc.stop(2_000);
+    clock.advance(2_000);
+    await stopped;
+    expect(svc.get(notificationId)!.deliveries[0]).toMatchObject({ state: 'pending', attempts: 0, lastError: null });
+    expect(p.threads.listForItem('repo_a:7')[0]?.threadTs).toBeNull();
+  });
+
   it('Retry-After longer than the backoff is honoured', async () => {
     svc = create();
     svc.start();

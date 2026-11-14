@@ -316,6 +316,9 @@ export class NotificationService implements Notifier, ChatNotifier {
       new Promise<void>((resolve) => {
         graceTimer = this.timers.setTimeout(() => {
           for (const c of this.inflight) c.abort(new Error('notification service stopping'));
+          // WI-39: Slack calls too – an aborted delivery stays pending (no attempt recorded) and nothing is written
+          // after the dispatcher pass ended (the caller closes the database afterwards).
+          this.slack.abortAll();
           resolve();
         }, graceMs);
       }),
