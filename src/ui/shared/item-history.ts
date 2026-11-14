@@ -31,6 +31,8 @@ export interface Effect {
   labelsAdded: string[];
   labelsRemoved: string[];
   projectFields: Array<{ name: string; from?: unknown; to: unknown }>;
+  /** Frontmatter fields of git_files items (WI-40). */
+  fields: Array<{ name: string; from?: unknown; to: unknown }>;
   projectItemAdded: boolean;
   unchanged: boolean;
   comment: { url: string | null; reconciled: boolean } | null;
@@ -182,6 +184,10 @@ export function parseEffect(v: unknown): Effect | null {
     labelsAdded: strings(e.labelsAdded),
     labelsRemoved: strings(e.labelsRemoved),
     projectFields: list(e.projectFields)
+      .map(obj)
+      .filter((f): f is Record<string, unknown> => f !== null && typeof f.name === 'string')
+      .map((f) => ({ name: s(f.name, 200), ...('from' in f ? { from: f.from } : {}), to: f.to })),
+    fields: list(e.fields)
       .map(obj)
       .filter((f): f is Record<string, unknown> => f !== null && typeof f.name === 'string')
       .map((f) => ({ name: s(f.name, 200), ...('from' in f ? { from: f.from } : {}), to: f.to })),
@@ -387,6 +393,7 @@ export function effectLines(effect: Effect | null | undefined, type?: string): s
   for (const l of effect.labelsRemoved) lines.push(`label − ${l}`);
   if (effect.projectItemAdded) lines.push('added to the project');
   for (const f of effect.projectFields) lines.push(`${f.name}: ${'from' in f ? `${value(f.from)} → ` : ''}${value(f.to)}`);
+  for (const f of effect.fields ?? []) lines.push(`${f.name}: ${'from' in f ? `${value(f.from)} → ` : ''}${value(f.to)}`);
   if (effect.comment) lines.push(effect.comment.reconciled ? 'comment found again (written before)' : 'comment written');
   if (effect.unchanged) lines.push('no change (already in this state)');
   if ('exitCode' in effect || 'signal' in effect) {

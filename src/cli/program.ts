@@ -80,6 +80,21 @@ export interface HubControlCliOptions extends GlobalOptions {
   timeout?: string;
 }
 
+/** Options of `source create-item` (WI-40, git_files sources). */
+export interface CreateItemCliOptions extends GlobalOptions {
+  title?: string;
+  /** Body from a file (`-` = stdin). */
+  bodyFile?: string;
+  body?: string;
+  /** `key=value` frontmatter fields (repeatable). */
+  field?: string[];
+  /** Labels (repeatable). */
+  label?: string[];
+  /** Author name of the commit trailer (default: the source identity). */
+  identity?: string;
+  json?: boolean;
+}
+
 /** Options of the `service` commands. */
 export interface ServiceCliOptions extends GlobalOptions {
   /** Print what would be done (unit file + steps) without changing anything. */
@@ -120,6 +135,7 @@ export interface CliHandlers {
   configValidate?: Handler<GlobalOptions>;
   configReload?: Handler<ControlCliOptions>;
   workflowDryRun?: (workflowId: string, opts: DryRunCliOptions) => Promise<number>;
+  sourceCreateItem?: (sourceId: string, opts: CreateItemCliOptions) => Promise<number>;
   status?: Handler<ControlCliOptions>;
   pause?: Handler<ControlCliOptions>;
   resume?: Handler<ControlCliOptions>;
@@ -181,6 +197,7 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
         '  config validate               validate the configuration offline',
         '  config reload                 reload the configuration of the running instance',
         '  workflow dry-run <workflow>   show candidate selection without starting anything',
+        '  source create-item <source>   create an item file in a git_files source (commit + push)',
         '  auth hash-password            print the scrypt hash of a password (auth.mode: password)',
         '  hub init | validate | start   run several workspaces under one hub with a shared run limit',
         '  hub status | pause | resume | stop-all | drain-all',
@@ -266,6 +283,28 @@ export function createProgram(handlers: CliHandlers = {}, io: CliIo = processIo)
         return;
       }
       io.setExitCode(await handlers.workflowDryRun(workflowId, cmd.optsWithGlobals<DryRunCliOptions>()));
+    });
+
+  const source = program.command('source').description('source commands');
+  const repeat = (value: string, previous: string[] = []): string[] => [...previous, value];
+  source
+    .command('create-item')
+    .description('create an item in a git_files source: next free number, one commit, push (works in a temporary clone)')
+    .argument('<source-id>', 'ID of a git_files source in sources.yaml')
+    .requiredOption('--title <text>', 'title of the item')
+    .option('--body-file <path>', 'Markdown body from a file ("-" = stdin)')
+    .option('--body <text>', 'Markdown body')
+    .option('--field <key=value>', 'frontmatter field, e.g. status=todo or priority=2 (repeatable; lists comma-separated)', repeat)
+    .option('--label <name>', 'label (repeatable)', repeat)
+    .option('--identity <id>', 'name recorded as author in the commit trailer (default: the source identity)')
+    .option('--json', 'print the result as JSON')
+    .action(async (sourceId: string, _opts: unknown, cmd: Command) => {
+      if (!handlers.sourceCreateItem) {
+        io.stderr('adispatch: "source create-item" is not implemented yet\n');
+        io.setExitCode(EXIT_NOT_IMPLEMENTED);
+        return;
+      }
+      io.setExitCode(await handlers.sourceCreateItem(sourceId, cmd.optsWithGlobals<CreateItemCliOptions>()));
     });
 
   const auth = program.command('auth').description('authentication helpers (auth in config.yaml)');

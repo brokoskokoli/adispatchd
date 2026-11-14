@@ -113,9 +113,14 @@ export function createWorkflowDryRunHandler(io: Pick<CliIo, 'stdout' | 'stderr'>
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
         ...(deps.env ? { env: deps.env } : {}),
       });
-      const result = await dryRunWorkflow({ config, sources: (id) => sources.get(id), state, clock, notes }, workflowId);
-      io.stdout(opts.json ? `${JSON.stringify(result, null, 2)}\n` : formatDryRun(result));
-      return result.source?.error ? 1 : 0;
+      try {
+        const result = await dryRunWorkflow({ config, sources: (id) => sources.get(id), state, clock, notes }, workflowId);
+        io.stdout(opts.json ? `${JSON.stringify(result, null, 2)}\n` : formatDryRun(result));
+        return result.source?.error ? 1 : 0;
+      } finally {
+        // git_files sources (WI-40) were read through a temporary clone of their own.
+        sources.dispose();
+      }
     } finally {
       close();
     }

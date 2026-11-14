@@ -19,6 +19,7 @@ export { processIo } from './program.js';
 export { createConfigValidateHandler, EXIT_CONFIG_INVALID, EXIT_CONFIG_VALID } from './config-validate.js';
 export { createHashPasswordHandler, MIN_PASSWORD_LENGTH, type HashPasswordDeps, type PasswordInput } from './auth.js';
 export { createWorkflowDryRunHandler, type WorkflowDryRunDeps } from './workflow-dry-run.js';
+export { createSourceCreateItemHandler, type SourceCreateItemDeps } from './source-create-item.js';
 export { createStartHandler, parseStartFlags, type StartDeps } from './start.js';
 export { createInitHandler, initDirectories, type InitResult } from './init.js';
 export { initTemplates, DATA_DIR_LAYOUT, type TemplateFile } from './init-templates.js';

@@ -5,6 +5,7 @@
  */
 import {
   ARTIFACT_SOURCE_TYPE,
+  GIT_FILES_SOURCE_TYPE,
   artifactTemplateItem,
   WORKER_PROTOCOL_VERSION,
   buildTemplateValues,
@@ -67,7 +68,11 @@ export function isArtifactWorkflow(snapshot: WorkflowSnapshot): boolean {
  */
 export function resolveActionIdentity(action: LifecycleActionConfig, snapshot: WorkflowSnapshot): IdentityRef | null {
   if (action.type === 'source.comment' && action.identity) return action.identity;
-  return snapshot.workflow.identity ?? snapshot.source?.identity ?? null;
+  const identity = snapshot.workflow.identity ?? snapshot.source?.identity ?? null;
+  // git_files (WI-40) writes with the source's transport credentials (or none); the action identity
+  // is only the author name of comments and commits. Without any, '' = the commit author of the source.
+  if (identity === null && snapshot.source?.type === GIT_FILES_SOURCE_TYPE) return '';
+  return identity;
 }
 
 /**

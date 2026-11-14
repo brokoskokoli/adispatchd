@@ -530,7 +530,7 @@ export class LifecycleEngine {
       try {
         const identity = resolveActionIdentity(config, snapshot);
         const { adapter, item: target } = await resolveSourceTarget(this.performerDeps, run, snapshot, item);
-        const found = identity ? await adapter.findCommentByMarker(target, commentMarker(run.id, action.id), identity) : null;
+        const found = identity !== null ? await adapter.findCommentByMarker(target, commentMarker(run.id, action.id), identity) : null;
         if (found) {
           this.repos.transaction(() => {
             this.repos.actions.finishAttempt(open.id, 'succeeded', { externalKey: found.id });

@@ -269,8 +269,10 @@ export function appliedSummary(details: unknown): string {
   const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
   const parts = [...strings(a.labelsAdded).map((l) => `+${l}`), ...strings(a.labelsRemoved).map((l) => `-${l}`)];
   if (a.projectItemAdded === true) parts.push('added to project');
-  if (a.projectFields && typeof a.projectFields === 'object') {
-    for (const [name, value] of Object.entries(a.projectFields as Record<string, unknown>)) {
+  // Project fields (GitHub) and frontmatter fields (git_files, WI-40).
+  for (const fields of [a.projectFields, a.fields]) {
+    if (!fields || typeof fields !== 'object') continue;
+    for (const [name, value] of Object.entries(fields as Record<string, unknown>)) {
       parts.push(value === null ? `${name} cleared` : `${name}=${typeof value === 'string' ? value : JSON.stringify(value)}`);
     }
   }

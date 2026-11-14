@@ -112,6 +112,15 @@ sources:
   # (attempted_by = completed runs, consumed_by = successful runs only).
   # artifacts:
   #   type: artifacts
+  # Issues as Markdown files with YAML frontmatter in a git repository (one file NNNN-<slug>.md per item);
+  # the daemon keeps its own clone under the data dir, writes = one commit + push each.
+  # tracker:
+  #   type: git_files
+  #   repository: https://github.com/example/project-meta.git
+  #   path: issues
+  #   identity: maintainer          # token for fetch/push (GitHub App: Contents read/write)
+  #   fields: { priority: number }  # further frontmatter keys usable in filters/views
+  #   # closed_when: { status: [done, closed] }   # default; comments_heading: "## Log" (default)
 `;
 
 const IDENTITIES_YAML = `# identities.yaml – GitHub App identities, one per role (Spec §5.3).

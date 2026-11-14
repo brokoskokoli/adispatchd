@@ -32,6 +32,7 @@ describe('cli program', () => {
       'config validate',
       'config reload',
       'workflow dry-run',
+      'source create-item',
       'auth hash-password',
       'hub init',
       'hub validate',

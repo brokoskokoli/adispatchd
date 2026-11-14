@@ -8,6 +8,7 @@ import { createHubGlobalHandler, createHubInitHandler, createHubStartHandler, cr
 import { createInitHandler } from './init.js';
 import { createProgram, processIo } from './program.js';
 import { createServiceInstallHandler, createServiceStatusHandler, createServiceUninstallHandler } from './service.js';
+import { createSourceCreateItemHandler } from './source-create-item.js';
 import { createStartHandler } from './start.js';
 import { createWorkflowDryRunHandler } from './workflow-dry-run.js';
 
@@ -28,6 +29,7 @@ await createProgram(
     configValidate: createConfigValidateHandler(processIo),
     configReload: createConfigReloadHandler(processIo),
     workflowDryRun: createWorkflowDryRunHandler(processIo),
+    sourceCreateItem: createSourceCreateItemHandler(processIo),
     status: createStatusHandler(processIo),
     pause: createSchedulerHandler('pause', processIo),
     resume: createSchedulerHandler('resume', processIo),
