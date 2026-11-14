@@ -292,13 +292,17 @@ export class ReplyRepository {
     return this.require(id);
   }
 
-  /** Final status; `done`/`rejected` clear the text (processed), `failed` keeps it for a manual retry. */
-  complete(id: number, status: 'done' | 'rejected' | 'failed', reason: string | null = null): ReplyRecord {
+  /**
+   * Final status. `done`/`rejected` clear the text (processed) unless `keepText` (an action of the chain failed and
+   * can still be retried by hand); `failed` always keeps it for a manual retry.
+   */
+  complete(id: number, status: 'done' | 'rejected' | 'failed', reason: string | null = null, options: { keepText?: boolean } = {}): ReplyRecord {
+    const keep = status === 'failed' || options.keepText === true ? 1 : 0;
     run(
       this.db,
-      `UPDATE notification_replies SET status = ?, reason = ?, text = CASE WHEN ? = 'failed' THEN text ELSE NULL END,
+      `UPDATE notification_replies SET status = ?, reason = ?, text = CASE WHEN ? = 1 THEN text ELSE NULL END,
          config_snapshot = NULL, updated_at = ? WHERE id = ?`,
-      [status, reason, status, this.clock.now().toISOString(), id],
+      [status, reason, keep, this.clock.now().toISOString(), id],
     );
     return this.require(id);
   }

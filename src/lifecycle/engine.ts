@@ -523,6 +523,14 @@ export class LifecycleEngine {
   }
 
   private perform(input: AttemptInput, config: JournalActionConfig): Promise<AttemptResult> {
+    // WI-39: after the reply was processed its text is gone – never post/run an empty `{reply.text}`.
+    if (input.reply && input.reply.textAvailable === false && usesReplyText(config)) {
+      return Promise.reject(
+        new LifecycleError('reply_text_gone', 'The text of the reply is no longer stored (the reply was processed); this action cannot be repeated', {
+          retryable: false,
+        }),
+      );
+    }
     switch (config.type) {
       case 'source.update':
         return performSourceUpdate(this.performerDeps, input, config);
@@ -688,7 +696,7 @@ export class LifecycleEngine {
     if (!replies || hook !== 'on_reply') return null;
     const reply = replies.forRun(runId);
     if (!reply) return null;
-    return { text: reply.text ?? '', user: reply.userId, userName: reply.userName, ts: reply.ts, permalink: reply.permalink, channel: reply.chatChannel };
+    return { text: reply.text ?? '', textAvailable: reply.text !== null, user: reply.userId, userName: reply.userName, ts: reply.ts, permalink: reply.permalink, channel: reply.chatChannel };
   }
 
   /** Hooks of a run in journal order. */
@@ -720,6 +728,19 @@ export function hookActions(snapshot: WorkflowSnapshot, hook: HookName): Journal
     timeoutMs: check.timeoutMs,
   };
   return [journal, ...configured];
+}
+
+/** True if a template of the action uses `{reply.text}` (WI-39). */
+function usesReplyText(config: JournalActionConfig): boolean {
+  const templates: string[] =
+    config.type === 'source.comment' || config.type === 'notify'
+      ? [config.message]
+      : config.type === 'shell'
+        ? [...config.args, ...Object.values(config.env)]
+        : config.type === REPLY_CHECK_ACTION_TYPE
+          ? ['{reply.text}'] // gets the text on stdin
+          : [];
+  return templates.some((t) => /\{\s*reply\.text\s*\}/.test(t));
 }
 
 /** Action config persisted in the journal (`action_config_json`). */

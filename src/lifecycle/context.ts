@@ -101,6 +101,8 @@ function hasResult(hook: HookName): boolean {
 export interface HookReplyInfo {
   /** Plain text; empty once the reply was processed (texts are not kept). */
   text: string;
+  /** False once the text was cleared (processed): actions using `{reply.text}` must not render it empty. */
+  textAvailable?: boolean;
   user: string;
   userName: string | null;
   ts: string;

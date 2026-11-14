@@ -1431,7 +1431,9 @@ export class RunController {
       if (current.status !== 'finalizing') this.repos.runs.beginFinalization(runId, target, { countOutcome: false });
       this.repos.runs.finish(runId);
       if (reply) {
-        const done = this.repos.replies.complete(reply.id, outcome.status, outcome.status === 'done' ? null : (outcome.detail ?? target.reason));
+        // The text stays while an action of on_reply is `failed` (also with continue_on_error): a manual retry renders it.
+        const keepText = this.replyActionFailed(runId);
+        const done = this.repos.replies.complete(reply.id, outcome.status, outcome.status === 'done' ? null : (outcome.detail ?? target.reason), { keepText });
         this.repos.afterCommit(() => this.options.chatReplies?.finished(done, outcome.status, outcome.detail, runId));
       }
     });
@@ -1465,15 +1467,28 @@ export class RunController {
   afterReplyChainChanged(runId: string): void {
     const run = this.repos.runs.get(runId);
     const reply = this.repos.replies.forRun(runId);
-    if (!run || run.triggerType !== 'reply' || !isTerminalStatus(run.status) || !reply || reply.status !== 'failed') return;
+    if (!run || run.triggerType !== 'reply' || !isTerminalStatus(run.status) || !reply) return;
+    // `failed` replies are finished once the chain went through; processed replies only lose their kept text.
+    const cleanup = (reply.status === 'done' || reply.status === 'rejected') && reply.text !== null;
+    if (reply.status !== 'failed' && !cleanup) return;
     const journal = this.repos.actions.listForHook(runId, 'on_reply');
     if (journal.some((a) => a.status === 'pending' || a.status === 'running') || stoppedAtJournal(journal)) return;
+    const keepText = this.replyActionFailed(runId);
+    if (cleanup) {
+      if (!keepText) this.repos.replies.complete(reply.id, reply.status as 'done' | 'rejected', reply.reason);
+      return;
+    }
     const rejected = journal.find((a) => a.type === REPLY_CHECK_ACTION_TYPE && a.effect?.rejected === true);
     const status: ReplyOutcome = rejected ? 'rejected' : 'done';
     const detail = rejected ? rejectionReason(this.repos.events.listForRun(runId), rejected.id) : null;
-    const done = this.repos.replies.complete(reply.id, status, detail);
+    const done = this.repos.replies.complete(reply.id, status, detail, { keepText });
     this.logger.info('reply processed after a manual retry', { runId, replyId: reply.id, status });
     this.options.chatReplies?.finished(done, status, detail, runId);
+  }
+
+  /** True while an `on_reply` action of the run is `failed` (incl. `continue_on_error`): it can still be retried. */
+  private replyActionFailed(runId: string): boolean {
+    return this.repos.actions.listForHook(runId, 'on_reply').some((a) => a.status === 'failed');
   }
 
   // ---------------------------------------------------------------------------

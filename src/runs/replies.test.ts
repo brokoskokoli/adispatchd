@@ -206,6 +206,47 @@ describe.runIf(supported)('RunController – reply runs (WI-39)', () => {
     expect(chat.finishedCalls.at(-1)).toMatchObject({ outcome: 'done' });
   });
 
+  it('keeps the text while a continue_on_error action failed: its retry renders {reply.text}; cleared afterwards', async () => {
+    const snapshot = await env.snapshot(
+      yaml(
+        '/bin/true',
+        `on_reply:\n  - id: answer\n    type: source.comment\n    continue_on_error: true\n    retry: { max_attempts: 1 }\n    message: 'Answer: {reply.text}'\n  - id: unlabel\n    type: source.update\n    labels: { remove: [needs-maintainer] }\n`,
+      ),
+    );
+    const h = await ready();
+    env.github.failNext({ method: 'POST', path: `/repos/${REPO}/issues/${ISSUE}/comments` }, { status: 502 });
+    const { reply } = record(snapshot, 'take option B');
+    h.controller.processReplies();
+    const r = await processed(h, reply.id);
+    expect(r).toMatchObject({ status: 'done', text: 'take option B' });
+    expect(env.p.runs.require(r.runId!)).toMatchObject({ businessResult: 'success' });
+    const failed = env.p.actions.listForRun(r.runId!).find((a) => a.name === 'answer');
+    expect(failed?.status).toBe('failed');
+    // A change without effect on the failed action keeps the text.
+    h.controller.afterReplyChainChanged(r.runId!);
+    expect(env.p.replies.require(reply.id).text).toBe('take option B');
+    await h.lifecycle.retryAction(failed!.id, { wait: true });
+    h.controller.afterReplyChainChanged(r.runId!);
+    expect(env.github.comments(REPO, ISSUE).at(-1)?.body).toContain('Answer: take option B');
+    expect(env.p.replies.require(reply.id)).toMatchObject({ status: 'done', text: null });
+  });
+
+  it('refuses to repeat an action with {reply.text} once the text is gone (never posts it empty)', async () => {
+    const snapshot = await env.snapshot(yaml('/bin/true'));
+    const h = await ready();
+    const { reply } = record(snapshot, 'hello');
+    h.controller.processReplies();
+    const r = await processed(h, reply.id);
+    expect(r.text).toBeNull();
+    const answer = env.p.actions.listForRun(r.runId!).find((a) => a.name === 'answer')!;
+    // Simulate a later repeat of the chain (e.g. the action reset by an operator tool).
+    env.p.db.prepare(`UPDATE run_actions SET status = 'pending' WHERE id = ?`).run(answer.id);
+    const before = env.github.comments(REPO, ISSUE).length;
+    const result = await h.lifecycle.runHook(r.runId!, 'on_reply', snapshot, { wait: true });
+    expect(result.failedAction).toMatchObject({ name: 'answer', lastError: expect.objectContaining({ code: 'lifecycle_reply_text_gone', retryable: false }) });
+    expect(env.github.comments(REPO, ISSUE)).toHaveLength(before);
+  });
+
   it('{reply.text} cannot smuggle a comment marker into the comment', async () => {
     const snapshot = await env.snapshot(yaml('/bin/true'));
     const h = await ready();

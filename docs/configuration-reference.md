@@ -1631,8 +1631,11 @@ Typisch: die Antwort als Kommentar an das Issue (die Agenten lesen nur dort) und
   `Text (url)`, `&amp;` → `&`), Steuerzeichen entfernt, auf 8 KiB (UTF-8) gekürzt (` […]`), `<!--` entschärft wie bei
   `source.comment`. Sieht der Text wie ein Secret aus (dieselbe Prüfung wie beim Kommentieren in der UI: GitHub-,
   Slack-, Anthropic-, AWS-Token, private Schlüssel, bekannte Secret-Werte), wird er **nicht gespeichert** und nichts
-  ausgeführt; im Thread steht der Grund, Reaktion ❌. Der Text wird nur bis zur Verarbeitung aufbewahrt (danach
-  geleert; bei `failed` bis zur erfolgreichen Wiederholung).
+  ausgeführt; im Thread steht der Grund, Reaktion ❌. Der Text wird nur bis zur Verarbeitung aufbewahrt: geleert,
+  sobald die Kette durch ist und keine Action von `on_reply` mehr `failed` ist (auch nicht mit `continue_on_error`) –
+  solange kann ein „Retry“ ihn noch rendern. Ist er geleert, scheitert eine wiederholte Action mit `{reply.text}`
+  endgültig (`lifecycle_reply_text_gone`) statt einen leeren Text zu posten. Die Kontextdatei einer `shell`-Action in
+  `on_reply` (mit `reply.text`) wird direkt nach dem Versuch gelöscht.
 - **`reply_check`** (optional, Workflow-Ebene): `command` (§2.4), `args` (Templates, Scope wie `on_reply`), `timeout`
   (Default `30s`). Die Antwort kommt auf **stdin**, der Kontext (Workflow, Run, Item, Antwort ohne Text) als JSON in
   `ADISPATCH_CHECK_CONTEXT_FILE`; Umgebung minimal wie bei Prüfskripten. Exit `0` → `on_reply` läuft; Exit `1` →
