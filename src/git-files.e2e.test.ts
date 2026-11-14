@@ -199,7 +199,9 @@ describe('git_files source end-to-end', () => {
     expect(code).toBe(0);
     const created = JSON.parse(out.join('')) as { item: string; file: string };
     expect(Number(created.item)).toBeGreaterThanOrEqual(8);
-    expect(remote.file(created.file)).toBe(`---\nid: ${created.item}\ntitle: "Flaky: test y"\nstatus: todo\npriority: 2\nlabels: [flaky]\n---\n\nFailed twice.\n`);
+    expect(remote.file(created.file)).toMatch(
+      new RegExp(`^---\\nid: ${created.item}\\ntitle: "Flaky: test y"\\nstatus: todo\\npriority: 2\\nlabels: \\[flaky\\]\\ncreated_at: \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z\\n---\\n\\nFailed twice\\.\\n$`),
+    );
     expect(remote.log()[0]).toContain('Adispatchd-Identity: ci');
     const bad = await handler('issues', { configDir: env.configDir, title: 'x', field: ['state=closed'] });
     expect(bad).toBe(2);

@@ -346,6 +346,8 @@ export class GitFilesSourceAdapter implements SourceAdapter {
         for (const [key, value] of Object.entries(fields)) if (value !== null) frontmatter[key] = value;
         const labels = [...new Set((input.labels ?? []).map((l) => l.trim()).filter((l) => l !== ''))];
         if (labels.length > 0) frontmatter.labels = labels;
+        // Like a GitHub issue: a creation time for sorting and item_priority, unless given with --field.
+        if (!Object.hasOwn(fields, 'created_at')) frontmatter.created_at = isoSeconds(this.clock.now());
         if ((await this.folderState()) === 'symlink') throw symlinkError(this.config.path);
         await mkdir(path.dirname(abs), { recursive: true });
         await writeFile(abs, renderNewItemFile(frontmatter, input.body ?? ''), { flag: 'wx' });

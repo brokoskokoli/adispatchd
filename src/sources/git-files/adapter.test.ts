@@ -319,9 +319,18 @@ describe('GitFilesSourceAdapter – writing', () => {
     const { adapter, remote } = setup({ 'issues/0007-a.md': ISSUE(7, ''), 'issues/0009-broken.md': 'broken' });
     const created = await adapter.createItem({ title: 'Flaky: test x', body: 'Seen twice.', labels: ['flaky'], fields: { status: 'todo', priority: 1 } }, 'ci');
     expect(created).toMatchObject({ itemId: '10', file: 'issues/0010-flaky-test-x.md' });
-    expect(remote.file('issues/0010-flaky-test-x.md')).toBe('---\nid: 10\ntitle: "Flaky: test x"\nstatus: todo\npriority: 1\nlabels: [flaky]\n---\n\nSeen twice.\n');
+    expect(remote.file('issues/0010-flaky-test-x.md')).toBe(
+      '---\nid: 10\ntitle: "Flaky: test x"\nstatus: todo\npriority: 1\nlabels: [flaky]\ncreated_at: 2026-11-14T10:00:00Z\n---\n\nSeen twice.\n',
+    );
     expect(remote.log()[0]).toContain('issues #10: create "Flaky: test x"');
-    expect((await item(adapter, '10')).fields.labels).toEqual(['flaky']);
+    const fresh = await item(adapter, '10');
+    expect(fresh.fields.labels).toEqual(['flaky']);
+    expect(fresh.fields.created_at).toBe('2026-11-14T10:00:00Z');
+    expect(fresh.createdAt).toBe('2026-11-14T10:00:00Z');
+    // An explicit created_at wins.
+    const dated = await adapter.createItem({ title: 'Old', fields: { created_at: '2026-01-02' } });
+    expect(remote.file(dated.file)).toContain('created_at: 2026-01-02\n');
+    expect(remote.file(dated.file).match(/created_at/g)).toHaveLength(1);
   });
 });
 

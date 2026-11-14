@@ -1003,7 +1003,7 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
 - **Items aus Skripten anlegen:** `adispatch source create-item <source-id> --config-dir <dir> --title <text>
   [--body <text> | --body-file <datei>|-] [--field key=value …] [--label <name> …] [--identity <name>] [--json]`
   legt `NNNN-<slug>.md` mit der nächsten freien Nummer (höchste vorhandene + 1, auch über ungültige Dateien hinweg)
-  an, committet und pusht; bei einem abgelehnten Push wird neu nummeriert. Der Befehl arbeitet in einem temporären
+  und `created_at` = jetzt (außer per `--field created_at=…` gesetzt) an, committet und pusht; bei einem abgelehnten Push wird neu nummeriert. Der Befehl arbeitet in einem temporären
   Klon (kein Konflikt mit dem Klon eines laufenden Daemons) und braucht die Zugangsdaten der Source-Identity in der
   Umgebung wie der Daemon. `--field` nimmt nur schreibbare Felder (§3.4.11), Listen kommagetrennt. Exit-Codes: 0
   angelegt, 1 Konfigurations- oder Source-Fehler, 2 falsche Aufrufparameter.
