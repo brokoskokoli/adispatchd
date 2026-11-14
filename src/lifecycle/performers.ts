@@ -3,7 +3,7 @@
  * `source.update`, `source.comment` (with idempotency marker) and `shell`.
  * One call = one attempt; retry policy and journal handling live in the engine.
  */
-import { stat } from 'node:fs/promises';
+import { rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   LINKED_ITEM_FIELDS,
@@ -488,6 +488,7 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     ...(resolved?.target.adapter.repository ? { repository: resolved.target.adapter.repository } : {}),
     ...(linked ? { linked } : {}),
     block: input.block ?? null,
+    reply: input.reply ?? null,
   });
   const args = config.args.map((a) => renderHookText(a, values, scope));
   const env: Record<string, string> = {};
@@ -513,6 +514,7 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     action: { id: action.id, name: action.name, ordinal: action.ordinal, attempt: input.attempt },
     ...(linked ? { linked } : {}),
     block: input.block ?? null,
+    reply: input.reply ?? null,
   });
 
   // Secrets (WI-18). Journal entries from before WI-18 have no `secrets`.
@@ -577,6 +579,9 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     return shellAttemptResult(outcome, config, files);
   } finally {
     await session?.close();
+    // WI-39: the context of an `on_reply` action contains the reply text, which is kept only until the reply is
+    // processed – the attempt's context.json is removed as soon as the attempt ended.
+    if (context.reply) await rm(files.contextFile, { force: true }).catch(() => undefined);
   }
 }
 

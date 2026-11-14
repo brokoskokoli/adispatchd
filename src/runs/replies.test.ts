@@ -4,7 +4,7 @@
  * no overtaking by new runs (P1), rejection, check errors with manual retry,
  * a vanished item and recovery. Real shell scripts, Fake-GitHub.
  */
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { ChatReplyFeedback, ChatReplyRef, ReplyOutcome } from '../core/index.js';
 import type { WorkflowSnapshot } from '../config/index.js';
@@ -121,6 +121,22 @@ describe.runIf(supported)('RunController – reply runs (WI-39)', () => {
     expect(chat.finishedCalls).toEqual([{ id: reply.id, outcome: 'done', detail: null, runId: done.runId }]);
     // Not cancellable, does not count as active worker run.
     expect(env.p.runs.countActive('wf')).toBe(0);
+  });
+
+  it('shell actions in on_reply get {reply.*} as args/env and a reply block in the context; the context file is removed afterwards', async () => {
+    const out = `${env.marks}/shell-reply`;
+    const record_ = env.script('record-reply.sh', `printf '%s|%s' "$1" "$REPLY_USER" > ${out}.args; cp "$ADISPATCH_CONTEXT_FILE" ${out}.json; echo "$ADISPATCH_CONTEXT_FILE" > ${out}.path`);
+    const snapshot = await env.snapshot(
+      yaml('/bin/true', `on_reply:\n  - type: shell\n    command: ${record_}\n    args: ['{reply.text}']\n    env: { REPLY_USER: '{reply.user_name} {reply.channel}' }\n`),
+    );
+    const h = await ready();
+    const { reply } = record(snapshot, 'use the cache');
+    h.controller.processReplies();
+    expect((await processed(h, reply.id)).status).toBe('done');
+    expect(readFileSync(`${out}.args`, 'utf8')).toBe('use the cache|Alex C0123456789');
+    const context = JSON.parse(readFileSync(`${out}.json`, 'utf8')) as { reply?: unknown; result: unknown; run: { trigger: string } };
+    expect(context).toMatchObject({ run: { trigger: 'reply' }, result: null, reply: { text: 'use the cache', user: 'U0123456789', user_name: 'Alex', channel: 'C0123456789' } });
+    expect(existsSync(readFileSync(`${out}.path`, 'utf8').trim())).toBe(false);
   });
 
   it('waits while a run of (workflow, item) is active, then starts; several replies in order; nothing overtakes (P1)', async () => {
