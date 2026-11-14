@@ -72,8 +72,8 @@ aus Distribution/NodeSource – nicht aus `nvm` im Home-Verzeichnis, das der Die
 
 ```bash
 # 1. Feste Version global installieren (kein npx im Dienst!).
-sudo npm install -g adispatchd@0.10.1
-#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.10.1.tgz
+sudo npm install -g adispatchd@0.11.0
+#    alternativ aus dem Repository-Checkout: npm install && npm pack && sudo npm install -g ./adispatchd-0.11.0.tgz
 
 # 2. Konfiguration anlegen (überschreibt nie bestehende Dateien)
 sudo adispatch init --config-dir /etc/adispatchd --data-dir /var/lib/adispatchd
@@ -251,6 +251,11 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
   unverändert). Einbahnstraße: 0.9.x startet mit einer v7-DB nicht mehr; zurück nur über das Backup
   `backups/adispatchd-6-<zeitstempel>.sqlite`. Die Inhalte der Artefakte liegen unter `artifacts/<id>/` im data-dir und
   gehören zum Datenbestand (Backups unten).
+- **0.11.0 hebt das Schema auf v8** (Slack-Threads und Antworten: Neuaufbau von `runs` und `run_actions` für den
+  Trigger `reply` und den Hook `on_reply`, Tabellen `notification_threads`, `notification_replies`,
+  `notification_reminders`, Spalten `notification_deliveries.thread_id`/`message_ts` und `notifications.dedupe_key`;
+  bestehende Daten bleiben unverändert). Einbahnstraße: 0.10.x startet mit einer v8-DB nicht mehr; zurück nur über das
+  Backup `backups/adispatchd-7-<zeitstempel>.sqlite`.
 - **Rollback:** Dienst stoppen, alte Paketversion installieren, `adispatchd.sqlite`, `adispatchd.sqlite-wal` und
   `adispatchd.sqlite-shm` beiseitelegen, das passende Backup als `adispatchd.sqlite` zurückkopieren (Eigentümer
   `adispatchd`), starten. Runs nach dem Backup-Zeitpunkt fehlen dann in der Historie (ihre Logdateien bleiben).
@@ -599,6 +604,58 @@ Beispiel [claude-inspect](https://github.com/brokoskokoli/claude_inspect) (Dashb
   Seite leer, läuft das Tool nicht, ist unter der URL vom Browser aus nicht erreichbar, lehnt die Anfrage ab (Host-Prüfung,
   Token) oder verbietet das Einbetten – dann „Open in new tab“ nutzen oder `embed: false` setzen.
 
+## Slack: Thread je Item und Antworten (seit 0.11.0)
+
+Ein Kanal `type: slack` ([Referenz §3.1](configuration-reference.md#31-configyaml)) postet Nachrichten der Action
+`notify` und Orchestrator-Ereignisse in einen Thread je (Workflow, Item); Antworten im Thread lösen `on_reply` aus
+([§3.4.10](configuration-reference.md#3410-hooks)). Die Verbindung zu Slack ist **ausgehend**: Web-API per HTTPS,
+Antworten über Socket Mode (WebSocket) – kein offener Port, passt zu Loopback/VPN.
+
+**Slack-App anlegen** (einmal je Instanz, siehe unten), unter <https://api.slack.com/apps> → *Create New App* →
+*From scratch*:
+
+1. **Socket Mode** einschalten (*Settings → Socket Mode*). Dabei ein **App-Level-Token** mit Scope `connections:write`
+   erzeugen → `xapp-…`. (Ohne Socket Mode und ohne `app_token_env` kann der Kanal nur senden.)
+2. **OAuth & Permissions → Bot Token Scopes:** `chat:write` (Nachrichten), `reactions:write` (⏳/✅/❌),
+   `channels:history` (öffentliche Channels) bzw. `groups:history` (private Channels) für die Antworten; optional
+   `users:read` – nur für `{reply.user_name}` (fehlt der Scope, steht dort die User-ID).
+3. **Event Subscriptions** einschalten, unter *Subscribe to bot events* `message.channels` bzw. `message.groups`
+   hinzufügen (bei Socket Mode ist keine Request-URL nötig).
+4. App im Workspace **installieren** → Bot-Token `xoxb-…`.
+5. Die App in den Channel **einladen** (`/invite @<App-Name>`); sonst scheitert die Zustellung mit `not_in_channel`.
+6. **Channel-ID** ermitteln (Channel-Details, unten: `C0123456789`) und **User-IDs** der Personen, deren Antworten zählen
+   sollen (Profil → *Copy member ID*: `U0123456789`) – in `channel` und `allowed_users` eintragen.
+7. **Tokens in die Env-Datei** des Dienstes (`/etc/default/adispatchd`, 0640 `root:adispatchd`), nie in die YAML:
+   ```bash
+   SLACK_BOT_TOKEN=xoxb-…
+   SLACK_APP_TOKEN=xapp-…
+   ```
+   und in `config.yaml` nur die Namen (`bot_token_env: SLACK_BOT_TOKEN`, `app_token_env: SLACK_APP_TOKEN`).
+   `adispatch config validate`, dann Reload bzw. Neustart (neue Umgebungsvariablen brauchen einen Neustart).
+
+**Eine Slack-App je Instanz.** Slack verteilt die Ereignisse einer App auf **eine** ihrer offenen Socket-Verbindungen.
+Teilen sich zwei Instanzen – auch zwei Workspaces eines Hubs – dieselbe App, bekommt jede nur einen Teil der Antworten,
+der Rest wird von der anderen Instanz ignoriert (unbekannter Thread). Deshalb je Instanz eine eigene App (mehrere
+Channels einer Instanz dürfen sich eine App teilen: adispatchd öffnet je `app_token_env` genau eine Verbindung). Die
+Validierung kann eine geteilte App nicht erkennen.
+
+**Zustand:** UI *Config → Notifications* (Kanäle mit Verbindungszustand, letzter Fehler, nächster Versuch; darunter die
+Zustellungen wie bei Webhooks mit „Retry“), `GET /api/v1/notifications/channels`, SSE `notification.channels`. Antworten
+erscheinen im Item-Verlauf („Reply in Slack from …“, ohne Text) und als Lifecycle-Run (Trigger `reply`).
+
+**Fehlerbilder Slack:**
+
+| Meldung | Ursache / Lösung |
+|---|---|
+| Zustellung `failed`: `Slack bot token is not set (environment variable …)` | Variable fehlt in der Env-Datei → eintragen, Neustart, „Retry“. |
+| `Slack API chat.postMessage failed: not_in_channel` / `channel_not_found` | App in den Channel einladen bzw. Channel-ID prüfen (nicht der Name). |
+| `… failed: invalid_auth` / `missing_scope` | falsches/abgelaufenes Token bzw. Scope fehlt (oben, Schritt 2) → App neu installieren, Token ersetzen. |
+| Kanalstatus `disconnected`: `app-level token is not set` | `app_token_env` nennt eine Variable, die fehlt. |
+| `apps.connections.open failed: … not_allowed_token_type` | in `app_token_env` steht das Bot-Token statt des App-Level-Tokens (`xapp-…`). |
+| Antwort im Thread, aber nichts passiert | nur eine Datei ohne Text gesendet (Dateien werden ignoriert, nur der Text zählt), Person nicht in `allowed_users`, Workflow ohne `on_reply`, Event `message.channels`/`message.groups` nicht abonniert, oder eine zweite Instanz nutzt dieselbe App (Log `reply ignored` auf `debug`). |
+
+Manuelle Prüfung mit einer echten App: [manual-tests/slack.md](manual-tests/slack.md).
+
 ## Hub: mehrere Workspaces auf einem Server (seit 0.10.0)
 
 Ein **Hub** betreibt mehrere unabhängige Projekte (Workspaces) auf einem Server unter **einem gemeinsamen Limit** für
@@ -809,7 +866,7 @@ Der Hub ist der **einzige** Dienst: Die Workspaces sind seine Kindprozesse und h
 bei der Einzelinstanz (Abschnitt „Installation als systemd-Dienst“: systemweites Node, feste Version global installieren, kein `npx`).
 
 ```bash
-sudo npm install -g adispatchd@0.10.1
+sudo npm install -g adispatchd@0.11.0
 
 # 1. Hub und Workspaces anlegen (überschreibt nie bestehende Dateien); Layout: Abschnitt „Verzeichnisse eines Hubs“
 sudo adispatch hub init --config-dir /etc/adispatchd-hub --data-dir /var/lib/adispatchd-hub/hub \
@@ -958,6 +1015,10 @@ nicht:
   die Variablen, die seine `identities.yaml`/`config.yaml` nennen. Verschiedene Workspaces brauchen **verschiedene Variablennamen**
   (`ACME_APP_PRIVATE_KEY`, `DOCS_APP_PRIVATE_KEY`). Dazu kommen die Hashes der Hub-Anmeldung (`password_hash_env`).
   Änderungen wirken nach `systemctl restart adispatchd-hub` (nach `hub drain-all --wait`).
+- **Slack (seit 0.11.0).** Jeder Workspace hat seine eigene `config.yaml` und damit eigene Slack-Kanäle und seine eigene
+  Socket-Mode-Verbindung; der Hub selbst verbindet sich nicht mit Slack. Je Workspace eine **eigene Slack-App** (eigene
+  Token-Variablen, z. B. `ACME_SLACK_BOT_TOKEN`/`ACME_SLACK_APP_TOKEN`): Teilen sich zwei Workspaces eine App, verliert
+  jeder einen Teil der Antworten (Abschnitt „Slack“ oben). Eine hubweite Verbindung mit Verteilung gibt es nicht.
 - **Reverse Proxy.** Ein Ziel genügt: `http://127.0.0.1:8090` (Übersicht, Hub-API und `/w/<id>/…` der Workspaces). Konfiguration
   (`allowed_hosts`, Pfadpräfix, SSE ungepuffert), Anmeldung und Vertrauensmodell: Abschnitt „Weboberfläche des Hubs“ oben. Die
   Loopback-Ports der Workspaces gehören nicht in den Proxy und nicht in die Firewall.
@@ -1065,4 +1126,5 @@ nicht:
   (rootless, `--userns keep-id`) ist manuell zu prüfen.
 - Linux-spezifisches Verhalten (systemd, cgroups, Prozessidentität über `/proc`) ist manuell zu prüfen:
   [manual-tests/systemd.md](manual-tests/systemd.md), [manual-tests/process-supervision.md](manual-tests/process-supervision.md);
-  GitHub-Annahmen: [manual-tests/github.md](manual-tests/github.md).
+  GitHub-Annahmen: [manual-tests/github.md](manual-tests/github.md); Slack mit echter App und echtem Channel:
+  [manual-tests/slack.md](manual-tests/slack.md) (automatisiert nur gegen einen Fake-Slack).

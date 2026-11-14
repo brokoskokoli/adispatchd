@@ -79,6 +79,11 @@ export interface RetentionConfig {
   uiActionsMs: number | null;
   /** `retention.artifacts` (WI-35): artifacts older than this are deleted; `null` = keep until deleted. */
   artifactsMs: number | null;
+  /**
+   * `retention.notification_threads` (WI-39): chat threads without a message
+   * for this long are forgotten (replies to them are then ignored); `null` = keep. Default 90 days.
+   */
+  notificationThreadsMs: number | null;
 }
 
 /**
@@ -98,8 +103,29 @@ export interface WebhookChannelConfig {
   on: readonly NotificationEventType[];
 }
 
+/**
+ * Slack channel (WI-39): messages via the Web API (`chat.postMessage`) with
+ * one thread per (workflow, item); replies in these threads arrive via Socket
+ * Mode (outgoing WebSocket) when `appTokenEnv` is set. Tokens come only from
+ * the environment and are never logged, persisted or returned.
+ */
+export interface SlackChannelConfig {
+  id: string;
+  type: 'slack';
+  /** Environment variable with the bot token (`xoxb-…`). */
+  botTokenEnv: string;
+  /** Environment variable with the app-level token (`xapp-…`, Socket Mode); `null` = send only, no replies. */
+  appTokenEnv: string | null;
+  /** Slack channel ID (`C…`/`G…`), not the name. */
+  channel: string;
+  /** Slack user IDs whose replies count; empty = no reply counts. */
+  allowedUsers: readonly string[];
+  /** Orchestrator events delivered to this channel (default: the global `notifications.on`). */
+  on: readonly NotificationEventType[];
+}
+
 /** A notification channel. */
-export type NotificationChannelConfig = WebhookChannelConfig;
+export type NotificationChannelConfig = WebhookChannelConfig | SlackChannelConfig;
 
 /** Central orchestrator notifications. */
 export interface NotificationsConfig {
@@ -605,8 +631,38 @@ export interface ShellActionConfig extends ActionBase {
   secrets: Readonly<Record<string, SecretRef>>;
 }
 
+/**
+ * `notify` action (WI-39): one message on a `slack` channel. With an item the
+ * message goes into the thread of (workflow, item) (`thread: item`, created
+ * on first use) or into a new thread (`thread: new`). The action succeeds as
+ * soon as the delivery is recorded; delivery is asynchronous (Spec §18).
+ */
+export interface NotifyActionConfig extends ActionBase {
+  type: 'notify';
+  /** ID of a `slack` channel in `notifications.channels`. */
+  channel: string;
+  /** Text template (placeholders like `source.comment`). */
+  message: string;
+  thread: 'item' | 'new';
+  /** One reminder in the thread after this delay; absent = none. */
+  remindAfterMs?: number;
+  /** Reminder only if the item then still matches this filter (expanded); absent = always. */
+  remindWhile?: FilterNode;
+}
+
+/**
+ * `reply_check` of a workflow (WI-39): checks the reply text (stdin) before
+ * `on_reply` runs. Exit 0 = accepted, 1 = rejected (stdout = reason),
+ * ≥ 2 / timeout = check error (the reply run fails, retryable).
+ */
+export interface ReplyCheckConfig {
+  command: string;
+  args: readonly string[];
+  timeoutMs: number;
+}
+
 /** A lifecycle action. */
-export type LifecycleActionConfig = SourceUpdateActionConfig | SourceCommentActionConfig | ShellActionConfig;
+export type LifecycleActionConfig = SourceUpdateActionConfig | SourceCommentActionConfig | ShellActionConfig | NotifyActionConfig;
 
 /** Actions of one hook, in order. */
 export type ActionList = readonly LifecycleActionConfig[];
@@ -675,6 +731,8 @@ export interface WorkflowConfig {
   execute: ExecuteConfig;
   retry: { maxTechnicalFailures: number };
   hooks: HooksConfig;
+  /** WI-39: check of a chat reply before `on_reply`; absent = none (keeps workflow hashes stable). */
+  replyCheck?: ReplyCheckConfig;
 }
 
 // ---------------------------------------------------------------------------

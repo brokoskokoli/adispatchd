@@ -147,15 +147,29 @@ export interface FinalizationTarget {
 /**
  * How a run was triggered. `unblock` (WI-30): lifecycle run created when a
  * retry block is removed; no worker, no workspace, only `on_retry_unblock`.
+ * `reply` (WI-39): lifecycle run of a reply in a chat thread; no worker, no
+ * workspace, only `reply_check` + `on_reply`.
  */
-export type TriggerType = 'source' | 'schedule' | 'manual' | 'unblock';
+export type TriggerType = 'source' | 'schedule' | 'manual' | 'unblock' | 'reply';
 
 /** All trigger types (API filters, UI). */
-export const TRIGGER_TYPES = ['source', 'schedule', 'manual', 'unblock'] as const satisfies readonly TriggerType[];
+export const TRIGGER_TYPES = ['source', 'schedule', 'manual', 'unblock', 'reply'] as const satisfies readonly TriggerType[];
+
+/**
+ * Lifecycle runs (WI-30 `unblock`, WI-39 `reply`): no worker, no workspace,
+ * not cancellable, not counted towards `max_concurrent` and not part of `run.last_*`.
+ */
+export const LIFECYCLE_TRIGGERS = ['unblock', 'reply'] as const satisfies readonly TriggerType[];
+
+/** True for the triggers of lifecycle runs (see {@link LIFECYCLE_TRIGGERS}). */
+export function isLifecycleTrigger(trigger: string): trigger is (typeof LIFECYCLE_TRIGGERS)[number] {
+  return (LIFECYCLE_TRIGGERS as readonly string[]).includes(trigger);
+}
 
 /**
  * Lifecycle hooks configured as action lists, in declaration order (Spec §10;
- * `on_error` since WI-17; `on_retry_block`/`on_retry_unblock` since WI-30).
+ * `on_error` since WI-17; `on_retry_block`/`on_retry_unblock` since WI-30;
+ * `on_reply` since WI-39).
  * Named-outcome hooks (`on_result.<outcome>`) are configured as a map and are
  * not part of this list.
  */
@@ -170,6 +184,7 @@ export const HOOK_NAMES = [
   'on_error',
   'on_retry_block',
   'on_retry_unblock',
+  'on_reply',
 ] as const;
 
 /**
@@ -268,8 +283,15 @@ export function selectCompletionHook(
   return hooks.on_error !== undefined ? 'on_error' : specific;
 }
 
-/** Lifecycle action types available in V1 (Spec §10). */
-export const ACTION_TYPES = ['source.update', 'source.comment', 'shell'] as const;
+/** Lifecycle action types (Spec §10; `notify` since WI-39). */
+export const ACTION_TYPES = ['source.update', 'source.comment', 'shell', 'notify'] as const;
+
+/**
+ * Internal journal action type (WI-39): the configured `reply_check` of a
+ * workflow, journaled as the first action of `on_reply`. Not configurable as
+ * a list action.
+ */
+export const REPLY_CHECK_ACTION_TYPE = 'reply_check';
 
 /** A lifecycle action type. */
 export type ActionType = (typeof ACTION_TYPES)[number];
@@ -300,11 +322,83 @@ export const DEFAULT_NOTIFICATION_EVENTS = ['retry_block_created', 'lifecycle_ac
 export type NotificationEventType = (typeof NOTIFICATION_EVENT_TYPES)[number];
 
 /**
+ * Notifications created explicitly (WI-39) and delivered to exactly one
+ * channel; never filtered by `notifications.on` or a channel's `on`:
+ * `workflow_notify` (lifecycle action `notify`), `workflow_reminder`
+ * (`remind_after`) and `reply_feedback` (answer in the thread when a reply
+ * was rejected or failed).
+ */
+export const EXPLICIT_NOTIFICATION_TYPES = ['workflow_notify', 'workflow_reminder', 'reply_feedback'] as const;
+
+/** Type of a persisted notification: an orchestrator event or an explicit message. */
+export type NotificationType = NotificationEventType | (typeof EXPLICIT_NOTIFICATION_TYPES)[number];
+
+/**
  * Sink for critical orchestrator events. Implementations persist and deliver
  * asynchronously; `notify` must never block or throw into orchestration.
  */
 export interface Notifier {
   notify(type: NotificationEventType, payload: Record<string, unknown>): void;
+}
+
+/** The part of a recorded chat reply the chat side needs (WI-39). */
+export interface ChatReplyRef {
+  id: number;
+  channelId: string;
+  chatChannel: string;
+  ts: string;
+  threadId: number | null;
+  workflowId: string;
+  itemKey: string;
+  userId: string;
+}
+
+/** Final outcome of a reply (WI-39). */
+export type ReplyOutcome = 'done' | 'rejected' | 'failed';
+
+/**
+ * Chat side of reply runs (WI-39), implemented by the notifications
+ * component: author details when the run starts and the feedback when it
+ * ends (reactions, a short answer in the thread). Best effort, never throws.
+ */
+export interface ChatReplyFeedback {
+  /** Display name (`users.info`) and permalink of the reply; `null` where unknown. */
+  describe(reply: ChatReplyRef): Promise<{ userName: string | null; permalink: string | null }>;
+  /** The reply was processed (✅) or rejected/failed (❌ plus a short answer without internals). */
+  finished(reply: ChatReplyRef, outcome: ReplyOutcome, detail: string | null, runId: string | null): void;
+}
+
+/** A message of the lifecycle action `notify` (WI-39), see {@link ChatNotifier}. */
+export interface WorkflowMessage {
+  /** Idempotency key (run + journaled action): the same key never creates a second message. */
+  dedupeKey: string;
+  /** Configured channel ID (`notifications.channels[].id`, type `slack`). */
+  channelId: string;
+  workflowId: string;
+  workflowName: string;
+  runId: string;
+  /** Item of the run; `null` = top-level message without thread (workflows without item). */
+  item: { sourceId: string; key: string; url: string | null; title: string | null } | null;
+  /** Rendered text (plain text; the channel escapes it). */
+  text: string;
+  /** `item` = thread of (workflow, item), `new` = a new thread. */
+  thread: 'item' | 'new';
+  /** One reminder in the thread after `afterMs` if `filter` (expanded) then matches; `null` filter = always. */
+  reminder?: { afterMs: number; filter: FilterNode | null } | null;
+}
+
+/**
+ * Records explicit chat messages (WI-39, lifecycle action `notify`).
+ * Synchronous (SQLite only, never network I/O); delivery is asynchronous.
+ */
+export interface ChatNotifier {
+  /**
+   * Record the message and its delivery. Idempotent per `dedupeKey`
+   * (`created: false` returns the existing notification).
+   *
+   * @throws OrchestratorError `notify_channel_unknown` / `notify_channel_type` (permanent)
+   */
+  enqueueMessage(message: WorkflowMessage): { notificationId: number; created: boolean };
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +711,10 @@ export interface ActionEffect {
   /** `shell`: exit status (`null` when terminated by a signal / not started). */
   exitCode?: number | null;
   signal?: string | null;
+  /** `notify` (WI-39): the notification created for the channel (delivered asynchronously). */
+  notification?: { id: number; channel: string };
+  /** `reply_check` (WI-39): the reply was rejected (nothing else ran). */
+  rejected?: boolean;
 }
 
 /** Outcome of {@link SourceAdapter.applyUpdate}. */

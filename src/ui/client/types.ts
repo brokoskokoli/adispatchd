@@ -98,6 +98,8 @@ export interface Block {
 }
 
 export interface RunDetail extends RunSummary {
+  /** Chat reply processed by a reply run (WI-39); never its text. */
+  reply?: ReplyView | null;
   lockKey: string | null;
   parameters: Record<string, unknown> | null;
   command: { command: string | null; args: unknown[]; configured?: boolean } | null;
@@ -477,6 +479,35 @@ export interface Notification {
   createdAt: string;
   deliveredAt: string | null;
   deliveries: Array<{ channelId: string; state: string; attempts: number; lastError: string | null; lastStatus: number | null; nextAttemptAt: string | null; deliveredAt: string | null }>;
+}
+
+/** Status of a notification channel (`GET /api/v1/notifications/channels`, WI-39). */
+export interface ChannelStatus {
+  id: string;
+  type: 'webhook' | 'slack';
+  channel: string | null;
+  replies: boolean;
+  state: 'connecting' | 'connected' | 'disconnected' | 'stopped' | 'disabled' | null;
+  since: string | null;
+  lastConnectedAt: string | null;
+  lastError: string | null;
+  nextAttemptAt: string | null;
+  allowedUsers: number;
+}
+
+/** A chat reply of a reply run (WI-39; never the text). */
+export interface ReplyView {
+  id: number;
+  channelId: string;
+  chatChannel: string;
+  ts: string;
+  userId: string;
+  userName: string | null;
+  permalink: string | null;
+  status: 'pending' | 'running' | 'done' | 'rejected' | 'failed';
+  reason: string | null;
+  runId: string | null;
+  receivedAt: string;
 }
 
 /** An artifact (`GET /api/v1/artifacts`, WI-35). */

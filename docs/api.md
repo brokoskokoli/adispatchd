@@ -180,6 +180,7 @@ Routen geprüft; eine neue Route ohne Eintrag in `src/api/roles.ts` lässt sich 
 | `GET /api/v1/dashboard/info` | viewer | – |
 | `POST /api/v1/dashboard/info/:id/refresh` | operator | – |
 | `GET /api/v1/notifications` | viewer | – |
+| `GET /api/v1/notifications/channels` | viewer | – |
 | `POST /api/v1/notifications/:id/retry` | operator | – |
 | `GET /api/v1/items/:source/:item/history` | viewer | – |
 | `GET /api/v1/items/:source/:item/github-events` | viewer | – |
@@ -218,7 +219,7 @@ mit `auth.mode: none` wie bisher ohne Einschränkung. `admin` umfasst alles von 
 | 403 | CSRF-/Origin-Codes (s. o.), `forbidden` (Rolle zu niedrig), `login_not_allowed`, `control_token_not_allowed` (WI-26), `ui_actions_disabled`, `user_login_required`, `identity_not_allowed` (WI-27) |
 | 421 | `host_not_allowed` (Host-Allowlist) |
 | 404 | `not_found`, `config_unknown_workflow`, `manual_item_not_found`, `view_not_found`, `source_not_found`, `item_not_found`, `github_not_found` (WI-27), `artifact_not_found`, `artifact_file_not_found` (WI-35) |
-| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27), `block_run_active`, `unblock_run_active` (WI-30), `artifact_in_use` (WI-35) |
+| 409 | `lock_conflict`, `run_not_active`, `run_not_cancellable`, `run_not_controlled`, `run_not_recovery_pending`, `run_already_started`, `lifecycle_busy`, `lifecycle_not_retryable`, `invalid_transition`, `duplicate_comment` (WI-27), `block_run_active`, `unblock_run_active` (WI-30), `artifact_in_use` (WI-35), `reply_pending` (WI-39: eine Antwort im Slack-Thread des Items wartet auf ihren `on_reply`-Run) |
 | 413 | `artifact_too_large` (Ordner zu groß für einen `.zip`-Download, WI-35) |
 | 422 | `config_invalid` (Reload abgelehnt; aktive Konfiguration bleibt), `github_rejected` (WI-27) |
 | 429 | `too_many_attempts` (Login, WI-26), `rate_limited` (Info-Refresh), `ui_actions_throttled`, `github_rate_limited` (WI-27) |
@@ -245,7 +246,8 @@ mit `auth.mode: none` wie bisher ohne Einschränkung. `admin` umfasst alles von 
                  "lastPlanningStep": { "startedAt": "…", "finishedAt": "…", "skipped": null, "startedRunIds": [] } },
   "limits": { "maxConcurrent": 5, "configuredMaxConcurrent": 5, "override": null },
   "usage": { "activeRuns": 2, "supervisedRuns": 2, "recoveryPending": 0, "byWorkflow": { "coder": { "active": 2, "max": 2 } } },
-  "counts": { "activeBlocks": 1, "failedActions": 0, "notifications": { "pending": 0, "delivered": 3, "failed": 1 } },
+  "counts": { "activeBlocks": 1, "failedActions": 0, "notifications": { "pending": 0, "delivered": 3, "failed": 1 },
+              "replies": { "pending": 0, "running": 0, "done": 4, "rejected": 1, "failed": 0 } },
   "config": { "version": 2, "hash": "…", "loadedAt": "…", "configDir": "/etc/adispatchd" },
   "server": { "host": "127.0.0.1", "port": 8787, "loopback": true },
   "hub": { "workspace": "coder", "reachable": true, "paused": false, "active": 3, "max": 6 },
@@ -358,13 +360,13 @@ ausführt → `409 unblock_run_active` (Meldung nennt den Run).
 
 | Methode | Pfad | Antwort |
 |---|---|---|
-| GET | `/api/v1/runs?workflow=<id>[,<id>…]&status=running,completed&trigger=source\|schedule\|manual\|unblock&item=<itemKey>&result=success\|failure&active=true\|false&before=<ISO>&limit=50&offset=0` | `{"runs":[RunSummary],"total","limit","offset"}` (neueste zuerst, `limit ≤ 500`; `workflow` seit 0.8.0 auch als kommagetrennte Liste = einer davon) |
+| GET | `/api/v1/runs?workflow=<id>[,<id>…]&status=running,completed&trigger=source\|schedule\|manual\|unblock\|reply&item=<itemKey>&result=success\|failure&active=true\|false&before=<ISO>&limit=50&offset=0` | `{"runs":[RunSummary],"total","limit","offset"}` (neueste zuerst, `limit ≤ 500`; `workflow` seit 0.8.0 auch als kommagetrennte Liste = einer davon) |
 | GET | `/api/v1/runs/:id` | RunDetail |
 | GET | `/api/v1/runs/:id/events?after=<sequence>&limit=1000` | `{"events":[RunEvent],"hasMore","nextAfter"}` |
 | GET | `/api/v1/runs/:id/logs?stream=stdout\|stderr&offset=<byte>&limit=<bytes>` bzw. `&tail=<bytes>` | LogPage |
 | GET | `/api/v1/runs/:id/kept` | KeptListing – gesicherte Dateien (`execute.keep`, WI-22) |
 | GET | `/api/v1/runs/:id/kept/<pfad>` | Download einer gesicherten Datei (`<pfad>` relativ zu `kept/`, Segmente URL-kodiert); `400 invalid_path`, `404 not_found` |
-| POST | `/api/v1/runs/:id/cancel` `{"reason"?}` | `202 {"runId","status":"cancelling","run"}`; `409` wenn beendet/nicht abbrechbar (auch Lifecycle-Runs mit Trigger `unblock`) |
+| POST | `/api/v1/runs/:id/cancel` `{"reason"?}` | `202 {"runId","status":"cancelling","run"}`; `409` wenn beendet/nicht abbrechbar (auch Lifecycle-Runs mit Trigger `unblock` oder `reply`) |
 | POST | `/api/v1/runs/:id/recovery/retry` `{"assumeGone"?: bool}` | `202` – Recovery eines `recovery_pending`-Runs erneut versuchen (`assumeGone: true` = Operator bestätigt, Prozess ist weg); `409 run_not_recovery_pending` |
 
 `RunSummary`:
@@ -386,13 +388,18 @@ Ergebnis aus der Ergebnisdatei (`outcome`, ab 0.3.0; `null` ohne bzw. bei techni
 `retryBlockHook` (ab 0.6.0): der Run hat einen Retry-Block erzeugt, und `on_retry_block` läuft nach dem Abschluss-Hook.
 `triggerType` ist `source`, `schedule`, `manual` oder (ab 0.6.0) `unblock` – Lifecycle-Run, der beim Aufheben eines
 Retry-Blocks nur `on_retry_unblock` ausführt (kein Worker, kein Workspace; `completed` + `success`/`failure` je nach
-Kette; nicht abbrechbar).
+Kette; nicht abbrechbar), oder (ab 0.11.0) `reply` – Lifecycle-Run einer Antwort im Slack-Thread des Items, der
+`reply_check` (falls konfiguriert) und `on_reply` ausführt (gleiche Eigenschaften; `failure` auch bei abgelehnter
+Antwort).
 
 `RunDetail` = RunSummary + `lockKey, parameters, command {command, args}, workingDirectory, workspacePath, pid,
 result` (geparste Ergebnisdatei), `error` (technische Diagnose), `input` (`context.json`, Worker-Input; max. 1 MiB) /
 `inputError`, `resultFile` / `resultFileError` (Rohdatei), `actions` (Journal inkl. `attemptsDetail` und – seit 0.9.0 – `effect`, der strukturierten Wirkung wie im Item-Verlauf; ältere Einträge `null`), `events` (max. 500,
 `eventsTruncated`), `logs {stdout:{size, truncated}, stderr:{…}}`, `block` (aktiver Block des Scopes), `retryBlock`
 (ab 0.6.0: bei Trigger `unblock` der aufgehobene Block, sonst der von diesem Run erzeugte Block oder `null`),
+`reply` (ab 0.11.0, nur Trigger `reply`, sonst `null`): `{id, channelId, chatChannel, ts, threadId, workflowId, itemKey,
+userId, userName, permalink, status: pending|running|done|rejected|failed, reason, runId, receivedAt, updatedAt}` – nie
+der Text der Antwort,
 `kept` (`{files, bytes, skippedCount, message, error}` aus dem Event `run.kept_files`, sonst `null`),
 `artifacts` (ab 0.10.0: `{created: [Artifact], report, input}` – `created` = vom Run erzeugte Artefakte, `report` = Payload des Events
 `run.artifacts` (`message, created, warnings, bytes`) oder `null`, `input` = bei einem Artefakt-Item `{id, exists, artifact}`, sonst `null`), `supervised`,
@@ -657,8 +664,8 @@ Antworten passieren den Secret-Redactor; Kommentartexte werden weder gespeichert
   Cursor für die nächste (ältere) Seite (`before=<nextBefore>`), `null` = keine weitere. Die Zeitleiste umfasst die
   letzten 1 000 Runs des Items. Jeder Eintrag hat `key, kind, at, cursor, runId, workflowId, workflowName` und je
   `kind`:
-  - `run_started` – `trigger` (`source`, `schedule`, `manual`, `unblock`), `user` (wer manuell gestartet hat – nur mit
-    Anmeldung bekannt – bzw. wer den Block eines `unblock`-Runs entfernt hat), `parameters`, `scheduledFor`,
+  - `run_started` – `trigger` (`source`, `schedule`, `manual`, `unblock`, `reply`), `user` (wer manuell gestartet hat – nur mit
+    Anmeldung bekannt –, wer den Block eines `unblock`-Runs entfernt hat bzw. wer in Slack geantwortet hat), `parameters`, `scheduledFor`,
     `reservedAt`, `startedAt`, `active`;
   - `run_finished` – `status` (technisch), `result`, `outcome`, `message` (`result.message`), `reason`, `durationMs`,
     `lifecycleStatus`;
@@ -666,12 +673,16 @@ Antworten passieren den Secret-Redactor; Kommentartexte werden weder gespeichert
     `on_retry_unblock`, …) und `actions: [{id, name, type, status, attempts, effect, effectSource, error, updatedAt}]`.
     `effect` = Wirkung: `labelsAdded`, `labelsRemoved`, `projectFields: [{name, from?, to}]` (alt → neu; `from` fehlt,
     wenn der alte Wert unbekannt ist), `projectItemAdded`, `unchanged` (`source.update`); `comment: {id, url,
-    reconciled?}` (`source.comment`); `exitCode`/`signal` (`shell`). `effectSource`: `recorded` (seit 0.9.0 strukturiert
+    reconciled?}` (`source.comment`); `exitCode`/`signal` (`shell`); `notification: {id, channel}` (`notify`, ab 0.11.0);
+    `rejected: true` (`reply_check` hat abgelehnt). `effectSource`: `recorded` (seit 0.9.0 strukturiert
     gespeichert, Schema v6) oder `journal` (ältere Einträge, aus den Journal-Events abgeleitet, alte Werte unbekannt);
   - `block_created` – `blockId, reason, failureCount, lastStatus, active`; `block_cleared` – `blockId, clearedBy,
     clearedRunId` (Lifecycle-Run, WI-30);
   - `ui_action` – `actionId, actor, actorVia, identity, action` (`comment`/`labels`/`project`), `result, errorCode,
-    errorMessage, effect` (wie oben, aus dem Audit).
+    errorMessage, effect` (wie oben, aus dem Audit);
+  - `reply` (ab 0.11.0) – Antwort in Slack: `replyId, user` (Anzeigename, sonst Slack-ID), `userId, channelId, status`
+    (`pending`/`running`/`done`/`rejected`/`failed`), `reason, permalink`; `runId` = Lifecycle-Run (Trigger `reply`).
+    Der Text der Antwort wird nie geliefert (und nach der Verarbeitung nicht mehr gespeichert).
 - `retentionGap` – `{deletedRuns, newestDeletedAt}`, wenn die Aufbewahrung (`retention`) Runs des Items gelöscht hat
   (gezählt seit 0.9.0); `deletedRuns: null` bei einem indirekten Hinweis (Retry-Block, dessen Run fehlt); sonst `null`.
 - `active` – aktive Runs und aktive Retry-Blocks des Items.
@@ -742,8 +753,23 @@ werden mit Benutzername im Daemon-Log bzw. (Start) im Run-Audit protokolliert.
 
 | Methode | Pfad | Antwort |
 |---|---|---|
-| GET | `/api/v1/notifications?state=pending\|delivered\|failed&limit=&offset=` | `{"notifications":[{id, eventType, payload, deliveryState, attempts, lastError, nextAttemptAt, createdAt, deliveredAt, deliveries:[{channelId, state, attempts, lastError, lastStatus, nextAttemptAt, deliveredAt}]}], "counts"}` |
+| GET | `/api/v1/notifications?state=pending\|delivered\|failed&limit=&offset=` | `{"notifications":[{id, eventType, payload, deliveryState, attempts, lastError, nextAttemptAt, createdAt, deliveredAt, deliveries:[{channelId, state, attempts, lastError, lastStatus, nextAttemptAt, deliveredAt, threadId, messageTs}]}], "counts", "channels":[ChannelStatus]}` |
+| GET | `/api/v1/notifications/channels` | `{"channels":[ChannelStatus]}` (ab 0.11.0) |
 | POST | `/api/v1/notifications/:id/retry` | `202 {"notification","requeued"}` – fehlgeschlagene Zustellungen erneut einreihen |
+
+`ChannelStatus` (ab 0.11.0) je konfiguriertem Kanal: `{id, type: webhook|slack, channel, replies, state, since,
+lastConnectedAt, lastError, nextAttemptAt, allowedUsers}` – `channel` = Slack-Channel-ID, `replies` = Socket Mode
+konfiguriert (`app_token_env`), `state` = `connecting`, `connected`, `disconnected` (mit `lastError`, redigiert, und
+`nextAttemptAt` des nächsten Verbindungsversuchs), `stopped`, `disabled` (nur Senden) bzw. `null` bei Webhooks;
+`allowedUsers` = Anzahl. Tokens erscheinen nie.
+
+`eventType` (ab 0.11.0) zusätzlich zu den Ereignissen: `workflow_notify` (Action `notify`; `payload: {workflowId,
+workflowName, runId, itemKey, sourceId, itemUrl, itemTitle, thread, text}`), `workflow_reminder` (Erinnerung von
+`remind_after`; Payload des `notify` plus `reminderId`, `notificationId`) und `reply_feedback` (Antwort im Thread auf eine
+abgelehnte/gescheiterte Antwort; `{workflowId, itemKey, replyId, runId, text}`). Sie haben genau eine Zustellung auf den
+genannten Slack-Kanal; `threadId`/`messageTs` der Zustellung nennen den Thread und das `ts` der geposteten Nachricht.
+Slack-Zustellung: `chat.postMessage` (Kopfnachricht des Threads beim ersten Mal), Backoff wie beim Webhook, `429` mit
+`Retry-After` verschiebt den nächsten Versuch mindestens um diese Zeit (auch beim Webhook).
 
 Webhook-Body (JSON-POST, Timeout 10 s, bis zu 6 Versuche mit Backoff 5 s/30 s/2 min/10 min/30 min, 4xx außer 408/429 nicht wiederholt):
 `{"source":"adispatchd","id":1,"event":"retry_block_created","createdAt":"…","text":"[adispatchd] …","payload":{…}}`
@@ -772,6 +798,7 @@ data: {"type":"run.event","time":"2026-10-16T…","id":1234,"payload":{…}}
 | `system.status` | nein | `{ready, paused, draining, stopping, activeRuns}` |
 | `system.ready` | nein | `{ready:true}` nach Recovery |
 | `notification` | nein | Notification inkl. `deliveries` (bei Anlage und jedem Zustellversuch) |
+| `notification.channels` | nein | `{channels: [ChannelStatus]}` bei jeder Änderung des Socket-Mode-Zustands (ab 0.11.0) |
 | `config.reloaded` | nein | `{version, hash, changed, diff, resetOverrides}` |
 | `retention.finished` | nein | `{finishedAt, deletedRuns, errors}` |
 | `system.metrics` | nein | neuester Messpunkt des Ressourcen-Monitors (Sample wie bei `GET /api/v1/system/metrics`), je Intervall; nicht bei `?run=` |

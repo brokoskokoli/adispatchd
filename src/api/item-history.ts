@@ -34,7 +34,7 @@ import {
 } from '../core/index.js';
 import type { ConfigManager } from '../config/index.js';
 import { LIFECYCLE_ACTION_EVENT, updateEffect } from '../lifecycle/index.js';
-import type { BlockRecord, Repositories, RunActionRecord, RunRecord, UiActionRecord } from '../persistence/index.js';
+import type { BlockRecord, ReplyRecord, Repositories, RunActionRecord, RunRecord, UiActionRecord } from '../persistence/index.js';
 import { ApiError } from './errors.js';
 import { toRunSummary, type RunSummary } from './serialize.js';
 import { githubError, RateLimiter } from './ui-actions.js';
@@ -61,7 +61,7 @@ const USER_ACTION_EVENT = 'audit.user_action';
 // Response shapes
 
 /** Kinds of timeline entries (filter checkboxes in the UI). */
-export const HISTORY_ENTRY_KINDS = ['run_started', 'run_finished', 'hook', 'block_created', 'block_cleared', 'ui_action'] as const;
+export const HISTORY_ENTRY_KINDS = ['run_started', 'run_finished', 'hook', 'block_created', 'block_cleared', 'ui_action', 'reply'] as const;
 export type HistoryEntryKind = (typeof HISTORY_ENTRY_KINDS)[number];
 
 /** One action of a hook chain in the timeline. */
@@ -160,7 +160,20 @@ export interface UiActionEntry extends EntryBase {
   effect: ActionEffect | null;
 }
 
-export type HistoryEntry = RunStartedEntry | RunFinishedEntry | HookEntry | BlockCreatedEntry | BlockClearedEntry | UiActionEntry;
+/** Reply in a chat thread (WI-39): who answered and what became of it – never the text. */
+export interface ReplyEntry extends EntryBase {
+  kind: 'reply';
+  replyId: number;
+  /** Display name (best effort), else the chat user ID. */
+  user: string;
+  userId: string;
+  channelId: string;
+  status: ReplyRecord['status'];
+  reason: string | null;
+  permalink: string | null;
+}
+
+export type HistoryEntry = RunStartedEntry | RunFinishedEntry | HookEntry | BlockCreatedEntry | BlockClearedEntry | UiActionEntry | ReplyEntry;
 
 /** Retention hint of an item. */
 export interface RetentionGap {
@@ -187,7 +200,7 @@ export interface ItemHistoryData {
 // ---------------------------------------------------------------------------
 // Building the history
 
-const RANK: Record<HistoryEntryKind, number> = { run_started: 0, hook: 1, block_created: 2, run_finished: 3, block_cleared: 4, ui_action: 5 };
+const RANK: Record<HistoryEntryKind, number> = { reply: 0, run_started: 1, hook: 2, block_created: 3, run_finished: 4, block_cleared: 5, ui_action: 6 };
 
 /** Cursor of an entry: sortable `at|rank|key` (entries are ordered by it, newest first). */
 function cursorOf(at: string, kind: HistoryEntryKind, key: string): string {
@@ -250,6 +263,9 @@ export function buildItemHistory(repos: Repositories, itemKey: string, options: 
   const clearedBlockOfRun = new Map<string, BlockRecord>();
   for (const b of blocks) if (b.clearedRunId) clearedBlockOfRun.set(b.clearedRunId, b);
   const uiActions = repos.uiActions.list({ itemKey, limit: 500 }).actions;
+  const replies = repos.replies.listForItem(itemKey);
+  const replyOfRun = new Map<string, ReplyRecord>();
+  for (const r of replies) if (r.runId) replyOfRun.set(r.runId, r);
 
   const entries: HistoryEntry[] = [];
   const base = (kind: HistoryEntryKind, key: string, at: string, run: RunRecord | null, workflowId: string | null = run?.workflowId ?? null) => ({
@@ -268,7 +284,15 @@ export function buildItemHistory(repos: Repositories, itemKey: string, options: 
       ...base('run_started', `run:${run.id}:start`, run.createdAt, run),
       kind: 'run_started',
       trigger: run.triggerType,
-      user: run.triggerType === 'unblock' ? (clearedBlockOfRun.get(run.id)?.clearedBy ?? null) : (startedBy.get(run.id) ?? null),
+      user:
+        run.triggerType === 'unblock'
+          ? (clearedBlockOfRun.get(run.id)?.clearedBy ?? null)
+          : run.triggerType === 'reply'
+            ? (() => {
+                const r = replyOfRun.get(run.id);
+                return r ? (r.userName ?? r.userId) : null;
+              })()
+            : (startedBy.get(run.id) ?? null),
       parameters: run.parameters,
       scheduledFor: run.scheduledFor,
       reservedAt: run.createdAt,
@@ -357,6 +381,21 @@ export function buildItemHistory(repos: Repositories, itemKey: string, options: 
       errorCode: a.errorCode,
       errorMessage: a.errorMessage,
       effect: uiActionEffect(a),
+    });
+  }
+  for (const r of replies) {
+    const run = r.runId ? (runById.get(r.runId) ?? null) : null;
+    entries.push({
+      ...base('reply', `reply:${r.id}`, r.receivedAt, run, r.workflowId),
+      runId: r.runId,
+      kind: 'reply',
+      replyId: r.id,
+      user: r.userName ?? r.userId,
+      userId: r.userId,
+      channelId: r.channelId,
+      status: r.status,
+      reason: r.reason,
+      permalink: r.permalink,
     });
   }
   entries.sort((x, y) => (x.cursor < y.cursor ? 1 : x.cursor > y.cursor ? -1 : 0));

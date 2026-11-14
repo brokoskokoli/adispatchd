@@ -14,6 +14,7 @@ import type {
   HooksConfig,
   IdentityConfig,
   LifecycleActionConfig,
+  NotificationChannelConfig,
   ParameterDefinition,
   ParameterOptionsSource,
   RetryPolicy,
@@ -86,17 +87,30 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
       cleanupIntervalMs: raw.retention.cleanup_interval,
       uiActionsMs: raw.retention.ui_actions,
       artifactsMs: raw.retention.artifacts,
+      notificationThreadsMs: raw.retention.notification_threads,
     },
     notifications: {
       on: [...raw.notifications.on],
-      channels: raw.notifications.channels.map((channel, index) => ({
-        id: channel.id ?? `channel-${index + 1}`,
-        type: channel.type,
-        url: channel.url ?? null,
-        urlEnv: channel.url_env ?? null,
-        headersEnv: { ...channel.headers_env },
-        on: [...(channel.on ?? raw.notifications.on)],
-      })),
+      channels: raw.notifications.channels.map((channel, index): NotificationChannelConfig =>
+        channel.type === 'slack'
+          ? {
+              id: channel.id ?? `channel-${index + 1}`,
+              type: 'slack',
+              botTokenEnv: channel.bot_token_env,
+              appTokenEnv: channel.app_token_env ?? null,
+              channel: channel.channel,
+              allowedUsers: [...channel.allowed_users],
+              on: [...(channel.on ?? raw.notifications.on)],
+            }
+          : {
+              id: channel.id ?? `channel-${index + 1}`,
+              type: channel.type,
+              url: channel.url ?? null,
+              urlEnv: channel.url_env ?? null,
+              headersEnv: { ...channel.headers_env },
+              on: [...(channel.on ?? raw.notifications.on)],
+            },
+      ),
     },
     container: { engine: raw.container.engine },
     monitoring: {
@@ -228,6 +242,8 @@ function normalizeAction(
   index: number,
   defaults: RetryPolicy,
   configDir: string,
+  expand: FilterExpander,
+  at: IssuePath,
 ): LifecycleActionConfig {
   const common = {
     id: raw.id ?? `${hook}.${index}`,
@@ -257,6 +273,16 @@ function normalizeAction(
         timeoutMs: raw.timeout,
         env: { ...raw.env },
         secrets: normalizeSecrets(raw.secrets),
+      };
+    case 'notify':
+      return {
+        ...common,
+        type: 'notify',
+        channel: raw.channel,
+        message: raw.message,
+        thread: raw.thread,
+        ...(raw.remind_after !== undefined ? { remindAfterMs: raw.remind_after } : {}),
+        ...(raw.remind_while !== undefined ? { remindWhile: expand(raw.remind_while, [...at, 'remind_while']) } : {}),
       };
   }
 }
@@ -323,17 +349,17 @@ export function normalizeWorkflow(
   /** IDs of all configured sources (default source of `options_from.github`, WI-31). */
   sourceIds: readonly string[] = [],
 ): WorkflowConfig {
-  const normalizeList = (hook: HookName, actions: readonly RawAction[]): LifecycleActionConfig[] =>
-    actions.map((action, i) => normalizeAction(action, hook, i, global.lifecycle.actionRetry, configDir));
+  const normalizeList = (hook: HookName, actions: readonly RawAction[], base: IssuePath): LifecycleActionConfig[] =>
+    actions.map((action, i) => normalizeAction(action, hook, i, global.lifecycle.actionRetry, configDir, expand, [...base, i]));
   const hooks: Record<string, LifecycleActionConfig[]> = {};
   // Hooks that are not configured stay absent (WI-17: "defined" vs. "not given").
   for (const hook of HOOK_NAMES) {
     const actions = raw[hook];
-    if (actions !== undefined) hooks[hook] = normalizeList(hook, actions);
+    if (actions !== undefined) hooks[hook] = normalizeList(hook, actions, [hook]);
   }
   for (const [outcome, actions] of Object.entries(raw.on_result ?? {})) {
     const hook = resultHookName(outcome);
-    hooks[hook] = normalizeList(hook, actions);
+    hooks[hook] = normalizeList(hook, actions, ['on_result', outcome]);
   }
   const parameters: Record<string, ParameterDefinition> = {};
   // Default source of `options_from.github` (WI-31): the only trigger source, else the only configured source.
@@ -394,6 +420,9 @@ export function normalizeWorkflow(
     execute: normalizeExecute(exec, global, configDir),
     retry: { maxTechnicalFailures: raw.retry.max_technical_failures },
     hooks: hooks as unknown as HooksConfig,
+    ...(raw.reply_check
+      ? { replyCheck: { command: resolveCommand(configDir, raw.reply_check.command), args: [...raw.reply_check.args], timeoutMs: raw.reply_check.timeout } }
+      : {}),
   };
 }
 

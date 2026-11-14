@@ -66,6 +66,8 @@ describe('hub documentation', () => {
     expect(site).toContain('Ein Hub für mehrere Projekte');
     expect(read('docs/manual-tests/hub-systemd.md')).toContain('service install --hub');
     expect(read('docs/configuration-reference.md')).toContain('service install --hub');
-    expect(read('CHANGELOG.md')).toMatch(new RegExp(`## \\[${APP_VERSION.replace(/\./g, '\\.')}\\] – \\d{4}-\\d{2}-\\d{2}`));
+    // Released: a dated section of the version; in work (version already bumped on the branch): "Unreleased" plans it.
+    const version = APP_VERSION.replace(/\./g, '\\.');
+    expect(read('CHANGELOG.md')).toMatch(new RegExp(`## \\[${version}\\] – \\d{4}-\\d{2}-\\d{2}|## \\[Unreleased\\]\\s+Geplant als ${version}\\b`));
   });
 });

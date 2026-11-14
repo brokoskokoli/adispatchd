@@ -13,6 +13,7 @@ export * from './hub-slots.js';
 export * from './ids.js';
 export * from './logger.js';
 export * from './paths.js';
+export * from './secret-scan.js';
 export * from './template.js';
 export * from './types.js';
 export * from './worker-protocol.js';

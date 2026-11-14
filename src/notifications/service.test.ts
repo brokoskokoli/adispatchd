@@ -199,7 +199,7 @@ describe('NotificationService', () => {
   });
 
   it('never throws from notify, even if persistence fails', () => {
-    const svc = create({ repositories: { notifications: { createWithDeliveries: () => { throw new Error('disk full'); } } as never } });
+    const svc = create({ repositories: { ...p, notifications: { createWithDeliveries: () => { throw new Error('disk full'); } } as never } });
     expect(() => svc.notify('recovery_failed', {})).not.toThrow();
     expect(logger.records.some((r) => r.msg === 'failed to record notification')).toBe(true);
   });

@@ -131,7 +131,7 @@ Konfigurationsänderungen wirken **nur** durch einen manuellen Reload (`adispatc
 | `scheduler.max_concurrent` | sofort |
 | `workspace.*`, `lifecycle.action_retry` | für neu reservierte Runs (Snapshot) |
 | `retention.*` | ab dem nächsten Retention-Durchlauf; `cleanup_interval` bestimmt den Timer nach jedem Durchlauf |
-| `notifications.*` | sofort für neue Benachrichtigungen; offene Zustellungen an entfernte Kanäle scheitern endgültig |
+| `notifications.*` | sofort für neue Benachrichtigungen; offene Zustellungen an entfernte Kanäle scheitern endgültig. Slack (seit 0.11.0): Socket-Mode-Verbindung nur neu, wenn sich die `app_token_env`-Variablen ändern; Threads entfernter Kanäle bleiben, Antworten darauf werden ignoriert |
 | `sources.yaml`, `identities.yaml` | Adapter/Credentials werden neu aufgebaut, wenn sich etwas geändert hat; entfernte bleiben für laufende Runs verfügbar; `ui_actions` gilt sofort (nächster Request) |
 | Workflows | sofort für Planung/Cron; geänderte Cron-Ausdrücke planen ab „jetzt“; Cache der Workflow-Conditions wird geleert; der angezeigte letzte Condition-Status geänderter/entfernter Workflows wird verworfen |
 | `dashboard.yaml` | sofort: neue und geänderte Kacheln werden gleich abgerufen, unveränderte behalten Wert und Ablaufzeit, entfernte verschwinden (ein laufendes Skript wird beendet) |
@@ -267,9 +267,10 @@ Alle Schlüssel sind optional. Fehlt die Datei, gelten alle Defaults (mit Warnun
 | `retention.max_log_size_per_run` | Größe | `100MB` | | Log-Limit des Haupt-Workers pro Run (stdout+stderr); Überlauf wird markiert. |
 | `retention.cleanup_interval` | Dauer | `24h` | ≥ 1 s | Abstand der Retention-Durchläufe (erster Lauf 60 s nach Bereitschaft). |
 | `retention.ui_actions` | Dauer \| `never` | `365d` | | seit 0.4.0: Audit-Einträge der UI-Aktionen (§3.3 `ui_actions`), unabhängig vom Ergebnis. |
+| `retention.notification_threads` | Dauer \| `never` | `90d` | | seit 0.11.0: Slack-Threads (§3.1 Kanal `slack`) ohne Nachricht seit dieser Dauer werden vergessen; Antworten darauf werden danach ignoriert. Threads mit wartender Antwort, Zustellung oder Erinnerung bleiben. Antworten mit Lifecycle-Run gehen mit dem Run (Run-Retention). |
 | `retention.artifacts` | Dauer \| `never` | `never` | | seit 0.10.0: Artefakte (§3.4.8 `artifacts`) werden gelöscht, wenn sie älter sind. Der Default `never` behält sie, bis sie in der UI/API gelöscht werden. Artefakte, die ein aktiver Run als Item nutzt, bleiben bestehen (der nächste Durchlauf löscht sie). |
 | `notifications.on` | Liste Enum | `retry_block_created`, `lifecycle_action_failed`, `recovery_failed` | dazu (seit 0.6.0) `retry_block_cleared` | global aktivierte Ereignisse. `[]` = keine Benachrichtigungen. `retry_block_cleared` ist nicht im Default (bestehende Konfigurationen bekommen nicht mehr Meldungen) und muss ausdrücklich eingetragen werden. |
-| `notifications.channels` | Liste | `[]` | | Zustellkanäle, siehe unten. |
+| `notifications.channels` | Liste | `[]` | | Zustellkanäle `webhook` und (seit 0.11.0) `slack`, siehe unten. |
 | `container.engine` | Enum | `docker` | `docker`, `podman` | Engine für `execute.type: container` ohne eigenes `engine` (seit 0.3.0, §3.4.8). |
 | `auth.mode` | Enum | `none` | `none`, `password`, `trusted_header` | Anmeldung für Web-UI und API (seit 0.4.0), siehe unten. `none` = keine Anmeldung (Verhalten bis 0.3.0). |
 | `auth.users` | Liste | `[]` | | Benutzer für `mode: password`: `name`, `password_hash_env`, `role`. |
@@ -297,7 +298,7 @@ Absturzes zwischen Kopieren und Eintragen).
 
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
-| `type` | `webhook` | ja | | einziger Kanaltyp in V1 |
+| `type` | `webhook` | ja | | Kanaltyp (daneben seit 0.11.0 `slack`, unten) |
 | `id` | Konfigurations-ID | nein | `channel-<n>` (1-basiert nach Position) | eindeutig innerhalb der Kanäle |
 | `url` | String | genau eines von `url`/`url_env` | | absolute `http(s)`-URL. Wird intern redigiert, kann aber Tokens enthalten → besser `url_env`. |
 | `url_env` | Env-Name | genau eines von `url`/`url_env` | | Umgebungsvariable mit der URL (gelesen bei jeder Zustellung; fehlt sie → Zustellung scheitert endgültig). |
@@ -312,6 +313,111 @@ Zustellung: `POST` mit `content-type: application/json`, Body
 **ohne** `continue_on_error`), `recovery_failed` (Run nach Neustart nicht sicher zuordenbar → `recovery_pending`),
 seit 0.6.0 optional `retry_block_cleared` (Retry-Block aufgehoben; Payload mit `blockId`, `clearedBy`, `clearedAt` und
 `runId` des Lifecycle-Runs oder `null`, §6.4).
+
+Ein Antwortstatus `429` mit `Retry-After` verschiebt den nächsten Versuch mindestens um diese Zeit (seit 0.11.0, für
+Webhook und Slack).
+
+**Kanal `type: slack`** (seit 0.11.0): Nachrichten über die Slack-Web-API (`chat.postMessage`) mit **einem Thread je
+(Workflow, Item)**; Antworten in diesen Threads kommen über **Socket Mode** (ausgehende WebSocket-Verbindung, kein
+offener Port) und lösen den Hook `on_reply` des Workflows aus (§3.4.10). Einrichtung der Slack-App:
+[operations.md](operations.md). Keine zusätzliche Abhängigkeit (Node-eigenes `fetch` und `WebSocket`).
+
+| Schlüssel | Typ | Pflicht | Default | Bedeutung |
+|---|---|---|---|---|
+| `type` | `slack` | ja | | |
+| `id` | Konfigurations-ID | nein | `channel-<n>` | eindeutig innerhalb der Kanäle; `notify` verweist darauf |
+| `bot_token_env` | Env-Name | ja | | Variable mit dem Bot-Token (`xoxb-…`; Scopes `chat:write`, `reactions:write`, `channels:history` bzw. `groups:history`, optional `users:read`) |
+| `app_token_env` | Env-Name | nein | – | Variable mit dem App-Level-Token (`xapp-…`, Scope `connections:write`) für Socket Mode. Ohne → nur Senden, keine Antworten |
+| `channel` | Slack-Channel-ID | ja | | `C…` (öffentlich) oder `G…` (privat), **nicht** der Name (`#team` ist ein Fehler) |
+| `allowed_users` | Liste Slack-User-ID | nein | `[]` | `U…`/`W…`; nur Antworten dieser Personen zählen. Leer/fehlend → keine Antwort zählt (Warnung, wenn `app_token_env` gesetzt ist) |
+| `on` | Liste Enum | nein | `notifications.on` | Orchestrator-Ereignisse für diesen Kanal (wie bei `webhook`) |
+
+- **Tokens nur aus der Umgebung.** `bot_token`/`app_token`/`token` im YAML sind ein Fehler (`Tokens must not be
+  written into config.yaml …`); ein Token-Wert (`xoxb-…`, `xapp-…`) in `*_env` ebenfalls (`Looks like a token …`).
+  Die Werte werden beim gemeinsamen Redactor registriert und erscheinen nie in Logs, Events, API, Datenbank oder
+  Fehlertexten. `bot_token_env` und `app_token_env` müssen verschiedene Variablen nennen.
+- **Thread je (Workflow, Item):** Die erste Nachricht zu einem Item legt den Thread an – Kopfnachricht mit dem
+  Item-Titel als Link, dem Item-Schlüssel und dem Workflow (bei möglichen Antworten mit dem Hinweis „Reply in this
+  thread …“), darunter die Nachricht als erste Antwort. Jede weitere Nachricht dieses Workflows zum Item geht in
+  denselben Thread; `notify` mit `thread: new` beginnt einen neuen (der neueste ist danach der aktuelle).
+  Verschiedene Workflows haben je einen eigenen Thread (Antworten sind workflowgebunden). Nachrichten eines Threads
+  werden **in Reihenfolge** zugestellt: eine Folgenachricht wartet, bis die ältere zugestellt (oder endgültig
+  gescheitert) ist und der Kopf sein `ts` gespeichert hat – kein zweiter Kopf bei gleichzeitigen `notify`; ein
+  Wiederholungsversuch nach teilweisem Erfolg (Kopf gepostet, Antwort nicht) postet den Kopf nicht noch einmal.
+- **Text:** reiner Text; `&`, `<`, `>` werden maskiert (kein `<!channel>`, keine versteckten Links aus Item-Titeln oder
+  Worker-Meldungen). Länger als 39 000 Zeichen wird gekürzt.
+- **Orchestrator-Ereignisse** (`on`) auf einem Slack-Kanal: Text wie beim Webhook (`[adispatchd] …`, ohne Interna und
+  Secrets); hat das Ereignis ein Item (`retry_block_created`, `retry_block_cleared`, `lifecycle_action_failed`,
+  `recovery_failed` eines Item-Runs), landet es im Thread `(Workflow, Item)` (wird bei Bedarf angelegt), sonst als
+  Nachricht im Channel. Eine Antwort darauf läuft durch `on_reply` dieses Workflows.
+- **Zustellung** wie beim Webhook: gespeichert vor dem Senden, Backoff 5 s … 30 min, 6 Versuche, `Retry-After` bei
+  `429`; Slack-Fehler wie `channel_not_found`, `not_in_channel`, `invalid_auth`, `missing_scope` sind endgültig
+  (UI „Retry“ stellt erneut zu). Fehlt die Bot-Token-Variable → endgültig gescheitert mit ihrem Namen.
+- **Socket Mode:** eine Verbindung je `app_token_env` (mehrere Kanäle derselben App teilen sie). `hello` → verbunden;
+  `disconnect` → sofort neu verbinden; Abbruch → neu verbinden mit Backoff 1 s, 2 s, 4 s … 60 s. Jedes Ereignis wird
+  erst **gespeichert**, dann bestätigt (deutlich unter Slacks 3 s), dann verarbeitet; scheitert das Speichern, wird
+  nicht bestätigt (Slack stellt erneut zu). Zustand je Kanal: `GET /api/v1/notifications/channels`, UI
+  Config → Notifications.
+- **Eine Slack-App je Instanz** (Workspace eines Hubs): Slack verteilt die Ereignisse einer App auf **eine** ihrer
+  offenen Socket-Verbindungen – teilen sich zwei Instanzen eine App, verliert jede einen Teil der Antworten. Die
+  Validierung kann das nicht erkennen.
+- **Reload:** Kanaländerungen wirken nach dem Reload; die Socket-Verbindung wird nur neu aufgebaut, wenn sich die
+  Menge der `app_token_env`-Variablen ändert (Channel-ID und `allowed_users` gelten sofort). Entfernt man einen
+  Kanal, bleiben seine Threads gespeichert, Antworten darauf werden ignoriert (Log).
+
+```yaml
+# example: slack
+# extends: github
+# file: config.yaml
+scheduler:
+  polling_interval: 60s
+notifications:
+  on: [retry_block_created, lifecycle_action_failed, recovery_failed]
+  channels:
+    - id: team
+      type: slack
+      bot_token_env: SLACK_BOT_TOKEN        # xoxb-…: chat:write, reactions:write, channels:history bzw. groups:history
+      app_token_env: SLACK_APP_TOKEN        # xapp-…: connections:write (Socket Mode); ohne → nur Senden
+      channel: C0123456789                  # Channel-ID, nicht der Name
+      allowed_users: [U0123456789]          # deren Antworten zählen; leer → keine
+retention:
+  notification_threads: 90d
+```
+
+```yaml
+# example: slack
+# file: filters/needs-maintainer.yaml
+id: needs-maintainer
+filter: { field: labels, operator: contains, value: needs-maintainer }
+```
+
+```yaml
+# example: slack
+# file: workflows/agent.yaml
+id: agent
+trigger: { type: source, source: project_a }
+identity: coder
+filter: { field: labels, operator: contains, value: ready-for-agent }
+execute: { type: shell, command: scripts/agent.sh }
+on_result:
+  needs_maintainer:
+    - type: source.update
+      labels: { add: [needs-maintainer], remove: [ready-for-agent] }
+    - type: notify
+      channel: team
+      message: "{item.title}: {result.message}"
+      remind_after: 4h                      # eine Erinnerung im Thread …
+      remind_while: needs-maintainer        # … nur wenn das Item dann noch passt (Filter-ID oder AST)
+reply_check:                                # optional: Prüfung des Antworttexts (stdin) vor on_reply
+  command: /bin/true
+  timeout: 30s
+on_reply:
+  - type: source.comment
+    identity: maintainer
+    message: "{reply.text}\n\n(Antwort in Slack von {reply.user_name})"
+  - type: source.update
+    labels: { add: [ready-for-agent], remove: [needs-maintainer] }
+```
 
 **Externe Tools `ui.external_links`** (seit 0.4.0): beliebige lokale Werkzeuge, z. B. das Agenten-Dashboard
 [claude-inspect](https://github.com/brokoskokoli/claude_inspect), als Eintrag in der Navigation – als Link in neuem Tab
@@ -497,6 +603,7 @@ retention:
   cleanup_interval: 24h
   ui_actions: 365d                                   # Audit der UI-Aktionen (WI-27)
   artifacts: never                                   # Artefakte (WI-35): Dauer oder never
+  notification_threads: 90d                          # Slack-Threads ohne Nachricht (WI-39)
 notifications:
   on: [retry_block_created, lifecycle_action_failed, recovery_failed]
   channels:
@@ -505,6 +612,12 @@ notifications:
       url_env: OPS_WEBHOOK_URL
       headers_env: { Authorization: OPS_WEBHOOK_AUTH }
       on: [retry_block_created, recovery_failed]
+    - id: team                                       # Slack mit Thread je Item und Antworten (WI-39)
+      type: slack
+      bot_token_env: SLACK_BOT_TOKEN
+      app_token_env: SLACK_APP_TOKEN                 # optional: ohne → nur Senden
+      channel: C0123456789
+      allowed_users: [U0123456789]
 container:
   engine: docker                                     # docker | podman (für execute.type: container)
 monitoring:                                          # Server-Ressourcen: Dashboard-Leiste + Reiter Resources
@@ -1401,7 +1514,7 @@ Fehlern (`crashed`, `start_error`, `timed_out`) derselben Workflow/Item-Kombinat
 
 #### 3.4.10 Hooks
 
-Zehn Hooks als Listen von Actions plus die Map `on_result`; die Actions eines Hooks laufen **sequentiell**:
+Elf Hooks als Listen von Actions plus die Map `on_result`; die Actions eines Hooks laufen **sequentiell**:
 
 | Hook | läuft … |
 |---|---|
@@ -1416,9 +1529,10 @@ Zehn Hooks als Listen von Actions plus die Map `on_result`; die Actions eines Ho
 | `on_error` | nach `crashed`, `start_error`, `timed_out` oder `cancelled`, wenn der jeweilige Hook oben **nicht definiert** ist |
 | `on_retry_block` | seit 0.6.0: im Run, dessen technischer Fehler gerade einen Retry-Block erzeugt hat – **nach** dessen Abschluss-Hook |
 | `on_retry_unblock` | seit 0.6.0: nach dem Aufheben eines Retry-Blocks, in einem eigenen Lifecycle-Run (Trigger `unblock`) |
+| `on_reply` | seit 0.11.0: nach einer Antwort im Slack-Thread des Items, in einem eigenen Lifecycle-Run (Trigger `reply`); davor optional `reply_check` |
 
 Genau ein Abschluss-Hook pro Run; Details in §6.8. `source.update`/`source.comment` nur in Source-Workflows.
-`on_retry_block`/`on_retry_unblock` sind keine Abschluss-Hooks; sie kommen zusätzlich hinzu (unten).
+`on_retry_block`/`on_retry_unblock` und `on_reply` sind keine Abschluss-Hooks; sie kommen zusätzlich hinzu (unten).
 
 **Benannte Ergebnisse (`on_result`).** Für Workflows mit mehr als zwei fachlichen Ausgängen (z. B. `approved`,
 `changes_requested`, `needs_maintainer`). Der Worker schreibt zusätzlich zu `result` ein `outcome` in die
@@ -1493,13 +1607,57 @@ on_retry_unblock:               # Block wurde aufgehoben – eigener Lifecycle-R
     message: 'Block {block.id} aufgehoben von {block.cleared_by}.'
 ```
 
+**Antworten im Thread (`on_reply`, `reply_check`, seit 0.11.0).** Schreibt `notify` (§3.4.11) eine Nachricht in den
+Slack-Thread eines Items, kann eine Person aus `allowed_users` dort antworten; die Antwort löst `on_reply` aus.
+Typisch: die Antwort als Kommentar an das Issue (die Agenten lesen nur dort) und das Übergabe-Label entfernen.
+
+- **Was zählt:** Kanal (Slack-App) und Channel stimmen, `thread_ts` gehört einem gespeicherten Thread dieses Kanals,
+  Absender in `allowed_users`, Nachricht neu (kein `subtype` außer `thread_broadcast` und `file_share`, kein Bot –
+  auch nicht die eigene App). Eine Antwort mit angehängten Dateien (`file_share`) zählt nur mit ihrem Text – die
+  Dateien werden ignoriert; Dateien ohne Text zählen nicht. Ignoriert (Log `debug`, kein Run): fremde Nutzer, andere Channels, unbekannte Threads,
+  Nachrichten außerhalb von Threads, `message_changed`, `message_deleted`, `bot_message`. Hat der Workflow kein (oder
+  ein leeres) `on_reply`, wird die Antwort ignoriert; eine ausstehende Erinnerung hebt sie trotzdem auf.
+- **Genau einmal:** Jede Antwort wird beim Eingang gespeichert (eindeutig je Slack-Channel + `ts`), dann bestätigt,
+  dann verarbeitet – stellt Slack dasselbe Ereignis erneut zu (Reconnect, Retry), entsteht kein zweiter Run.
+- **Lifecycle-Run** (Trigger `reply`) mit der beim Eingang geladenen Workflow-Konfiguration, wie bei
+  `on_retry_unblock`: kein Worker, kein Workspace, Lock `(Workflow, Item)`, zählt nicht als technischer Fehler,
+  nicht zu `max_concurrent`, nicht als `run.last_*`, nicht abbrechbar; Journal, Retry/Skip einzelner Actions, Recovery
+  und Item-Verlauf wie bei jedem Run. Endstatus `completed` + `success` (Antwort `done`), sonst `completed` +
+  `failure` (Antwort `rejected` oder `failed`).
+- **Warteschlange je Item:** Läuft für `(Workflow, Item)` gerade ein Run, wartet die Antwort und läuft, sobald das
+  Lock frei ist (FIFO je Item; kein `409`). Solange eine Antwort wartet, startet für `(Workflow, Item)` **kein anderer
+  Run**: die Planung meldet `locked` mit Grund `reply <id> pending (on_reply runs first)`, ein manueller Start mit
+  diesem Item `409 reply_pending`; wird das Lock frei, bekommt die älteste wartende Antwort es zuerst.
+- **Text `{reply.text}`** ist untrusted (§5.1): Slack-Formatierung wird zu Klartext (`<@U…>` → `@U…`, `<url|Text>` →
+  `Text (url)`, `&amp;` → `&`), Steuerzeichen entfernt, auf 8 KiB (UTF-8) gekürzt (` […]`), `<!--` entschärft wie bei
+  `source.comment`. Sieht der Text wie ein Secret aus (dieselbe Prüfung wie beim Kommentieren in der UI: GitHub-,
+  Slack-, Anthropic-, AWS-Token, private Schlüssel, bekannte Secret-Werte), wird er **nicht gespeichert** und nichts
+  ausgeführt; im Thread steht der Grund, Reaktion ❌. Der Text wird nur bis zur Verarbeitung aufbewahrt: geleert,
+  sobald die Kette durch ist und keine Action von `on_reply` mehr `failed` ist (auch nicht mit `continue_on_error`) –
+  solange kann ein „Retry“ ihn noch rendern. Ist er geleert, scheitert eine wiederholte Action mit `{reply.text}`
+  endgültig (`lifecycle_reply_text_gone`) statt einen leeren Text zu posten. Die Kontextdatei einer `shell`-Action in
+  `on_reply` (mit `reply.text`) wird direkt nach dem Versuch gelöscht.
+- **`reply_check`** (optional, Workflow-Ebene): `command` (§2.4), `args` (Templates, Scope wie `on_reply`), `timeout`
+  (Default `30s`). Die Antwort kommt auf **stdin**, der Kontext (Workflow, Run, Item, Antwort ohne Text) als JSON in
+  `ADISPATCH_CHECK_CONTEXT_FILE`; Umgebung minimal wie bei Prüfskripten. Exit `0` → `on_reply` läuft; Exit `1` →
+  abgelehnt: nichts ausgeführt, die erste Ausgabe auf stdout (max. 500 Zeichen) steht als Grund im Thread, ❌;
+  Exit ≥ 2, Signal, Timeout → Prüfung gescheitert: nichts ausgeführt, Antwort `failed`, im Run als gescheiterte
+  Action `reply_check` sichtbar und per „Retry“ erneut ausführbar (danach läuft die Kette weiter). Journal: erste
+  Action von `on_reply` mit ID `reply_check`, ein Versuch.
+- **Rückmeldung in Slack** (best effort): Reaktion ⏳ beim Eingang, ✅ wenn die Kette mit `success` endet, ❌ plus kurze
+  Antwort im Thread (ohne Interna) bei Ablehnung oder Fehler. Ist das Item beim Eingang nicht mehr lesbar
+  (gelöscht/unsichtbar), läuft `on_reply` nicht (`failed`, ❌).
+- **Workflows ohne Item** (Cron, manuell ohne Item): keine Threads, keine Antworten – `on_reply` ergibt eine Warnung.
+  Ebenso gewarnt wird, wenn kein Slack-Kanal mit `app_token_env` und `allowed_users` die Antworten liefern kann, und
+  bei `reply_check` ohne `on_reply`.
+
 #### 3.4.11 Actions
 
 Gemeinsame Schlüssel aller Actions:
 
 | Schlüssel | Typ | Pflicht | Default | Bedeutung |
 |---|---|---|---|---|
-| `type` | Enum | ja | | `source.update`, `source.comment`, `shell` |
+| `type` | Enum | ja | | `source.update`, `source.comment`, `shell`, `notify` (seit 0.11.0) |
 | `id` | Konfigurations-ID | nein | `<hook>.<index>` (z. B. `on_success.1`, `on_result.approved.0`, `on_retry_block.0`) | stabiler Name im Journal; **workflowweit** eindeutig |
 | `continue_on_error` | Boolean | nein | `false` | nach endgültigem Scheitern trotzdem mit der nächsten Action weitermachen |
 | `retry.max_attempts` | Integer ≥ 1 | nein | `lifecycle.action_retry.max_attempts` | Versuche insgesamt |
@@ -1587,6 +1745,25 @@ on_success:
 Erfolg = Exit 0; alles andere (Exit ≠ 0, Signal, Timeout, Startfehler) = gescheiterter, wiederholbarer Versuch.
 Arbeitsverzeichnis: der Run-Workspace, falls er existiert, sonst ein eigenes Verzeichnis pro Versuch
 unter `data-dir/runs/<run>/actions/…`. SIGTERM→SIGKILL-Frist fest 5 s, Log-Limit fest 10 MiB pro Versuch.
+
+`notify` – Nachricht auf einem Slack-Kanal (seit 0.11.0; in jedem Hook):
+
+| Schlüssel | Typ | Pflicht | Default | Bedeutung |
+|---|---|---|---|---|
+| `channel` | Kanal-ID | ja | | `id` eines Kanals `type: slack` in `notifications.channels` (`webhook` oder unbekannt → Fehler) |
+| `message` | String | ja | | Template (Modus `text`, Platzhalter wie `source.comment`) |
+| `thread` | Enum | nein | `item` | `item` = Thread von (Workflow, Item), beim ersten Mal angelegt; `new` = neuer Thread |
+| `remind_after` | Dauer > 0 | nein | – | **eine** Erinnerung im Thread nach dieser Zeit (nur Workflows mit Item) |
+| `remind_while` | Filter-ID oder Filter | nein | – | Erinnerung nur, wenn das Item dann (frisch gelesen) diesen Filter erfüllt; braucht `remind_after`; Felder wie im Workflow-Filter geprüft |
+
+Die Action ist erfolgreich, sobald die Zustellung **angelegt** ist (eine Benachrichtigung `workflow_notify` mit genau
+einer Zustellung auf den Kanal; weder `notifications.on` noch das `on` des Kanals filtern sie) – die Hook-Kette wartet
+nie auf Slack. Ein Wiederholungsversuch derselben Action (Recovery) legt keine zweite Nachricht an. Fehlzustellungen
+erscheinen wie bei Webhooks in der UI (Config → Notifications). Die Erinnerung kommt höchstens einmal, nur wenn
+`remind_while` dann `true` ist (`false`/`unknown` → keine Erinnerung, Log; das Lesen des Items ist auf 15 s begrenzt,
+danach gilt `unknown`, damit eine langsame Source die übrigen Zustellungen nicht aufhält); eine Antwort im Thread hebt sie auf.
+Workflows ohne Item: `notify` erlaubt, die Nachricht geht ohne Thread in den Channel (keine Antworten, kein
+`remind_after`).
 
 **Secrets für Shell-Actions** (seit 0.3.0): `secrets` wie bei `execute` (§3.4.8), in allen Hooks einschließlich
 `on_result.<outcome>`, `on_error`, `on_retry_block` und `on_retry_unblock`. Tokens werden **pro Versuch**
@@ -2528,7 +2705,7 @@ Wert (`parent` ohne Eltern-Artefakt) ist `null`.
 | `{workspace.base_dir}` | absoluter, normalisierter `workspace.base_dir` | nie |
 | `{timestamp}` | aktuelle UTC-Zeit beim Rendern, `YYYYMMDDTHHMMSSZ` | nie |
 | `{run.id}` | Run-ID `run-YYYYMMDDTHHMMSSmmmZ-xxxxxxxx` | – |
-| `{run.trigger}` | `source` \| `schedule` \| `manual` \| `unblock` (Lifecycle-Run von `on_retry_unblock`, seit 0.6.0) | – |
+| `{run.trigger}` | `source` \| `schedule` \| `manual` \| `unblock` (Lifecycle-Run von `on_retry_unblock`, seit 0.6.0) \| `reply` (Lifecycle-Run von `on_reply`, seit 0.11.0) | – |
 | `{run.started_at}` | ISO-8601 mit ms (UTC) | in `on_start` und in Hooks von Runs, deren Worker nie lief |
 | `{workspace.path}` | absoluter Workspace-Pfad des Runs | in `on_start`; in Abschluss-Hooks, wenn der Worker nie gespawnt wurde |
 | `{source.id}` | Source-ID | Run ohne Item |
@@ -2555,6 +2732,12 @@ Wert (`parent` ohne Eltern-Artefakt) ist `null`.
 | `{block.created_at}` | Entstehungszeitpunkt des Blocks, ISO-8601 (UTC) | – |
 | `{block.last_status}` | technischer Endstatus des auslösenden Runs (`crashed`, `start_error`, `timed_out`) | Blocks von vor 0.6.0, deren Run gelöscht ist |
 | `{block.cleared_at}` | Zeitpunkt des Aufhebens, ISO-8601 (UTC) | nur in `on_retry_unblock` erlaubt |
+| `{reply.text}` | Text der Antwort in Slack als Klartext (seit 0.11.0, nur `on_reply`/`reply_check`; **untrusted**, max. 8 KiB, `<!--` entschärft, §3.4.10) | nach erfolgreicher Verarbeitung (Text nicht mehr gespeichert) |
+| `{reply.user}` | Slack-User-ID der Person (`U…`) | – |
+| `{reply.user_name}` | Anzeigename (best effort über `users.info`, Scope `users:read`) | ohne Scope/unbekannt → `{reply.user}` |
+| `{reply.ts}` | Zeitstempel der Antwort (Slack `ts`) | – |
+| `{reply.permalink}` | Link auf die Antwort (best effort) | nicht ermittelbar → leer |
+| `{reply.channel}` | Slack-Channel-ID der Antwort | – |
 | `{block.cleared_by}` | wer aufgehoben hat: angemeldeter Benutzer (§3.1 `auth`), ohne Anmeldung der vom Client mitgeschickte Name (UI `ui`, sonst `api`) – über die API also immer gesetzt; `anonymous` nur bei einem intern ohne Namen aufgehobenen Block | nur in `on_retry_unblock` erlaubt |
 
 Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_error`).
@@ -2563,7 +2746,7 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 
 ✓ = erlaubt, – = Konfigurationsfehler, (s) = nur wenn `trigger.type: source`, (leer) = erlaubt, aber dort leer.
 
-| Platzhalter | `execute.working_directory` (path) | `execute.args`, `execute.env` | `on_start` (`message`, `args`, `env`) | übrige Hooks | `on_retry_unblock` | `conditions.workflow[].args` | `conditions.item[].args` |
+| Platzhalter | `execute.working_directory` (path) | `execute.args`, `execute.env` | `on_start` (`message`, `args`, `env`) | übrige Hooks | `on_retry_unblock`, `on_reply`, `reply_check.args` | `conditions.workflow[].args` | `conditions.item[].args` |
 |---|---|---|---|---|---|---|---|
 | `workflow.*`, `workspace.base_dir`, `timestamp` | ✓ (`base_dir` nur am Anfang) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `run.id`, `run.trigger` | ✓ | ✓ | ✓ | ✓ | ✓ (des Lifecycle-Runs) | – | – |
@@ -2575,8 +2758,9 @@ Fehlender Wert: Modus `text` → leerer String; Modus `path` → Fehler (`start_
 | `item.name`, `item.type` | ✓ (s, `artifacts`) | ✓ (s, `artifacts`) | ✓ (s, `artifacts`) | ✓ (s, `artifacts`) | ✓ (s, `artifacts`) | – | ✓ (s, `artifacts`) |
 | `item.path` | – | ✓ (s, `artifacts`) | – | ✓ (s, `artifacts`) | – | – | – |
 | `item.work_branch`, `item.work_pr` | ✓ (s, GitHub; `null` → Fehler) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | ✓ (s, GitHub) | – | – |
-| `block.id`, `block.failures`, `block.created_at`, `block.last_status` | – | – | – | nur `on_retry_block` | ✓ | – | – |
-| `block.cleared_at`, `block.cleared_by` | – | – | – | – | ✓ | – | – |
+| `block.id`, `block.failures`, `block.created_at`, `block.last_status` | – | – | – | nur `on_retry_block` | ✓ (nur `on_retry_unblock`) | – | – |
+| `block.cleared_at`, `block.cleared_by` | – | – | – | – | ✓ (nur `on_retry_unblock`) | – | – |
+| `reply.*` | – | – | – | – | ✓ (nur `on_reply`, `reply_check`) | – | – |
 
 `{source.vars.<name>}` muss zusätzlich in `vars` **jeder** Source des Workflows stehen (sonst Fehler mit der Liste
 der Sources, in denen sie fehlt); im Pfadmodus wird der Wert wie jeder Platzhalter zu genau einem sicheren
@@ -2708,6 +2892,10 @@ Item-Priorität überholt also keinen Workflow mit höherer Workflow-Priorität.
   `unblock run <id> active`, manuelle Starts ohne Item scheitern mit `409 unblock_run_active`. Mit nicht leerem `on_retry_unblock` und laufendem Run
   für `(Workflow, Item)` wird das Entfernen abgelehnt (`409 block_run_active`). Optional die Benachrichtigung
   `retry_block_cleared`. Details §3.4.10.
+- **Antworten (seit 0.11.0):** Eine Antwort im Slack-Thread läuft als Lifecycle-Run (Trigger `reply`) unter dem Lock
+  `(Workflow, Item)`. Wartet eine Antwort, startet für `(Workflow, Item)` kein anderer Run (Planung `locked` mit Grund
+  `reply <id> pending (on_reply runs first)`, manueller Start `409 reply_pending`, Aufheben eines Blocks mit
+  `on_retry_unblock` ebenso `409 reply_pending`); wird das Lock frei, bekommt die älteste Antwort es zuerst (§3.4.10).
 
 ### 6.5 Run-Start
 
@@ -2729,7 +2917,8 @@ UI oder `POST /api/v1/workflows/:id/start` `{"item"?: "…", "parameters"?: {…
   den Filter-Recheck vor `on_start`.
 - **Umgeht nicht:** den Lock pro Workflow+Item (HTTP 409 `lock_conflict`), Drain/Shutdown, laufende Recovery,
   Parametervalidierung und (seit 0.6.0) einen laufenden Lifecycle-Run eines aufgehobenen Workflow-Blocks: Start ohne
-  Item, solange `on_retry_unblock` läuft → HTTP 409 `unblock_run_active`.
+  Item, solange `on_retry_unblock` läuft → HTTP 409 `unblock_run_active`; (seit 0.11.0) eine wartende Antwort im
+  Slack-Thread des Items → HTTP 409 `reply_pending`.
 - Source-Workflow: Item-Referenz Pflicht – `123`, `#123`, `owner/repo#123`,
   `https://github.com/owner/repo/issues/123` bzw. `/pull/123` (Owner/Repo ohne Groß-/Kleinschreibung, muss zur
   Source passen) oder (seit 0.3.0) `<source>:<ref>` wie `project_a:123`; das Item muss existieren. Bei mehreren
@@ -3510,6 +3699,60 @@ scheduler:
 ```
 
 Lösung: Schreibweise laut §3 korrigieren (der Vorschlag nennt den nächstliegenden erlaubten Schlüssel).
+
+**Slack, `notify`, `on_reply`** (seit 0.11.0) – `notify` auf einem Webhook-Kanal, unbekannter Kanal, `{reply.*}`
+außerhalb von `on_reply`/`reply_check`, unbekannter Filter in `remind_while`, Token im YAML statt in der Umgebung.
+
+```yaml
+# example: err-slack
+# extends: github
+# invalid
+# expect: config.yaml: notifications.channels[1].bot_token: Tokens must not be written into config.yaml: set "bot_token_env" to the name of an environment variable that holds the token
+# expect: config.yaml: notifications.channels[1].app_token_env: Looks like a token: name the environment variable that holds it (e.g. SLACK_BOT_TOKEN), never the token itself
+# expect: config.yaml: notifications.channels[1].channel: Expected a Slack channel ID such as C0123456789 (not the channel name)
+# file: config.yaml
+notifications:
+  channels:
+    - { id: ops, type: webhook, url_env: OPS_WEBHOOK_URL }
+    - id: team
+      type: slack
+      bot_token_env: SLACK_BOT_TOKEN
+      bot_token: xoxb-0000000000-placeholder
+      app_token_env: xapp-1-A0000-placeholder
+      channel: '#team'
+```
+
+```yaml
+# example: err-notify
+# extends: slack
+# invalid
+# expect: workflows/notify-errors.yaml: on_success[0].channel: "notify" needs a channel of type "slack"; "ops" is of type "webhook"
+# expect: workflows/notify-errors.yaml: on_success[1].channel: Unknown notification channel "teem" (config.yaml notifications.channels) (did you mean "team"?)
+# expect: workflows/notify-errors.yaml: on_success[2].message: Placeholder "{reply.text}" is only available in "on_reply" and "reply_check"
+# expect: workflows/notify-errors.yaml: on_success[3].remind_while: Unknown named filter "needs-maintainr" (did you mean "needs-maintainer"?)
+# file: config.yaml
+notifications:
+  channels:
+    - { id: ops, type: webhook, url_env: OPS_WEBHOOK_URL }
+    - { id: team, type: slack, bot_token_env: SLACK_BOT_TOKEN, app_token_env: SLACK_APP_TOKEN, channel: C0123456789, allowed_users: [U0123456789] }
+```
+
+```yaml
+# example: err-notify
+# file: workflows/notify-errors.yaml
+id: notify-errors
+trigger: { type: source, source: project_a }
+execute: { type: shell, command: /bin/true }
+on_success:
+  - { type: notify, channel: ops, message: done }
+  - { type: notify, channel: teem, message: done }
+  - { type: notify, channel: team, message: '{reply.text}' }
+  - { type: notify, channel: team, message: x, remind_after: 1h, remind_while: needs-maintainr }
+```
+
+Lösung: `notify` braucht einen Kanal `type: slack` aus `notifications.channels`; `{reply.*}` gibt es nur in
+`on_reply` und `reply_check`; Tokens gehören in die Umgebung (Env-Datei des Dienstes), `*_env` nennt nur den
+Variablennamen; Channel-IDs stehen in Slack unter „Channel details“.
 
 **Hooks `on_error`/`on_result`** – Tippfehler im Hook-Namen und Ergebnis-Schlüssel, die keine IDs sind.
 

@@ -143,7 +143,19 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
             ['Run ID', h('code', null, d.id)],
             ['Workflow', routeLink(['workflows', d.workflowId], d.workflowId)],
             ['Identity / role', text(d.identity)],
-            ['Trigger', h('span', null, d.triggerType === 'unblock' ? 'unblock (lifecycle run of a removed retry block)' : d.triggerType, d.scheduledFor ? ` (slot ${d.scheduledFor})` : '')],
+            [
+              'Trigger',
+              h(
+                'span',
+                null,
+                d.triggerType === 'unblock'
+                  ? 'unblock (lifecycle run of a removed retry block)'
+                  : d.triggerType === 'reply'
+                    ? 'reply (lifecycle run of a reply in a chat thread)'
+                    : d.triggerType,
+                d.scheduledFor ? ` (slot ${d.scheduledFor})` : '',
+              ),
+            ],
             ['Source item', h('span', null, d.sourceUrl ? externalLink(d.sourceUrl) : text(d.sourceItemKey), d.sourceItemKey ? [' ', historyLinkForKey(d.sourceItemKey), ' ', itemPanelLink(d.sourceId, d.sourceItemKey.slice(d.sourceItemKey.indexOf(':') + 1))] : null)],
             ['Technical state', badge(d.status, d.active ? 'info' : 'muted')],
             ['Business result', d.businessResult ? badge(d.businessResult, d.businessResult === 'success' ? 'ok' : 'warn') : text(null)],
@@ -192,6 +204,19 @@ export const runPage = (ctx: PageContext, runId: string): Page => {
               { class: 'card span-all' },
               h('h2', null, 'Active retry block'),
               h('p', null, `Internal retry block #${d.block.id} of this scope (${d.block.failureCount} technical failures): ${d.block.reason} `, routeLink(['blocked'], 'Blocked →')),
+            )
+          : null,
+        d.reply
+          ? section(
+              'Reply in Slack',
+              kv([
+                ['From', h('span', null, text(d.reply.userName ?? d.reply.userId), d.reply.userName ? h('span', { class: 'muted' }, ` (${d.reply.userId})`) : null)],
+                ['Channel', h('span', null, h('code', null, d.reply.channelId), ` ${d.reply.chatChannel}`)],
+                ['Message', d.reply.permalink ? externalLink(d.reply.permalink, 'open in Slack') : h('code', null, d.reply.ts)],
+                ['Received', time(d.reply.receivedAt)],
+                ['Status', badge(d.reply.status, d.reply.status === 'done' ? 'ok' : d.reply.status === 'pending' || d.reply.status === 'running' ? 'info' : 'error')],
+                ['Reason', text(d.reply.reason)],
+              ]),
             )
           : null,
         d.error ? h('section', { class: 'card span-all' }, h('h2', null, 'Technical diagnosis'), jsonBlock(d.error)) : null,

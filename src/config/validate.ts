@@ -51,9 +51,11 @@ import {
   type GlobalConfig,
   type IdentityConfig,
   type LifecycleActionConfig,
+  type NotifyActionConfig,
   type ParameterDefinition,
   type ParameterOptionsSource,
   type SecretRef,
+  type SlackChannelConfig,
   type SourceConfig,
   type ViewConfig,
   type ViewFieldConfig,
@@ -169,6 +171,16 @@ function validateGlobal(global: GlobalConfig, issues: IssueCollector): void {
     const at: IssuePath = ['notifications', 'channels', i];
     if (ids.has(channel.id)) issues.error(CONFIG_FILE, [...at, 'id'], `Duplicate channel ID "${channel.id}"`);
     ids.add(channel.id);
+    if (channel.type === 'slack') {
+      // WI-39: without allowed users no reply counts (Socket Mode would only acknowledge events).
+      if (channel.appTokenEnv !== null && channel.allowedUsers.length === 0) {
+        issues.warning(CONFIG_FILE, [...at, 'allowed_users'], 'No "allowed_users": replies in the threads of this channel are ignored');
+      }
+      if (channel.appTokenEnv !== null && channel.appTokenEnv === channel.botTokenEnv) {
+        issues.error(CONFIG_FILE, [...at, 'app_token_env'], '"app_token_env" and "bot_token_env" must name different variables (xapp-… vs. xoxb-… token)');
+      }
+      return;
+    }
     if ((channel.url === null) === (channel.urlEnv === null)) {
       issues.error(CONFIG_FILE, at, 'Webhook channel needs exactly one of "url" or "url_env"');
     } else if (channel.url !== null && !isHttpUrl(channel.url)) {
@@ -535,6 +547,7 @@ function validateWorkflow(entry: WorkflowEntry, input: SemanticInput, issues: Is
     });
   }
   validateHookRouting(wf, issues, file);
+  validateReplyHooks(wf, input, issues, file, isSource);
 }
 
 /**
@@ -688,8 +701,8 @@ function validateAction(
     workspace: true,
     source: isSource,
     sourceVar: sourceCtx.sourceVar,
-    // `on_retry_unblock` (WI-30) runs in a lifecycle run without worker: no result (like `on_start`).
-    result: hook !== 'on_start' && hook !== 'on_retry_unblock',
+    // `on_retry_unblock` (WI-30) and `on_reply` (WI-39) run in a lifecycle run without worker: no result (like `on_start`).
+    result: hook !== 'on_start' && hook !== 'on_retry_unblock' && hook !== 'on_reply',
     linked: sourceCtx.linked,
     artifact: sourceCtx.artifact,
     // The input is staged right before the worker starts: not available in `on_start`.
@@ -697,6 +710,7 @@ function validateAction(
     parameters: parameterNames,
     block: isRetryBlockHook(hook),
     blockCleared: hook === 'on_retry_unblock',
+    reply: hook === 'on_reply',
   };
   if ((action.type === 'source.update' || action.type === 'source.comment') && !isSource) {
     issues.error(file, [...at, 'type'], `"${action.type}" needs a source item; the workflow has no source trigger`);
@@ -730,6 +744,91 @@ function validateAction(
       checkLiteralSecrets(action.env, issues, file, [...at, 'env']);
       checkSecrets(action.secrets, action.env, input, issues, file, [...at, 'secrets']);
       break;
+    case 'notify':
+      validateNotify(action, at, sourceCtx, scope, input, issues, file);
+      break;
+  }
+}
+
+/**
+ * `notify` (WI-39): the channel exists and is a `slack` channel; the message
+ * is a hook template; reminders need an item (they go into its thread) and
+ * `remind_while` needs `remind_after`; filter fields of `remind_while` are
+ * checked like the workflow filter.
+ */
+function validateNotify(
+  action: NotifyActionConfig,
+  at: IssuePath,
+  sourceCtx: ActionSourceContext,
+  scope: TemplateScope,
+  input: SemanticInput,
+  issues: IssueCollector,
+  file: string,
+): void {
+  const channels = input.global.notifications.channels;
+  const channel = channels.find((c) => c.id === action.channel);
+  if (!channel) {
+    const suggestion = suggestField(action.channel, channels.map((c) => c.id));
+    issues.error(
+      file,
+      [...at, 'channel'],
+      `Unknown notification channel "${action.channel}" (config.yaml notifications.channels)${suggestion ? ` (did you mean "${suggestion}"?)` : ''}`,
+    );
+  } else if (channel.type !== 'slack') {
+    issues.error(file, [...at, 'channel'], `"notify" needs a channel of type "slack"; "${channel.id}" is of type "${channel.type}"`);
+  }
+  checkTemplate(action.message, 'text', scope, issues, file, [...at, 'message']);
+  if (action.remindWhile !== undefined && action.remindAfterMs === undefined) {
+    issues.error(file, [...at, 'remind_while'], '"remind_while" needs "remind_after"');
+  }
+  if (!sourceCtx.isSource) {
+    if (action.remindAfterMs !== undefined) {
+      issues.error(file, [...at, 'remind_after'], '"remind_after" needs a source item (the reminder goes into the thread of the item); the workflow has no source trigger');
+    }
+    return;
+  }
+  if (action.remindWhile && sourceCtx.sources.length > 0 && new Set(sourceCtx.sources.map((s) => s.type)).size === 1) {
+    const ctx = workflowFieldContext([...sourceCtx.sources]);
+    addFieldIssues(checkFilterFields(action.remindWhile, ctx, { listing: false }), {
+      issues,
+      file,
+      at: [...at, 'remind_while'],
+      raw: null,
+      named: input.namedFilters,
+    });
+  }
+}
+
+/**
+ * WI-39 checks of `on_reply` / `reply_check`: replies exist only for
+ * workflows with items (threads per item); `reply_check` without `on_reply`
+ * is unused; replies need a Slack channel with `app_token_env` and `allowed_users`.
+ */
+function validateReplyHooks(wf: WorkflowConfig, input: SemanticInput, issues: IssueCollector, file: string, isSource: boolean): void {
+  const onReply = wf.hooks.on_reply;
+  const hasReplyHook = onReply !== undefined && onReply.length > 0;
+  if (wf.replyCheck) {
+    wf.replyCheck.args.forEach((arg, i) =>
+      checkTemplate(arg, 'text', { run: true, workspace: true, source: isSource, reply: true, parameters: Object.keys(wf.parameters) }, issues, file, ['reply_check', 'args', i]),
+    );
+    if (!hasReplyHook) issues.warning(file, ['reply_check'], '"reply_check" is unused: the workflow has no "on_reply" actions');
+  }
+  if (!hasReplyHook) return;
+  if (!isSource) {
+    issues.warning(file, ['on_reply'], `"on_reply" never runs: replies arrive only in threads of items, and the workflow has no source trigger (trigger is "${wf.trigger.type}")`);
+    return;
+  }
+  const slack = input.global.notifications.channels.filter((c): c is SlackChannelConfig => c.type === 'slack');
+  const used = new Set(
+    configuredHooks(wf.hooks).flatMap(([, actions]) => actions.filter((a): a is NotifyActionConfig => a.type === 'notify').map((a) => a.channel)),
+  );
+  const relevant = used.size > 0 ? slack.filter((c) => used.has(c.id)) : slack;
+  if (relevant.length === 0) {
+    issues.warning(file, ['on_reply'], '"on_reply" never runs: no Slack channel is configured (config.yaml notifications.channels)');
+  } else if (!relevant.some((c) => c.appTokenEnv !== null)) {
+    issues.warning(file, ['on_reply'], `"on_reply" never runs: channel(s) ${relevant.map((c) => `"${c.id}"`).join(', ')} have no "app_token_env" (send only, no replies)`);
+  } else if (!relevant.some((c) => c.appTokenEnv !== null && c.allowedUsers.length > 0)) {
+    issues.warning(file, ['on_reply'], `"on_reply" never runs: channel(s) ${relevant.map((c) => `"${c.id}"`).join(', ')} have no "allowed_users"`);
   }
 }
 

@@ -14,6 +14,8 @@ import {
   commentMarker,
   isRetryBlockHook,
   noopLogger,
+  REPLY_CHECK_ACTION_TYPE,
+  type ChatNotifier,
   sleep,
   systemClock,
   systemTimers,
@@ -31,12 +33,15 @@ import {
 } from '../core/index.js';
 import type { LifecycleActionConfig, RetryPolicy, WorkflowSnapshot } from '../config/index.js';
 import { ShellExecutor } from '../executors/index.js';
+import { ShellCheckRunner } from '../filters/index.js';
 import type { Repositories, RunActionRecord, RunRecord } from '../persistence/index.js';
-import { parseRunSnapshot, resolveActionIdentity, type HookBlockInfo } from './context.js';
+import { parseRunSnapshot, resolveActionIdentity, type HookBlockInfo, type HookReplyInfo } from './context.js';
 import { LifecycleBusyError, LifecycleError, describeActionError, type ActionErrorInfo } from './errors.js';
 import {
   failureEffect,
   mergeEffects,
+  performNotify,
+  performReplyCheck,
   performShell,
   performSourceComment,
   performSourceUpdate,
@@ -44,8 +49,12 @@ import {
   type AttemptInput,
   type AttemptResult,
   type PerformerDeps,
+  type ReplyCheckActionConfig,
   type SourceResolver,
 } from './performers.js';
+
+/** Config of a journaled action: a configured lifecycle action or the internal `reply_check` (WI-39). */
+export type JournalActionConfig = LifecycleActionConfig | ReplyCheckActionConfig;
 
 /** Event type persisted in `run_events` for every action state change. */
 export const LIFECYCLE_ACTION_EVENT = 'lifecycle.action';
@@ -107,7 +116,7 @@ export interface LifecycleActionFailedPayload extends Record<string, unknown> {
 export interface LifecycleEngineOptions {
   /** Persistence (WI-03). */
   repositories: Pick<Repositories, 'runs' | 'actions' | 'events' | 'transaction' | 'afterCommit'> &
-    Partial<Pick<Repositories, 'blocks'>>;
+    Partial<Pick<Repositories, 'blocks' | 'replies'>>;
   /** Source adapters by configured source ID. */
   sources: SourceResolver;
   /** Data directory (context/log files of `shell` actions below `runs/<id>/actions`, `logs/<id>/actions`). */
@@ -132,6 +141,10 @@ export interface LifecycleEngineOptions {
   credentials?: CredentialProvider;
   /** Tuning of token files of `shell` actions (`delivery: file`, WI-18); tests only. */
   tokenFiles?: { renewBeforeMs?: number; retryDelayMs?: number; maxRetryDelayMs?: number };
+  /** Records `notify` messages (WI-39); without it `notify` actions fail permanently. */
+  chat?: ChatNotifier;
+  /** Runner of `reply_check` (WI-39); default `new ShellCheckRunner({ clock, timers, logger })`. */
+  checks?: ShellCheckRunner;
 }
 
 interface ChainOptions {
@@ -170,6 +183,8 @@ export class LifecycleEngine {
       timers: this.timers,
       logger: this.logger,
       tokenFiles: options.tokenFiles ?? {},
+      chat: options.chat,
+      checks: options.checks ?? new ShellCheckRunner({ clock: this.clock, timers: this.timers, logger: this.logger }),
     };
   }
 
@@ -198,7 +213,7 @@ export class LifecycleEngine {
     return this.exclusive(runId, async () => {
       const current = this.repos.runs.require(runId);
       const snap = snapshot ?? parseRunSnapshot(current.configSnapshot, runId);
-      const configs = snap.workflow.hooks[hook] ?? [];
+      const configs = hookActions(snap, hook);
       this.repos.actions.createJournal(
         runId,
         hook,
@@ -409,7 +424,7 @@ export class LifecycleEngine {
   }
 
   /** Execute one action with its retry policy. The action is `pending` on entry. */
-  private async executeAction(action: RunActionRecord, config: LifecycleActionConfig, opts: ChainOptions): Promise<ActionOutcome> {
+  private async executeAction(action: RunActionRecord, config: JournalActionConfig, opts: ChainOptions): Promise<ActionOutcome> {
     const policy = retryPolicy(config);
     let roundAttempts = 0;
     let current = action;
@@ -434,6 +449,7 @@ export class LifecycleEngine {
         signal: opts.signal,
         now: this.clock.now(),
         block: this.blockOf(run.id, current.hook),
+        reply: this.replyOf(run.id, current.hook),
       };
       let result: AttemptResult;
       try {
@@ -492,13 +508,29 @@ export class LifecycleEngine {
           ...(effect ? { effect } : {}),
         });
         this.appendActionEvent(done, { attempt: attempt.attempt, details: result.details });
+        // WI-39: a rejecting `reply_check` ends the chain successfully; the rest is skipped in the same transaction.
+        if (result.stopChain) {
+          for (const later of this.repos.actions.listForHook(current.runId, current.hook)) {
+            if (later.ordinal > current.ordinal && later.status === 'pending') {
+              this.appendActionEvent(this.repos.actions.setStatus(later.id, 'skipped'), { stoppedBy: current.id, reason: result.stopChain.reason });
+            }
+          }
+        }
       });
       this.publishChange(current.id);
       return 'succeeded';
     }
   }
 
-  private perform(input: AttemptInput, config: LifecycleActionConfig): Promise<AttemptResult> {
+  private perform(input: AttemptInput, config: JournalActionConfig): Promise<AttemptResult> {
+    // WI-39: after the reply was processed its text is gone – never post/run an empty `{reply.text}`.
+    if (input.reply && input.reply.textAvailable === false && usesReplyText(config)) {
+      return Promise.reject(
+        new LifecycleError('reply_text_gone', 'The text of the reply is no longer stored (the reply was processed); this action cannot be repeated', {
+          retryable: false,
+        }),
+      );
+    }
     switch (config.type) {
       case 'source.update':
         return performSourceUpdate(this.performerDeps, input, config);
@@ -506,6 +538,10 @@ export class LifecycleEngine {
         return performSourceComment(this.performerDeps, input, config);
       case 'shell':
         return performShell(this.performerDeps, input, config);
+      case 'notify':
+        return performNotify(this.performerDeps, input, config);
+      case REPLY_CHECK_ACTION_TYPE:
+        return performReplyCheck(this.performerDeps, input, config);
     }
   }
 
@@ -654,6 +690,15 @@ export class LifecycleEngine {
     return hook === 'on_retry_block' ? blocks.createdByRun(runId) : blocks.clearedByRun(runId);
   }
 
+  /** Chat reply of a reply run (WI-39) for `on_reply`; the text is empty once it was processed. */
+  private replyOf(runId: string, hook: HookName): HookReplyInfo | null {
+    const replies = this.repos.replies;
+    if (!replies || hook !== 'on_reply') return null;
+    const reply = replies.forRun(runId);
+    if (!reply) return null;
+    return { text: reply.text ?? '', textAvailable: reply.text !== null, user: reply.userId, userName: reply.userName, ts: reply.ts, permalink: reply.permalink, channel: reply.chatChannel };
+  }
+
   /** Hooks of a run in journal order. */
   private hooksInOrder(runId: string): HookName[] {
     const hooks: HookName[] = [];
@@ -665,9 +710,42 @@ export class LifecycleEngine {
 // ---------------------------------------------------------------------------
 // Pure helpers
 
+/**
+ * Actions journaled for `hook`: the configured list; for `on_reply` (WI-39)
+ * the workflow's `reply_check` comes first (ID `reply_check`, one attempt).
+ */
+export function hookActions(snapshot: WorkflowSnapshot, hook: HookName): JournalActionConfig[] {
+  const configured: JournalActionConfig[] = [...(snapshot.workflow.hooks[hook] ?? [])];
+  const check = snapshot.workflow.replyCheck;
+  if (hook !== 'on_reply' || !check) return configured;
+  const journal: ReplyCheckActionConfig = {
+    type: REPLY_CHECK_ACTION_TYPE,
+    id: 'reply_check',
+    continueOnError: false,
+    retry: { maxAttempts: 1, delayMs: 0 },
+    command: check.command,
+    args: [...check.args],
+    timeoutMs: check.timeoutMs,
+  };
+  return [journal, ...configured];
+}
+
+/** True if a template of the action uses `{reply.text}` (WI-39). */
+function usesReplyText(config: JournalActionConfig): boolean {
+  const templates: string[] =
+    config.type === 'source.comment' || config.type === 'notify'
+      ? [config.message]
+      : config.type === 'shell'
+        ? [...config.args, ...Object.values(config.env)]
+        : config.type === REPLY_CHECK_ACTION_TYPE
+          ? ['{reply.text}'] // gets the text on stdin
+          : [];
+  return templates.some((t) => /\{\s*reply\.text\s*\}/.test(t));
+}
+
 /** Action config persisted in the journal (`action_config_json`). */
-export function actionConfig(action: RunActionRecord): LifecycleActionConfig {
-  const config = action.config as LifecycleActionConfig | null;
+export function actionConfig(action: RunActionRecord): JournalActionConfig {
+  const config = action.config as JournalActionConfig | null;
   if (!config || typeof config !== 'object' || config.type !== action.type) {
     throw new LifecycleError('invalid_action_config', `Journal entry ${action.id} has no valid action configuration`, {
       details: { actionId: action.id },
@@ -676,7 +754,7 @@ export function actionConfig(action: RunActionRecord): LifecycleActionConfig {
   return config;
 }
 
-function retryPolicy(config: LifecycleActionConfig): RetryPolicy {
+function retryPolicy(config: JournalActionConfig): RetryPolicy {
   const r = config.retry as Partial<RetryPolicy> | undefined;
   return {
     maxAttempts: Math.max(1, Math.floor(r?.maxAttempts ?? DEFAULT_ACTION_RETRY.maxAttempts)),

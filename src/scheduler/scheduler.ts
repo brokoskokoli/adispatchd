@@ -45,6 +45,7 @@ import {
   BlockedError,
   UnblockRunActiveError,
   LockConflictError,
+  ReplyPendingError,
   type CronFiringRecord,
   type Repositories,
   type RunRecord,
@@ -562,6 +563,7 @@ export class Scheduler {
         diag.blockId = err.blockId;
         return set('blocked', `retry block ${err.blockId}`);
       }
+      if (err instanceof ReplyPendingError) return set('locked', `reply ${err.replyId} pending (on_reply runs first)`);
       throw err;
     }
     // --- end of synchronous section ------------------------------------------
@@ -818,7 +820,8 @@ export class Scheduler {
    * the workflow+item (`LockConflictError`, HTTP 409). The run counts towards
    * the limits of automatic starts.
    *
-   * @throws UnknownWorkflowError, SchedulerError, LockConflictError, UnblockRunActiveError (WI-30: workflow without item while its unblock run is active)
+   * @throws UnknownWorkflowError, SchedulerError, LockConflictError, UnblockRunActiveError (WI-30: workflow without item while its unblock run is active),
+   *   ReplyPendingError (WI-39: a chat reply of the item waits for its `on_reply` run; HTTP 409 `reply_pending`)
    */
   async startManual(workflowId: string, request: ManualStartRequest = {}): Promise<ManualStartResult> {
     const eff = this.config.getWorkflow(workflowId);

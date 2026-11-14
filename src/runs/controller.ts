@@ -27,9 +27,13 @@ import {
   LINKED_PLACEHOLDER_FIELDS,
   dataPaths,
   errorMessage,
+  isLifecycleTrigger,
   isOrchestratorError,
   isTerminalStatus,
   noopLogger,
+  REPLY_CHECK_ACTION_TYPE,
+  type ChatReplyFeedback,
+  type ReplyOutcome,
   outcomeOfHook,
   parseSourceItemKey,
   renderTemplate,
@@ -84,9 +88,11 @@ import {
   type SourceResolver,
 } from '../lifecycle/index.js';
 import {
+  LockConflictError,
   RUN_STATUS_EVENT,
   finalizationTarget,
   type BlockRecord,
+  type ReplyRecord,
   type Repositories,
   type RunRecord,
   type RunUpdate,
@@ -215,6 +221,8 @@ export interface RunControllerOptions {
   tokenFiles?: { renewBeforeMs?: number; retryDelayMs?: number; maxRetryDelayMs?: number };
   /** Receives `retry_block_created`, `retry_block_cleared` (WI-30) and `recovery_failed` after commit. Must not block/throw. */
   notifier?: Notifier;
+  /** Chat side of reply runs (WI-39): author details at the start, reactions and answer at the end. */
+  chatReplies?: ChatReplyFeedback;
   /**
    * Executor per run; default by `execute.type`: `new ShellExecutor({clock, logger, workspaceBaseDir})`
    * or `new ContainerExecutor({…, engines: containers})` (WI-19).
@@ -269,7 +277,8 @@ interface ActiveRun {
   runId: string;
   /**
    * `run`: supervised execution; `recovery`: recovery / retryRecovery in progress (not cancellable);
-   * `lifecycle`: `on_retry_unblock` chain of a removed block (trigger `unblock`, WI-30; not cancellable).
+   * `lifecycle`: `on_retry_unblock` chain of a removed block (trigger `unblock`, WI-30) or
+   * `reply_check` + `on_reply` of a chat reply (trigger `reply`, WI-39); not cancellable.
    */
   kind: 'run' | 'recovery' | 'lifecycle';
   /** Aborted on cancel (on_start chain, item re-read, secret resolution). */
@@ -542,12 +551,12 @@ export class RunController {
         status: current.status,
       });
     }
-    if (current.triggerType === 'unblock') {
-      // Lifecycle run of a removed block (WI-30): never a worker.
+    if (isLifecycleTrigger(current.triggerType)) {
+      // Lifecycle runs (WI-30 unblock, WI-39 reply): never a worker.
       if (!this.ready || this.draining || this.stopping) {
         throw new RunControllerError('run_controller_not_accepting', `Run ${runId} not started: controller not accepting runs`, { runId });
       }
-      return { runId, done: this.startUnblockRun(runId) };
+      return { runId, done: current.triggerType === 'reply' ? this.startReplyRun(runId) : this.startUnblockRun(runId) };
     }
     if (!this.ready || this.draining || this.stopping) {
       const notReady = !this.ready;
@@ -620,8 +629,9 @@ export class RunController {
       throw new RunControllerError('run_not_active', `Run ${runId} already finished (${run.status})`, { runId, status: run.status });
     }
     const entry = this.active.get(runId);
-    if (run.triggerType === 'unblock') {
-      throw new RunControllerError('run_not_cancellable', `Run ${runId} is a lifecycle run (on_retry_unblock) and cannot be cancelled`, {
+    if (isLifecycleTrigger(run.triggerType)) {
+      const chain = run.triggerType === 'reply' ? 'on_reply' : 'on_retry_unblock';
+      throw new RunControllerError('run_not_cancellable', `Run ${runId} is a lifecycle run (${chain}) and cannot be cancelled`, {
         runId,
         status: run.status,
       });
@@ -811,6 +821,7 @@ export class RunController {
     }
     return this.trackRecovery(run, async () => {
       if (run.triggerType === 'unblock') await this.recoverUnblockRun(run);
+      else if (run.triggerType === 'reply') await this.recoverReplyRun(run);
       else if (run.status === 'finalizing') await this.resumeFinalizing(run);
       else {
         await this.recoverProcessRun(run, options.assumeGone ? { gone: true, detail: 'operator confirmed the worker is gone' } : undefined);
@@ -870,6 +881,8 @@ export class RunController {
       if (!run || !isTerminalStatus(run.status)) continue;
       try {
         await this.resumeTerminalRunActions(run);
+        // WI-39: a manually retried on_reply chain that went through now marks its reply done.
+        if (run.triggerType === 'reply') this.afterReplyChainChanged(run.id);
         report.resumedActions.push(runId);
       } catch (err) {
         this.logger.error('resuming lifecycle actions failed', { runId, error: err });
@@ -886,6 +899,8 @@ export class RunController {
       errors: report.errors.length,
     });
     this.publishStatus();
+    // WI-39: replies that waited while the process was down.
+    this.processReplies();
     return report;
   }
 
@@ -980,6 +995,10 @@ export class RunController {
   private async recoverRun(run: RunRecord): Promise<void> {
     if (run.triggerType === 'unblock') {
       await this.recoverUnblockRun(run);
+      return;
+    }
+    if (run.triggerType === 'reply') {
+      await this.recoverReplyRun(run);
       return;
     }
     switch (run.status) {
@@ -1182,7 +1201,7 @@ export class RunController {
     if (!snapshot) {
       target = { status: 'completed', businessResult: 'failure', reason: 'invalid configuration snapshot' };
     } else {
-      const item = await this.readUnblockItem(run);
+      const { item } = await this.readLifecycleItem(run);
       let result: HookResult | undefined;
       let hookError: unknown;
       try {
@@ -1218,21 +1237,258 @@ export class RunController {
   }
 
   /**
-   * Item of a lifecycle run, read freshly for `{item.*}`; `undefined` if the
-   * run has no item or it cannot be read (source actions then re-read it and
-   * fail regularly, e.g. `item_not_found`).
+   * Item of a lifecycle run, read freshly for `{item.*}`; `item` undefined if
+   * the run has no item or it cannot be read (source actions then re-read it
+   * and fail regularly, e.g. `item_not_found`). `missing` = the source
+   * answered that the item does not exist (or is not visible) any more.
    */
-  private async readUnblockItem(run: RunRecord): Promise<SourceItem | undefined> {
-    if (!run.sourceItemKey) return undefined;
+  private async readLifecycleItem(run: RunRecord): Promise<{ item: SourceItem | undefined; missing: boolean }> {
+    if (!run.sourceItemKey) return { item: undefined, missing: false };
     const { sourceId, itemId } = parseSourceItemKey(run.sourceItemKey);
     const adapter = this.options.sources(run.sourceId ?? sourceId);
-    if (!adapter) return undefined;
+    if (!adapter) return { item: undefined, missing: false };
     try {
-      return (await adapter.getItem(itemId, { signal: this.hookAbort.signal })) ?? undefined;
+      const item = await adapter.getItem(itemId, { signal: this.hookAbort.signal });
+      return item ? { item, missing: false } : { item: undefined, missing: true };
     } catch (err) {
       this.logger.warn('item of lifecycle run could not be read', { runId: run.id, error: errorMessage(err) });
-      return undefined;
+      return { item: undefined, missing: false };
     }
+  }
+
+
+  // ---------------------------------------------------------------------------
+  // Reply runs (trigger `reply`, WI-39)
+
+  /**
+   * Reserve and start the lifecycle run of every waiting reply whose item
+   * lock is free – the oldest reply of each (workflow, item) first (FIFO).
+   * While a reply waits, `RunRepository.reserve` refuses every other run of
+   * (workflow, item) (`reply_pending`, P1), so a freed lock goes to the reply.
+   * Called when a reply was recorded, whenever a supervised run ended and
+   * after recovery. Synchronous; no-op before recovery and while draining.
+   */
+  processReplies(): void {
+    if (!this.ready || this.draining || this.stopping) return;
+    let heads: ReplyRecord[];
+    try {
+      heads = this.repos.replies.listPendingHeads();
+    } catch (err) {
+      this.logger.error('pending replies could not be read', { error: errorMessage(err) });
+      return;
+    }
+    for (const reply of heads) {
+      if (reply.configSnapshot === null) {
+        // Should not happen (recorded with the snapshot); never let it block the item.
+        const failed = this.repos.replies.complete(reply.id, 'failed', 'no workflow snapshot');
+        this.options.chatReplies?.finished(failed, 'failed', null, null);
+        continue;
+      }
+      let run: RunRecord;
+      try {
+        run = this.repos.transaction(() => {
+          const current = this.repos.replies.require(reply.id);
+          if (current.status !== 'pending') throw new RunControllerError('reply_not_pending', `Reply ${reply.id} is ${current.status}`, {});
+          const reserved = this.repos.runs.reserve({
+            workflowId: current.workflowId,
+            triggerType: 'reply',
+            sourceId: current.sourceId,
+            sourceItemKey: current.itemKey,
+            configSnapshot: current.configSnapshot,
+            failIfBlocked: false,
+          });
+          this.repos.replies.assignRun(reply.id, reserved.id);
+          return reserved;
+        });
+      } catch (err) {
+        if (err instanceof LockConflictError) continue; // waits for the run holding the item lock
+        if (err instanceof RunControllerError && err.code === 'reply_not_pending') continue;
+        this.logger.error('reply run could not be reserved', { replyId: reply.id, error: errorMessage(err) });
+        continue;
+      }
+      this.publisher.flush();
+      this.logger.info('reply run reserved', { replyId: reply.id, runId: run.id, workflowId: run.workflowId, itemKey: run.sourceItemKey });
+      this.startReplyRun(run.id);
+    }
+  }
+
+  /** Supervise `reply_check` + `on_reply` of a reserved reply run. */
+  private startReplyRun(runId: string): Promise<RunRecord> {
+    const entry: ActiveRun = {
+      runId,
+      kind: 'lifecycle',
+      cancel: new AbortController(),
+      cancelRequested: false,
+      cancelReason: '',
+      proc: undefined,
+      tokenFiles: undefined,
+      done: Promise.resolve(this.repos.runs.require(runId)),
+    };
+    this.active.set(runId, entry);
+    entry.done = this.track(
+      runId,
+      this.executeReply(runId).catch((err: unknown) => this.onUnexpected(entry, err)),
+    );
+    this.publishStatus();
+    return entry.done;
+  }
+
+  /**
+   * `reserved → starting → running`, author details (best effort), the item
+   * read freshly, then `reply_check` + `on_reply`; the run ends `completed` +
+   * `success` (reply `done`) or `failure` (reply `rejected` by `reply_check`,
+   * or `failed`: chain stopped, item gone, internal error) – run status and
+   * reply status in one transaction. Not counted, no counter reset.
+   * Interrupted by a forced stop: the run stays `running`, recovery continues.
+   */
+  private async executeReply(runId: string): Promise<RunRecord> {
+    const run = this.repos.runs.require(runId);
+    const snapshot = tryParseSnapshot(run);
+    if (run.status === 'reserved') this.repos.runs.transition(runId, 'starting', { expectedFrom: 'reserved' });
+    if (this.repos.runs.require(runId).status === 'starting') this.repos.runs.transition(runId, 'running', { expectedFrom: 'starting' });
+    this.publisher.flush();
+    let reply = this.repos.replies.forRun(runId);
+    if (reply && reply.userName === null && reply.permalink === null && this.options.chatReplies) {
+      try {
+        reply = this.repos.replies.setAuthorInfo(reply.id, await this.options.chatReplies.describe(reply));
+      } catch (err) {
+        this.logger.debug('reply author details not available', { runId, error: errorMessage(err) });
+      }
+    }
+    let target: FinalizationTarget;
+    let outcome: { status: ReplyOutcome; detail: string | null };
+    if (!snapshot || !reply) {
+      target = { status: 'completed', businessResult: 'failure', reason: !snapshot ? 'invalid configuration snapshot' : 'reply record missing' };
+      outcome = { status: 'failed', detail: 'internal error' };
+    } else {
+      const read = await this.readLifecycleItem(run);
+      if (read.missing) {
+        target = { status: 'completed', businessResult: 'failure', reason: 'item no longer exists or is not visible' };
+        outcome = { status: 'failed', detail: 'the item no longer exists or is not visible' };
+      } else {
+        let result: HookResult | undefined;
+        let hookError: unknown;
+        try {
+          result = await this.lifecycle.runHook(runId, 'on_reply', snapshot, {
+            ...(read.item ? { item: read.item } : {}),
+            signal: this.hookAbort.signal,
+            wait: true,
+          });
+        } catch (err) {
+          hookError = err;
+        }
+        this.publisher.flush();
+        if (result?.status === 'interrupted' || (hookError !== undefined && this.hookAbort.signal.aborted)) {
+          return this.repos.runs.require(runId);
+        }
+        ({ target, outcome } = this.replyOutcome(runId, result, hookError));
+      }
+    }
+    this.finishReplyRun(runId, target, reply, outcome);
+    return this.repos.runs.require(runId);
+  }
+
+  /** Final status of a reply run from its `on_reply` journal (rejection = `reply_check` effect `rejected`). */
+  private replyOutcome(
+    runId: string,
+    result: HookResult | undefined,
+    hookError: unknown,
+  ): { target: FinalizationTarget; outcome: { status: ReplyOutcome; detail: string | null } } {
+    if (hookError !== undefined) {
+      this.logger.error('on_reply failed unexpectedly', { runId, error: hookError });
+      this.appendEvent(runId, RUN_EVENTS.hookError, { hook: 'on_reply', message: errorMessage(hookError) });
+      return {
+        target: { status: 'completed', businessResult: 'failure', reason: `on_reply failed: ${errorMessage(hookError)}` },
+        outcome: { status: 'failed', detail: null },
+      };
+    }
+    if (result?.status === 'failed') {
+      const failed = result.failedAction;
+      const name = failed ? (failed.name ?? String(failed.id)) : '?';
+      const check = failed?.type === REPLY_CHECK_ACTION_TYPE;
+      return {
+        target: { status: 'completed', businessResult: 'failure', reason: check ? 'reply_check failed' : `on_reply action '${name}' failed` },
+        outcome: { status: 'failed', detail: check ? 'the reply check failed' : `action ${name} failed` },
+      };
+    }
+    const rejected = this.repos.actions
+      .listForHook(runId, 'on_reply')
+      .find((a) => a.type === REPLY_CHECK_ACTION_TYPE && a.status === 'succeeded' && a.effect?.rejected === true);
+    if (rejected) {
+      const reason = rejectionReason(this.repos.events.listForRun(runId), rejected.id);
+      return {
+        target: { status: 'completed', businessResult: 'failure', reason: `reply rejected by reply_check${reason ? `: ${reason}` : ''}` },
+        outcome: { status: 'rejected', detail: reason },
+      };
+    }
+    return { target: { status: 'completed', businessResult: 'success', reason: 'on_reply succeeded' }, outcome: { status: 'done', detail: null } };
+  }
+
+  /** Finalize a reply run and its reply in one transaction; chat feedback after commit. */
+  private finishReplyRun(runId: string, target: FinalizationTarget, reply: ReplyRecord | null, outcome: { status: ReplyOutcome; detail: string | null }): void {
+    this.repos.transaction(() => {
+      const current = this.repos.runs.require(runId);
+      if (current.status !== 'finalizing') this.repos.runs.beginFinalization(runId, target, { countOutcome: false });
+      this.repos.runs.finish(runId);
+      if (reply) {
+        // The text stays while an action of on_reply is `failed` (also with continue_on_error): a manual retry renders it.
+        const keepText = this.replyActionFailed(runId);
+        const done = this.repos.replies.complete(reply.id, outcome.status, outcome.status === 'done' ? null : (outcome.detail ?? target.reason), { keepText });
+        this.repos.afterCommit(() => this.options.chatReplies?.finished(done, outcome.status, outcome.detail, runId));
+      }
+    });
+    this.publisher.flush();
+  }
+
+  /**
+   * Recovery of a reply run (WI-39): actions left `running` are made safe,
+   * then `reply_check` + `on_reply` continue (a `finalizing` run just finishes).
+   */
+  private async recoverReplyRun(run: RunRecord): Promise<void> {
+    const snapshot = tryParseSnapshot(run);
+    if (snapshot) await this.makeActionsSafe(run.id, { abandonOnStart: false });
+    if (run.status === 'finalizing') {
+      this.recordRecovered(run.id, 'resumed', 'finishing reply run');
+      const target = finalizationTarget(run) ?? { status: 'completed', businessResult: 'failure', reason: 'recovered' };
+      const status: ReplyOutcome = target.businessResult === 'success' ? 'done' : 'failed';
+      this.finishReplyRun(run.id, target, this.repos.replies.forRun(run.id), { status, detail: null });
+      return;
+    }
+    this.recordRecovered(run.id, 'resumed', 'resuming on_reply');
+    await this.executeReply(run.id);
+  }
+
+  /**
+   * After a manual retry/skip of an `on_reply` action of a finished reply run
+   * (API): a `failed` reply becomes `done`/`rejected` once its chain went
+   * through (✅ / ❌). The run's final status does not change (as for every
+   * hook of a finished run).
+   */
+  afterReplyChainChanged(runId: string): void {
+    const run = this.repos.runs.get(runId);
+    const reply = this.repos.replies.forRun(runId);
+    if (!run || run.triggerType !== 'reply' || !isTerminalStatus(run.status) || !reply) return;
+    // `failed` replies are finished once the chain went through; processed replies only lose their kept text.
+    const cleanup = (reply.status === 'done' || reply.status === 'rejected') && reply.text !== null;
+    if (reply.status !== 'failed' && !cleanup) return;
+    const journal = this.repos.actions.listForHook(runId, 'on_reply');
+    if (journal.some((a) => a.status === 'pending' || a.status === 'running') || stoppedAtJournal(journal)) return;
+    const keepText = this.replyActionFailed(runId);
+    if (cleanup) {
+      if (!keepText) this.repos.replies.complete(reply.id, reply.status as 'done' | 'rejected', reply.reason);
+      return;
+    }
+    const rejected = journal.find((a) => a.type === REPLY_CHECK_ACTION_TYPE && a.effect?.rejected === true);
+    const status: ReplyOutcome = rejected ? 'rejected' : 'done';
+    const detail = rejected ? rejectionReason(this.repos.events.listForRun(runId), rejected.id) : null;
+    const done = this.repos.replies.complete(reply.id, status, detail, { keepText });
+    this.logger.info('reply processed after a manual retry', { runId, replyId: reply.id, status });
+    this.options.chatReplies?.finished(done, status, detail, runId);
+  }
+
+  /** True while an `on_reply` action of the run is `failed` (incl. `continue_on_error`): it can still be retried. */
+  private replyActionFailed(runId: string): boolean {
+    return this.repos.actions.listForHook(runId, 'on_reply').some((a) => a.status === 'failed');
   }
 
   // ---------------------------------------------------------------------------
@@ -1744,6 +2000,8 @@ export class RunController {
       this.repos.runs.finish(runId);
     });
     this.publisher.flush();
+    // WI-39: the lock is free without a supervised run ending (`track`) – a waiting reply gets it now.
+    this.processReplies();
   }
 
   /** Message if a `required` artifact of the workflow is not available in the workspace, else `null` (WI-35). */
@@ -1881,6 +2139,8 @@ export class RunController {
     return promise.finally(() => {
       this.active.delete(runId);
       this.publishStatus();
+      // WI-39 (P1): a lock may be free now – a waiting reply gets it before any other start.
+      this.processReplies();
       if (this.active.size === 0) {
         for (const resolve of [...this.idleWaiters]) resolve();
       }
@@ -1982,6 +2242,21 @@ export class RunController {
 
 function minDefined(a: number | undefined, b: number): number {
   return a === undefined ? b : Math.min(a, b);
+}
+
+/** First `failed` action without `continue_on_error` of a journal (the chain stops there), else `null`. */
+function stoppedAtJournal(journal: readonly { status: string; config: unknown }[]): unknown {
+  return journal.find((a) => a.status === 'failed' && !(a.config as { continueOnError?: boolean } | null)?.continueOnError) ?? null;
+}
+
+/** Reason of a rejecting `reply_check` (journal event details of the action), or `null`. */
+function rejectionReason(events: readonly { type: string; payload: Record<string, unknown> }[], actionId: number): string | null {
+  for (const e of [...events].reverse()) {
+    if (e.type !== 'lifecycle.action' || e.payload.actionId !== actionId) continue;
+    const reason = (e.payload.details as { reason?: unknown } | undefined)?.reason;
+    if (typeof reason === 'string' && reason !== '') return reason;
+  }
+  return null;
 }
 
 function hasActions(snapshot: WorkflowSnapshot, hook: HookName): boolean {

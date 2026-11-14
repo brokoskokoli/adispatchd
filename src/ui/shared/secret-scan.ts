@@ -1,7 +1,7 @@
 /**
  * Best-effort detection of secrets in texts a user is about to send as a
- * GitHub comment (WI-27). Kept identical to src/api/secret-scan.ts (the
- * server cannot import UI modules; src/api/secret-scan.test.ts compares both).
+ * GitHub comment (WI-27). Kept identical to src/core/secret-scan.ts (the
+ * server cannot import UI modules; src/core/secret-scan.test.ts compares both).
  * Findings name only the kind and count, never the value.
  */
 

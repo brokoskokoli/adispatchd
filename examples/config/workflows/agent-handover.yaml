@@ -1,0 +1,49 @@
+# workflows/agent-handover.yaml – hand an item to a human in Slack and continue with the answer (WI-39).
+# Disabled example. The agent writes {"schema_version": 1, "result": "success", "outcome": "needs_maintainer",
+# "message": "<question>"} into $ADISPATCH_RESULT_FILE when it needs a decision.
+id: agent-handover
+name: Agent with Slack handover
+enabled: false
+priority: 30
+identity: coder
+
+trigger:
+  type: source
+  source: project_a
+
+filter:
+  all:
+    - { field: labels, operator: contains, value: ready-for-agent }
+    - not: { use: needs-maintainer }
+
+execute:
+  type: shell
+  command: /etc/adispatchd/scripts/coder.sh
+  args: ['{item.url}']
+  timeout:
+    max_duration: 2h
+
+on_result:
+  needs_maintainer:
+    - type: source.update
+      labels: { add: [needs-maintainer], remove: [ready-for-agent] }
+    # Message in the item's Slack thread (created on first use); the hook does not wait for Slack.
+    - type: notify
+      channel: team
+      message: '{item.title}: {result.message}'
+      remind_after: 4h                  # one reminder in the thread …
+      remind_while: needs-maintainer    # … only if the item still matches this named filter
+
+# Optional check of the reply text (stdin) before on_reply: exit 0 = ok, 1 = rejected (stdout = reason
+# shown in the thread), ≥ 2 = check error (retry in the UI).
+# reply_check:
+#   command: /etc/adispatchd/scripts/check-reply.sh
+#   timeout: 30s
+
+# A reply of an allowed user in the thread: lifecycle run (trigger "reply") under the item lock.
+on_reply:
+  - type: source.comment
+    identity: maintainer
+    message: "{reply.text}\n\n(answered in Slack by {reply.user_name})"
+  - type: source.update
+    labels: { add: [ready-for-agent], remove: [needs-maintainer] }

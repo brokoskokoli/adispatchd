@@ -18,10 +18,12 @@ export interface SchedulingState {
   activeBlock(workflowId: string, itemKey: string | null): { id: number; reason: string } | null;
   /** Recent cron firings of a workflow, newest slot first. */
   recentCronFirings(workflowId: string, limit: number): CronFiringRecord[];
+  /** Oldest chat reply of (workflow, item) waiting for its `on_reply` run (WI-39), or `null`. */
+  pendingReply?(workflowId: string, itemKey: string): { id: number } | null;
 }
 
 /** {@link SchedulingState} over the repositories. */
-export function repositoryState(repos: Pick<Repositories, 'runs' | 'blocks' | 'cronFirings'>): SchedulingState {
+export function repositoryState(repos: Pick<Repositories, 'runs' | 'blocks' | 'cronFirings'> & Partial<Pick<Repositories, 'replies'>>): SchedulingState {
   return {
     countActive: (workflowId, sourceId) => repos.runs.countActive(workflowId, sourceId),
     activeRunForItem: (workflowId, itemKey) => {
@@ -33,6 +35,10 @@ export function repositoryState(repos: Pick<Repositories, 'runs' | 'blocks' | 'c
       return block ? { id: block.id, reason: block.reason } : null;
     },
     recentCronFirings: (workflowId, limit) => repos.cronFirings.listForWorkflow(workflowId, limit),
+    pendingReply: (workflowId, itemKey) => {
+      const reply = repos.replies?.pendingFor(workflowId, itemKey);
+      return reply ? { id: reply.id } : null;
+    },
   };
 }
 

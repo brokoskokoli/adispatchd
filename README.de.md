@@ -57,6 +57,12 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
   Sammel-Hook `on_error` für alle technischen Ausgänge.
 - **Retry-Blocks mit Hooks (0.6.0):** `on_retry_block` beim Entstehen eines Blocks (z. B. Label `agent-blocked`,
   Skript per SSH), `on_retry_unblock` beim Aufheben – als eigener Lifecycle-Run, der das Item bis zum Ende hält.
+- **Übergabe in Slack mit Antworten (0.11.0):** Ein Kanal `type: slack` postet Nachrichten der Action `notify` und
+  Orchestrator-Ereignisse in **einen Thread je Item**; antwortet dort eine berechtigte Person, läuft der Hook
+  **`on_reply`** des Workflows als Lifecycle-Run (z. B. Antwort als Kommentar ans Issue, Label `needs-maintainer`
+  entfernen) – genau einmal je Slack-Nachricht, hinter einem laufenden Run des Items eingereiht; optional `reply_check`,
+  eine Erinnerung, solange das Item wartet, Reaktionen ⏳/✅/❌. Socket Mode über eine ausgehende WebSocket-Verbindung –
+  kein offener Port, keine neue Abhängigkeit; Tokens nur aus der Umgebung.
 - **Worker im Container:** `execute.type: container` startet den Worker in einem Wegwerf-Container (Docker oder
   Podman) mit festen Mounts für Workspace, Kontext, Ergebnis und Token-Dateien, Ressourcenlimits, `--cap-drop ALL` –
   Secrets nie auf der Kommandozeile; Cancel/Timeout stoppen den Container, nach einem Neustart räumt die Recovery
@@ -133,14 +139,14 @@ Voraussetzungen: Linux (Produktion, systemd) oder macOS (lokal), **Node.js ≥ 2
 Paket `adispatchd` auf npm, Befehl `adispatch`. Für Dienste immer eine **feste Version** global installieren (kein `npx`):
 
 ```bash
-npm install -g adispatchd@0.10.1                 # aus der npm-Registry
+npm install -g adispatchd@0.11.0                 # aus der npm-Registry
 npx adispatchd --help                           # nur zum Ausprobieren, ohne Installation
 
 # alternativ aus dem Repository-Checkout:
 git clone https://github.com/brokoskokoli/adispatchd.git && cd adispatchd
 npm install
-npm pack                                        # baut (prepack) und erzeugt adispatchd-0.10.1.tgz
-npm install -g ./adispatchd-0.10.1.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
+npm pack                                        # baut (prepack) und erzeugt adispatchd-0.11.0.tgz
+npm install -g ./adispatchd-0.11.0.tgz   # feste Version aus dem Tarball (für Dienste Pflicht)
 # lokal ohne globale Installation: npm run build && node dist/cli/main.js <kommando> …
 ```
 
@@ -295,7 +301,7 @@ on_error:                            # crashed, start_error, timed_out, cancelle
 
 - Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_timeout`, `on_cancel`, `on_error`
   (Sammel-Hook, wenn der spezifische technische Hook fehlt), `on_result.<outcome>` (benannte Ergebnisse statt
-  `on_success`/`on_failure`) und `on_retry_block`/`on_retry_unblock` (Retry-Block entsteht/wird aufgehoben, 0.6.0); Actions `source.update`, `source.comment`, `shell`; Retry 3 × 30 s
+  `on_success`/`on_failure`), `on_retry_block`/`on_retry_unblock` (Retry-Block entsteht/wird aufgehoben, 0.6.0) und `on_reply` (Antwort im Slack-Thread, 0.11.0); Actions `source.update`, `source.comment`, `shell`, `notify` (0.11.0); Retry 3 × 30 s
   (`lifecycle.action_retry`), `continue_on_error`.
 - Platzhalter (feste Liste): `{run.id}`, `{workflow.id}`, `{item.number}`, `{item.url}`, `{result.message}`,
   `{parameters.<name>}`, `{source.vars.<name>}`, `{workspace.base_dir}`, `{item.work_branch}`, `{item.work_pr}` … –
