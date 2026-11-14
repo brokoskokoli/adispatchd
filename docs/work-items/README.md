@@ -42,6 +42,7 @@ Zerlegung der Spec v0.1 in umsetzbare Pakete. **Status: alle Work-Items umgesetz
 | [36](WI-36-hub-core.md) | Hub-Kern: mehrere Workspaces als Kindprozesse mit gemeinsamem Slot-Limit | §7, §14 | 34 | 0.10.0 |
 | [37](WI-37-hub-api-ui.md) | Hub-API und Übersicht: Workspaces, Verwaltung, Durchreichen der Workspace-UIs | §15, §16, §20 | 36 | 0.10.0 |
 | [38](WI-38-hub-operations.md) | Hub im Betrieb: systemd, `init`, Doku und Website | §14, §19 | 36, 37 | 0.10.0 |
+| [39](WI-39-slack-threads-replies.md) | Slack-Kanal mit Threads je Item, Action `notify`, Hook `on_reply` als Lifecycle-Run | §10, §11, §12, §18 | 30, 33 | 0.11.0 |
 
 Ablauf je Work-Item: Coder-Agent (eigener Branch/Worktree) → Reviewer-Agent (prüft gegen Acceptance Criteria + Spec) → ggf. Fix-Runde → Merge nach `main`.
 
