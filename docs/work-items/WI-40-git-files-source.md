@@ -29,7 +29,7 @@ sources:
     branch: main                     # Default main
     path: issues                     # Ordner im Repo, Default issues; Dateien NNNN-<slug>.md (oder NNNN.md)
     identity: coordinator            # optional: Token dieser Identity für fetch/push (github_app oder github_token)
-    commit_author: { name: adispatchd, email: adispatchd@example.invalid }   # Default wie hier
+    commit_author: { name: adispatchd, email: adispatchd@users.noreply.invalid }   # Default wie hier
     closed_when: { status: [done, closed] }   # Default; Feld → Werte, ein Treffer genügt → state closed
     comments_heading: "## Log"       # Überschrift des Kommentar-Abschnitts am Dateiende, Default "## Log"
     fields:                          # weitere Frontmatter-Schlüssel mit Typ (für Filter/Views/Sortierung)
