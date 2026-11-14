@@ -219,6 +219,20 @@ describe.runIf(supported)('RunController – reply runs (WI-39)', () => {
     expect(chat.finishedCalls.at(-1)).toMatchObject({ outcome: 'done' });
   });
 
+  it('reply_check timeout: nothing runs, reply failed, the check action failed and retryable', async () => {
+    const slowCheck = env.script('slow-check.sh', 'cat >/dev/null; sleep 5; exit 0');
+    const snapshot = await env.snapshot(yaml('/bin/true', `reply_check:\n  command: ${slowCheck}\n  timeout: 500ms\n${ON_REPLY}`));
+    const h = await ready();
+    const { reply } = record(snapshot, 'slow');
+    h.controller.processReplies();
+    const r = await processed(h, reply.id);
+    expect(r).toMatchObject({ status: 'failed', reason: 'the reply check failed', text: 'slow' });
+    const [check, answer] = env.p.actions.listForRun(r.runId!);
+    expect(check).toMatchObject({ name: 'reply_check', status: 'failed', lastError: expect.objectContaining({ code: 'lifecycle_reply_check_error', message: expect.stringContaining('timed out after 500ms') }) });
+    expect(answer?.status).toBe('pending');
+    expect(env.github.comments(REPO, ISSUE)).toEqual([]);
+  });
+
   it('keeps the text while a continue_on_error action failed: its retry renders {reply.text}; cleared afterwards', async () => {
     const snapshot = await env.snapshot(
       yaml(

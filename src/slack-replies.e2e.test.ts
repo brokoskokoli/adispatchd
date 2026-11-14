@@ -164,28 +164,48 @@ describe('end-to-end: Slack thread per item and replies (WI-39)', () => {
     expect(JSON.stringify(env.logger.records)).not.toContain(APP);
   });
 
-  it('a manual start of the item is refused with 409 reply_pending while a reply waits', async () => {
-    // A reply waits (recorded, not yet processed): keep the item lock busy with a fake active run.
+  it('while a reply waits, the planning step reports locked (reply pending) and a manual start gets 409 reply_pending', async () => {
+    // Independent of the first test: own issue, own thread, a reply recorded but not yet processed.
     const persistence = env.app.persistence;
-    const thread = persistence.threads.listForItem('repo_a:11')[0]!;
+    // Whatever ran before must not occupy the workflow limit (max_concurrent 1).
+    for (const r of [11]) {
+      try {
+        env.github.setLabels(REPO_A, r, []);
+      } catch {
+        /* issue of the first test not created (test run alone) */
+      }
+    }
+    await until(() => persistence.runs.countActive('coder') === 0, 'no active run of coder');
+    env.github.createIssue(REPO_A, { number: 21, title: 'Pick a queue', labels: ['ready'] });
+    const thread = persistence.threads.setThreadTs(
+      persistence.threads.resolve({ channelId: 'team', workflowId: 'coder', sourceId: 'repo_a', itemKey: 'repo_a:21', chatChannel: CHANNEL, mode: 'item' }).id,
+      '1700000999.100000',
+    );
     persistence.replies.record({
       channelId: 'team',
       chatChannel: CHANNEL,
-      ts: '1700000999.000555',
+      ts: '1700000999.100001',
       threadId: thread.id,
       workflowId: 'coder',
       sourceId: 'repo_a',
-      itemKey: 'repo_a:11',
+      itemKey: 'repo_a:21',
       userId: USER,
-      text: 'later',
+      text: 'use the existing queue',
       configSnapshot: env.app.config.snapshotWorkflow('coder', 'repo_a'),
       status: 'pending',
     });
-    const res = await env.request('POST', '/api/v1/workflows/coder/start', { item: 'repo_a:11' });
+    const res = await env.request('POST', '/api/v1/workflows/coder/start', { item: 'repo_a:21' });
     expect(res.status).toBe(409);
     expect(res.json.error.code).toBe('reply_pending');
-    // Processing the waiting reply frees the item again.
+    // The scheduler does not start the item (it matches the filter) but reports why.
+    await env.app.scheduler.planOnce();
+    const candidate = env.app.scheduler.lastDiagnosis('coder')?.candidates.find((c) => c.itemKey === 'repo_a:21');
+    expect(candidate).toMatchObject({ decision: 'locked', reason: expect.stringMatching(/^reply \d+ pending \(on_reply runs first\)$/) });
+    expect(persistence.runs.list({ workflowId: 'coder', sourceItemKey: 'repo_a:21' }).runs).toEqual([]);
+    // Processing the waiting reply runs on_reply first.
     env.app.controller.processReplies();
-    await until(() => persistence.replies.listForItem('repo_a:11').every((r) => r.status !== 'pending' && r.status !== 'running'), 'reply processed');
+    await until(() => persistence.replies.listForItem('repo_a:21').every((r) => r.status !== 'pending' && r.status !== 'running'), 'reply processed');
+    const [first] = persistence.runs.list({ sourceItemKey: 'repo_a:21' }).runs.reverse();
+    expect(first?.triggerType).toBe('reply');
   });
 });
