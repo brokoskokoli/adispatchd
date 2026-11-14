@@ -934,17 +934,19 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
 | `vars` | Map | nein | wie bei `github` | `{source.vars.<Name>}` |
 
 - **Eigener Klon:** Der Daemon hält einen Klon unter `<data-dir>/sources/<source-id>/` – nur ein Spiegel: vor jedem
-  Lesen und Schreiben `fetch` des Branches und `reset --hard`. Lesen holt höchstens alle **5 s** neu (gleichzeitige
-  Leser eines Planungsschritts teilen sich einen fetch) und parst dann alle Dateien. Bricht der Aufrufer ab (Abbruch
-  eines Run-Starts, Herunterfahren, Zeitgrenze von `remind_while`, geschlossene Ansicht), beendet der Adapter einen
-  laufenden Lese-fetch bzw. wartet nicht weiter auf die Sperre des Klons; Schreibvorgänge laufen dagegen zu Ende
-  (ein abgebrochener Push hätte einen unklaren Ausgang). Ein **fehlgeschlagener** fetch wird ebenso geteilt: Leser
-  bekommen bis zum nächsten Versuch denselben Fehler (Warnung `Fetching the repository failed …` einmal je Versuch),
-  der Abstand wächst mit jedem weiteren Fehlschlag in Folge (5 s, 10 s, 20 s … höchstens 60 s); Schreibvorgänge holen
-  immer selbst, ein erfolgreicher fetch beendet das Warten. Die Remote-URL steht nicht in
-  der Konfiguration des Klons (kein `origin`), Git läuft ohne System-/Benutzer-Git-Konfiguration und -Attribute (die
-  `.gitattributes` des Repositories gelten), ohne Hooks und ohne
-  Terminal-Abfrage.
+  Lesen und Schreiben `fetch` des Branches und `reset --hard`. Lesen holt höchstens alle **5 s** neu und parst dann
+  alle Dateien; gleichzeitige Leser eines Planungsschritts teilen sich einen fetch. „Frisch gelesen“ (`getItem`,
+  Felder für Filter, die Prüfung direkt vor `on_start`, Spec §7) heißt bei `git_files` also: höchstens 5 s alt – eine
+  eben gepushte Statusänderung kann einen Start, der in diesen 5 s geprüft wird, nicht mehr verhindern
+  (Schreibvorgänge und `findCommentByMarker` holen immer neu). Bricht der Aufrufer ab (Abbruch eines Run-Starts,
+  Herunterfahren, Zeitgrenze von `remind_while`, geschlossene Ansicht), beendet der Adapter einen laufenden Lese-fetch
+  bzw. wartet nicht weiter auf die Sperre des Klons; Schreibvorgänge laufen dagegen zu Ende (ein abgebrochener Push
+  hätte einen unklaren Ausgang). Ein **fehlgeschlagener** fetch wird ebenso geteilt: Leser bekommen bis zum nächsten
+  Versuch denselben Fehler (Warnung `Fetching the repository failed …` einmal je Versuch), der Abstand wächst mit
+  jedem weiteren Fehlschlag in Folge (5 s, 10 s, 20 s … höchstens 60 s); Schreibvorgänge holen immer selbst, ein
+  erfolgreicher fetch beendet das Warten. Die Remote-URL steht nicht in der Konfiguration des Klons (kein `origin`),
+  Git läuft ohne System-/Benutzer-Git-Konfiguration und -Attribute (die `.gitattributes` des Repositories gelten),
+  ohne Hooks und ohne Terminal-Abfrage.
 - **Zugangsdaten:** Mit `identity` holt der Daemon deren Token (GitHub-App-Installationstoken bzw. `github_token`)
   und gibt es **nur über die Umgebung** des Git-Prozesses (`ADISPATCH_GIT_TOKEN`) an einen Inline-Credential-Helper
   (Benutzer `x-access-token`), der nur für Scheme und Host des Repositories gilt; Weiterleitungen folgt Git nicht –
@@ -992,7 +994,9 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
   vor dem neuen Eintrag (bzw. vor der neu angelegten Überschrift); ist er im Kommentartext offen (z. B. aus
   `{reply.text}`), schließt er ihn am Ende des Eintrags, vor dem Marker. Auch Menschen können Einträge
   im selben Format schreiben (`### 2026-11-14 10:00 - alice` wird ebenfalls erkannt); sie erscheinen im Feld
-  `comments`.
+  `comments`. **Autor und Text sind nicht authentifiziert** (untrusted, §20.5): Jeder mit Schreibrecht auf das
+  Repository kann `### … — coordinator` schreiben; anders als bei GitHub-Kommentaren belegt der Name nicht, wer den
+  Eintrag verfasst hat. Worker und Hooks sollen `comments[].author` nicht als Berechtigung werten.
 - **Identity:** Fetch/Push laufen immer mit der Source-`identity`; die Identity der Action (§6.10) erscheint als
   Autor im Kommentarkopf und im Commit-Trailer. Ohne jede Identity ist der Autor `commit_author.name`.
 - **Worker-Kontext:** `context.json` enthält in `source.attributes` alle billigen Felder – hier also auch `body`
