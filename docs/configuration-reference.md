@@ -938,7 +938,10 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
   Leser eines Planungsschritts teilen sich einen fetch) und parst dann alle Dateien. Bricht der Aufrufer ab (Abbruch
   eines Run-Starts, Herunterfahren, Zeitgrenze von `remind_while`, geschlossene Ansicht), beendet der Adapter einen
   laufenden Lese-fetch bzw. wartet nicht weiter auf die Sperre des Klons; Schreibvorgänge laufen dagegen zu Ende
-  (ein abgebrochener Push hätte einen unklaren Ausgang). Die Remote-URL steht nicht in
+  (ein abgebrochener Push hätte einen unklaren Ausgang). Ein **fehlgeschlagener** fetch wird ebenso geteilt: Leser
+  bekommen bis zum nächsten Versuch denselben Fehler (Warnung `Fetching the repository failed …` einmal je Versuch),
+  der Abstand wächst mit jedem weiteren Fehlschlag in Folge (5 s, 10 s, 20 s … höchstens 60 s); Schreibvorgänge holen
+  immer selbst, ein erfolgreicher fetch beendet das Warten. Die Remote-URL steht nicht in
   der Konfiguration des Klons (kein `origin`), Git läuft ohne System-/Benutzer-Git-Konfiguration, ohne Hooks und ohne
   Terminal-Abfrage.
 - **Zugangsdaten:** Mit `identity` holt der Daemon deren Token (GitHub-App-Installationstoken bzw. `github_token`)

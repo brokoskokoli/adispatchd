@@ -448,6 +448,52 @@ describe('GitFilesSourceAdapter – abort and failing fetches', () => {
     expect(fetches.count).toBe(1);
   });
 
+  it('shares a failed fetch with concurrent readers and backs off before the next attempt', async () => {
+    let failing = true;
+    let fetches = 0;
+    const exec: GitExec = async (args, options) => {
+      if (args.includes('fetch')) {
+        fetches++;
+        if (failing) {
+          const { GitCommandError } = await import('./git.js');
+          throw new GitCommandError('git exited with 128', 128, 'fatal: unable to access: Could not resolve host: git.example.invalid');
+        }
+      }
+      return execGit(args, options);
+    };
+    const { adapter, clock, logger } = setup({ 'issues/0001-a.md': ISSUE(1, '') }, { identity: null }, { exec, minFetchIntervalMs: 5_000 });
+    const results = await Promise.all([
+      adapter.listCandidates().catch((e: unknown) => e),
+      adapter.getItem('1').catch((e: unknown) => e),
+      adapter.listLabels().catch((e: unknown) => e),
+      adapter.resolveFields({ sourceId: 'issues', itemId: '1', key: 'issues#1', url: '', type: 'issue', fields: {} }, ['status']).catch((e: unknown) => e),
+      adapter.listCandidates().catch((e: unknown) => e),
+    ]);
+    expect(fetches).toBe(1);
+    expect(results.every((r) => r === results[0])).toBe(true);
+    expect(results[0]).toBeInstanceOf(SourceError);
+    expect((results[0] as SourceError).kind).toBe('transient');
+    expect(logger.records.filter((r) => r.msg.startsWith('Fetching the repository failed'))).toHaveLength(1);
+
+    // Backoff: the interval (5 s), then doubled (10 s), …
+    clock.advance(4_999);
+    await expect(adapter.listCandidates()).rejects.toBe(results[0]);
+    expect(fetches).toBe(1);
+    clock.advance(1);
+    await expect(adapter.listCandidates()).rejects.toBeInstanceOf(SourceError);
+    expect(fetches).toBe(2);
+    clock.advance(9_999);
+    await expect(adapter.listCandidates()).rejects.toBeInstanceOf(SourceError);
+    expect(fetches).toBe(2);
+    expect(logger.records.at(-1)?.fields).toMatchObject({ failures: 2, retryInMs: 10_000 });
+
+    // A writer fetches in any case; success ends the backoff.
+    failing = false;
+    await adapter.applyUpdate({ sourceId: 'issues', itemId: '1', key: 'issues#1', url: '', type: 'issue', fields: {} }, { fields: { status: 'x' } }, 'c');
+    expect(fetches).toBe(3);
+    expect((await adapter.listCandidates()).length).toBe(1);
+  });
+
   it('terminates the git process on abort (execGit)', async () => {
     const controller = new AbortController();
     const reason = new Error('stop');

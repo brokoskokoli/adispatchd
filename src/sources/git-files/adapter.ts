@@ -74,6 +74,9 @@ export const GIT_FILES_ITEM_TYPE = 'issue';
 /** Default minimal interval between two fetches for reads. */
 export const GIT_FILES_MIN_FETCH_INTERVAL_MS = 5_000;
 
+/** Longest time readers get the error of a failed fetch before the next attempt (backoff cap). */
+export const GIT_FILES_MAX_FETCH_BACKOFF_MS = 60_000;
+
 /** Default attempts of a write when the push is rejected (concurrent commits). */
 export const GIT_FILES_MAX_PUSH_ATTEMPTS = 5;
 
@@ -166,6 +169,8 @@ export class GitFilesSourceAdapter implements SourceAdapter {
   private readonly minFetchIntervalMs: number;
   private readonly maxPushAttempts: number;
   private lastFetchAt: number | null = null;
+  /** Last failed fetch (shared with readers until `until`), and how many failed in a row. */
+  private lastFailure: { error: unknown; until: number; count: number } | null = null;
   private parsed: ParsedState | null = null;
   /** Problems already logged (file + problem), so a broken file warns once, not on every poll. */
   private readonly reported = new Set<string>();
@@ -477,10 +482,19 @@ export class GitFilesSourceAdapter implements SourceAdapter {
     );
   }
 
-  /** Writers pass no signal: a write runs to its end once it holds the lock (a cut-off push has an unknown outcome). */
+  /**
+   * Fetch and reset unless a read finds the last fetch fresh enough. A failed
+   * fetch is shared like a successful one: readers (`force=false`) get its
+   * error until the backoff ends (the fetch interval, doubled with every
+   * further failure in a row, at most {@link GIT_FILES_MAX_FETCH_BACKOFF_MS}),
+   * instead of each trying again behind the clone lock. Writers always fetch.
+   * Writers pass no signal: a write runs to its end once it holds the lock (a
+   * cut-off push has an unknown outcome).
+   */
   private async syncLocked(force: boolean, signal?: AbortSignal): Promise<void> {
     const now = this.clock.now().getTime();
     if (!force && this.lastFetchAt !== null && now - this.lastFetchAt < this.minFetchIntervalMs) return;
+    if (!force && this.lastFailure && now < this.lastFailure.until) throw this.lastFailure.error;
     try {
       try {
         await this.clone.sync(signal);
@@ -493,10 +507,21 @@ export class GitFilesSourceAdapter implements SourceAdapter {
       }
     } catch (err) {
       this.lastFetchAt = null;
-      if (err instanceof GitCommandError) throw new SourceError('transient', `Updating the clone failed: ${err.message}`);
-      throw err;
+      // An abort is the caller's decision, not a failure of the repository.
+      if (signal?.aborted) throw err;
+      const error = err instanceof GitCommandError ? new SourceError('transient', `Updating the clone failed: ${err.message}`) : err;
+      const count = (this.lastFailure?.count ?? 0) + 1;
+      const backoffMs = Math.min(this.minFetchIntervalMs * 2 ** Math.min(count - 1, 20), GIT_FILES_MAX_FETCH_BACKOFF_MS);
+      this.lastFailure = { error, until: this.clock.now().getTime() + backoffMs, count };
+      this.logger.warn('Fetching the repository failed; reads report this error until the next attempt', {
+        error: error instanceof Error ? error.message : String(error),
+        failures: count,
+        retryInMs: backoffMs,
+      });
+      throw error;
     }
     this.lastFetchAt = now;
+    this.lastFailure = null;
     this.parsed = null;
   }
 
