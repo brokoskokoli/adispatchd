@@ -812,7 +812,7 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
 | `repository` | String | ja | URL mit Schema `https`, `http`, `ssh`, `git`, `file`, scp-artig `git@host:o/r.git` oder Pfad (relativ zum config-dir); **keine Zugangsdaten in der URL**; nicht mit `-` beginnend | Remote des Klons |
 | `branch` | String | nein | Default `main`; gültiger Branch-Name | gelesener und beschriebener Branch |
 | `path` | String | nein | Default `issues`; relativ, ohne `..`/`.git`, `/` als Trenner; `.` = Wurzel | Ordner der Item-Dateien (Unterordner werden nicht gelesen) |
-| `identity` | Identity-ID | nein | muss existieren (`github_app` oder `github_token`) | Token für fetch/push; ohne: Git ohne Zugangsdaten (lokaler Pfad, ssh mit Agent, öffentliches Repository) |
+| `identity` | Identity-ID | nein | muss existieren (`github_app` oder `github_token`); nicht mit einer `http://`-URL (Token im Klartext) | Token für fetch/push (nur bei `https://`-Remotes verwendet); ohne: Git ohne Zugangsdaten (lokaler Pfad, ssh mit Agent, öffentliches Repository) |
 | `commit_author` | `{ name, email }` | nein | Default `adispatchd <adispatchd@users.noreply.invalid>`; einzeilig, ohne `<`/`>` | Autor der Commits |
 | `closed_when` | Map Schlüssel → Wert(e) | nein | Default `{ status: [done, closed] }`; Schlüssel = Frontmatter-Schlüssel (nicht abgeleitete Felder wie `state`) | Feld `state`: `closed`, wenn ein Wert passt (ohne Groß-/Kleinschreibung, bei Listen wie `labels` ein Element), sonst `open` |
 | `comments_heading` | String | nein | Default `## Log`; eine Markdown-Überschrift | Abschnitt am Dateiende für `source.comment` (z. B. `## Verlauf`) |
@@ -827,20 +827,26 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
   Terminal-Abfrage.
 - **Zugangsdaten:** Mit `identity` holt der Daemon deren Token (GitHub-App-Installationstoken bzw. `github_token`)
   und gibt es **nur über die Umgebung** des Git-Prozesses (`ADISPATCH_GIT_TOKEN`) an einen Inline-Credential-Helper
-  (Benutzer `x-access-token`) – nie in URL, Argumenten, Klon-Konfiguration, Logs oder Fehlermeldungen. Rechte:
+  (Benutzer `x-access-token`), der nur für Scheme und Host des Repositories gilt; Weiterleitungen folgt Git nicht –
+  nie in URL, Argumenten, Klon-Konfiguration, Logs oder Fehlermeldungen. Ein abgelehntes Token (auch „not found“ bei
+  privaten Repositories) wird einmal verworfen und mit einem frischen wiederholt. ssh läuft mit `BatchMode=yes` (keine
+  Rückfragen), außer `GIT_SSH_COMMAND` ist gesetzt. Rechte:
   GitHub App mit **Contents: Read and write** auf dem Repository, bzw. ein Token mit diesem Recht (fine-grained) oder
   `repo` (klassisch). Für ssh-Remotes ohne `identity` nutzt Git den ssh-Agent (`SSH_AUTH_SOCK`) des Daemons.
 - **Ungültige Dateien** (kein oder fehlerhaftes Frontmatter, kein Mapping, doppelte Schlüssel, `id` keine positive
-  ganze Zahl oder ≠ Zahl im Dateinamen, dieselbe Nummer in mehreren Dateien, Symlink, größer als 1 MiB) werden
+  ganze Zahl oder ≠ Zahl im Dateinamen, dieselbe Nummer in mehreren Dateien – auch wenn eine davon ungültig ist –,
+  Symlink, größer als 1 MiB) werden
   übersprungen und einmal je Datei und Problem als Warnung `Skipping malformed item file` geloggt; der
-  Planungsschritt läuft mit den übrigen Items weiter. `.md`-Dateien ohne Nummernpräfix (`README.md`) werden still
+  Planungsschritt läuft mit den übrigen Items weiter. Ist der Ordner `path` selbst (oder ein übergeordneter Ordner im
+  Repository) ein symbolischer Link, liest der Adapter keine Items und schreibt nichts. `.md`-Dateien ohne Nummernpräfix (`README.md`) werden still
   ignoriert. Ein Wert, der nicht zum Typ seines Felds passt (z. B. `priority: high` bei `priority: number`), macht
   nur dieses Feld des Items **unknown** (fail closed, §4.3).
 - **Listing:** wie bei GitHub nur offene Items, außer der Filter wählt oben `state` (`equals`/`in`) aus (§4.5).
 - **Schreiben** (`source.update` mit `labels` und `fields`, §3.4.11; `source.comment`): jede Action = **ein
   Commit** (Nachricht `<source> #<nr>: <Änderung>` mit Trailern `Adispatchd-Run`, `Adispatchd-Action`,
   `Adispatchd-Identity`) und ein Push. Frontmatter-Änderungen schreiben nur das Frontmatter neu (Reihenfolge der
-  Schlüssel und YAML-Kommentare bleiben erhalten), Kommentare werden nur am Dateiende angehängt; der Body bleibt
+  Schlüssel und YAML-Kommentare bleiben erhalten; Abstände, Flow-Listen `[ a,  b ]` und gefaltete Texte im
+  Frontmatter können dabei normalisiert werden), Kommentare werden nur am Dateiende angehängt; der Body bleibt
   bytegleich, sodass nebenläufige Änderungen von Menschen sauber mergen. Wird der Push abgelehnt (jemand hat
   inzwischen gepusht), holt der Adapter den neuen Stand, setzt den Klon darauf zurück und wendet die Änderung **neu**
   an (Labels/Felder nur, wenn noch nötig; ein Kommentar nur, wenn sein Marker fehlt) – höchstens 5 Versuche, danach
@@ -849,7 +855,10 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
 - **Kommentare:** Eintrag `### <ISO-Zeit> — <Identity>`, Text, Marker `<!-- adispatchd:<run>:<action> -->` als letzte
   Zeile; der Abschnitt `comments_heading` wird angelegt, wenn er fehlt. HTML-Kommentare im Text werden entschärft,
   Zeilen, die wie ein Eintragskopf aussehen, mit `\` maskiert. Kommentar-ID ist der SHA des Commits; ein Retry
-  findet einen schon geschriebenen Eintrag an seinem Marker (`findCommentByMarker`). Auch Menschen können Einträge
+  findet einen schon geschriebenen Eintrag an seinem Marker (`findCommentByMarker`). Ein Eintrag endet am nächsten
+  Eintragskopf oder an einer Überschrift der Ebene von `comments_heading` oder höher (Text, den jemand danach anfügt,
+  gehört nicht mehr dazu); solche Überschriften im Kommentartext werden ebenfalls mit `\` maskiert. Die Überschrift
+  zählt nur außerhalb von Code-Blöcken. Auch Menschen können Einträge
   im selben Format schreiben (`### 2026-11-14 10:00 - alice` wird ebenfalls erkannt); sie erscheinen im Feld
   `comments`.
 - **Identity:** Fetch/Push laufen immer mit der Source-`identity`; die Identity der Action (§6.10) erscheint als

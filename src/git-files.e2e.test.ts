@@ -25,7 +25,7 @@ let cookie = '';
 beforeAll(async () => {
   remote = new TestRemote({ 'README.md': '# Tracker\n' });
   const items = {
-    'issues/0001-first.md': ISSUE(1, 'status: todo\npriority: 1\nbranch: wi-1\n', 'Fix the first thing.\n\n## Log\n\n### 2026-11-13T09:00:00Z — alice\nPlease keep the API stable.\n'),
+    'issues/0001-first.md': ISSUE(1, 'status: todo\npriority: 1\nbranch: wi-1\npr: "#41"\n', 'Fix the first thing.\n\n## Log\n\n### 2026-11-13T09:00:00Z — alice\nPlease keep the API stable.\n'),
     'issues/0002-blocked.md': ISSUE(2, 'status: todo\npriority: 9\nblocked_by: [3]\n'),
     'issues/0003-waiting.md': ISSUE(3, 'status: waiting\n'),
     'issues/0004-unknown-blocker.md': ISSUE(4, 'status: todo\nblocked_by: [99]\n'),
@@ -53,7 +53,7 @@ beforeAll(async () => {
     );
     const worker = e.script(
       'worker.sh',
-      `printf '%s|%s|%s' "$1" "$2" "$3" > "${e.marks}/args-$ADISPATCH_SOURCE_ITEM_ID.txt"
+      `printf '%s|%s|%s|%s' "$1" "$2" "$3" "$4" > "${e.marks}/args-$ADISPATCH_SOURCE_ITEM_ID.txt"
 cp "$ADISPATCH_CONTEXT_FILE" "${e.marks}/context-$ADISPATCH_SOURCE_ITEM_ID.json"
 printf '{"schema_version":1,"result":"success","message":"ok"}' > "$ADISPATCH_RESULT_FILE"`,
     );
@@ -73,7 +73,7 @@ printf '{"schema_version":1,"result":"success","message":"ok"}' > "$ADISPATCH_RE
         'execute:',
         '  type: shell',
         `  command: ${worker}`,
-        "  args: ['{item.number}', '{item.title}', '{item.work_branch}']",
+        "  args: ['{item.number}', '{item.title}', '{item.work_branch}', '{item.work_pr}']",
         'on_start:',
         '  - { type: source.update, fields: { status: coding }, labels: { add: [agent] } }',
         'on_success:',
@@ -126,8 +126,8 @@ describe('git_files source end-to-end', () => {
     const runId1 = second.startedRunIds[0] as string;
     expect((await env.waitTerminal(runId1)).status).toBe('completed');
 
-    expect(readFileSync(path.join(env.marks, 'args-1.txt'), 'utf8')).toBe('1|Item 1|wi-1');
-    expect(readFileSync(path.join(env.marks, 'args-7.txt'), 'utf8')).toBe('7|Item 7|');
+    expect(readFileSync(path.join(env.marks, 'args-1.txt'), 'utf8')).toBe('1|Item 1|wi-1|41');
+    expect(readFileSync(path.join(env.marks, 'args-7.txt'), 'utf8')).toBe('7|Item 7||');
     const context = JSON.parse(readFileSync(path.join(env.marks, 'context-1.json'), 'utf8')) as { source: { attributes: Record<string, unknown> } };
     expect(context.source.attributes).toMatchObject({
       body: 'Fix the first thing.',
@@ -136,7 +136,7 @@ describe('git_files source end-to-end', () => {
     });
 
     const file = remote.file('issues/0001-first.md');
-    expect(file.startsWith('---\nid: 1\ntitle: Item 1\nstatus: review\npriority: 1\nbranch: wi-1\nlabels: []\n---\nFix the first thing.\n\n## Log\n\n### 2026-11-13T09:00:00Z — alice\nPlease keep the API stable.\n')).toBe(true);
+    expect(file.startsWith('---\nid: 1\ntitle: Item 1\nstatus: review\npriority: 1\nbranch: wi-1\npr: "#41"\nlabels: []\n---\nFix the first thing.\n\n## Log\n\n### 2026-11-13T09:00:00Z — alice\nPlease keep the API stable.\n')).toBe(true);
     expect(file).toMatch(new RegExp(`### \\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ — maintainer\\n\\nDone in ${runId1}\\n\\n<!-- adispatchd:${runId1}:`));
     const log = remote.log();
     expect(log.filter((m) => m.startsWith('issues #1: '))).toHaveLength(3);

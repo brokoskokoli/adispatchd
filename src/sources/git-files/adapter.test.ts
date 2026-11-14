@@ -1,10 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FakeClock, SourceError, type CredentialProvider, type LogFields, type Logger, type SourceItem } from '../../core/index.js';
 import { GitFilesSourceAdapter, listedStates, type GitFilesAdapterConfig, type GitFilesAdapterOptions } from './adapter.js';
-import { execGit, GIT_TOKEN_ENV, type GitExec } from './git.js';
+import { CREDENTIAL_HELPER, credentialOrigin, execGit, GitClone, GIT_TOKEN_ENV, type GitExec } from './git.js';
 import { TestRemote } from './testing/repo.js';
 
 const ISSUE = (id: number, extra: string, body = 'Body.\n'): string => `---\nid: ${id}\ntitle: Item ${id}\n${extra}---\n${body}`;
@@ -129,6 +130,8 @@ describe('GitFilesSourceAdapter – reading', () => {
       'issues/0005-a.md': ISSUE(5, ''),
       'issues/0005-b.md': ISSUE(5, ''),
       'issues/0006-nofm.md': 'no frontmatter\n',
+      'issues/0007-ok.md': ISSUE(7, ''),
+      'issues/0007-old.md': '---\n: bad\n',
     });
     const items = await adapter.listCandidates();
     expect(items.map((i) => i.itemId)).toEqual(['1']);
@@ -145,11 +148,13 @@ describe('GitFilesSourceAdapter – reading', () => {
       'issues/0005-a.md',
       'issues/0005-b.md',
       'issues/0006-nofm.md',
+      'issues/0007-ok.md',
+      'issues/0007-old.md',
     ]);
     // A second poll does not warn again.
     await adapter.listCandidates();
-    expect(logger.records.filter((r) => r.level === 'warn')).toHaveLength(5);
-    expect((await adapter.problems()).length).toBe(5);
+    expect(logger.records.filter((r) => r.level === 'warn')).toHaveLength(7);
+    expect((await adapter.problems()).length).toBe(7);
   });
 
   it('parses item references', () => {
@@ -220,6 +225,7 @@ describe('GitFilesSourceAdapter – writing', () => {
     await expect(adapter.applyUpdate(it1, { fields: { state: 'closed' } }, 'x')).rejects.toThrow('cannot be set');
     await expect(adapter.applyUpdate(it1, { fields: { priority: 'high' } }, 'x')).rejects.toThrow('expected a number');
     await expect(adapter.applyUpdate(it1, { project: { Status: 'x' } }, 'x')).rejects.toThrow('no GitHub project');
+    await expect(adapter.applyUpdate(it1, { fields: { blocked_by: ['abc'] } }, 'x')).rejects.toThrow('item numbers');
   });
 
   it('appends comments with a marker and finds them again', async () => {
@@ -302,19 +308,72 @@ describe('GitFilesSourceAdapter – credentials', () => {
     const { adapter, cloneDir } = setup({ 'issues/0001-a.md': ISSUE(1, '') }, {}, { exec, env: { PATH: process.env.PATH, HOME: tmpdir(), SECRET_OF_DAEMON: 'x' } });
     await adapter.applyUpdate(await item(adapter, '1'), { labels: { add: ['x'] } }, 'c');
     for (const call of seen) expect(call.args.join(' ')).not.toContain(TOKEN);
-    const remoteCalls = seen.filter((c) => c.args.includes('fetch') || c.args.includes('push'));
-    expect(remoteCalls.length).toBeGreaterThanOrEqual(2);
-    for (const call of remoteCalls) {
-      expect(call.env[GIT_TOKEN_ENV]).toBe(TOKEN);
-      expect(call.args.some((a) => a.startsWith('credential.helper=!'))).toBe(true);
-    }
-    for (const call of seen.filter((c) => !c.args.includes('fetch') && !c.args.includes('push'))) expect(call.env[GIT_TOKEN_ENV]).toBeUndefined();
+    // A local path has no http(s) origin: the token is never handed out at all.
+    for (const call of seen) expect(call.env[GIT_TOKEN_ENV]).toBeUndefined();
     for (const call of seen) {
       expect(call.env.SECRET_OF_DAEMON).toBeUndefined();
       expect(call.env.GIT_CONFIG_GLOBAL).toBe('/dev/null');
     }
     expect(readFileSync(path.join(cloneDir, '.git', 'config'), 'utf8')).not.toContain(TOKEN);
     expect(readFileSync(path.join(cloneDir, '.git', 'config'), 'utf8')).not.toContain('remote');
+  });
+
+  it('hands the token to fetch/push of an https remote only, scoped to its origin', async () => {
+    const seen: Array<{ args: readonly string[]; env: Record<string, string> }> = [];
+    const exec: GitExec = async (args, options) => {
+      seen.push({ args, env: options.env });
+      return { stdout: args.includes('rev-parse') ? 'f'.repeat(40) : '', stderr: '' };
+    };
+    const dir = mkdtempSync(path.join(tmpdir(), 'adispatchd-clone-'));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const clone = new GitClone({ dir, remote: 'https://github.com/acme/app-meta.git', branch: 'main', token: async () => TOKEN, exec, env: { PATH: process.env.PATH } });
+    await clone.sync();
+    const fetch = seen.find((c) => c.args.includes('fetch'));
+    expect(fetch?.env[GIT_TOKEN_ENV]).toBe(TOKEN);
+    expect(fetch?.args).toContain(`credential.https://github.com.helper=${CREDENTIAL_HELPER}`);
+    expect(fetch?.args).toContain('http.followRedirects=false');
+    expect(fetch?.args.join(' ')).not.toContain(TOKEN);
+    for (const call of seen.filter((c) => !c.args.includes('fetch'))) expect(call.env[GIT_TOKEN_ENV]).toBeUndefined();
+    expect(credentialOrigin('ssh://git@github.com/acme/x.git')).toBeNull();
+  });
+
+  it('the inline credential helper answers git with the token for its origin only', () => {
+    const fill = (host: string): string =>
+      spawnSync('git', ['-c', 'credential.helper=', '-c', `credential.https://github.com.helper=${CREDENTIAL_HELPER}`, 'credential', 'fill'], {
+        input: `protocol=https\nhost=${host}\n\n`,
+        env: { PATH: process.env.PATH ?? '', HOME: tmpdir(), GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0', GIT_ASKPASS: '/bin/false', [GIT_TOKEN_ENV]: `${TOKEN}$x;'"` },
+        encoding: 'utf8',
+      }).stdout;
+    expect(fill('github.com')).toContain(`username=x-access-token\npassword=${TOKEN}$x;'"`);
+    expect(fill('evil.example.invalid')).not.toContain(TOKEN);
+  });
+
+  it('never logs the token', async () => {
+    const { adapter, logger } = setup({ 'issues/0001-a.md': ISSUE(1, '') });
+    await adapter.applyUpdate(await item(adapter, '1'), { labels: { add: ['x'] } }, 'c');
+    await adapter.postComment(await item(adapter, '1'), 'hi', 'adispatchd:run-1:a', 'c');
+    expect(JSON.stringify(logger.records)).not.toContain(TOKEN);
+  });
+
+  it('does not read or write through a symlinked item folder', async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), 'adispatchd-outside-'));
+    cleanups.push(() => rmSync(outside, { recursive: true, force: true }));
+    writeFileSync(path.join(outside, '0001-x.md'), ISSUE(1, ''));
+    const remote = new TestRemote({ 'README.md': 'x\n' });
+    cleanups.push(() => remote.dispose());
+    remote.symlink('issues', outside);
+    const cloneDir = mkdtempSync(path.join(tmpdir(), 'adispatchd-clone-'));
+    cleanups.push(() => rmSync(cloneDir, { recursive: true, force: true }));
+    const adapter = new GitFilesSourceAdapter(
+      'issues',
+      { repository: remote.bare, branch: 'main', path: 'issues', identity: null, commitAuthor: { name: 'b', email: 'b@example.invalid' }, closedWhen: { status: ['done'] }, commentsHeading: '## Log', fields: {}, webUrl: null, location: 'x' },
+      { credentials, logger: new MemoryLogger(), clock: new FakeClock() },
+      { cloneDir, minFetchIntervalMs: 0 },
+    );
+    expect(await adapter.listCandidates()).toEqual([]);
+    expect((await adapter.problems())[0]?.problem).toContain('symbolic link');
+    await expect(adapter.createItem({ title: 'x' })).rejects.toThrow('symbolic link');
+    expect(readdirSync(outside)).toEqual(['0001-x.md']);
   });
 
   it('works without identity (no credentials)', async () => {

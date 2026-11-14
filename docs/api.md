@@ -595,6 +595,13 @@ geprüft (in dieser Reihenfolge nach Host/CSRF/Rolle):
 | POST | `/api/v1/items/:source/:item/project` | `{"identity","fields":{"Status":"Review","Notes":null}}` | `{"changed","applied":{projectFields, projectItemAdded?},"action"}` |
 | GET | `/api/v1/ui-actions?source=&item=<key>&limit=&offset=` | – | `{"enabled","identities","actions":[…],"total","limit","offset"}` (neueste zuerst); mit `auth.mode: none` `403 ui_actions_disabled` |
 
+- **Source `git_files` (seit 0.11.0):** Kommentar und Labels funktionieren gleich, geschrieben wird als Commit + Push
+  in das Repository der Source (Transport mit der Source-Identity, die gewählte Identity ist Autor im Eintragskopf und im
+  Commit-Trailer). `comment.id` ist der SHA des Commits, `comment.url` der Link aus `web_url` (sonst `null`).
+  `availableLabels` sind alle in der Source verwendeten Labels; ein neues Label braucht `create: true`. Der Eintrag trägt
+  einen internen Marker (`adispatchd:ui-…`), damit die Neuanwendung nach einem abgelehnten Push nichts doppelt schreibt;
+  automatisch wiederholt wird auch hier nicht. `POST …/project` antwortet `400 project_not_configured`
+  (Frontmatter-Felder lassen sich aus der UI noch nicht setzen). Fehler der Source erscheinen mit den `github_*`-Codes.
 - **Kommentare werden nie still verändert.** Sieht der Text nach einem Secret aus, antwortet die API
   `400 comment_contains_secret` (Meldung und `details.findings` nennen nur Art und Anzahl, nie den Wert) und sendet nichts.
   Erkannt werden – **best effort**, keine Garantie – dem Daemon bekannte Werte (Installation-Tokens, Keys, Token-Identities)

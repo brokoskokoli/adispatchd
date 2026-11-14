@@ -3,7 +3,7 @@
  * remote plus a helper clone to commit "concurrent" changes. Not part of the build.
  */
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -35,8 +35,9 @@ export class TestRemote {
     this.bare = path.join(this.root, 'remote.git');
     this.work = path.join(this.root, 'work');
     git(this.root, 'init', '-q', '--bare', '-b', branch, this.bare);
-    git(this.root, 'clone', '-q', this.bare, this.work);
-    git(this.work, 'checkout', '-q', '-B', branch);
+    // init + remote instead of cloning the empty bare repository (no "empty repository" warning).
+    git(this.root, 'init', '-q', '-b', branch, this.work);
+    git(this.work, 'remote', 'add', 'origin', this.bare);
     this.commit(files, 'Seed');
   }
 
@@ -54,6 +55,14 @@ export class TestRemote {
     }
     git(this.work, 'add', '-A');
     git(this.work, 'commit', '-q', '--allow-empty', '-m', message);
+    git(this.work, 'push', '-q', 'origin', `HEAD:refs/heads/${this.branch}`);
+  }
+
+  /** Commit a symbolic link `rel` → `target` (absolute). */
+  symlink(rel: string, target: string): void {
+    symlinkSync(target, path.join(this.work, rel));
+    git(this.work, 'add', '-A');
+    git(this.work, 'commit', '-q', '-m', 'Add symlink');
     git(this.work, 'push', '-q', 'origin', `HEAD:refs/heads/${this.branch}`);
   }
 

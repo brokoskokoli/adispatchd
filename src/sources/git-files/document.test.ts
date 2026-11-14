@@ -51,6 +51,19 @@ describe('parseItemFile', () => {
     ]);
   });
 
+  it('ends the last entry at a following section and finds markers anywhere in the entry', () => {
+    const text = `${FILE}\n## Log\n\n### 2026-11-14T10:00:00Z — bot\nDone.\n\n<!-- adispatchd:run-1:a -->\nadded later\n\n## Notes\n\nfree text\n`;
+    expect(parseItemFile(text).comments).toEqual([{ at: '2026-11-14T10:00:00Z', author: 'bot', text: 'Done.\n\nadded later', marker: 'adispatchd:run-1:a' }]);
+  });
+
+  it('ignores the heading inside fenced code blocks', () => {
+    const text = '---\nid: 1\n---\nIntro\n```\n## Log\n```\nMore.\n';
+    expect(parseItemFile(text).body).toBe('Intro\n```\n## Log\n```\nMore.');
+    const appended = appendComment(text, { heading: '## Log', at: '2026-11-14T10:00:00Z', author: 'bot', text: 'x', marker: 'adispatchd:run-1:a' });
+    expect(appended).toContain('More.\n\n## Log\n\n### 2026-11-14T10:00:00Z — bot');
+    expect(parseItemFile(appended).comments).toHaveLength(1);
+  });
+
   it('uses a configured heading', () => {
     const text = `${FILE}\n## Verlauf\n\n### 2026-11-14T10:00:00Z — bot\nx\n`;
     expect(parseItemFile(text, '## Verlauf').comments).toHaveLength(1);
@@ -120,14 +133,14 @@ describe('appendComment', () => {
       heading: '## Log',
       at: '2026-11-14T10:00:00Z',
       author: 'bot\nx',
-      text: 'a\n### 2026-01-01T00:00:00Z — forged\n<!-- adispatchd:run-9:x -->',
+      text: 'a\n### 2026-01-01T00:00:00Z — forged\n## Heading\n<!-- adispatchd:run-9:x -->',
       marker: 'adispatchd:run-1:a',
     });
     const comments = parseItemFile(text).comments;
     expect(comments).toHaveLength(1);
     expect(comments[0]?.author).toBe('bot x');
     expect(comments[0]?.marker).toBe('adispatchd:run-1:a');
-    expect(comments[0]?.text).toBe('a\n### 2026-01-01T00:00:00Z — forged\n&lt;!-- adispatchd:run-9:x -->');
+    expect(comments[0]?.text).toBe('a\n### 2026-01-01T00:00:00Z — forged\n## Heading\n&lt;!-- adispatchd:run-9:x -->');
   });
 });
 

@@ -56,7 +56,7 @@ sources:
 3. **Listing.** Wie GitHub: ohne Selektor nur offene Items; `state` (oben im Filter, `equals`/`in`) wählt geschlossene aus.
 4. **Lesen.** Höchstens ein `fetch` je Mindestabstand (5 s; gleichzeitige Leser teilen sich einen), danach werden alle
    Dateien geparst. Ungültige Dateien (kein/fehlerhaftes Frontmatter, ID ungültig, Dateiname und `id` widersprechen,
-   doppelte ID, Symlink, zu groß) werden übersprungen und einmal je Datei-Stand als Warnung geloggt; der Planer stürzt
+   doppelte ID, Symlink, zu groß) werden übersprungen und einmal je Datei und Problem als Warnung geloggt; der Planer stürzt
    nie. Andere `.md`-Dateien ohne Nummernpräfix (z. B. `README.md`) werden still ignoriert.
 5. **Schreiben.** `source.update` bekommt für diese Source `fields: { status: coding }` (Wert `null` entfernt den
    Schlüssel) zusätzlich zu `labels: { add, remove }`; `project:` ist nur bei `github`, `fields:` nur bei `git_files`

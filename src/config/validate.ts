@@ -30,7 +30,7 @@ import {
   branchProblem,
   GIT_FILES_BUILTIN_FIELDS,
   GIT_FILES_FIELD_NAME_PATTERN,
-  gitFilesValueProblem,
+  gitFilesFieldValueProblem,
   gitFilesWritableType,
   normalizeItemFolder,
   PROJECT_FIELD_PREFIX,
@@ -286,6 +286,9 @@ function validateGitFilesSource(source: Extract<SourceConfig, { type: 'git_files
   const at = (...rest: (string | number)[]): IssuePath => ['sources', source.id, ...rest];
   const repo = repositoryProblem(source.repository);
   if (repo) issues.error(SOURCES_FILE, at('repository'), `"repository" ${repo}`);
+  else if (source.identity !== null && /^http:\/\//i.test(source.repository)) {
+    issues.error(SOURCES_FILE, at('identity'), 'A token would be sent unencrypted: use an https:// repository URL with "identity"');
+  }
   const branch = branchProblem(source.branch);
   if (branch) issues.error(SOURCES_FILE, at('branch'), `"${source.branch}" ${branch}`);
   if (normalizeItemFolder(source.path) === undefined) {
@@ -363,7 +366,7 @@ function checkFieldsUpdate(
       continue;
     }
     const type = types[0];
-    const problem = type ? gitFilesValueProblem(type, fields[name]) : undefined;
+    const problem = type ? gitFilesFieldValueProblem(name, type, fields[name]) : undefined;
     if (type && problem) issues.error(file, [...at, name], `Invalid value for field "${name}" (${type}): ${problem}`);
   }
 }

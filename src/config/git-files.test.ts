@@ -101,6 +101,8 @@ describe('config: git_files sources (WI-40)', () => {
     expect(all).toContain('sources.bad.fields.bad name: Invalid field name');
     expect(all).toContain('sources.bad.web_url: "web_url" must contain "{path}"');
     expect(all).toContain('sources.bad.identity: Unknown identity "nobody"');
+    const http = await load({ 'sources.yaml': 'sources:\n  plain: { type: git_files, repository: "http://git.example.invalid/acme/x.git", identity: maintainer }\n' });
+    expect(http.errors.join('\n')).toContain('sources.plain.identity: A token would be sent unencrypted');
   });
 
   it('accepts declared and built-in fields in filters, priorities and views; rejects unknown ones', async () => {
@@ -168,6 +170,7 @@ describe('config: git_files sources (WI-40)', () => {
           '  - { type: source.update, project: { Status: x } }',
           '  - { type: source.update, fields: { state: closed, labels: [x], unknown: 1, priority: high } }',
           '  - { type: source.update, fields: {} }',
+          '  - { type: source.update, fields: { blocked_by: [abc] } }',
           '',
         ].join('\n'),
       ),
@@ -180,5 +183,6 @@ describe('config: git_files sources (WI-40)', () => {
     expect(all).toContain('on_start[1].fields.unknown: Field "unknown" cannot be set: it is not a writable frontmatter field');
     expect(all).toContain('on_start[1].fields.priority: Invalid value for field "priority" (number): expected a number');
     expect(all).toContain('on_start[2].fields: "fields" must set at least one field');
+    expect(all).toContain('on_start[3].fields.blocked_by: Invalid value for field "blocked_by" (string[]): expected a list of item numbers');
   });
 });

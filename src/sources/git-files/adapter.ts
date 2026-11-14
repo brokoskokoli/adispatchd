@@ -60,6 +60,7 @@ import {
   GIT_FILES_FIELD_DEFINITIONS,
   gitFilesDeclaredFieldDefinitions,
   gitFilesUpdateValue,
+  gitFilesFieldValueProblem,
   gitFilesValueProblem,
   gitFilesWritableType,
   type GitFilesFieldType,
@@ -330,16 +331,21 @@ export class GitFilesSourceAdapter implements SourceAdapter {
         for (const [key, value] of Object.entries(fields)) if (value !== null) frontmatter[key] = value;
         const labels = [...new Set((input.labels ?? []).map((l) => l.trim()).filter((l) => l !== ''))];
         if (labels.length > 0) frontmatter.labels = labels;
+        if ((await this.folderState()) === 'symlink') throw symlinkError(this.config.path);
         await mkdir(path.dirname(abs), { recursive: true });
         await writeFile(abs, renderNewItemFile(frontmatter, input.body ?? ''), { flag: 'wx' });
-        const commit = await this.clone.commit([file], this.message(id, `create "${truncate(title, 80)}"`, { identity }), this.config.commitAuthor);
+        const commit = await gitStep(() => this.clone.commit([file], this.message(id, `create "${truncate(title, 80)}"`, { identity }), this.config.commitAuthor));
         const failed = await this.clone.push();
         if (!failed) {
           this.markPushed();
           this.logger.info('Created item', { item: sourceItemKey(this.sourceId, String(id)), file, commit });
           return { itemId: String(id), file, commit, url: this.fileUrl(file, this.config.branch) ?? itemHistoryRoute(this.sourceId, String(id)) };
         }
-        if (failed.failure !== 'rejected') throw pushError(failed.error, true);
+        if (failed.failure !== 'rejected') {
+          const err = pushError(failed.error, true);
+          if (this.retryAuth(err, attempt)) continue;
+          throw err;
+        }
         this.logger.info('Push rejected (concurrent commit); retrying with a fresh state', { attempt });
       }
       throw new SourceError('transient', `Creating the item failed: the push was rejected ${this.maxPushAttempts} times (concurrent commits)`);
@@ -394,17 +400,50 @@ export class GitFilesSourceAdapter implements SourceAdapter {
         }
         if (result.text === null) return { value: result.value, commit: null, file: entry.file };
         await writeFile(entry.abs, result.text);
-        const commit = await this.clone.commit([entry.file], this.message(id, result.summary, meta), this.config.commitAuthor);
+        const commit = await gitStep(() => this.clone.commit([entry.file], this.message(id, result.summary, meta), this.config.commitAuthor));
         const failed = await this.clone.push();
         if (!failed) {
           this.markPushed();
           return { value: result.value, commit, file: entry.file };
         }
-        if (failed.failure !== 'rejected') throw pushError(failed.error, true);
+        if (failed.failure !== 'rejected') {
+          const err = pushError(failed.error, true);
+          if (this.retryAuth(err, attempt)) continue;
+          throw err;
+        }
         this.logger.info('Push rejected (concurrent commit); applying the change again on the fresh state', { item: `#${id}`, attempt });
       }
       throw new SourceError('transient', `Writing item #${id} failed: the push was rejected ${this.maxPushAttempts} times (concurrent commits)`);
     });
+  }
+
+  /**
+   * After the first auth failure of a push, drop the cached token and try
+   * again with a fresh one (e.g. an installation token that expired).
+   * Nothing was pushed, so repeating is safe.
+   */
+  private retryAuth(err: SourceError, attempt: number): boolean {
+    if (err.kind !== 'auth' || !this.config.identity || attempt > 1 || !this.credentials.invalidate) return false;
+    this.credentials.invalidate(this.config.identity);
+    this.logger.info('Push credentials rejected; retrying once with a fresh token');
+    return true;
+  }
+
+  /** `ok` (folder exists, no symlink on the way), `missing`, or `symlink` (the folder or a parent is a symbolic link). */
+  private async folderState(): Promise<'ok' | 'missing' | 'symlink'> {
+    let current = this.clone.dir;
+    for (const segment of this.config.path === '' ? [] : this.config.path.split('/')) {
+      current = path.join(current, segment);
+      try {
+        const info = await lstat(current);
+        if (info.isSymbolicLink()) return 'symlink';
+        if (!info.isDirectory()) return 'missing';
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 'missing';
+        throw err;
+      }
+    }
+    return 'ok';
   }
 
   private message(id: number, summary: string, meta: { identity: IdentityRef | null; origin?: { runId?: string; actionId?: string } }): string {
@@ -434,10 +473,17 @@ export class GitFilesSourceAdapter implements SourceAdapter {
     const now = this.clock.now().getTime();
     if (!force && this.lastFetchAt !== null && now - this.lastFetchAt < this.minFetchIntervalMs) return;
     try {
-      await this.clone.sync();
+      try {
+        await this.clone.sync();
+      } catch (err) {
+        // A stale token: GitHub answers "authentication failed", for private repositories also "not found".
+        const credentialProblem = err instanceof SourceError && (err.kind === 'auth' || err.kind === 'not_found');
+        if (!credentialProblem || !this.config.identity || !this.credentials.invalidate) throw err;
+        this.credentials.invalidate(this.config.identity);
+        await this.clone.sync();
+      }
     } catch (err) {
       this.lastFetchAt = null;
-      if (err instanceof SourceError && err.kind === 'auth' && this.config.identity) this.credentials.invalidate?.(this.config.identity);
       if (err instanceof GitCommandError) throw new SourceError('transient', `Updating the clone failed: ${err.message}`);
       throw err;
     }
@@ -457,6 +503,15 @@ export class GitFilesSourceAdapter implements SourceAdapter {
       this.logger.warn('Skipping malformed item file', { file, problem: message });
     };
     const dir = this.absolute(this.config.path);
+    const folder = await this.folderState();
+    if (folder !== 'ok') {
+      problem(
+        this.config.path === '' ? '.' : this.config.path,
+        folder === 'symlink' ? 'the item folder (or a parent) is a symbolic link; it is not read' : 'the item folder does not exist in the repository (no items)',
+      );
+      this.parsed = state;
+      return state;
+    }
     let names: string[];
     try {
       names = (await readdir(dir)).sort();
@@ -512,9 +567,21 @@ export class GitFilesSourceAdapter implements SourceAdapter {
       list.push({ id, file, abs, text, data: parsed.data, body: parsed.body, comments: parsed.comments });
       byId.set(id, list);
     }
+    // Numbers of malformed files: a valid file with the same number is ambiguous too (which one is meant?).
+    const broken = new Map<number, string>();
+    for (const p of state.problems) {
+      const m = ITEM_FILE_PATTERN.exec(p.file.split('/').pop() ?? '');
+      if (m) broken.set(Number(m[1]), p.file);
+    }
     for (const [id, entries] of byId) {
-      if (entries.length === 1) {
+      const brokenFile = broken.get(id);
+      if (entries.length === 1 && brokenFile === undefined) {
         state.byId.set(id, entries[0] as Entry);
+        continue;
+      }
+      state.ambiguous.add(id);
+      if (entries.length === 1) {
+        problem((entries[0] as Entry).file, `item number ${id} is also used by the malformed file ${brokenFile ?? ''}`);
         continue;
       }
       state.ambiguous.add(id);
@@ -541,7 +608,7 @@ export class GitFilesSourceAdapter implements SourceAdapter {
 
     // Free frontmatter keys first; built-in and declared fields override them below.
     for (const [key, value] of Object.entries(data)) {
-      if (GIT_FILES_BUILTIN_FIELDS.has(key) || key.includes('.')) continue;
+      if (GIT_FILES_BUILTIN_FIELDS.has(key) || key.includes('.') || UNSAFE_KEYS.has(key)) continue;
       fields[key] = freeValue(value);
     }
 
@@ -644,7 +711,7 @@ export class GitFilesSourceAdapter implements SourceAdapter {
         problems.push(`"${name}" cannot be set (not a writable frontmatter field of source "${this.sourceId}"; declare it under "fields" or use "labels")`);
         continue;
       }
-      const problem = gitFilesValueProblem(type, value);
+      const problem = gitFilesFieldValueProblem(name, type, value);
       if (problem) problems.push(`"${name}": ${problem}`);
       else out[name] = gitFilesUpdateValue(type, value);
     }
@@ -665,7 +732,8 @@ export class GitFilesSourceAdapter implements SourceAdapter {
   private fileUrl(file: string, ref: string): string | null {
     if (!this.config.webUrl) return null;
     const encoded = file.split('/').map(encodeURIComponent).join('/');
-    return this.config.webUrl.replaceAll('{ref}', encodeURIComponent(ref)).replaceAll('{path}', encoded);
+    const encodedRef = ref.split('/').map(encodeURIComponent).join('/');
+    return this.config.webUrl.replaceAll('{ref}', encodedRef).replaceAll('{path}', encoded);
   }
 }
 
@@ -826,6 +894,23 @@ function updateSummary(applied: SourceUpdateApplied): string {
 function parseMarkerOrigin(marker: string): { runId?: string; actionId?: string } {
   const m = /^adispatchd:([^:]+):(.+)$/.exec(marker);
   return m ? { runId: m[1] as string, actionId: m[2] as string } : {};
+}
+
+/** Frontmatter keys never copied into the field record (prototype pollution). */
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+function symlinkError(folder: string): SourceError {
+  return new SourceError('invalid', `The item folder "${folder || '.'}" (or a parent) is a symbolic link; refusing to write`, { retryable: false });
+}
+
+/** A local git step (add/commit) failed: nothing was pushed, so it is safe to retry. */
+async function gitStep<T>(fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof GitCommandError) throw new SourceError('transient', `Committing failed: ${err.message}`);
+    throw err;
+  }
 }
 
 function pushError(err: GitCommandError, outcomeUnknown: boolean): SourceError {

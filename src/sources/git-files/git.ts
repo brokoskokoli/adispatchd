@@ -132,6 +132,8 @@ export class GitClone {
       GIT_CONFIG_GLOBAL: '/dev/null',
       GIT_ASKPASS: '/bin/false',
       SSH_ASKPASS: '/bin/false',
+      // No interactive ssh prompts (host keys, passphrases) unless the operator configured ssh explicitly.
+      GIT_SSH_COMMAND: env.GIT_SSH_COMMAND ?? 'ssh -o BatchMode=yes',
     };
   }
 
@@ -146,10 +148,12 @@ export class GitClone {
     const credential: string[] = [];
     if (options.remote) {
       token = await this.options.token();
-      // An empty helper first resets any helper from other config levels.
-      credential.push('-c', 'credential.helper=');
-      if (token) {
-        credential.push('-c', `credential.helper=${CREDENTIAL_HELPER}`);
+      // An empty helper first resets any helper from other config levels; redirects never carry credentials elsewhere.
+      credential.push('-c', 'credential.helper=', '-c', 'http.followRedirects=false');
+      const origin = credentialOrigin(this.options.remote);
+      if (token && origin) {
+        // Scoped to the origin of the repository: the token is never offered to another host.
+        credential.push('-c', `credential.${origin}.helper=${CREDENTIAL_HELPER}`);
         env[GIT_TOKEN_ENV] = token;
       }
     }
@@ -198,12 +202,13 @@ export class GitClone {
   /** Reset the local branch and working tree to the last fetched remote state. */
   async reset(): Promise<void> {
     await this.git(['checkout', '-q', '--force', '-B', LOCAL_BRANCH, `refs/remotes/upstream/${this.options.branch}`]);
-    await this.git(['clean', '-q', '-f', '-d']);
+    // -x: also files the repository ignores (the clone is a mirror of the remote branch, nothing else).
+    await this.git(['clean', '-q', '-ffdx']);
   }
 
   /** Commit the given paths (relative to the repository root). */
   async commit(paths: readonly string[], message: string, author: { name: string; email: string }): Promise<string> {
-    await this.git(['add', '--', ...paths]);
+    await this.git(['add', '-f', '--', ...paths]);
     await this.git(['-c', `user.name=${author.name}`, '-c', `user.email=${author.email}`, 'commit', '-q', '--no-verify', '-m', message, '--', ...paths]);
     return this.head();
   }
@@ -230,6 +235,16 @@ export class GitClone {
   async commitAdding(needle: string, file: string): Promise<string | null> {
     const out = (await this.git(['log', '--format=%H', '--reverse', '-S', needle, `refs/remotes/upstream/${this.options.branch}`, '--', file])).stdout.trim();
     return out === '' ? null : (out.split('\n')[0] ?? null);
+  }
+}
+
+/** `scheme://host[:port]` of an http(s) repository URL (scope of the credential helper), else `null`. */
+export function credentialOrigin(remote: string): string | null {
+  try {
+    const url = new URL(remote);
+    return url.protocol === 'https:' || url.protocol === 'http:' ? `${url.protocol}//${url.host}` : null;
+  } catch {
+    return null;
   }
 }
 

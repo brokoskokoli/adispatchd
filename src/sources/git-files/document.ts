@@ -99,8 +99,26 @@ function parseFrontmatter(frontmatter: string): Document.Parsed {
 const ENTRY_HEADER = /^### (\d{4}-\d{2}-\d{2}(?:[T ][0-9:.]+)?(?:Z|[+-]\d{2}:?\d{2})?) [—–-] (.+?)\s*$/;
 const MARKER_LINE = /^<!-- (adispatchd:[A-Za-z0-9_.:-]+) -->$/;
 
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const HEADING = /^ {0,3}(#{1,6})(?:[ \t]|$)/;
+
+/** Index of the first line equal to `heading` outside fenced code blocks, or -1. */
 function headingIndex(lines: readonly string[], heading: string): number {
-  return lines.findIndex((l) => l.trimEnd() === heading);
+  let fence: string | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] as string;
+    const f = FENCE.exec(line);
+    if (fence) {
+      if (f && (f[1] as string)[0] === fence[0] && (f[1] as string).length >= fence.length) fence = null;
+      continue;
+    }
+    if (f) {
+      fence = f[1] as string;
+      continue;
+    }
+    if (line.trimEnd() === heading) return i;
+  }
+  return -1;
 }
 
 /** Parse an item file. Throws {@link ItemFileError} when it is malformed. */
@@ -111,33 +129,60 @@ export function parseItemFile(text: string, commentsHeading: string = DEFAULT_CO
   const lines = parts.rest.split(/\r?\n/);
   const at = headingIndex(lines, commentsHeading);
   const body = (at < 0 ? lines : lines.slice(0, at)).join('\n').replace(/\s+$/, '');
-  return { data, body, comments: at < 0 ? [] : parseEntries(lines.slice(at + 1)) };
+  const level = HEADING.exec(commentsHeading)?.[1]?.length ?? 2;
+  return { data, body, comments: at < 0 ? [] : parseEntries(lines.slice(at + 1), level) };
 }
 
-function parseEntries(lines: readonly string[]): CommentEntry[] {
+/**
+ * Entries of the comment section. An entry ends at the next entry header or
+ * at a heading of the section's level or higher (text a person added after
+ * the log is not part of the last entry). The marker is the last marker line
+ * of the entry, wherever it stands.
+ */
+function parseEntries(lines: readonly string[], sectionLevel: number): CommentEntry[] {
   const entries: CommentEntry[] = [];
   let current: { at: string; author: string; lines: string[] } | null = null;
   const flush = (): void => {
     if (!current) return;
-    const text = current.lines.join('\n').trim();
-    const textLines = text.split('\n');
-    const last = textLines[textLines.length - 1]?.trim() ?? '';
-    const marker = MARKER_LINE.exec(last)?.[1] ?? null;
+    let marker: string | null = null;
+    let markerAt = -1;
+    current.lines.forEach((l, i) => {
+      const m = MARKER_LINE.exec(l.trim());
+      if (m) {
+        marker = m[1] as string;
+        markerAt = i;
+      }
+    });
+    const textLines = markerAt >= 0 ? current.lines.filter((_, i) => i !== markerAt) : current.lines;
     entries.push({
       at: current.at,
       author: current.author,
-      text: (marker ? textLines.slice(0, -1).join('\n') : text).trim().replace(/^\\(?=### )/gm, ''),
+      text: textLines.join('\n').trim().replace(/^\\(?=#)/gm, ''),
       marker,
     });
+    current = null;
   };
+  let fence: string | null = null;
   for (const line of lines) {
-    const header = ENTRY_HEADER.exec(line);
+    const f = FENCE.exec(line);
+    if (fence) {
+      if (f && (f[1] as string)[0] === fence[0] && (f[1] as string).length >= fence.length) fence = null;
+      current?.lines.push(line);
+      continue;
+    }
+    if (f) fence = f[1] as string;
+    const header = f ? null : ENTRY_HEADER.exec(line);
     if (header) {
       flush();
       current = { at: header[1] as string, author: header[2] as string, lines: [] };
-    } else if (current) {
-      current.lines.push(line);
+      continue;
     }
+    const heading = f ? null : HEADING.exec(line);
+    if (heading && (heading[1] as string).length <= sectionLevel) {
+      flush();
+      continue;
+    }
+    current?.lines.push(line);
   }
   flush();
   return entries;
@@ -287,11 +332,16 @@ export function appendComment(text: string, entry: NewCommentEntry): string {
   let out = text.replace(/[ \t]*$/, '');
   if (!out.endsWith('\n')) out += '\n';
   if (headingIndex(lines, entry.heading) < 0) out += `\n${entry.heading}\n`;
+  const sectionLevel = HEADING.exec(entry.heading)?.[1]?.length ?? 2;
   const body = entry.text
     .replace(/<!--/g, '&lt;!--')
     .replace(/\r\n?/g, '\n')
     .split('\n')
-    .map((l) => (ENTRY_HEADER.test(l) ? `\\${l}` : l))
+    // Entry headers and headings that would end the section are escaped (`\\## …`), so the text stays one entry.
+    .map((l) => {
+      const heading = HEADING.exec(l);
+      return ENTRY_HEADER.test(l) || (heading && (heading[1] as string).length <= sectionLevel) ? `\\${l}` : l;
+    })
     .join('\n')
     .trim();
   out += `\n### ${entry.at} — ${entryAuthor(entry.author)}\n\n${body === '' ? '(empty)' : body}\n\n<!-- ${entry.marker} -->\n`;

@@ -130,6 +130,16 @@ export function gitFilesValueProblem(type: GitFilesFieldType, value: unknown): s
   }
 }
 
+/** Problem with a value for the writable field `name` of `type` (adds the rules of `blocked_by`), or `undefined`. */
+export function gitFilesFieldValueProblem(name: string, type: GitFilesFieldType, value: unknown): string | undefined {
+  const problem = gitFilesValueProblem(type, value);
+  if (problem) return problem;
+  if (name === 'blocked_by' && Array.isArray(value) && !value.every((v) => /^#?\d{1,9}$/.test(String(v).trim()) && Number(String(v).trim().replace(/^#/, '')) > 0)) {
+    return 'expected a list of item numbers (e.g. [12, 15])';
+  }
+  return undefined;
+}
+
 /** Normalize a valid update value for writing (numbers in string fields stay as written). */
 export function gitFilesUpdateValue(type: GitFilesFieldType, value: FieldUpdateValue): FieldUpdateValue {
   if (type === 'string[]' && Array.isArray(value)) return value.map((v) => String(v));

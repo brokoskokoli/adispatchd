@@ -45,6 +45,7 @@ export function parseFieldArgs(
     if (eq <= 0) return { error: `--field "${arg}": expected key=value` };
     const key = arg.slice(0, eq).trim();
     const raw = arg.slice(eq + 1);
+    if (key === 'title') return { error: '--field "title": use --title' };
     const type = gitFilesWritableType(key, declared);
     if (!type) return { error: `--field "${key}": not a writable frontmatter field of the source (declare it under "fields" in sources.yaml)` };
     switch (type) {
