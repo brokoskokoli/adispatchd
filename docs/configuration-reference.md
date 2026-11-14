@@ -970,8 +970,11 @@ Coding started (run-20261114T100000000Z-3fa2c91b).
   Zeilen, die wie ein Eintragskopf aussehen, mit `\` maskiert. Kommentar-ID ist der SHA des Commits; ein Retry
   findet einen schon geschriebenen Eintrag an seinem Marker (`findCommentByMarker`). Ein Eintrag endet am nächsten
   Eintragskopf oder an einer Überschrift der Ebene von `comments_heading` oder höher (Text, den jemand danach anfügt,
-  gehört nicht mehr dazu); solche Überschriften im Kommentartext werden ebenfalls mit `\` maskiert. Die Überschrift
-  zählt nur außerhalb von Code-Blöcken. Auch Menschen können Einträge
+  gehört nicht mehr dazu); solche Überschriften im Kommentartext werden ebenfalls mit `\` maskiert. Überschrift,
+  Eintragsköpfe und Marker zählen nur außerhalb von Code-Blöcken (```` ``` ````/`~~~`). Ein offen gelassener
+  Code-Block kann nichts verschlucken: Ist er im Body oder in einem früheren Eintrag offen, schließt der Adapter ihn
+  vor dem neuen Eintrag (bzw. vor der neu angelegten Überschrift); ist er im Kommentartext offen (z. B. aus
+  `{reply.text}`), schließt er ihn am Ende des Eintrags, vor dem Marker. Auch Menschen können Einträge
   im selben Format schreiben (`### 2026-11-14 10:00 - alice` wird ebenfalls erkannt); sie erscheinen im Feld
   `comments`.
 - **Identity:** Fetch/Push laufen immer mit der Source-`identity`; die Identity der Action (§6.10) erscheint als

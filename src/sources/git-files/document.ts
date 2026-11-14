@@ -99,26 +99,41 @@ function parseFrontmatter(frontmatter: string): Document.Parsed {
 const ENTRY_HEADER = /^### (\d{4}-\d{2}-\d{2}(?:[T ][0-9:.]+)?(?:Z|[+-]\d{2}:?\d{2})?) [—–-] (.+?)\s*$/;
 const MARKER_LINE = /^<!-- (adispatchd:[A-Za-z0-9_.:-]+) -->$/;
 
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 const HEADING = /^ {0,3}(#{1,6})(?:[ \t]|$)/;
+
+/**
+ * Fence state after `line` (CommonMark fenced code blocks): `fence` is the
+ * opening sequence of the open block, or `null` outside one. A block closes
+ * with the same character, at least as long, followed only by whitespace; a
+ * backtick fence whose info string contains a backtick is not a fence.
+ */
+function nextFence(fence: string | null, line: string): string | null {
+  const m = FENCE.exec(line);
+  if (fence) {
+    const seq = m?.[1];
+    return seq && seq[0] === fence[0] && seq.length >= fence.length && (m?.[2] ?? '').trim() === '' ? null : fence;
+  }
+  if (!m) return null;
+  const seq = m[1] as string;
+  return seq[0] === '`' && (m[2] ?? '').includes('`') ? null : seq;
+}
+
+/** For every line: is it part of a fenced code block (delimiters included)? Plus the fence still open after the last line. */
+function fencedLines(lines: readonly string[], start: string | null = null): { fenced: boolean[]; open: string | null } {
+  let fence = start;
+  const fenced = lines.map((line) => {
+    const before = fence;
+    fence = nextFence(fence, line);
+    return before !== null || fence !== null;
+  });
+  return { fenced, open: fence };
+}
 
 /** Index of the first line equal to `heading` outside fenced code blocks, or -1. */
 function headingIndex(lines: readonly string[], heading: string): number {
-  let fence: string | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] as string;
-    const f = FENCE.exec(line);
-    if (fence) {
-      if (f && (f[1] as string)[0] === fence[0] && (f[1] as string).length >= fence.length) fence = null;
-      continue;
-    }
-    if (f) {
-      fence = f[1] as string;
-      continue;
-    }
-    if (line.trimEnd() === heading) return i;
-  }
-  return -1;
+  const { fenced } = fencedLines(lines);
+  return lines.findIndex((line, i) => !fenced[i] && line.trimEnd() === heading);
 }
 
 /** Parse an item file. Throws {@link ItemFileError} when it is malformed. */
@@ -137,23 +152,24 @@ export function parseItemFile(text: string, commentsHeading: string = DEFAULT_CO
  * Entries of the comment section. An entry ends at the next entry header or
  * at a heading of the section's level or higher (text a person added after
  * the log is not part of the last entry). The marker is the last marker line
- * of the entry, wherever it stands.
+ * of the entry outside fenced code blocks, wherever it stands. Headers,
+ * headings and markers inside fenced code blocks are text.
  */
 function parseEntries(lines: readonly string[], sectionLevel: number): CommentEntry[] {
   const entries: CommentEntry[] = [];
-  let current: { at: string; author: string; lines: string[] } | null = null;
+  let current: { at: string; author: string; lines: Array<{ text: string; fenced: boolean }> } | null = null;
   const flush = (): void => {
     if (!current) return;
     let marker: string | null = null;
     let markerAt = -1;
     current.lines.forEach((l, i) => {
-      const m = MARKER_LINE.exec(l.trim());
+      const m = l.fenced ? null : MARKER_LINE.exec(l.text.trim());
       if (m) {
         marker = m[1] as string;
         markerAt = i;
       }
     });
-    const textLines = markerAt >= 0 ? current.lines.filter((_, i) => i !== markerAt) : current.lines;
+    const textLines = current.lines.filter((_, i) => i !== markerAt).map((l) => l.text);
     entries.push({
       at: current.at,
       author: current.author,
@@ -162,28 +178,22 @@ function parseEntries(lines: readonly string[], sectionLevel: number): CommentEn
     });
     current = null;
   };
-  let fence: string | null = null;
-  for (const line of lines) {
-    const f = FENCE.exec(line);
-    if (fence) {
-      if (f && (f[1] as string)[0] === fence[0] && (f[1] as string).length >= fence.length) fence = null;
-      current?.lines.push(line);
-      continue;
-    }
-    if (f) fence = f[1] as string;
-    const header = f ? null : ENTRY_HEADER.exec(line);
+  const { fenced } = fencedLines(lines);
+  lines.forEach((line, i) => {
+    const inFence = fenced[i] as boolean;
+    const header = inFence ? null : ENTRY_HEADER.exec(line);
     if (header) {
       flush();
       current = { at: header[1] as string, author: header[2] as string, lines: [] };
-      continue;
+      return;
     }
-    const heading = f ? null : HEADING.exec(line);
+    const heading = inFence ? null : HEADING.exec(line);
     if (heading && (heading[1] as string).length <= sectionLevel) {
       flush();
-      continue;
+      return;
     }
-    current?.lines.push(line);
-  }
+    current?.lines.push({ text: line, fenced: inFence });
+  });
   flush();
   return entries;
 }
@@ -324,6 +334,11 @@ export function entryAuthor(name: string): string {
  * section if it is missing). Lines of the text that look like an entry header
  * are escaped (`\### …`) so that the text cannot split itself into entries;
  * HTML comment openers are neutralised (no forged markers).
+ *
+ * Fenced code blocks never swallow what follows: a block left open in the
+ * file (body or an earlier entry) is closed before the new heading/entry, and
+ * a block left open in the text is closed at the end of the entry, before the
+ * marker.
  */
 export function appendComment(text: string, entry: NewCommentEntry): string {
   if (!MARKER_LINE.test(`<!-- ${entry.marker} -->`)) throw new ItemFileError('invalid comment marker');
@@ -331,9 +346,11 @@ export function appendComment(text: string, entry: NewCommentEntry): string {
   const lines = parts.rest.split(/\r?\n/);
   let out = text.replace(/[ \t]*$/, '');
   if (!out.endsWith('\n')) out += '\n';
+  const openInFile = fencedLines(lines).open;
+  if (openInFile) out += `${openInFile}\n`;
   if (headingIndex(lines, entry.heading) < 0) out += `\n${entry.heading}\n`;
   const sectionLevel = HEADING.exec(entry.heading)?.[1]?.length ?? 2;
-  const body = entry.text
+  const textLines = entry.text
     .replace(/<!--/g, '&lt;!--')
     .replace(/\r\n?/g, '\n')
     .split('\n')
@@ -341,9 +358,10 @@ export function appendComment(text: string, entry: NewCommentEntry): string {
     .map((l) => {
       const heading = HEADING.exec(l);
       return ENTRY_HEADER.test(l) || (heading && (heading[1] as string).length <= sectionLevel) ? `\\${l}` : l;
-    })
-    .join('\n')
-    .trim();
+    });
+  let body = textLines.join('\n').trim();
+  const openInText = fencedLines(body.split('\n')).open;
+  if (openInText) body += `\n${openInText}`;
   out += `\n### ${entry.at} — ${entryAuthor(entry.author)}\n\n${body === '' ? '(empty)' : body}\n\n<!-- ${entry.marker} -->\n`;
   return out;
 }

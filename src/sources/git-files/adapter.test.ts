@@ -250,6 +250,22 @@ describe('GitFilesSourceAdapter – writing', () => {
     expect(remote.file('issues/0001-a.md')).toContain('— bot\n\nFrom the UI\n');
   });
 
+  it('keeps markers findable when the body and a comment leave code fences open', async () => {
+    const { adapter, remote } = setup({ 'issues/0001-a.md': ISSUE(1, '', 'Test output:\n```\nFAIL x\n') });
+    const it1 = await item(adapter, '1');
+    const a = 'adispatchd:run-a:on_reply.0';
+    const b = 'adispatchd:run-b:on_success.0';
+    await adapter.postComment(it1, 'Here:\n```\nnot closed\n---\n## Log', a, 'slack');
+    await adapter.postComment(it1, 'Agent report', b, 'coder');
+    expect(await adapter.findCommentByMarker(it1, a)).not.toBeNull();
+    expect(await adapter.findCommentByMarker(it1, b)).not.toBeNull();
+    // A retry of A does not append it again.
+    await adapter.postComment(it1, 'Here:\n```\nnot closed', a, 'slack');
+    const comments = (await item(adapter, '1')).fields.comments as Array<{ author: string }>;
+    expect(comments.map((c) => c.author)).toEqual(['slack', 'coder']);
+    expect(remote.file('issues/0001-a.md').match(/^## Log$/gm)).toHaveLength(1);
+  });
+
   it('resolves a rejected push by fetching and applying the change again', async () => {
     let remote: TestRemote | undefined;
     let raced = false;
