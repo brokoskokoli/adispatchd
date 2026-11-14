@@ -295,6 +295,24 @@ function lastLines(text: string): string {
   return lines.slice(-3).join(' | ').slice(0, 500);
 }
 
+/**
+ * Git's messages for rejected credentials (https: "Authentication failed",
+ * no credentials to answer a prompt, HTTP 401/403, GitHub's "Permission to
+ * o/r denied"; ssh: "Permission denied (publickey)"). Only these exact forms
+ * count, never a bare number or "permission denied" of a local file, so a
+ * path or ref name in the output does not turn a transient error permanent.
+ */
+const AUTH_FAILURE =
+  /authentication failed for|invalid username or password|could not read (username|password) for|terminal prompts disabled|the requested url returned error: (401|403)\b|permission to \S+ denied to|permission denied \((publickey|password|keyboard-interactive)[^)]*\)/i;
+
+/** Git's messages for a repository that does not exist (or is hidden from these credentials). */
+const NOT_FOUND = /^remote: repository not found\.?$|repository '[^'\n]*' not found$|does not appear to be a git repository$|the requested url returned error: 404\b/im;
+
+/** Does git's error output say that the credentials were rejected? */
+export function isAuthFailure(text: string): boolean {
+  return AUTH_FAILURE.test(text);
+}
+
 /** Map a failed fetch to a {@link SourceError}. */
 export function classifyFetchError(err: unknown, branch: string): unknown {
   if (!(err instanceof GitCommandError)) return err;
@@ -302,10 +320,10 @@ export function classifyFetchError(err: unknown, branch: string): unknown {
   if (/couldn't find remote ref|could not find remote ref/i.test(text)) {
     return new SourceError('not_found', `Branch "${branch}" does not exist in the repository: ${err.message}`, { retryable: false });
   }
-  if (/authentication failed|could not read (username|password)|terminal prompts disabled|permission denied|403|401/i.test(text)) {
+  if (isAuthFailure(text)) {
     return new SourceError('auth', `The repository rejected the credentials: ${err.message}`, { retryable: false });
   }
-  if (/repository not found|does not appear to be a git repository|not found/i.test(text)) {
+  if (NOT_FOUND.test(text)) {
     return new SourceError('not_found', `Repository not found or not accessible: ${err.message}`, { retryable: false });
   }
   return new SourceError('transient', `Fetching the repository failed: ${err.message}`);

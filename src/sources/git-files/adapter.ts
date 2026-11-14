@@ -65,7 +65,7 @@ import {
   gitFilesWritableType,
   type GitFilesFieldType,
 } from './fields.js';
-import { GitClone, GitCommandError, type GitExec } from './git.js';
+import { GitClone, GitCommandError, isAuthFailure, type GitExec } from './git.js';
 import { KeyedSerializer } from './lock.js';
 
 /** Item kind reported as {@link SourceItem.type}. */
@@ -967,7 +967,7 @@ async function gitStep<T>(fn: () => Promise<T>): Promise<T> {
 
 function pushError(err: GitCommandError, outcomeUnknown: boolean): SourceError {
   const text = err.stderr;
-  if (/authentication failed|could not read (username|password)|terminal prompts disabled|permission denied|403|401/i.test(text)) {
+  if (isAuthFailure(text)) {
     return new SourceError('auth', `The repository rejected the push credentials: ${err.message}`, { retryable: false });
   }
   if (/protected branch|pre-receive hook declined|GH006|GH013/i.test(text)) {
