@@ -368,20 +368,21 @@ describe.runIf(supported)('ShellExecutor – idle timeout (Spec §8.3)', () => {
   });
 
   it('is reset by output and events', async () => {
-    // Runs ~1 s, well beyond the idle timeout, but produces output every ~50 ms.
+    // Runs ~2.4 s, well beyond the idle timeout, but produces output every ~50 ms. The margin (30×) is wide because
+    // on a heavily loaded machine starting a single `sleep` can take several hundred milliseconds.
     const body = `
 i=0
-while [ $i -lt 16 ]; do
+while [ $i -lt 48 ]; do
   if [ $((i % 2)) -eq 0 ]; then echo "tick $i"; else echo '@@ADISPATCH_EVENT {"type":"progress"}' >&2; fi
   sleep 0.05
   i=$((i + 1))
 done`;
     const before = Date.now();
-    const { outcome, classification, events } = await run(body, { timeouts: { idleTimeoutMs: 500 } });
-    expect(Date.now() - before).toBeGreaterThan(500);
+    const { outcome, classification, events } = await run(body, { timeouts: { idleTimeoutMs: 1_500 } });
+    expect(Date.now() - before).toBeGreaterThan(1_500);
     expect(outcome.timedOut).toBe(false);
     expect(classification.status).toBe('completed');
-    expect(events.filter((e) => e.type === 'progress' && e.stream === 'stderr')).toHaveLength(8);
+    expect(events.filter((e) => e.type === 'progress' && e.stream === 'stderr')).toHaveLength(24);
   });
 });
 
