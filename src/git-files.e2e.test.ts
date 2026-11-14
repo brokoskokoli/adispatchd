@@ -152,7 +152,9 @@ describe('git_files source end-to-end', () => {
     const history = await env.request('GET', '/api/v1/items/issues/1/history', undefined, { cookie });
     expect(history.status).toBe(200);
     expect(JSON.stringify(history.json)).toContain('"fields":[{"name":"status","from":"coding","to":"review"}]');
-  });
+    // Two worker runs, each with several commit/push cycles against a real bare repository: a few dozen git
+    // processes, ~15 s on a loaded machine – more than the global 20 s budget allows under a parallel full run.
+  }, 60_000);
 
   it('shows the items in a view, including closed ones', async () => {
     const view = await env.request('GET', '/api/v1/views/board/items?refresh=1', undefined, { cookie });
