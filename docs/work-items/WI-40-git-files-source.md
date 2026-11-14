@@ -29,7 +29,7 @@ sources:
     branch: main                     # Default main
     path: issues                     # Ordner im Repo, Default issues; Dateien NNNN-<slug>.md (oder NNNN.md)
     identity: coordinator            # optional: Token dieser Identity für fetch/push (github_app oder github_token)
-    commit_author: { name: adispatchd, email: adispatchd@example.invalid }   # Default wie hier
+    commit_author: { name: adispatchd, email: adispatchd@users.noreply.invalid }   # Default wie hier
     closed_when: { status: [done, closed] }   # Default; Feld → Werte, ein Treffer genügt → state closed
     comments_heading: "## Log"       # Überschrift des Kommentar-Abschnitts am Dateiende, Default "## Log"
     fields:                          # weitere Frontmatter-Schlüssel mit Typ (für Filter/Views/Sortierung)
@@ -48,7 +48,7 @@ sources:
    `work_branch` (= `branch`), `work_pr` (= `pr`, Zahl), `work_pr_url` (wenn `pr` eine URL ist). **Weitere
    Frontmatter-Schlüssel** werden unter `fields:` mit Typ (`string`, `number`, `boolean`, `date`, `string[]`)
    deklariert, damit die Konfigurationsprüfung offline Feldnamen, Operatoren und Werttypen prüfen kann (wie
-   `project.fields` bei GitHub). Nicht deklarierte Schlüssel stehen trotzdem in `context.json` (`attributes.frontmatter`).
+   `project.fields` bei GitHub). Nicht deklarierte Schlüssel stehen trotzdem als eigene Attribute in `context.json` (`source.attributes`; Skalare und Listen von Strings wörtlich, sonst JSON-Text), sind aber nicht filterbar.
    Ein Wert, der nicht zum Typ passt, ist für dieses Item **unbekannt** (fail closed).
 2. **Abhängigkeiten.** `blocked_by_open` zählt Blocker, die nicht `closed` sind. Ist ein Blocker unbekannt (keine
    Datei, ungültige Datei, doppelte ID), sind `blocked_by_open` und `blocked` **unbekannt** und `status` ist `unknown`
@@ -56,7 +56,7 @@ sources:
 3. **Listing.** Wie GitHub: ohne Selektor nur offene Items; `state` (oben im Filter, `equals`/`in`) wählt geschlossene aus.
 4. **Lesen.** Höchstens ein `fetch` je Mindestabstand (5 s; gleichzeitige Leser teilen sich einen), danach werden alle
    Dateien geparst. Ungültige Dateien (kein/fehlerhaftes Frontmatter, ID ungültig, Dateiname und `id` widersprechen,
-   doppelte ID, Symlink, zu groß) werden übersprungen und einmal je Datei-Stand als Warnung geloggt; der Planer stürzt
+   doppelte ID, Symlink, zu groß) werden übersprungen und einmal je Datei und Problem als Warnung geloggt; der Planer stürzt
    nie. Andere `.md`-Dateien ohne Nummernpräfix (z. B. `README.md`) werden still ignoriert.
 5. **Schreiben.** `source.update` bekommt für diese Source `fields: { status: coding }` (Wert `null` entfernt den
    Schlüssel) zusätzlich zu `labels: { add, remove }`; `project:` ist nur bei `github`, `fields:` nur bei `git_files`

@@ -120,7 +120,7 @@ export async function loadConfig(configDir: string, options: LoadConfigOptions):
     dir,
     options.dataDir,
   );
-  const sources = rawSources ? normalizeSources(rawSources) : {};
+  const sources = rawSources ? normalizeSources(rawSources, dir) : {};
   const identities = rawIdentities ? normalizeIdentities(rawIdentities) : {};
 
   // Named filters first: workflows and views contain them expanded.

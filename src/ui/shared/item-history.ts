@@ -6,7 +6,7 @@
  * builder. Everything from the API or GitHub is rendered as text.
  */
 import type { Child, ElementLike, HFn, Listener } from './dom.js';
-import { formatDuration, type Tone } from './format.js';
+import { formatDuration, itemRefText, type Tone } from './format.js';
 
 /** Kinds of timeline entries (filter checkboxes); `github` = external GitHub events. */
 export const ENTRY_KINDS = ['run_started', 'run_finished', 'hook', 'block_created', 'block_cleared', 'ui_action', 'reply', 'github'] as const;
@@ -32,6 +32,8 @@ export interface Effect {
   labelsAdded: string[];
   labelsRemoved: string[];
   projectFields: Array<{ name: string; from?: unknown; to: unknown }>;
+  /** Frontmatter fields of git_files items (WI-40). */
+  fields: Array<{ name: string; from?: unknown; to: unknown }>;
   projectItemAdded: boolean;
   unchanged: boolean;
   comment: { url: string | null; reconciled: boolean } | null;
@@ -121,6 +123,8 @@ export type HistoryItem =
       ok: true;
       url: string;
       type: string;
+      /** Type of the source (`github`, `git_files`, …); `null` from older servers. */
+      sourceType: string | null;
       repository: string | null;
       title: string;
       state: string | null;
@@ -191,6 +195,10 @@ export function parseEffect(v: unknown): Effect | null {
     labelsAdded: strings(e.labelsAdded),
     labelsRemoved: strings(e.labelsRemoved),
     projectFields: list(e.projectFields)
+      .map(obj)
+      .filter((f): f is Record<string, unknown> => f !== null && typeof f.name === 'string')
+      .map((f) => ({ name: s(f.name, 200), ...('from' in f ? { from: f.from } : {}), to: f.to })),
+    fields: list(e.fields)
       .map(obj)
       .filter((f): f is Record<string, unknown> => f !== null && typeof f.name === 'string')
       .map((f) => ({ name: s(f.name, 200), ...('from' in f ? { from: f.from } : {}), to: f.to })),
@@ -293,6 +301,7 @@ function parseItem(v: unknown): HistoryItem | null {
     ok: true,
     url: s(i.url),
     type: s(i.type, 40),
+    sourceType: sn(i.sourceType, 40),
     repository: sn(i.repository, 200),
     title: s(i.title),
     state: sn(i.state, 40),
@@ -401,6 +410,7 @@ export function effectLines(effect: Effect | null | undefined, type?: string): s
   for (const l of effect.labelsRemoved) lines.push(`label − ${l}`);
   if (effect.projectItemAdded) lines.push('added to the project');
   for (const f of effect.projectFields) lines.push(`${f.name}: ${'from' in f ? `${value(f.from)} → ` : ''}${value(f.to)}`);
+  for (const f of effect.fields ?? []) lines.push(`${f.name}: ${'from' in f ? `${value(f.from)} → ` : ''}${value(f.to)}`);
   if (effect.comment) lines.push(effect.comment.reconciled ? 'comment found again (written before)' : 'comment written');
   if (effect.unchanged) lines.push('no change (already in this state)');
   if (effect.notification) lines.push(`message to ${effect.notification.channel} recorded`);
@@ -534,7 +544,7 @@ export function headSection<E extends ElementLike>(h: HFn<E>, d: HistoryData, r:
     'section',
     { class: 'card history-head' },
     h('h1', null, item.url ? r.link(item.url, item.title || `${d.source}:${d.itemId}`) : item.title || `${d.source}:${d.itemId}`),
-    h('p', { class: 'muted' }, `${item.repository ?? d.source}#${d.itemId} · source ${d.source}`),
+    h('p', { class: 'muted' }, `${itemRefText({ source: d.source, itemId: d.itemId, repository: item.repository, sourceType: item.sourceType })} · source ${d.source}`),
     h('dl', { class: 'kv' }, rows),
     activeRuns,
     blocks,

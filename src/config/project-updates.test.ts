@@ -103,7 +103,7 @@ describe('config: source.update with project fields (WI-16)', () => {
       'workflows/w.yaml: on_start[1].project.Due: Invalid value for project field "Due" (date): expected a date YYYY-MM-DD or null',
       'workflows/w.yaml: on_start[1].project.Sprint: Invalid value for project field "Sprint" (iteration): expected a string or null',
       'workflows/w.yaml: on_start[2].project: "project" must set at least one field',
-      'workflows/w.yaml: on_start[3].labels: "source.update" must add or remove at least one label or set a project field',
+      'workflows/w.yaml: on_start[3].labels: "source.update" must add or remove at least one label or set a project field (github) or a field (git_files)',
     ]);
   });
 

@@ -144,6 +144,8 @@ export interface DataPaths {
   runsDir: string;
   /** `artifacts/` (WI-35): `artifacts/<artifact-id>/content` holds the stored file or folder */
   artifactsDir: string;
+  /** `sources/` (WI-40): `sources/<source-id>/` holds the clone of a `git_files` source */
+  sourcesDir: string;
   /** Default `workspace.base_dir`: `workspaces/` */
   defaultWorkspacesDir: string;
   /** `backups/` */
@@ -164,6 +166,7 @@ export function dataPaths(dataDir: string): DataPaths {
     logsDir,
     runsDir,
     artifactsDir: path.join(root, 'artifacts'),
+    sourcesDir: path.join(root, 'sources'),
     defaultWorkspacesDir: path.join(root, 'workspaces'),
     backupsDir: path.join(root, 'backups'),
     run(runId: string): RunPaths {

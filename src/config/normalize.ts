@@ -4,6 +4,14 @@
  */
 import path from 'node:path';
 import { dataPaths, HOOK_NAMES, normalizeArtifactPath, parseSize, resultHookName, type FilterNode, type HookName } from '../core/index.js';
+import {
+  DEFAULT_COMMENTS_HEADING,
+  GIT_FILES_DEFAULT_AUTHOR,
+  defaultWebUrl,
+  normalizeItemFolder,
+  repositoryLocation,
+  resolveRepository,
+} from '../sources/index.js';
 import type { RawFilterNode } from './filter-schema.js';
 import type { IssuePath } from './issues.js';
 import type { z } from 'zod';
@@ -135,12 +143,38 @@ export function normalizeGlobal(raw: RawGlobalConfig, configDir: string, dataDir
   };
 }
 
-/** Normalize `sources.yaml`. */
-export function normalizeSources(raw: RawSourcesFile): Record<string, SourceConfig> {
+/** Default `closed_when` of a `git_files` source (WI-40). */
+export const DEFAULT_GIT_FILES_CLOSED_WHEN: Readonly<Record<string, readonly string[]>> = Object.freeze({ status: ['done', 'closed'] });
+
+/** Normalize `sources.yaml`; local `git_files` repository paths are resolved against `configDir`. */
+export function normalizeSources(raw: RawSourcesFile, configDir: string = process.cwd()): Record<string, SourceConfig> {
   const out: Record<string, SourceConfig> = {};
   for (const [id, source] of Object.entries(raw.sources)) {
     if (source.type === 'artifacts') {
       out[id] = { id, type: 'artifacts', identity: null, project: null, vars: { ...(source.vars ?? {}) } };
+      continue;
+    }
+    if (source.type === 'git_files') {
+      const repository = resolveRepository(source.repository, configDir);
+      out[id] = {
+        id,
+        type: 'git_files',
+        repository,
+        branch: source.branch,
+        // An unsafe folder is reported by validate.ts; keep it as written until then.
+        path: normalizeItemFolder(source.path) ?? source.path,
+        identity: source.identity ?? null,
+        project: null,
+        commitAuthor: source.commit_author ? { name: source.commit_author.name, email: source.commit_author.email } : { ...GIT_FILES_DEFAULT_AUTHOR },
+        closedWhen: source.closed_when
+          ? Object.fromEntries(Object.entries(source.closed_when).map(([k, v]) => [k, Array.isArray(v) ? [...v] : [v]]))
+          : { ...DEFAULT_GIT_FILES_CLOSED_WHEN },
+        commentsHeading: source.comments_heading ?? DEFAULT_COMMENTS_HEADING,
+        fields: { ...(source.fields ?? {}) },
+        webUrl: source.web_url ?? defaultWebUrl(repository),
+        location: repositoryLocation(repository),
+        vars: { ...(source.vars ?? {}) },
+      };
       continue;
     }
     out[id] = {
@@ -261,6 +295,7 @@ function normalizeAction(
         labels: { add: [...(raw.labels?.add ?? [])], remove: [...(raw.labels?.remove ?? [])] },
         // Only present when configured, so hashes of label-only actions stay unchanged.
         ...(raw.project !== undefined ? { project: { ...raw.project } } : {}),
+        ...(raw.fields !== undefined ? { fields: { ...raw.fields } } : {}),
       };
     case 'source.comment':
       return { ...common, type: 'source.comment', message: raw.message, identity: raw.identity ?? null };

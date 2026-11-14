@@ -269,10 +269,32 @@ export function appliedSummary(details: unknown): string {
   const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
   const parts = [...strings(a.labelsAdded).map((l) => `+${l}`), ...strings(a.labelsRemoved).map((l) => `-${l}`)];
   if (a.projectItemAdded === true) parts.push('added to project');
-  if (a.projectFields && typeof a.projectFields === 'object') {
-    for (const [name, value] of Object.entries(a.projectFields as Record<string, unknown>)) {
+  // Project fields (GitHub) and frontmatter fields (git_files, WI-40).
+  for (const fields of [a.projectFields, a.fields]) {
+    if (!fields || typeof fields !== 'object') continue;
+    for (const [name, value] of Object.entries(fields as Record<string, unknown>)) {
       parts.push(value === null ? `${name} cleared` : `${name}=${typeof value === 'string' ? value : JSON.stringify(value)}`);
     }
   }
   return truncate(parts.join(', '), 200);
+}
+
+/** Source type of `git_files` sources (WI-40; mirrors `GIT_FILES_SOURCE_TYPE`, the UI does not import the core). */
+const GIT_FILES = 'git_files';
+
+/** Text of the external link of an item, by source type: GitHub, a file of a `git_files` repository, anything else. */
+export function itemLinkText(sourceType: string | null | undefined): string {
+  if (sourceType === 'github') return 'Open on GitHub';
+  if (sourceType === GIT_FILES) return 'Open file';
+  return 'Open source item';
+}
+
+/**
+ * Short reference of an item: `owner/name#7` for GitHub; `<source>#7` for
+ * `git_files` items, whose repository is not where the number lives (no
+ * confusion with issue #7 of the same repository).
+ */
+export function itemRefText(item: { source: string; itemId: string; repository: string | null; sourceType?: string | null }): string {
+  if (item.sourceType === GIT_FILES) return `${item.source}#${item.itemId}`;
+  return `${item.repository ?? item.source}#${item.itemId}`;
 }

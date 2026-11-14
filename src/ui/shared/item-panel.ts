@@ -8,6 +8,7 @@
  */
 import type { AuthMe } from './auth.js';
 import type { Child, ElementLike, HFn, Listener } from './dom.js';
+import { itemLinkText, itemRefText, safeHttpUrl } from './format.js';
 import { describeFindings, scanSecrets } from './secret-scan.js';
 
 /** A project field of the item. */
@@ -43,6 +44,8 @@ export interface PanelItem {
   key: string;
   url: string;
   type: string;
+  /** Type of the source (`github`, `git_files`, …); `null` from older servers. */
+  sourceType: string | null;
   repository: string | null;
   title: string;
   state: string | null;
@@ -108,6 +111,7 @@ export function parseItemDetails(v: unknown): PanelItem | null {
     key: str(d.key, 300),
     url: str(d.url),
     type: str(d.type, 40),
+    sourceType: strOrNull(d.sourceType, 40),
     repository: strOrNull(d.repository, 300),
     title: str(d.title),
     state: strOrNull(d.state, 40),
@@ -210,7 +214,7 @@ export function confirmTitle(item: PanelItem, identity: string): string {
 
 /** Lines describing what will be sent (confirmation dialog). */
 export function confirmLines(kind: 'comment' | 'labels' | 'project', item: PanelItem, payload: unknown): string[] {
-  const where = `${item.repository ?? item.source}#${item.itemId}`;
+  const where = itemRefText(item);
   if (kind === 'comment') {
     const text = String(payload);
     return [`Comment on ${where} (${text.length} characters):`, text.length > 400 ? `${text.slice(0, 400)}…` : text];
@@ -324,6 +328,8 @@ export function auditTable<E extends ElementLike>(h: HFn<E>, actions: readonly P
 
 /** The whole panel for one item. */
 export function itemPanel<E extends ElementLike>(h: HFn<E>, item: PanelItem, state: PanelState, on: PanelHandlers): E {
+  // Only a real web page (a git_files source without web_url links to the item history instead).
+  const webUrl = safeHttpUrl(item.url);
   const noIdentity = item.identities.length === 0;
   const disabled = noIdentity || state.identity === '';
   const datalistId = `labels-${item.source}-${item.itemId}`;
@@ -331,12 +337,13 @@ export function itemPanel<E extends ElementLike>(h: HFn<E>, item: PanelItem, sta
   const header = h(
     'div',
     { class: 'item-head' },
-    h('h1', null, item.title || `${item.repository ?? item.source}#${item.itemId}`),
+    h('h1', null, item.title || itemRefText(item)),
     h(
       'p',
       { class: 'muted' },
-      `${item.repository ?? item.source}#${item.itemId} · ${item.type === 'pull_request' ? 'pull request' : 'issue'}${item.state ? ` · ${item.state}` : ''} · source ${item.source} · `,
-      on.link(item.url, 'Open on GitHub'),
+      `${itemRefText(item)} · ${item.type === 'pull_request' ? 'pull request' : 'issue'}${item.state ? ` · ${item.state}` : ''} · source ${item.source}`,
+      webUrl ? ' · ' : null,
+      webUrl ? on.link(webUrl, itemLinkText(item.sourceType)) : null,
     ),
   );
 

@@ -28,7 +28,7 @@ import {
 import { VIEW_RUN_FIELDS } from '../views/index.js';
 import { KEEP_MAX_ENTRIES, KEEP_MAX_FILES } from '../runs/index.js';
 import { ARTIFACT_MAX_ENTRIES, ARTIFACT_MAX_FILES } from '../artifacts/index.js';
-import { ARTIFACT_FIELD_DEFINITIONS } from '../sources/index.js';
+import { ARTIFACT_FIELD_DEFINITIONS, GIT_FILES_DECLARABLE_TYPES, GIT_FILES_FIELD_DEFINITIONS, GIT_FILES_WRITABLE_BUILTINS } from '../sources/index.js';
 import {
   DEFAULT_WORKING_DIRECTORY,
   DEFAULTS,
@@ -248,6 +248,18 @@ describe('docs/configuration-reference.md', () => {
     expect(markdown).toContain(`höchstens ${fmt(ARTIFACT_MAX_FILES)} Dateien und ${fmt(ARTIFACT_MAX_ENTRIES)} untersuchte Verzeichniseinträge`);
     const section = markdown.slice(markdown.indexOf('### 4.9 Feldkatalog der Source `artifacts`'), markdown.indexOf('## 5. Platzhalter-Referenz'));
     for (const f of ARTIFACT_FIELD_DEFINITIONS) expect(section, f.name).toContain(`| \`${f.name}\` | ${f.type} |`);
+  });
+
+  it('documents the git_files source: keys, field catalogue, writable fields and the CLI (WI-40)', () => {
+    const section = markdown.slice(markdown.indexOf('#### 3.2.2 Source `git_files`'), markdown.indexOf('### 3.3 identities.yaml'));
+    for (const key of ['repository', 'branch', 'path', 'identity', 'commit_author', 'closed_when', 'comments_heading', 'fields', 'web_url', 'vars']) {
+      expect(section, key).toContain(`| \`${key}\` |`);
+    }
+    for (const type of GIT_FILES_DECLARABLE_TYPES) expect(section, type).toContain(`\`${type}\``);
+    expect(section).toContain('adispatch source create-item');
+    const catalogue = markdown.slice(markdown.indexOf('### 4.10 Feldkatalog der Source `git_files`'), markdown.indexOf('## 5. Platzhalter-Referenz'));
+    for (const f of GIT_FILES_FIELD_DEFINITIONS) expect(catalogue, f.name).toContain(`| \`${f.name}\` | ${f.type} |`);
+    for (const name of Object.keys(GIT_FILES_WRITABLE_BUILTINS)) expect(markdown, name).toContain(`\`${name}\``);
   });
 
   it('documents the container executor: keys, defaults, mounts, labels and config.yaml (WI-19)', () => {

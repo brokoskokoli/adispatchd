@@ -56,6 +56,7 @@ const RAW = {
   key: 'repo_a:7',
   url: 'https://github.com/example/a/issues/7',
   type: 'issue',
+  sourceType: 'github',
   repository: 'example/a',
   title: '<img src=x onerror=alert(1)> Fix it',
   state: 'open',
@@ -189,6 +190,19 @@ describe('panel rendering', () => {
     // Audit: comment link and error text.
     expect(panel.textContent).toContain('github_forbidden: locked');
     expect(panel.find('a').some((a) => a.textContent === 'comment' && a.attrs.href?.includes('issuecomment-1'))).toBe(true);
+  });
+
+  it('names the link after the source type and links only real web pages (git_files, WI-40)', () => {
+    const files = parseItemDetails({ ...RAW, sourceType: 'git_files', repository: 'example/a', url: 'https://git.example.invalid/blob/main/issues/0007-x.md' }) as PanelItem;
+    const panel = itemPanel(h, files, initialState(files), handlers);
+    expect(panel.find('a').find((a) => a.textContent === 'Open file')?.attrs.href).toBe('https://git.example.invalid/blob/main/issues/0007-x.md');
+    expect(panel.textContent).not.toContain('Open on GitHub');
+    // Not "example/a#7": that would read as issue #7 of the repository.
+    expect(panel.textContent).toContain('repo_a#7 · issue');
+    const noWeb = parseItemDetails({ ...RAW, sourceType: 'git_files', url: '#/items/repo_a/7/history' }) as PanelItem;
+    expect(itemPanel(h, noWeb, initialState(noWeb), handlers).find('a').some((a) => a.textContent === 'Open file')).toBe(false);
+    const other = parseItemDetails({ ...RAW, sourceType: 'something' }) as PanelItem;
+    expect(itemPanel(h, other, initialState(other), handlers).find('a').some((a) => a.textContent === 'Open source item')).toBe(true);
   });
 
   it('enables buttons for pending edits and shows the plain-text preview', () => {

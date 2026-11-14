@@ -13,10 +13,12 @@
  * instance lock released. SIGTERM/SIGINT: drain with timeout, a second signal
  * escalates to cancel-all (see {@link installSignalHandlers}).
  */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   ConsoleLogger,
+  dataPaths,
   OrchestratorError,
   SecretRedactor,
   noopLogger,
@@ -66,7 +68,7 @@ import {
 import { Scheduler } from './scheduler/index.js';
 import { DashboardInfoService, type DashboardInfoServiceOptions } from './dashboard/index.js';
 import { ParameterOptionsService } from './parameter-options/index.js';
-import { createArtifactSourceFactory, createGitHubSourceFactory } from './sources/index.js';
+import { createArtifactSourceFactory, createGitFilesSourceFactory, createGitHubSourceFactory, findOrphanedClones, KeyedSerializer } from './sources/index.js';
 import { ViewService } from './views/index.js';
 import { AuthService, createApiServer, type UiActionLimits, EventHub, removeControlToken, writeControlToken, type AuthServiceOptions, type ReadinessReport } from './api/index.js';
 import { HubSlotClient, type HubSlotClientOptions } from './hub/index.js';
@@ -99,6 +101,14 @@ export interface SourceRegistryDeps {
   logger?: Logger;
   /** Artifact catalogue of the artifacts source (WI-35); default: empty (e.g. offline dry-run). */
   artifacts?: ArtifactCatalog;
+  /**
+   * Directory of the clones of `git_files` sources (WI-40, `<dir>/<source-id>`):
+   * the daemon uses `<data-dir>/sources`; tools running next to a daemon
+   * (dry-run, `source create-item`) pass a temporary directory of their own.
+   */
+  gitFilesDir?: string;
+  /** Overrides of the `git_files` adapters (tests). */
+  gitFiles?: { minFetchIntervalMs?: number; maxPushAttempts?: number };
 }
 
 /**
@@ -117,6 +127,10 @@ export class SourceRegistry implements CredentialProvider {
   private signature = '';
   private readonly clock: Clock;
   private readonly redactor: SecretRedactor;
+  /** Serialises git per clone across adapter rebuilds (WI-40). */
+  private readonly gitLocks = new KeyedSerializer();
+  /** Temporary clone directory when no `gitFilesDir` is given (removed by {@link dispose}). */
+  private tempGitFilesDir: string | null = null;
 
   constructor(
     config: LoadedConfig,
@@ -152,6 +166,35 @@ export class SourceRegistry implements CredentialProvider {
         next.set(source.id, createArtifactSourceFactory(this.deps.artifacts ?? EMPTY_ARTIFACT_CATALOG).create(source.id, {}, this.adapterDeps()));
         continue;
       }
+      if (source.type === 'git_files') {
+        const gitFiles = createGitFilesSourceFactory({
+          clonesDir: this.gitFilesDir(),
+          locks: this.gitLocks,
+          redact: (text) => this.redactor.redact(text),
+          ...(this.deps.env ? { env: this.deps.env } : {}),
+          ...this.deps.gitFiles,
+        });
+        next.set(
+          source.id,
+          gitFiles.create(
+            source.id,
+            {
+              repository: source.repository,
+              branch: source.branch,
+              path: source.path,
+              identity: source.identity,
+              commitAuthor: source.commitAuthor,
+              closedWhen: source.closedWhen,
+              commentsHeading: source.commentsHeading,
+              fields: source.fields,
+              webUrl: source.webUrl,
+              location: source.location,
+            },
+            this.adapterDeps(source.id),
+          ),
+        );
+        continue;
+      }
       next.set(
         source.id,
         factory.create(
@@ -177,6 +220,18 @@ export class SourceRegistry implements CredentialProvider {
       );
     }
     this.adapters = next;
+  }
+
+  /** Remove the temporary clones (only those created because no `gitFilesDir` was given). */
+  dispose(): void {
+    if (this.tempGitFilesDir) rmSync(this.tempGitFilesDir, { recursive: true, force: true });
+    this.tempGitFilesDir = null;
+  }
+
+  private gitFilesDir(): string {
+    if (this.deps.gitFilesDir) return this.deps.gitFilesDir;
+    this.tempGitFilesDir ??= mkdtempSync(path.join(tmpdir(), 'adispatchd-git-files-'));
+    return this.tempGitFilesDir;
   }
 
   private adapterDeps(sourceId?: string): SourceAdapterDeps {
@@ -253,6 +308,28 @@ export async function checkContainerEngines(client: ContainerEngineClient, engin
   }
 }
 
+/**
+ * Log clones of `git_files` sources that are no longer configured (WI-40,
+ * removed or renamed sources). Only reported: deleting them is safe once no
+ * run of the old source is active, but left to the operator.
+ */
+export async function reportOrphanedClones(clonesDir: string, config: LoadedConfig, log: Logger): Promise<void> {
+  try {
+    const ids = Object.values(config.sources)
+      .filter((s) => s.type === 'git_files')
+      .map((s) => s.id);
+    const orphaned = await findOrphanedClones(clonesDir, ids);
+    if (orphaned.length > 0) {
+      log.info('clones of git_files sources that are no longer configured (safe to delete when no run of them is active)', {
+        dir: clonesDir,
+        clones: orphaned,
+      });
+    }
+  } catch (err) {
+    log.warn('could not check the clones of git_files sources', { dir: clonesDir, error: errorMessage(err) });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Application
 
@@ -312,6 +389,8 @@ export interface AppOptions {
   hub?: { socketPath: string; workspaceId: string } & Partial<Pick<HubSlotClientOptions, 'heartbeatMs' | 'requestTimeoutMs' | 'reconnectInitialMs' | 'reconnectMaxMs'>>;
   /** Tuning of the dashboard info tiles (WI-24; tests). */
   dashboardInfo?: Partial<Pick<DashboardInfoServiceOptions, 'maxParallel' | 'manualMinIntervalMs' | 'manualPerMinute'>>;
+  /** Tuning of the `git_files` adapters (WI-40; tests). */
+  gitFiles?: { minFetchIntervalMs?: number; maxPushAttempts?: number };
 }
 
 /** Options of {@link App.shutdown}. */
@@ -434,8 +513,10 @@ export async function createApp(options: AppOptions): Promise<App> {
     redactor,
     logger,
     artifacts,
+    gitFilesDir: dataPaths(dataDir).sourcesDir,
     ...(options.fetch ? { fetch: options.fetch } : {}),
     ...(options.env ? { env: options.env } : {}),
+    ...(options.gitFiles ? { gitFiles: options.gitFiles } : {}),
   });
   const sourceLookup = (id: string): SourceAdapter | undefined => sources.get(id);
 
@@ -880,6 +961,7 @@ export async function createApp(options: AppOptions): Promise<App> {
         const engines = containerEngines(config.current);
         for (const e of engines) checkedEngines.add(e);
         await checkContainerEngines(containers, engines, log);
+        await reportOrphanedClones(dataPaths(dataDir).sourcesDir, config.current, log);
         const report = await controller.recover();
         log.info('recovery finished', {
           finalized: report.finalized.length,

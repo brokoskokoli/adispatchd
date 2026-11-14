@@ -21,7 +21,7 @@ import {
   parseDuration,
   parseSize,
 } from '../core/index.js';
-import { PROJECT_FIELD_KINDS } from '../sources/index.js';
+import { GIT_FILES_DECLARABLE_TYPES, PROJECT_FIELD_KINDS } from '../sources/index.js';
 import { filterNodeSchema } from './filter-schema.js';
 import { AUTH_MODES, AUTH_ROLES } from './model.js';
 import { isIP } from 'node:net';
@@ -421,9 +421,36 @@ const artifactsSourceSchema = z.strictObject({
   vars: sourceVarsSchema.optional(),
 });
 
+/** A scalar from YAML as string (`done`, `1`, `true` → `"done"`, `"1"`, `"true"`). */
+const scalarString = z.union([z.string(), z.number(), z.boolean()], { error: 'Expected a string' }).transform((v) => String(v));
+
+/**
+ * Issues as Markdown files with YAML frontmatter in a git repository (WI-40).
+ * Paths, names and the combination with actions are checked in validate.ts.
+ */
+const gitFilesSourceSchema = z.strictObject({
+  type: z.literal('git_files'),
+  /** Remote URL (https, ssh, file) or local path (absolute or relative to the config dir). */
+  repository: nonEmpty,
+  branch: nonEmpty.default('main'),
+  /** Folder of the item files in the repository; `.` = repository root. */
+  path: z.string().trim().default('issues'),
+  /** Identity whose token is used for fetch/push; without it git runs without credentials. */
+  identity: configId.optional(),
+  commit_author: z.strictObject({ name: nonEmpty, email: nonEmpty }).optional(),
+  /** Frontmatter key → values; an item is closed when one of them matches. Default `{ status: [done, closed] }`. */
+  closed_when: z.record(z.string(), z.union([scalarString, z.array(scalarString)])).optional(),
+  comments_heading: nonEmpty.optional(),
+  /** Further frontmatter keys usable as fields, with their type. */
+  fields: z.record(z.string(), z.enum(GIT_FILES_DECLARABLE_TYPES, `Expected one of: ${GIT_FILES_DECLARABLE_TYPES.join(', ')}`)).optional(),
+  /** Web URL of a file: template with {ref} and {path}; default derived for github.com repositories. */
+  web_url: nonEmpty.optional(),
+  vars: sourceVarsSchema.optional(),
+});
+
 /** Schema of `sources.yaml`. */
 export const sourcesFileSchema = z.strictObject({
-  sources: z.record(configId, z.discriminatedUnion('type', [githubSourceSchema, artifactsSourceSchema])).default({}),
+  sources: z.record(configId, z.discriminatedUnion('type', [githubSourceSchema, artifactsSourceSchema, gitFilesSourceSchema])).default({}),
 });
 
 /** Parsed `sources.yaml`. */
@@ -702,12 +729,31 @@ const projectUpdateValue = z
     return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso;
   });
 
+/**
+ * Desired value of a frontmatter field in `source.update.fields` (WI-40):
+ * string, number, boolean, `null` (= remove the key) or a list of strings.
+ * A YAML timestamp parsed as Date becomes `YYYY-MM-DD` / its ISO string.
+ * Checked per type in validate.ts.
+ */
+const fieldUpdateValue = z
+  .union([z.string(), z.number(), z.boolean(), z.null(), z.date(), z.array(z.union([z.string(), z.number()]))], {
+    error: 'Expected a string, a number, true/false, null or a list of strings',
+  })
+  .transform((value) => {
+    if (Array.isArray(value)) return value.map((v) => String(v));
+    if (!(value instanceof Date)) return value;
+    const iso = value.toISOString();
+    return iso.endsWith('T00:00:00.000Z') ? iso.slice(0, 10) : iso;
+  });
+
 const actionSchema = z.discriminatedUnion('type', [
   z.strictObject({
     type: z.literal('source.update'),
     ...actionCommon,
     labels: z.strictObject({ add: stringList, remove: stringList }).optional(),
     project: z.record(z.string(), projectUpdateValue).optional(),
+    /** Frontmatter fields of `git_files` items (WI-40): key → value, `null` removes the key. */
+    fields: z.record(z.string(), fieldUpdateValue).optional(),
   }),
   z.strictObject({
     type: z.literal('source.comment'),

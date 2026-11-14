@@ -8,6 +8,7 @@ import path from 'node:path';
 import {
   LINKED_ITEM_FIELDS,
   type ActionEffect,
+  type FieldUpdateValue,
   type ProjectFieldUpdateValue,
   type SourceUpdateApplied,
   commentMarker,
@@ -116,6 +117,11 @@ export function updateEffect(applied: SourceUpdateApplied | undefined | null): A
     const previous = applied?.projectFieldsPrevious ?? {};
     effect.projectFields = fields.map(([name, to]) => ({ name, ...(Object.hasOwn(previous, name) ? { from: previous[name] ?? null } : {}), to }));
   }
+  const frontmatter = Object.entries(applied?.fields ?? {});
+  if (frontmatter.length > 0) {
+    const previous = applied?.fieldsPrevious ?? {};
+    effect.fields = frontmatter.map(([name, to]) => ({ name, ...(Object.hasOwn(previous, name) ? { from: previous[name] ?? null } : {}), to }));
+  }
   if (applied?.projectItemAdded) effect.projectItemAdded = true;
   if (Object.keys(effect).length === 0) effect.unchanged = true;
   return effect;
@@ -157,6 +163,15 @@ export function mergeEffects(previous: ActionEffect | null | undefined, next: Ac
   if (removed.length > 0) effect.labelsRemoved = removed;
   const changedFields = [...fields.values()].filter((f) => !('from' in f) || f.from !== f.to);
   if (changedFields.length > 0) effect.projectFields = changedFields;
+  // Frontmatter fields (git_files, WI-40): first known old value, last new value, dropped when back at the old value.
+  const frontmatter = new Map<string, { name: string; from?: FieldUpdateValue; to: FieldUpdateValue }>();
+  for (const f of [...(previous.fields ?? []), ...(next.fields ?? [])]) {
+    const known = frontmatter.get(f.name);
+    if (!known) frontmatter.set(f.name, { ...f });
+    else frontmatter.set(f.name, { name: f.name, ...('from' in known ? { from: known.from } : 'from' in f ? { from: f.from } : {}), to: f.to });
+  }
+  const changedFrontmatter = [...frontmatter.values()].filter((f) => !('from' in f) || JSON.stringify(f.from) !== JSON.stringify(f.to));
+  if (changedFrontmatter.length > 0) effect.fields = changedFrontmatter;
   if (previous.projectItemAdded || next.projectItemAdded) effect.projectItemAdded = true;
   const comment = next.comment ?? previous.comment;
   if (comment) effect.comment = comment;
@@ -273,7 +288,7 @@ async function resolveLinkedForTemplates(
 
 function requireIdentity(input: AttemptInput, config: SourceCommentActionConfig | SourceUpdateActionConfig): string {
   const identity = resolveActionIdentity(config, input.snapshot);
-  if (!identity) throw new LifecycleError('no_identity', `No identity for action "${config.id}" (action → workflow → source)`);
+  if (identity === null) throw new LifecycleError('no_identity', `No identity for action "${config.id}" (action → workflow → source)`);
   return identity;
 }
 
@@ -290,8 +305,13 @@ export async function performSourceUpdate(
   const { adapter, item } = await resolveSourceTarget(deps, input.run, input.snapshot, input.item);
   const result = await adapter.applyUpdate(
     item,
-    { labels: { add: config.labels.add, remove: config.labels.remove }, ...(config.project ? { project: config.project } : {}) },
+    {
+      labels: { add: config.labels.add, remove: config.labels.remove },
+      ...(config.project ? { project: config.project } : {}),
+      ...(config.fields ? { fields: config.fields } : {}),
+    },
     identity,
+    { origin: { runId: input.run.id, actionId: config.id } },
   );
   return {
     externalKey: null,

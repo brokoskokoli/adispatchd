@@ -5,3 +5,4 @@
  */
 export * from './github/index.js';
 export * from './artifacts/index.js';
+export * from './git-files/index.js';

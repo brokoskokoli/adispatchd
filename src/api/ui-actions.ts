@@ -26,6 +26,7 @@ import { z } from 'zod';
 import {
   describeFindings,
   errorMessage,
+  GIT_FILES_SOURCE_TYPE,
   maskSecrets,
   noopLogger,
   redactValue,
@@ -171,13 +172,17 @@ function parse<T extends z.ZodType>(schema: T, value: unknown, what: string): z.
 // GitHub errors → API errors
 
 /**
- * Understandable API error for a failed GitHub call. GitHub's 401/403 are
+ * Understandable API error for a failed source call. GitHub's 401/403 are
  * reported as 502 so the UI does not confuse them with its own login/role.
+ * The codes keep their `github_` prefix for every source type (documented
+ * API); the texts of a `git_files` source (WI-40) name the repository, not
+ * GitHub.
  */
-export function githubError(err: unknown, identity: string, note?: string): ApiError | null {
+export function githubError(err: unknown, identity: string, note?: string, sourceType?: string): ApiError | null {
   if (!(err instanceof SourceError)) return null;
   const detail = err.message;
   const who = `identity "${identity}"${note ? ` (${note})` : ''}`;
+  if (sourceType === GIT_FILES_SOURCE_TYPE) return repositoryError(err, who, detail);
   switch (err.kind) {
     case 'auth':
       return new ApiError(502, 'github_auth_failed', `GitHub rejected the credentials of ${who}: ${detail}`);
@@ -196,6 +201,33 @@ export function githubError(err: unknown, identity: string, note?: string): ApiE
     case 'invalid':
       return new ApiError(422, 'github_rejected', `GitHub rejected the request: ${detail}`);
   }
+}
+
+/** {@link githubError} for a `git_files` source: same codes, texts about the repository. */
+function repositoryError(err: SourceError, who: string, detail: string): ApiError {
+  switch (err.kind) {
+    case 'auth':
+      return new ApiError(502, 'github_auth_failed', `The repository rejected the credentials of ${who}: ${detail}`);
+    case 'forbidden':
+      return new ApiError(502, 'github_forbidden', `The repository refused the push of ${who} (e.g. a protected branch or no write access): ${detail}`);
+    case 'not_found':
+      return new ApiError(404, 'github_not_found', `The item or the repository was not found for ${who}: ${detail}`);
+    case 'rate_limited':
+      return new ApiError(429, 'github_rate_limited', `Rate limit reached for ${who}; try again later: ${detail}`, {
+        ...(err.retryAfterMs !== undefined ? { retryAfterMs: err.retryAfterMs } : {}),
+      });
+    case 'transient':
+      return err.outcomeUnknown
+        ? new ApiError(502, 'github_outcome_unknown', `The change may have reached the repository; check the item file before sending again: ${detail}`)
+        : new ApiError(502, 'github_unavailable', `The repository is not reachable or answered with an error: ${detail}`);
+    case 'invalid':
+      return new ApiError(422, 'github_rejected', `The change was rejected: ${detail}`);
+  }
+}
+
+/** Where a change goes, for messages: GitHub, or the repository of a `git_files` source. */
+function placeOf(adapter: SourceAdapter | null | undefined): string {
+  return adapter?.type === GIT_FILES_SOURCE_TYPE ? 'the repository' : 'GitHub';
 }
 
 const retryAfter = (reply: FastifyReply, ms: number): void => {
@@ -273,7 +305,7 @@ export function registerUiActionRoutes(app: FastifyInstance, deps: UiActionDeps)
       item = await adapter.getItem(itemId);
     } catch (err) {
       const readIdentity = deps.config.current.sources[sourceId]?.identity ?? 'source';
-      throw githubError(err, readIdentity, 'source identity, used for reading the item') ?? err;
+      throw githubError(err, readIdentity, 'source identity, used for reading the item', adapter.type) ?? err;
     }
     if (!item || item.sourceId !== sourceId) throw new ApiError(404, 'item_not_found', `Item ${itemId} not found in source "${sourceId}"`);
     return item;
@@ -322,13 +354,14 @@ export function registerUiActionRoutes(app: FastifyInstance, deps: UiActionDeps)
       return record;
     };
     let out: ActionOutcome;
+    let adapter: SourceAdapter | null = null;
     try {
       requireIdentity(identity);
-      const adapter = requireSource(source);
+      adapter = requireSource(source);
       item = await loadItem(adapter, source, ref);
       out = await fn(adapter, item);
     } catch (err) {
-      const mapped = err instanceof ApiError ? err : githubError(err, identity);
+      const mapped = err instanceof ApiError ? err : githubError(err, identity, undefined, adapter?.type);
       const unknown = err instanceof SourceError && err.outcomeUnknown;
       const applied = err instanceof SourceError ? (err.details?.applied as Record<string, unknown> | undefined) : undefined;
       try {
@@ -352,7 +385,7 @@ export function registerUiActionRoutes(app: FastifyInstance, deps: UiActionDeps)
       return { ...out.body, action };
     } catch (auditErr) {
       logger.error('ui action audit failed after a successful GitHub write', { actor: user.name, identity, kind, item: item?.key, error: errorMessage(auditErr) });
-      return { ...out.body, action: null, auditWarning: 'The action was carried out on GitHub, but it could not be recorded in the audit log (see the daemon log).' };
+      return { ...out.body, action: null, auditWarning: `The action was carried out on ${placeOf(adapter)}, but it could not be recorded in the audit log (see the daemon log).` };
     }
   };
 
@@ -424,6 +457,7 @@ export function registerUiActionRoutes(app: FastifyInstance, deps: UiActionDeps)
       key: item.key,
       url: item.url,
       type: item.type,
+      sourceType: adapter.type,
       repository: adapter.repository ?? null,
       title: typeof f.title === 'string' ? f.title : '',
       state: typeof f.state === 'string' ? f.state : null,
@@ -458,7 +492,7 @@ export function registerUiActionRoutes(app: FastifyInstance, deps: UiActionDeps)
     for (const [k, at] of recentComments) if (now - at >= limits.duplicateCommentMs) recentComments.delete(k);
     const dupKey = `${user.name.toLowerCase()}\0${source}:${ref}\0${createHash('sha256').update(text).digest('hex')}`;
     if (recentComments.has(dupKey)) {
-      throw new ApiError(409, 'duplicate_comment', 'The same comment was just sent to this item; check the item on GitHub before sending it again');
+      throw new ApiError(409, 'duplicate_comment', `The same comment was just sent to this item; check the item on ${placeOf(deps.sources?.(source))} before sending it again`);
     }
     recentComments.set(dupKey, now);
     // The text itself is never stored, only its length.
@@ -491,7 +525,7 @@ export function registerUiActionRoutes(app: FastifyInstance, deps: UiActionDeps)
         try {
           existing = (await adapter.listLabels?.()) ?? [];
         } catch (err) {
-          throw githubError(err, deps.config.current.sources[item.sourceId]?.identity ?? 'source', 'source identity, used for reading the repository labels') ?? err;
+          throw githubError(err, deps.config.current.sources[item.sourceId]?.identity ?? 'source', 'source identity, used for reading the repository labels', adapter.type) ?? err;
         }
         const known = new Set(existing.map((l) => l.toLowerCase()));
         const missing = body.add.filter((l) => !known.has(l.toLowerCase()));

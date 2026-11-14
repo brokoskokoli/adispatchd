@@ -83,6 +83,13 @@ Logs? `adispatchd` verlegt diese Entscheidungen in wenige YAML-Dateien und hält
   `type: artifacts`: Ein anderer Workflow verarbeitet sie automatisch – über die eingebauten Felder `consumed_by` / `attempted_by` genau
   einmal je Artefakt – oder per manuellem Start und sieht eine schreibgeschützte Kopie unter `inputs/` (`{item.path}`).
   Ketten *erzeugen → verarbeiten* brauchen keine Pipeline-Engine (`retention.artifacts`, API `/api/v1/artifacts`; seit 0.10.0).
+- **Issues als Dateien in einem Git-Repository:** Die Source `type: git_files` liest Markdown-Dateien mit
+  YAML-Frontmatter (eine `NNNN-<slug>.md` je Item) aus einem (privaten) Repository, z. B. einem Tracker neben dem Code.
+  Filter, Item-Priorität, Views und Platzhalter arbeiten auf dem Frontmatter (`status`, `labels`, `blocked_by` →
+  `dependencies.*`, `branch` → `{item.work_branch}`, eigene deklarierte Felder); `source.update` setzt
+  Frontmatter-`fields` und Labels, `source.comment` hängt einen Eintrag an einen Log-Abschnitt – je ein Commit und
+  Push, bei nebenläufigen Pushes neu angewendet, der Body bleibt unberührt. Der Daemon hält einen eigenen Klon; Tokens
+  erreichen Git nur über einen Credential-Helper. Skripte legen Items mit `adispatch source create-item` an (seit 0.11.0).
 - **Item-Verlauf:** Seit 0.9.0 zeigt eine Seite je Issue/PR den Weg durch die Workflows: aktueller Stand (frisch von
   GitHub gelesen), der **Pfad** aller Runs mit Ergebnis und eine filterbare **Zeitleiste** mit Run-Start und -Ende,
   Hook-Ketten mit der Wirkung jeder Action (Labels +/−, Projektfeld `alt → neu`, Kommentar-Link, Exit-Status),
@@ -405,7 +412,7 @@ Kurzfassung – Details in [docs/operations.md](docs/operations.md):
 
 ## Projektstand und Roadmap
 
-Version 0.10.1. Alle geplanten Work-Items sind umgesetzt und durch eine automatisierte Testsuite abgedeckt (CI auf
+Version 0.11.0. Alle geplanten Work-Items sind umgesetzt und durch eine automatisierte Testsuite abgedeckt (CI auf
 Node 22 und 24). Die manuelle Prüfung gegen echte GitHub-Repositories und systemd unter Linux steht noch aus – was vor
 dem Produktivbetrieb offen ist, steht in [docs/status.md](docs/status.md), Release-Notizen in [CHANGELOG.md](CHANGELOG.md).
 

@@ -36,6 +36,34 @@ Geplant als 0.11.0 (DB-Schema v8).
   - `retention.notification_threads` (Default `90d`).
   - Doku: Einrichtung der Slack-App in `docs/operations.md` (Socket Mode, Scopes, Events, eine App je Instanz/Workspace),
     manuelle Testanleitung `docs/manual-tests/slack.md`.
+- **Source `git_files`** (WI-40): Issues als Markdown-Dateien mit YAML-Frontmatter in einem Git-Repository (eine Datei
+  `NNNN-<slug>.md` je Item), z. B. ein privater Tracker neben dem Code.
+  - `sources.yaml`: `type: git_files` mit `repository` (URL oder Pfad), `branch`, `path`, optional `identity` (Token
+    für fetch/push), `commit_author`, `closed_when` (Default `{ status: [done, closed] }` → Feld `state`),
+    `comments_heading` (Default `## Log`), `fields` (weitere Frontmatter-Schlüssel mit Typ) und `web_url`.
+  - Felder: `number`, `title`, `state`, `status`, `labels`, `milestone`, `blocked_by`, `branch`, `pr`, `spec`,
+    `files`, `created_at`, `body`, `comments`, `path`, `url`, `dependencies.*` (unbekannte Blocker → unknown),
+    `work_branch`/`work_pr`/`work_pr_url` sowie die deklarierten Felder – in Filtern, `item_priority`, Views und
+    Platzhaltern (`{item.number}`, `{item.title}`, `{item.work_branch}`, `{item.work_pr}`); `context.json` enthält
+    zusätzlich `body` und `comments`.
+  - Eigener Klon unter `<data-dir>/sources/<id>/` (Spiegel, höchstens ein fetch je 5 s beim Lesen; ein
+    fehlgeschlagener fetch wird geteilt, danach Backoff bis 60 s; ein Abbruch beendet Lese-fetches); ungültige
+    Dateien werden mit einer Warnung übersprungen. Klone nicht mehr konfigurierter Sources meldet der Start.
+  - Schreiben: `source.update` mit neuem `fields: { status: coding }` (nur `git_files`; `null` entfernt den
+    Schlüssel) und `labels`, `source.comment` als Eintrag am Dateiende mit Marker – je ein Commit mit Item, Änderung
+    und Run in der Nachricht plus Push; abgelehnter Push → fetch und Neuanwendung (höchstens 5 Versuche). Nur das
+    Frontmatter bzw. das Dateiende wird geändert, der Body bleibt bytegleich; offen gelassene Code-Blöcke in Body oder
+    Kommentartext werden beim Anhängen geschlossen.
+  - Zugangsdaten: Token der Source-Identity nur über die Umgebung eines Inline-Credential-Helpers – nie in URL,
+    Klon-Konfiguration oder Logs.
+  - UI: Kommentar und Labels im Item-Panel auch für `git_files`-Items (Link „Open file“, Anzeige `<source>#<nr>`;
+    API-Feld `sourceType` im Item-Panel und im Kopf des Item-Verlaufs).
+  - CLI: `adispatch source create-item <source> --title … [--body-file …] [--field k=v] [--label …]` legt ein Item
+    mit der nächsten freien Nummer und `created_at` an (temporärer Klon, Commit, Push).
+- Konfigurationsprüfung: `source.update.project` nur bei `github`-Sources, `fields` nur bei `git_files`-Sources,
+  Typprüfung der Werte, abgeleitete Felder sind nicht schreibbar; Warnung, wenn `identity` einer `git_files`-Source
+  bei einem Nicht-https-Remote nicht verwendet wird.
+- Item-Verlauf und Run-Events zeigen geänderte Frontmatter-Felder (`status: todo → coding`).
 
 ### Geändert
 

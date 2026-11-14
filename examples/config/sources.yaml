@@ -29,3 +29,16 @@ sources:
   # and workflows/summarize-report.yaml). No identity or credentials; at most one source of this type.
   artifacts:
     type: artifacts
+
+  # Issues as Markdown files with YAML frontmatter in a git repository (one file NNNN-<slug>.md per item),
+  # e.g. a private tracker repository. The daemon keeps its own clone under <data-dir>/sources/<id>/;
+  # source.update (labels, fields) and source.comment are one commit + push each.
+  # Create items from scripts: adispatch source create-item tracker --config-dir . --title "…" --field status=todo
+  # tracker:
+  #   type: git_files
+  #   repository: https://github.com/example/project-meta.git
+  #   branch: main
+  #   path: issues
+  #   identity: maintainer            # GitHub App with Contents: Read and write on the repository
+  #   fields: { priority: number }
+  #   closed_when: { status: [done, closed] }

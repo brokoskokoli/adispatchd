@@ -9,7 +9,7 @@ API-Referenz: [api.md](api.md) · Worker-Vertrag: [worker-protocol.md](worker-pr
 |---|---|---|
 | `/etc/adispatchd/` (config-dir) | `config.yaml`, `sources.yaml`, `identities.yaml`, `workflows/`, `views/`, `scripts/` | `root:adispatchd`, Verzeichnisse 0750, Dateien 0640, Skripte 0750 |
 | `/etc/default/adispatchd` | Secrets als Umgebungsvariablen (GitHub-App-Keys, GitHub-Tokens, Webhook-URLs) | `root:adispatchd`, 0640 |
-| `/var/lib/adispatchd/` (data-dir) | `adispatchd.sqlite` (+ `-wal`/`-shm`), `adispatchd.lock`, `logs/`, `runs/`, `artifacts/`, `workspaces/`, `backups/` | `adispatchd`, 0750 |
+| `/var/lib/adispatchd/` (data-dir) | `adispatchd.sqlite` (+ `-wal`/`-shm`), `adispatchd.lock`, `logs/`, `runs/`, `artifacts/`, `sources/` (Klone der `git_files`-Sources, seit 0.11.0), `workspaces/`, `backups/` | `adispatchd`, 0750 |
 | Paket, z. B. `/usr/lib/node_modules/adispatchd/` | Code (`dist/`), wird bei Updates ersetzt | `root`, nur lesbar für den Dienst |
 
 Verzeichnisse eines Hubs (mehrere Workspaces): Abschnitt [Verzeichnisse eines Hubs](#verzeichnisse-eines-hubs).
@@ -270,6 +270,7 @@ journalctl -u adispatchd -n 50      # "database migrated" + Backup-Pfad, "recove
 | `adispatchd.sqlite` | im laufenden Betrieb konsistent: `sqlite3 /var/lib/adispatchd/adispatchd.sqlite ".backup '/backup/orch.sqlite'"` (bzw. `VACUUM INTO`); bei gestopptem Dienst auch Dateikopie inkl. `-wal`/`-shm` |
 | `logs/`, `runs/` | normale Dateikopie (DB und Logdateien bilden gemeinsam das Run-Journal; `runs/<id>/kept/` enthält die per `execute.keep` gesicherten Dateien); `runs/*/secrets/` und `runs/*/actions/*/*/secrets/` ausschließen (laufende Token-Dateien; nur diese, nicht jedes `secrets/`-Verzeichnis, z. B. in Workspaces) |
 | `artifacts/` | normale Dateikopie, zusammen mit `adispatchd.sqlite` (die Tabelle `artifacts` kennt die Verzeichnisse `artifacts/<id>/content`); Verzeichnisse ohne Datenbankeintrag und älter als 24 h räumt die Retention weg |
+| `sources/` | nicht nötig: Klone der `git_files`-Sources (seit 0.11.0), ein Spiegel des Remotes, der bei Bedarf neu angelegt wird. Wird eine Source entfernt oder umbenannt, bleibt ihr Klon `sources/<alte-id>/` liegen; der Daemon löscht ihn nicht selbst, meldet ihn aber beim Start (Info `clones of git_files sources that are no longer configured …` mit den Namen). Er kann gefahrlos gelöscht werden, sobald kein Run der alten Source mehr läuft (ein Klon einer konfigurierten Source wird beim nächsten Lesen ebenfalls neu angelegt) |
 | `workspaces/` | meist nicht nötig (Arbeitskopien der Worker) |
 
 **`adispatchd.lock` und `adispatchd.lock.json` nie öffnen, kopieren, archivieren oder wiederherstellen.** Die Instanzsperre
@@ -523,7 +524,8 @@ Sicherheit und Verhalten:
 - Kommentare werden **nicht automatisch wiederholt**; derselbe Text am selben Item innerhalb von 60 s wird abgewiesen.
   Bei `github_outcome_unknown` erst auf GitHub nachsehen, ob der Kommentar schon da ist.
 - Je Benutzer höchstens 20 Aktionen und 60 Item-Abrufe pro Minute (`429 ui_actions_throttled`).
-- Der Link „Open on GitHub“ öffnet das Item in einem neuen Tab – dort liest und schreibt man als man selbst.
+- Der Link „Open on GitHub“ öffnet das Item in einem neuen Tab – dort liest und schreibt man als man selbst. Bei
+  `git_files`-Sources heißt er „Open file“ (Datei über `web_url`) und fehlt, wenn die Source keine `web_url` hat.
 
 **Audit:** Tabelle `ui_actions` in der Datenbank (Schema v4): Zeit, Benutzer, Identity, Item, Art, Ergebnis/Fehler, bei
 Kommentaren die URL (nie der Text; Labels/Feldwerte maskiert). Anzeige auf der Seite „UI Actions“ und im Item-Panel, API

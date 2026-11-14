@@ -596,12 +596,22 @@ geprüft (in dieser Reihenfolge nach Host/CSRF/Rolle):
 | Methode | Pfad | Body | Antwort |
 |---|---|---|---|
 | GET | `/api/v1/items/resolve?ref=` | – | `{"source","item"}` für eine URL, `owner/repo#nr` oder `<source>:<nr>`; eine bloße Nummer passt bei mehreren Sources nicht (`400 ambiguous_item_ref`) |
-| GET | `/api/v1/items/:source/:item` | – | `{source, itemId, key, url, type, repository, title, state, labels, project: {owner, number, fields:[{name, kind, known, value, reason, choices, problem}], error} \| null, availableLabels \| null, labelsError, identities:[{id, type}], recentActions:[…]}` – `choices` = Optionen (single_select) bzw. Iterationen (iteration) aus den Projektmetadaten; `identities` = nur die freigeschalteten |
+| GET | `/api/v1/items/:source/:item` | – | `{source, itemId, key, url, type, sourceType, repository, title, state, labels, project: {owner, number, fields:[{name, kind, known, value, reason, choices, problem}], error} \| null, availableLabels \| null, labelsError, identities:[{id, type}], recentActions:[…]}` – `choices` = Optionen (single_select) bzw. Iterationen (iteration) aus den Projektmetadaten; `identities` = nur die freigeschalteten |
 | POST | `/api/v1/items/:source/:item/comment` | `{"identity","body"}` (Markdown, 1–65 536 Zeichen, gemessen am gesendeten Text) | `{"comment":{"id","url"},"action":{…}}` |
 | POST | `/api/v1/items/:source/:item/labels` | `{"identity","add":[],"remove":[],"create":false}` (je ≤ 50 Namen à ≤ 50 Zeichen) | `{"changed","applied":{labelsAdded, labelsRemoved},"action"}`; ein Name in `add`, den das Repository nicht kennt → `400 label_not_found` (`details.labels`), außer mit `create: true` (GitHub legt das Label dann an) |
 | POST | `/api/v1/items/:source/:item/project` | `{"identity","fields":{"Status":"Review","Notes":null}}` | `{"changed","applied":{projectFields, projectItemAdded?},"action"}` |
 | GET | `/api/v1/ui-actions?source=&item=<key>&limit=&offset=` | – | `{"enabled","identities","actions":[…],"total","limit","offset"}` (neueste zuerst); mit `auth.mode: none` `403 ui_actions_disabled` |
 
+- **Source `git_files` (seit 0.11.0):** Kommentar und Labels funktionieren gleich, geschrieben wird als Commit + Push
+  in das Repository der Source (Transport mit der Source-Identity, die gewählte Identity ist Autor im Eintragskopf und im
+  Commit-Trailer). `comment.id` ist der SHA des Commits, `comment.url` der Link aus `web_url` (sonst `null`).
+  `availableLabels` sind alle in der Source verwendeten Labels; ein neues Label braucht `create: true`. Der Eintrag trägt
+  einen internen Marker (`adispatchd:ui-…`), damit die Neuanwendung nach einem abgelehnten Push nichts doppelt schreibt;
+  automatisch wiederholt wird auch hier nicht. `POST …/project` antwortet `400 project_not_configured`
+  (Frontmatter-Felder lassen sich aus der UI noch nicht setzen). Fehler der Source erscheinen mit den `github_*`-Codes,
+  die Meldungstexte nennen das Repository statt GitHub. `sourceType` (seit 0.11.0, auch im Kopf von `…/history`) ist
+  der Typ der Source (`github`, `git_files`, `artifacts`); die UI wählt danach den Linktext („Open on GitHub“, „Open
+  file“, sonst „Open source item“) und zeigt einen Link nur bei einer echten http(s)-URL.
 - **Kommentare werden nie still verändert.** Sieht der Text nach einem Secret aus, antwortet die API
   `400 comment_contains_secret` (Meldung und `details.findings` nennen nur Art und Anzahl, nie den Wert) und sendet nichts.
   Erkannt werden – **best effort**, keine Garantie – dem Daemon bekannte Werte (Installation-Tokens, Keys, Token-Identities)
@@ -649,7 +659,7 @@ Antworten passieren den Secret-Redactor; Kommentartexte werden weder gespeichert
 **`…/history`**
 
 - `item` – **aktueller Stand**, frisch über die Source gelesen (Source-Identity; 10 s zwischengespeichert,
-  `refresh=true` liest neu): `{ok: true, source, itemId, key, url, type, repository, title, state, labels,
+  `refresh=true` liest neu): `{ok: true, source, itemId, key, url, type, sourceType, repository, title, state, labels,
   projectFields: [{name, kind, known, value, reason}] | null, linked: {workBranch, workPr, workPrUrl} | null}` (`linked`
   = `work_branch`/`work_pr`, WI-21, wenn die Source sie liefert). Ist das Item nicht lesbar: `{ok: false, …, error:
   {code, message}}` (`source_not_found` – Source nicht (mehr) konfiguriert, `item_not_found`, `github_forbidden`, …);
@@ -860,7 +870,7 @@ fehlgeschlagene – steht im Audit-Log des Hubs.
 
 ```json
 // HubStatusView (GET /api/v1/hub/status)
-{ "version": "0.10.1", "startedAt": "…", "time": "…", "state": "running|paused|stopping", "paused": false,
+{ "version": "0.11.0", "startedAt": "…", "time": "…", "state": "running|paused|stopping", "paused": false,
   "slots": { "max": 6, "active": 3, "byWorkspace": { "coder": 2, "docs": 1 } },
   "resources": { "at": "…", "cpu": { "percent": 12.5, "cores": 8, "load": [0.4, 0.3, 0.3] },
                  "memory": { "usedBytes": 4294967296, "totalBytes": 17179869184 },
@@ -872,7 +882,7 @@ fehlgeschlagene – steht im Audit-Log des Hubs.
   "port": 8091, "path": "/w/coder/", "startedAt": "…", "restarts": 0, "crashes": 0,
   "lastExit": { "code": null, "signal": "SIGKILL", "at": "…" }, "nextRestartAt": null, "message": null,
   "slots": 2, "connected": true,
-  "activity": { "version": "0.10.1", "activeRuns": 2, "supervisedRuns": 2, "recoveryPending": 0,
+  "activity": { "version": "0.11.0", "activeRuns": 2, "supervisedRuns": 2, "recoveryPending": 0,
                 "activeBlocks": 1, "failedActions": 0, "failedNotifications": 0,
                 "scheduler": { "state": "running", "paused": false, "draining": false }, "ownLimit": 5, "at": "…" } }  // null, solange der Workspace nicht läuft/antwortet
 
@@ -953,7 +963,7 @@ die Anforderung verschickt ist (`transition` zeigt `draining`/`stopping`/`restar
 
 ```json
 {
-  "version": "0.10.1", "pid": 4711, "startedAt": "…", "time": "…",
+  "version": "0.11.0", "pid": 4711, "startedAt": "…", "time": "…",
   "state": "running|paused|stopping", "paused": false,
   "slots": { "max": 6, "active": 3, "byWorkspace": { "coder": 2, "docs": 1 } },
   "server": { "host": "127.0.0.1", "port": 8090 },

@@ -26,7 +26,17 @@ import {
   type TemplateScope,
 } from '../core/index.js';
 import { collectFields } from '../filters/index.js';
-import { PROJECT_FIELD_PREFIX, valueProblem } from '../sources/index.js';
+import {
+  branchProblem,
+  GIT_FILES_BUILTIN_FIELDS,
+  GIT_FILES_FIELD_NAME_PATTERN,
+  gitFilesFieldValueProblem,
+  gitFilesWritableType,
+  normalizeItemFolder,
+  PROJECT_FIELD_PREFIX,
+  repositoryProblem,
+  valueProblem,
+} from '../sources/index.js';
 import {
   checkFieldName,
   checkFilterFields,
@@ -271,7 +281,8 @@ function validateSources(input: SemanticInput, issues: IssueCollector): void {
     ),
   );
   for (const source of Object.values(input.sources)) {
-    if (source.identity === null) continue; // artifacts source: no identity
+    if (source.type === 'git_files') validateGitFilesSource(source, issues);
+    if (source.identity === null) continue; // artifacts source / git_files without credentials: no identity
     if (!input.identities[source.identity]) {
       issues.error(SOURCES_FILE, ['sources', source.id, 'identity'], `Unknown identity "${source.identity}"`);
     }
@@ -279,6 +290,103 @@ function validateSources(input: SemanticInput, issues: IssueCollector): void {
     if (source.project && source.project.identity !== source.identity && !input.identities[source.project.identity]) {
       issues.error(SOURCES_FILE, ['sources', source.id, 'project', 'identity'], `Unknown identity "${source.project.identity}"`);
     }
+  }
+}
+
+/** Settings of a `git_files` source (WI-40). */
+function validateGitFilesSource(source: Extract<SourceConfig, { type: 'git_files' }>, issues: IssueCollector): void {
+  const at = (...rest: (string | number)[]): IssuePath => ['sources', source.id, ...rest];
+  const repo = repositoryProblem(source.repository);
+  if (repo) issues.error(SOURCES_FILE, at('repository'), `"repository" ${repo}`);
+  else if (source.identity !== null && /^http:\/\//i.test(source.repository)) {
+    issues.error(SOURCES_FILE, at('identity'), 'A token would be sent unencrypted: use an https:// repository URL with "identity"');
+  } else if (source.identity !== null && !/^https:\/\//i.test(source.repository)) {
+    // ssh, git://, scp-like and local paths: git never asks for an http credential, the token is not used.
+    issues.warning(
+      SOURCES_FILE,
+      at('identity'),
+      '"identity" is only used for https:// repositories; this repository is reached without it (ssh agent, local path); remove "identity" or use an https:// URL',
+    );
+  }
+  const branch = branchProblem(source.branch);
+  if (branch) issues.error(SOURCES_FILE, at('branch'), `"${source.branch}" ${branch}`);
+  if (normalizeItemFolder(source.path) === undefined) {
+    issues.error(SOURCES_FILE, at('path'), '"path" must be a folder relative to the repository root (no absolute path, no "..", no ".git", "/" as separator)');
+  }
+  const heading = source.commentsHeading;
+  if (!/^#{1,6} \S/.test(heading) || /[\r\n]/.test(heading)) {
+    issues.error(SOURCES_FILE, at('comments_heading'), '"comments_heading" must be one Markdown heading line, e.g. "## Log"');
+  }
+  if (/[\r\n<>]/.test(source.commitAuthor.name) || /[\r\n<>\s]/.test(source.commitAuthor.email)) {
+    issues.error(SOURCES_FILE, at('commit_author'), '"commit_author" name and email must be single-line without "<" or ">" (and the email without spaces)');
+  }
+  for (const name of Object.keys(source.fields)) {
+    if (!GIT_FILES_FIELD_NAME_PATTERN.test(name)) {
+      issues.error(SOURCES_FILE, at('fields', name), 'Invalid field name (allowed: letters, digits, "_" and "-", must start with a letter or "_", at most 64 characters)');
+    } else if (GIT_FILES_BUILTIN_FIELDS.has(name)) {
+      issues.error(SOURCES_FILE, at('fields', name), `"${name}" is a built-in field of git_files sources and cannot be declared`);
+    }
+  }
+  const closedKeys = Object.keys(source.closedWhen);
+  if (closedKeys.length === 0) issues.error(SOURCES_FILE, at('closed_when'), '"closed_when" needs at least one frontmatter key with values');
+  for (const key of closedKeys) {
+    if (!GIT_FILES_FIELD_NAME_PATTERN.test(key) || (GIT_FILES_BUILTIN_FIELDS.has(key) && gitFilesWritableType(key, {}) === undefined && key !== 'labels')) {
+      issues.error(SOURCES_FILE, at('closed_when', key), `"${key}" cannot decide the state: use a frontmatter key such as status or labels`);
+    }
+    if ((source.closedWhen[key] ?? []).length === 0) issues.error(SOURCES_FILE, at('closed_when', key), 'Give at least one value');
+  }
+  if (source.webUrl !== null) {
+    if (!/^https?:\/\/\S+$/.test(source.webUrl)) issues.error(SOURCES_FILE, at('web_url'), '"web_url" must be an http(s) URL');
+    else if (!source.webUrl.includes('{path}')) issues.error(SOURCES_FILE, at('web_url'), '"web_url" must contain "{path}" (and usually "{ref}")');
+  }
+}
+
+/**
+ * `source.update.fields` (WI-40): only for `git_files` sources; every key must
+ * be writable (built-in frontmatter key or declared under `fields`) with the
+ * same type in every trigger source, and the value must fit the type.
+ */
+function checkFieldsUpdate(
+  fields: Readonly<Record<string, unknown>>,
+  sources: readonly SourceConfig[],
+  issues: IssueCollector,
+  file: string,
+  at: IssuePath,
+): void {
+  const names = Object.keys(fields);
+  if (names.length === 0) {
+    issues.error(file, at, '"fields" must set at least one field');
+    return;
+  }
+  if (sources.length === 0) return;
+  const other = sources.filter((s) => s.type !== 'git_files');
+  if (other.length > 0) {
+    issues.error(
+      file,
+      at,
+      `"fields" is only available for git_files sources (${other.map((s) => `"${s.id}": ${s.type}`).join(', ')}); GitHub items use "labels" and "project"`,
+    );
+    return;
+  }
+  for (const name of names) {
+    const types = sources.map((s) => (s.type === 'git_files' ? gitFilesWritableType(name, s.fields) : undefined));
+    if (types.some((t) => t === undefined)) {
+      const why =
+        name === 'labels'
+          ? 'use "labels: { add, remove }"'
+          : GIT_FILES_BUILTIN_FIELDS.has(name)
+            ? 'it is derived and cannot be set'
+            : `it is not a writable frontmatter field (declare it under "fields" of ${sources.length === 1 ? `source "${sources[0]?.id ?? ''}"` : 'every source of the workflow'})`;
+      issues.error(file, [...at, name], `Field "${name}" cannot be set: ${why}`);
+      continue;
+    }
+    if (new Set(types).size > 1) {
+      issues.error(file, [...at, name], `Field "${name}" has different types in the sources of the workflow; declare it with the same type everywhere`);
+      continue;
+    }
+    const type = types[0];
+    const problem = type ? gitFilesFieldValueProblem(name, type, fields[name]) : undefined;
+    if (type && problem) issues.error(file, [...at, name], `Invalid value for field "${name}" (${type}): ${problem}`);
   }
 }
 
@@ -720,9 +828,21 @@ function validateAction(
   }
   switch (action.type) {
     case 'source.update':
-      if (action.project !== undefined) checkProjectUpdate(action.project, sourceCtx.sources, issues, file, [...at, 'project']);
-      if (action.labels.add.length === 0 && action.labels.remove.length === 0 && action.project === undefined) {
-        issues.error(file, [...at, 'labels'], '"source.update" must add or remove at least one label or set a project field');
+      if (action.project !== undefined) {
+        const gitFiles = sourceCtx.sources.filter((s) => s.type === 'git_files');
+        if (gitFiles.length > 0) {
+          issues.error(
+            file,
+            [...at, 'project'],
+            `"project" is only available for github sources; git_files sources (${gitFiles.map((s) => `"${s.id}"`).join(', ')}) set frontmatter fields with "fields"`,
+          );
+        } else {
+          checkProjectUpdate(action.project, sourceCtx.sources, issues, file, [...at, 'project']);
+        }
+      }
+      if (action.fields !== undefined) checkFieldsUpdate(action.fields, sourceCtx.sources, issues, file, [...at, 'fields']);
+      if (action.labels.add.length === 0 && action.labels.remove.length === 0 && action.project === undefined && action.fields === undefined) {
+        issues.error(file, [...at, 'labels'], '"source.update" must add or remove at least one label or set a project field (github) or a field (git_files)');
       }
       // Labels compare case-insensitively (GitHub, adapter): `Ready` and `ready` are the same label.
       for (const label of action.labels.add) {

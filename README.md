@@ -80,6 +80,13 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   processes them automatically – exactly once per artifact via the built-in fields `consumed_by` / `attempted_by` – or by a manual start,
   and sees a read-only copy below `inputs/` (`{item.path}`). Chains such as *produce → process* need no pipeline engine
   (`retention.artifacts`, API `/api/v1/artifacts`; since 0.10.0).
+- **Issues as files in a git repository** – the source `type: git_files` reads Markdown files with YAML frontmatter
+  (one `NNNN-<slug>.md` per item) from a (private) repository, e.g. a tracker kept next to the code. Filters, item
+  priority, views and placeholders work on the frontmatter (`status`, `labels`, `blocked_by` → `dependencies.*`,
+  `branch` → `{item.work_branch}`, your own declared fields); `source.update` sets frontmatter `fields` and labels,
+  `source.comment` appends to a log section – one commit and push each, re-applied on concurrent pushes, the body
+  untouched. The daemon keeps its own clone; tokens reach git only through a credential helper. Scripts add items with
+  `adispatch source create-item` (since 0.11.0).
 - **Item history** – since 0.9.0 one page per issue/PR shows its way through the workflows: the current state (read
   fresh from GitHub), the **path** of all runs with their results and a filterable **timeline** of run starts and
   ends, hook chains with what each action changed (labels added/removed, project field `old → new`, comment link,
@@ -319,7 +326,7 @@ Details: [docs/worker-protocol.md](docs/worker-protocol.md).
 
 ## Status and roadmap
 
-Version 0.10.1. All planned work items are implemented and covered by an automated test suite (CI on Node 22 and 24).
+Version 0.11.0. All planned work items are implemented and covered by an automated test suite (CI on Node 22 and 24).
 Manual verification against real GitHub repositories and systemd on Linux is still pending – see
 [docs/status.md](docs/status.md) for what is open before production use, and [CHANGELOG.md](CHANGELOG.md) for
 release notes.
