@@ -172,6 +172,19 @@ describe.runIf(supported)('RunController – reply runs (WI-39)', () => {
     expect(env.reserve(snapshot).status).toBe('reserved');
   });
 
+  it('a waiting reply starts when a reserved, never started run of the item is cancelled', async () => {
+    const snapshot = await env.snapshot(yaml('/bin/true'));
+    const h = await ready();
+    const reserved = env.reserve(snapshot); // reserved, never handed to startRun
+    const { reply } = record(snapshot, 'after the cancel');
+    h.controller.processReplies();
+    expect(env.p.replies.require(reply.id).status).toBe('pending');
+    h.controller.requestCancel(reserved.id);
+    expect(env.p.runs.require(reserved.id).status).toBe('cancelled');
+    expect(env.p.replies.require(reply.id).status).toBe('running');
+    expect((await processed(h, reply.id)).status).toBe('done');
+  });
+
   it('reply_check exit 1: nothing runs, reply rejected with the reason; exit ≥ 2: failed, retry after a fix completes it', async () => {
     const check = env.script('check.sh', 'read text; case "$text" in *forbidden*) echo "Please rephrase"; exit 1;; *broken*) exit 3;; esac; exit 0');
     const snapshot = await env.snapshot(yaml('/bin/true', `reply_check:\n  command: ${check}\n  timeout: 5s\n${ON_REPLY}`));

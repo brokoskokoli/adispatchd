@@ -2000,6 +2000,8 @@ export class RunController {
       this.repos.runs.finish(runId);
     });
     this.publisher.flush();
+    // WI-39: the lock is free without a supervised run ending (`track`) – a waiting reply gets it now.
+    this.processReplies();
   }
 
   /** Message if a `required` artifact of the workflow is not available in the workspace, else `null` (WI-35). */
