@@ -55,7 +55,13 @@ who picks which issue, what happens when an agent crashes, how do labels get res
   technical ends and (0.6.0) **`on_retry_block`/`on_retry_unblock`** when a retry block is created or removed (e.g.
   label the item `agent-blocked`, call a script).
 - **Actions** – `source.update` (add/remove labels, set **GitHub Projects fields**, adding the item to the project
-  if needed), `source.comment`, and `shell` hooks; idempotent (read before write) with journal and retries.
+  if needed), `source.comment`, `shell` hooks and (0.11.0) `notify`; idempotent (read before write) with journal and retries.
+- **Slack handover with replies** (0.11.0) – a `slack` notification channel posts `notify` messages and orchestrator
+  events into **one thread per item**; a reply of an allowed user in that thread runs the workflow's **`on_reply`**
+  hook as a lifecycle run (e.g. post the answer as a comment on the issue and remove the `needs-maintainer` label),
+  exactly once per Slack message, queued behind a running run of the item; optional `reply_check`, one reminder while
+  the item still waits, ⏳/✅/❌ reactions. Socket Mode over an outgoing WebSocket – no open port, no new dependency;
+  tokens only from the environment.
 - **Shell or container workers** – `execute.type: shell` runs a command without a shell in its own process group;
   `execute.type: container` runs a throw-away Docker or Podman container with fixed mounts, resource limits and
   `--cap-drop ALL`.

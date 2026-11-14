@@ -5,10 +5,37 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 
 ## [Unreleased]
 
-## [0.11.0] – 2026-11-14
+Geplant als 0.11.0 (DB-Schema v8).
 
 ### Hinzugefügt
 
+- **Slack-Kanal mit Thread je Item und Antworten** (WI-39). Eine Übergabe an einen Menschen erscheint als
+  Slack-Nachricht, die Antwort im Thread löst Actions am Item aus – ohne Kontextwechsel zum Issue.
+  - Kanal `notifications.channels[].type: slack` (`bot_token_env`, optional `app_token_env` für Socket Mode, `channel`
+    = Channel-ID, `allowed_users`, `on`). Tokens nur aus der Umgebung (Token im YAML oder als Variablenname = Fehler),
+    nie in Logs, API, DB. Keine neue Abhängigkeit: Web-API über `fetch`, Socket Mode über das Node-eigene `WebSocket`
+    (ausgehend, kein offener Port), Reconnect mit Backoff 1 s … 60 s.
+  - Neue Lifecycle-Action `notify` (`channel`, `message`, `thread: item|new`, `remind_after`, `remind_while`): legt die
+    Zustellung an und ist sofort fertig; die erste Nachricht zu (Workflow, Item) erzeugt den Thread (Kopf mit
+    Item-Titel als Link), weitere gehen hinein, in Reihenfolge, der Kopf genau einmal. Eine Erinnerung im Thread, wenn
+    `remind_while` dann noch gilt; eine Antwort hebt sie auf. Orchestrator-Ereignisse mit Item landen im Thread des
+    Items.
+  - Neuer Hook `on_reply` und optional `reply_check` (stdin = Text; 0 ok, 1 abgelehnt mit Grund, ≥ 2 Fehler): Eine
+    Antwort einer Person aus `allowed_users` im Thread läuft als **Lifecycle-Run mit Trigger `reply`** (wie `unblock`:
+    kein Worker, Lock `(Workflow, Item)`, nicht gezählt, Retry/Skip, Recovery). Genau einmal je Slack-Nachricht
+    (gespeichert vor dem Ack); läuft gerade ein Run des Items, wartet die Antwort (FIFO) und kein anderer Run überholt
+    sie (Planung `locked`, manueller Start `409 reply_pending`). Platzhalter `{reply.text}` (Klartext, max. 8 KiB,
+    `<!--` entschärft, Secret-artiger Text abgelehnt), `{reply.user}`, `{reply.user_name}`, `{reply.ts}`,
+    `{reply.permalink}`, `{reply.channel}` – nur in `on_reply`/`reply_check`. Reaktionen ⏳/✅/❌, kurze Antwort im Thread
+    bei Ablehnung oder Fehler.
+  - API: `GET /api/v1/notifications/channels` (Socket-Mode-Zustand), `channels` in `GET /api/v1/notifications`, SSE
+    `notification.channels`, Run-Detail `reply` (ohne Text), Item-Verlauf-Eintrag `reply`, Trigger-Filter `reply`,
+    Zähler `counts.replies` in `/api/v1/status`, Fehlercode `409 reply_pending`.
+  - UI: Kanäle mit Verbindungszustand unter Config → Notifications, Slack-Zustellungen wie Webhooks, Badge „reply“ in
+    der Run-Liste, Abschnitt „Reply in Slack“ im Run-Detail, „Reply in Slack from …“ im Item-Verlauf.
+  - `retention.notification_threads` (Default `90d`).
+  - Doku: Einrichtung der Slack-App in `docs/operations.md` (Socket Mode, Scopes, Events, eine App je Instanz/Workspace),
+    manuelle Testanleitung `docs/manual-tests/slack.md`.
 - **Source `git_files`** (WI-40): Issues als Markdown-Dateien mit YAML-Frontmatter in einem Git-Repository (eine Datei
   `NNNN-<slug>.md` je Item), z. B. ein privater Tracker neben dem Code.
   - `sources.yaml`: `type: git_files` mit `repository` (URL oder Pfad), `branch`, `path`, optional `identity` (Token
@@ -33,6 +60,14 @@ Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format n
 - Konfigurationsprüfung: `source.update.project` nur bei `github`-Sources, `fields` nur bei `git_files`-Sources,
   Typprüfung der Werte, abgeleitete Felder sind nicht schreibbar.
 - Item-Verlauf und Run-Events zeigen geänderte Frontmatter-Felder (`status: todo → coding`).
+
+### Geändert
+
+- Webhooks: Ein `429` mit `Retry-After` verschiebt den nächsten Zustellversuch mindestens um diese Zeit.
+- Die Secret-Prüfung der UI-Kommentare (WI-27) liegt jetzt in `src/core/secret-scan.ts` und prüft auch Slack-Antworten.
+- DB-Schema **v8** (Migration mit Backup, Einbahnstraße): `runs.trigger_type` + `reply`, `run_actions.hook` +
+  `on_reply` (Neuaufbau beider Tabellen), neue Tabellen `notification_threads`, `notification_replies`,
+  `notification_reminders`, Spalten `notification_deliveries.thread_id`/`message_ts`, `notifications.dedupe_key`.
 
 ## [0.10.1] – 2026-10-29
 

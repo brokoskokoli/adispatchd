@@ -11,6 +11,17 @@ import { ISSUE, ITEM_KEY, REPO, createRunsEnv, waitForRun, type RunsTestEnv } fr
 
 const supported = process.platform === 'linux' || process.platform === 'darwin';
 
+/**
+ * Poll a marker file written by a test script. Not via bus events: the script writes it after its last action
+ * event, so an event-driven check could miss it (flaky under load).
+ */
+async function waitForFile(file: string, timeoutMs = 30_000): Promise<void> {
+  for (const end = Date.now() + timeoutMs; !existsSync(file); ) {
+    if (Date.now() > end) throw new Error(`marker file not written: ${path.basename(file)}`);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
 /** Coder-style workflow; `extra` appends YAML (e.g. the retry-block hooks). */
 function yaml(command: string, extra: string, options: { maxFailures?: number; onCrash?: string } = {}): string {
   return `
@@ -209,7 +220,7 @@ describe.runIf(supported)('RunController – retry-block hooks (WI-30)', () => {
     it('holds the item lock while the chain runs: no automatic start in between', async () => {
       const gate = path.join(env.marks, 'go');
       const started = path.join(env.marks, 'started');
-      const wait = env.script('wait.sh', `touch ${started}\ni=0\nwhile [ ! -f ${gate} ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done`);
+      const wait = env.script('wait.sh', `touch ${started}\ni=0\nwhile [ ! -f ${gate} ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done`);
       const { h, snapshot, block } = await blocked(`
 on_retry_unblock:
   - type: shell
@@ -218,7 +229,7 @@ on_retry_unblock:
     labels: { add: [ready] }
 `);
       const runId = h.controller.clearBlock(block.id, null, { snapshot }).clearedRunId!;
-      await waitForRun(h, env.p, runId, () => existsSync(started));
+      await waitForFile(started);
       expect(env.p.runs.require(runId).status).toBe('running');
       expect(env.p.runs.activeLock('wf', `item:${ITEM_KEY}`)?.runId).toBe(runId);
       expect(() => env.reserve(snapshot, { failIfBlocked: true })).toThrow(LockConflictError);
@@ -301,7 +312,7 @@ on_retry_unblock:
     it('workflow-scoped blocks (no item): only shell actions, no automatic cron start while the chain runs', async () => {
       const gate = path.join(env.marks, 'go');
       const out = path.join(env.marks, 'unblocked.txt');
-      const wait = env.script('wait.sh', `printf '%s ' "$@" > ${out}\ni=0\nwhile [ ! -f ${gate} ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done`);
+      const wait = env.script('wait.sh', `printf '%s ' "$@" > ${out}\ni=0\nwhile [ ! -f ${gate} ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done`);
       const snapshot = await env.snapshot(`
 id: nightly
 trigger: { type: schedule, cron: '0 3 * * *' }
@@ -318,7 +329,7 @@ on_retry_unblock:
       await h.controller.startRun(first.id).done;
       const block = env.p.blocks.activeFor('nightly', null)!;
       const runId = h.controller.clearBlock(block.id, null, { snapshot }).clearedRunId!;
-      await waitForRun(h, env.p, runId, () => existsSync(out));
+      await waitForFile(out);
       expect(() => env.p.runs.reserve({ ...slot, scheduledFor: '2026-10-23T03:00:00.000Z', failIfBlocked: true })).toThrow(UnblockRunActiveError);
       // A manual start without item would run in parallel to the chain: refused too (HTTP 409 unblock_run_active).
       expect(() => env.p.runs.reserve({ workflowId: 'nightly', triggerType: 'manual', configSnapshot: snapshot })).toThrow(

@@ -3,7 +3,7 @@
  * `source.update`, `source.comment` (with idempotency marker) and `shell`.
  * One call = one attempt; retry policy and journal handling live in the engine.
  */
-import { stat } from 'node:fs/promises';
+import { rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import {
   LINKED_ITEM_FIELDS,
@@ -25,13 +25,20 @@ import {
   type HookName,
   type SourceAdapter,
   type SourceItem,
+  type ChatNotifier,
+  errorMessage,
+  isOrchestratorError,
+  REPLY_CHECK_ACTION_TYPE,
 } from '../core/index.js';
 import type {
+  NotifyActionConfig,
+  RetryPolicy,
   ShellActionConfig,
   SourceCommentActionConfig,
   SourceUpdateActionConfig,
   WorkflowSnapshot,
 } from '../config/index.js';
+import type { ShellCheckRunner } from '../filters/index.js';
 import { TOKEN_DIR_NAME, TokenFileSession, isTokenDirInWorkspace, type TokenFileRequest } from '../executors/index.js';
 import type { RunActionRecord, RunRecord } from '../persistence/index.js';
 import {
@@ -43,6 +50,7 @@ import {
   renderHookText,
   resolveActionIdentity,
   type HookBlockInfo,
+  type HookReplyInfo,
 } from './context.js';
 import { LifecycleError } from './errors.js';
 
@@ -65,6 +73,23 @@ export interface AttemptInput {
   now: Date;
   /** Retry block of `on_retry_block` / `on_retry_unblock` (WI-30), else `null`/absent. */
   block?: HookBlockInfo | null;
+  /** Chat reply of `on_reply` (WI-39), else `null`/absent. */
+  reply?: HookReplyInfo | null;
+}
+
+/**
+ * Journal config of the `reply_check` of a workflow (WI-39): journaled as the
+ * first action of `on_reply` (ID `reply_check`), one attempt, never
+ * `continue_on_error`. Not a configurable list action.
+ */
+export interface ReplyCheckActionConfig {
+  type: typeof REPLY_CHECK_ACTION_TYPE;
+  id: string;
+  continueOnError: false;
+  retry: RetryPolicy;
+  command: string;
+  args: readonly string[];
+  timeoutMs: number;
 }
 
 /** Successful attempt. */
@@ -75,6 +100,11 @@ export interface AttemptResult {
   details: Record<string, unknown>;
   /** Structured effect for the item history (WI-33, `run_actions.effect_json`). */
   effect?: ActionEffect;
+  /**
+   * WI-39 (`reply_check` exit 1): the chain stops successfully here; the
+   * remaining actions of the hook are skipped in the same transaction.
+   */
+  stopChain?: { reason: string };
 }
 
 /** Effect of a (possibly partial) `source.update` from what the adapter applied (WI-33). */
@@ -189,6 +219,10 @@ export interface PerformerDeps {
   logger: Logger;
   /** Tuning of token files (tests). */
   tokenFiles: { renewBeforeMs?: number; retryDelayMs?: number; maxRetryDelayMs?: number };
+  /** Records `notify` messages (WI-39); absent = `notify` fails permanently. */
+  chat: ChatNotifier | undefined;
+  /** Runs `reply_check` (WI-39). */
+  checks: ShellCheckRunner;
 }
 
 interface SourceTarget {
@@ -338,6 +372,109 @@ export function neutralizeHtmlComments(body: string): string {
   return body.replace(/<!--/g, '&lt;!--');
 }
 
+/**
+ * `notify` (WI-39): renders the message and records it (with the thread of
+ * (workflow, item) and an optional reminder) via the chat notifier. Succeeds
+ * as soon as the delivery is recorded – the chat service delivers it
+ * asynchronously (Spec §18: orchestration never waits for the chat service).
+ * Idempotent per (run, journaled action): a repeated attempt finds the
+ * notification recorded before.
+ */
+export async function performNotify(deps: PerformerDeps, input: AttemptInput, config: NotifyActionConfig): Promise<AttemptResult> {
+  const { run, snapshot, hook, action } = input;
+  if (!deps.chat) {
+    throw new LifecycleError('notify_unavailable', 'Chat notifications are not available in this process', { retryable: false });
+  }
+  const scope = hookTemplateScope(snapshot, hook);
+  const resolved = await resolveLinkedForTemplates(deps, input, [config.message]);
+  // Title and URL of the thread head: the given item, else read it (best effort; the message never fails for it).
+  let target = resolved?.target ?? null;
+  if (!target && !input.item && isSourceWorkflow(snapshot)) {
+    try {
+      target = await resolveSourceTarget(deps, run, snapshot, undefined);
+    } catch {
+      target = null;
+    }
+  }
+  const item = target?.item ?? input.item ?? itemFromRun(run);
+  const values = buildHookTemplateValues({
+    run,
+    snapshot,
+    hook,
+    item,
+    now: input.now,
+    ...(target?.adapter.repository ? { repository: target.adapter.repository } : {}),
+    ...(resolved?.linked ? { linked: resolved.linked } : {}),
+    block: input.block ?? null,
+    reply: input.reply ?? null,
+  });
+  const text = renderHookText(config.message, values, scope);
+  const title = item?.fields.title;
+  const withItem = isSourceWorkflow(snapshot) && item !== null;
+  let recorded: { notificationId: number; created: boolean };
+  try {
+    recorded = deps.chat.enqueueMessage({
+      dedupeKey: `notify:${run.id}:${action.id}`,
+      channelId: config.channel,
+      workflowId: snapshot.workflow.id,
+      workflowName: snapshot.workflow.name,
+      runId: run.id,
+      item: withItem ? { sourceId: item.sourceId, key: item.key, url: item.url || null, title: typeof title === 'string' ? title : null } : null,
+      text,
+      thread: config.thread ?? 'item',
+      ...(config.remindAfterMs !== undefined && withItem ? { reminder: { afterMs: config.remindAfterMs, filter: config.remindWhile ?? null } } : {}),
+    });
+  } catch (err) {
+    // Unknown channel (e.g. removed by a reload) or a database error: no point in retrying automatically.
+    throw new LifecycleError(isOrchestratorError(err) ? err.code.replace(/^lifecycle_/, '') : 'notify_failed', errorMessage(err), { retryable: false, cause: err });
+  }
+  return {
+    externalKey: String(recorded.notificationId),
+    details: { notificationId: recorded.notificationId, channel: config.channel, ...(recorded.created ? {} : { reconciled: true }) },
+    effect: { notification: { id: recorded.notificationId, channel: config.channel } },
+  };
+}
+
+/** Max. length of the reason of a rejecting `reply_check` (stdout) shown in the thread. */
+export const REPLY_CHECK_REASON_MAX = 500;
+
+/**
+ * `reply_check` (WI-39): the check gets the reply text on stdin and a context
+ * file (`ADISPATCH_CHECK_CONTEXT_FILE`: workflow, run, item, reply without
+ * text). Exit 0 = accepted; exit 1 = rejected – the chain stops successfully
+ * (`stopChain`, the reason is the first line(s) of stdout); exit ≥ 2, signal,
+ * timeout = check error (the action fails, a manual retry runs it again).
+ */
+export async function performReplyCheck(deps: PerformerDeps, input: AttemptInput, config: ReplyCheckActionConfig): Promise<AttemptResult> {
+  const { run, snapshot, hook } = input;
+  const reply = input.reply;
+  if (!reply) throw new LifecycleError('no_reply', `Run ${run.id} has no chat reply to check`, { retryable: false });
+  const scope = hookTemplateScope(snapshot, hook);
+  const item = input.item ?? itemFromRun(run);
+  const values = buildHookTemplateValues({ run, snapshot, hook, item, now: input.now, reply });
+  const args = config.args.map((a) => renderHookText(a, values, scope));
+  const context = {
+    schema_version: 1,
+    kind: 'reply_check',
+    workflow: { id: snapshot.workflow.id },
+    run: { id: run.id, trigger: run.triggerType },
+    ...(item ? { source: { id: item.sourceId, item_id: item.itemId, item_key: item.key, url: item.url } } : {}),
+    reply: { user: reply.user, user_name: reply.userName ?? reply.user, ts: reply.ts, channel: reply.channel, permalink: reply.permalink },
+  };
+  const result = await deps.checks.run(
+    { command: config.command, args, timeoutMs: config.timeoutMs, stdin: reply.text },
+    context,
+    input.signal ? { signal: input.signal } : {},
+  );
+  const base = { exitCode: result.exitCode, signal: result.signal, timedOut: result.timedOut, durationMs: result.durationMs };
+  if (result.value === true) return { externalKey: null, details: { ...base, accepted: true }, effect: {} };
+  if (result.value === false) {
+    const reason = result.stdout.trim().slice(0, REPLY_CHECK_REASON_MAX) || 'rejected by reply_check';
+    return { externalKey: null, details: { ...base, rejected: true, reason }, effect: { rejected: true }, stopChain: { reason } };
+  }
+  throw new LifecycleError('reply_check_error', `reply_check failed: ${result.error ?? 'unknown error'}`, { retryable: true, details: base });
+}
+
 async function isDirectory(p: string | null): Promise<boolean> {
   if (!p) return false;
   try {
@@ -371,6 +508,7 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     ...(resolved?.target.adapter.repository ? { repository: resolved.target.adapter.repository } : {}),
     ...(linked ? { linked } : {}),
     block: input.block ?? null,
+    reply: input.reply ?? null,
   });
   const args = config.args.map((a) => renderHookText(a, values, scope));
   const env: Record<string, string> = {};
@@ -396,6 +534,7 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     action: { id: action.id, name: action.name, ordinal: action.ordinal, attempt: input.attempt },
     ...(linked ? { linked } : {}),
     block: input.block ?? null,
+    reply: input.reply ?? null,
   });
 
   // Secrets (WI-18). Journal entries from before WI-18 have no `secrets`.
@@ -460,6 +599,9 @@ export async function performShell(deps: PerformerDeps, input: AttemptInput, con
     return shellAttemptResult(outcome, config, files);
   } finally {
     await session?.close();
+    // WI-39: the context of an `on_reply` action contains the reply text, which is kept only until the reply is
+    // processed – the attempt's context.json is removed as soon as the attempt ended.
+    if (context.reply) await rm(files.contextFile, { force: true }).catch(() => undefined);
   }
 }
 

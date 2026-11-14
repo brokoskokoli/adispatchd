@@ -330,6 +330,9 @@ export async function checkEligibility(candidate: PreparedCandidate, ctx: Eligib
     diag.runId = holder.id;
     return reject('locked', `run ${holder.id} of this workflow is active for the item`);
   }
+  // WI-39 (P1): a waiting chat reply of the item gets the lock first.
+  const reply = ctx.state.pendingReply?.(workflow.id, candidate.itemKey);
+  if (reply) return reject('locked', `reply ${reply.id} pending (on_reply runs first)`);
   const block = ctx.state.activeBlock(workflow.id, candidate.itemKey);
   if (block) {
     diag.blockId = block.id;

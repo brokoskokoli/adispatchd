@@ -25,14 +25,24 @@ retention:
   blocked_runs: never
   max_log_size_per_run: 100MB
   cleanup_interval: 24h
+  notification_threads: 90d   # Slack threads without a message for this long are forgotten
 
 notifications:
-  # Admin/orchestrator notifications (Spec §18). Channels are optional, e.g.:
-  # channels:
+  # Admin/orchestrator notifications (Spec §18). Webhook channels are optional, e.g.:
   #   - type: webhook
-  #     url_env: SLACK_WEBHOOK_URL
+  #     url_env: OPS_WEBHOOK_URL
   #     headers_env: { Authorization: WEBHOOK_AUTH_HEADER }
   on: [retry_block_created, lifecycle_action_failed, recovery_failed]
+  channels:
+    # Slack (0.11.0): one thread per (workflow, item) for `notify` and events with an item; replies in the
+    # thread run `on_reply` (workflows/agent-handover.yaml). Tokens only in the service environment.
+    # Without app_token_env the channel only sends. Use one Slack app per instance (docs/operations.md).
+    - id: team
+      type: slack
+      bot_token_env: SLACK_BOT_TOKEN        # xoxb-…: chat:write, reactions:write, channels:history (optional users:read)
+      app_token_env: SLACK_APP_TOKEN        # xapp-…: connections:write (Socket Mode)
+      channel: C0123456789                  # channel ID, not the name
+      allowed_users: [U0123456789]          # Slack user IDs whose replies count
 
 # Web UI: external tools in the toolbar (optional). url = how the BROWSER reaches the tool.
 # embed: true shows it inside the UI (#/tools/<id>), false (default) opens a new tab.

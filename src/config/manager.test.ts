@@ -229,10 +229,11 @@ describe('snapshotWorkflow', () => {
     });
     const pub = toPublicConfig(manager.current);
     expect(JSON.stringify(pub)).not.toContain('T0K3N');
-    expect(pub.global.notifications.channels.map((c) => [c.url, c.urlEnv])).toEqual([
+    expect(pub.global.notifications.channels.map((c) => (c.type === 'webhook' ? [c.url, c.urlEnv] : []))).toEqual([
       ['[REDACTED]', null],
       [null, 'HOOK_URL'],
     ]);
-    expect(manager.current.global.notifications.channels[0]?.url).toBe('https://hooks.example.com/T0K3N');
+    const first = manager.current.global.notifications.channels[0];
+    expect(first?.type === 'webhook' ? first.url : null).toBe('https://hooks.example.com/T0K3N');
   });
 });

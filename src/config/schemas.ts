@@ -69,6 +69,8 @@ export const DEFAULTS = {
   monitoringRetention: '6h',
   monitoringTopProcesses: 5,
   monitoringMinCpuPercent: 2,
+  notificationThreadsRetention: '90d',
+  replyCheckTimeout: '30s',
 } as const;
 
 /** Lower bound of `monitoring.interval` (WI-23). */
@@ -164,6 +166,39 @@ const webhookChannelSchema = z.strictObject({
   url_env: envName.optional(),
   headers_env: z.record(z.string().regex(/^[A-Za-z0-9-]+$/, 'Invalid HTTP header name'), envName).default({}),
   on: z.array(notificationEvent).optional(),
+});
+
+/** Slack token values (bot `xoxb-…`, app-level `xapp-…`, user `xoxp-…`): never allowed where a variable name is expected. */
+const SLACK_TOKEN_VALUE = /^x(?:ox[abposr]|app)-/i;
+
+/** Name of the environment variable holding a Slack token (WI-39); a token value itself is refused. */
+const slackTokenEnv = z
+  .string()
+  .refine((v) => !SLACK_TOKEN_VALUE.test(v.trim()), 'Looks like a token: name the environment variable that holds it (e.g. SLACK_BOT_TOKEN), never the token itself')
+  .pipe(envName);
+
+/** A key that would hold a token literally: always an error pointing to the `*_env` key. */
+function tokenInYaml(envKey: string) {
+  return z.unknown().refine(() => false, `Tokens must not be written into config.yaml: set "${envKey}" to the name of an environment variable that holds the token`);
+}
+
+/** Slack channel ID (`C…` public, `G…` private); a name like `#team` is refused. */
+export const SLACK_CHANNEL_ID_PATTERN = /^[CG][A-Z0-9]{6,}$/;
+/** Slack user ID (`U…`, Enterprise Grid `W…`). */
+export const SLACK_USER_ID_PATTERN = /^[UW][A-Z0-9]{6,}$/;
+
+const slackChannelSchema = z.strictObject({
+  id: configId.optional(),
+  type: z.literal('slack'),
+  bot_token_env: slackTokenEnv,
+  app_token_env: slackTokenEnv.optional(),
+  channel: z.string().regex(SLACK_CHANNEL_ID_PATTERN, 'Expected a Slack channel ID such as C0123456789 (not the channel name)'),
+  allowed_users: z.array(z.string().regex(SLACK_USER_ID_PATTERN, 'Expected a Slack user ID such as U0123456789')).default([]),
+  on: z.array(notificationEvent).optional(),
+  /** Only to report a precise error: tokens never belong into the YAML (the value is never echoed). */
+  bot_token: tokenInYaml('bot_token_env').optional(),
+  app_token: tokenInYaml('app_token_env').optional(),
+  token: tokenInYaml('bot_token_env').optional(),
 });
 
 /** Entry of `ui.external_links` (WI-25); URL rules are checked semantically (validate.ts). */
@@ -272,12 +307,14 @@ export const globalConfigSchema = z.strictObject({
       ui_actions: durationOrNever.default(parseDuration(DEFAULTS.uiActionsRetention)),
       /** Artifacts (WI-35) are kept until deleted by default. */
       artifacts: durationOrNever.default(null),
+      /** Chat threads (WI-39) without a message for this long are forgotten. */
+      notification_threads: durationOrNever.default(parseDuration(DEFAULTS.notificationThreadsRetention)),
     })
     .prefault({}),
   notifications: z
     .strictObject({
       on: z.array(notificationEvent).default([...DEFAULT_NOTIFICATION_EVENTS]),
-      channels: z.array(z.discriminatedUnion('type', [webhookChannelSchema])).default([]),
+      channels: z.array(z.discriminatedUnion('type', [webhookChannelSchema, slackChannelSchema])).default([]),
     })
     .prefault({}),
   /** Container executor defaults (WI-19). */
@@ -733,6 +770,16 @@ const actionSchema = z.discriminatedUnion('type', [
     env: envMap,
     secrets: secretsMap,
   }),
+  // WI-39: message on a slack channel, in the thread of (workflow, item).
+  z.strictObject({
+    type: z.literal('notify'),
+    ...actionCommon,
+    channel: configId,
+    message: nonEmpty,
+    thread: z.enum(['item', 'new']).default('item'),
+    remind_after: positiveDuration.optional(),
+    remind_while: filterNodeSchema.optional(),
+  }),
 ]);
 
 /** Parsed lifecycle action. */
@@ -782,6 +829,14 @@ export const workflowSchema = z.strictObject({
   ...hookShape,
   /** Named outcomes (WI-17): `on_result.<outcome>` replaces `on_success`/`on_failure`. */
   on_result: z.record(configId, z.array(actionSchema)).optional(),
+  /** WI-39: check of a chat reply (stdin = text) before `on_reply`. */
+  reply_check: z
+    .strictObject({
+      command: nonEmpty,
+      args: stringList,
+      timeout: positiveDuration.default(parseDuration(DEFAULTS.replyCheckTimeout)),
+    })
+    .optional(),
 });
 
 /** Parsed workflow file. */

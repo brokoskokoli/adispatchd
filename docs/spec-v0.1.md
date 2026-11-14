@@ -2,7 +2,7 @@
 
 > **Name:** Agent Dispatch Daemon – npm-Paket, Repository, systemd-Unit und Standardpfade `adispatchd`, CLI-Befehl `adispatch`. Ursprünglicher Arbeitsname: „Agent Orchestrator“ (`agent-orchestrator`); alle Bezeichner wurden entsprechend umbenannt (z. B. Umgebungsvariablen `ADISPATCH_*` statt `ORCH_*`, Kommentar-Marker `adispatchd:` statt `orch:`).
 
-**Status:** Umgesetzt bis Version 0.11.0 (Artefakte: WI-35; Hub: WI-36 Kern, WI-37 API und Weboberfläche, WI-38 Betrieb; Source `git_files`: WI-40; npm `adispatchd`). Ursprünglich technischer Entwurf v0.1; spätere Erweiterungen stehen als „Nachtrag 0.2.0 … 0.11.0 (WI-NN)“ an der jeweiligen Stelle, verbindliche Dateiformate in [configuration-reference.md](configuration-reference.md)  
+**Status:** Umgesetzt bis Version 0.11.0 (unveröffentlicht; Slack-Kanal mit Threads je Item und Antworten: WI-39; Source `git_files`: WI-40; zuvor 0.10.1 mit Artefakten WI-35 und Hub WI-36 bis WI-38; npm `adispatchd`). Ursprünglich technischer Entwurf v0.1; spätere Erweiterungen stehen als „Nachtrag 0.2.0 … 0.11.0 (WI-NN)“ an der jeweiligen Stelle, verbindliche Dateiformate in [configuration-reference.md](configuration-reference.md)  
 **Ziel:** Eigenständig installierbarer, konfigurationsgetriebener Orchestrator für Shell-Prozesse und KI-Agenten  
 **Technologie:** TypeScript, Node.js (unterstützte LTS-Version), SQLite, YAML, HTTP/SSE  
 **Betrieb:** Linux (Produktion, systemd), macOS (lokal)  
@@ -517,7 +517,7 @@ Events werden separat mit Run-ID und Zeitstempel in SQLite gespeichert, zudem pe
 
 ## 10. Lifecycle-Aktionen
 
-Unterstützte Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` (ab 0.3.0 zusätzlich `on_error`, `on_result.<outcome>`; ab 0.6.0 `on_retry_block`, `on_retry_unblock`, §11).
+Unterstützte Hooks: `on_start`, `on_success`, `on_failure`, `on_crash`, `on_start_error`, `on_cancel`, `on_timeout` (ab 0.3.0 zusätzlich `on_error`, `on_result.<outcome>`; ab 0.6.0 `on_retry_block`, `on_retry_unblock`, §11; ab 0.11.0 `on_reply`, §18).
 
 Aktionstypen V1:
 
@@ -529,6 +529,8 @@ Aktionstypen V1:
   [Konfigurationsreferenz §3.4.11](configuration-reference.md#3411-actions).
 - `source.comment`: Kommentar über Adapter, mit optionaler Action-Identity.
 - `shell`: beliebiges Shell-Skript mit Run-/Result-Kontext, isolierter Umgebung und konfigurierbarem Timeout.
+- **Nachtrag 0.11.0 (WI-39):** `notify`: Nachricht auf einem `slack`-Kanal in den Thread von (Workflow, Item); die Action
+  ist erfolgreich, sobald die Zustellung angelegt ist (§18).
 
 **Nachtrag 0.3.0 (WI-17) – benannte Ergebnisse und Sammel-Hook:**
 
@@ -558,19 +560,32 @@ Bei Erreichen des Limits entsteht ein Datensatz `blocks(workflow_id, item_key, r
 - Platzhalter `{block.id}`, `{block.failures}`, `{block.created_at}`, `{block.last_status}` in beiden Hooks, `{block.cleared_at}`, `{block.cleared_by}` nur in `on_retry_unblock` (sonst Konfigurationsfehler); `on_retry_unblock` hat kein `result.*`. Workflows ohne Item: nur `shell`.
 - Neue, nicht standardmäßig aktivierte Benachrichtigung `retry_block_cleared`. Schema v5: `runs.trigger_type` erlaubt `unblock`, `runs.retry_block_hook`, `run_actions.hook` erlaubt die beiden Hooks, `blocks.last_status`, `blocks.cleared_run_id` (Migration mit Backup, kein Downgrade). Details: [configuration-reference.md](configuration-reference.md) §3.4.10, §5, §6.4.
 
+**Nachtrag 0.11.0 (WI-39) – Antworten als Lifecycle-Run:** Eine Antwort im Slack-Thread eines Items läuft wie
+`on_retry_unblock` als **Lifecycle-Run** (Trigger `reply`, §18): kein Worker, kein Workspace, Lock `(Workflow, Item)`,
+Snapshot der beim Eingang geladenen Konfiguration, zählt nicht als technischer Fehler, setzt den Zähler nicht zurück,
+nicht zu `max_concurrent`, nicht als `run.last_*`, nicht abbrechbar; Retry/Skip, Recovery, Item-Verlauf wie bei jedem
+Run. **Bewusste Abweichung von WI-30:** Statt `409 block_run_active` **wartet** die Antwort bei aktivem Run (FIFO je
+Item). Damit sie nicht überholt wird, lehnt die Reservierung jeden anderen Run von `(Workflow, Item)` ab, solange eine
+Antwort wartet (`reply_pending`: Planung `locked` mit Grund `reply <id> pending`, manueller Start `409 reply_pending`);
+wird das Lock frei, reserviert der Controller zuerst den Reply-Run der ältesten wartenden Antwort.
+
 ## 12. SQLite-Datenmodell (logisches Schema)
 
 Die Tabellen unten sind konzeptionell; DDL, Indizes, Fremdschlüssel und Migrationen sind vor Implementierung auszuarbeiten.
 
 | Tabelle | Relevante Spalten | Zweck |
 |---|---|---|
-| `runs` | `id`, `workflow_id`, `trigger_type`, `source_id`, `source_item_key`, `source_url`, `config_snapshot`, `parameters_json`, `status`, `business_result`, `exit_code`, `pid`, `process_start_identity`, `workspace_path`, `started_at`, `finished_at`, `lifecycle_status`; ab 0.3.0 `outcome`, `completion_hook` (WI-17); ab 0.6.0 `retry_block_hook`, Trigger `unblock` (WI-30) | Versuche und Ausführungshistorie |
+| `runs` | `id`, `workflow_id`, `trigger_type`, `source_id`, `source_item_key`, `source_url`, `config_snapshot`, `parameters_json`, `status`, `business_result`, `exit_code`, `pid`, `process_start_identity`, `workspace_path`, `started_at`, `finished_at`, `lifecycle_status`; ab 0.3.0 `outcome`, `completion_hook` (WI-17); ab 0.6.0 `retry_block_hook`, Trigger `unblock` (WI-30); ab 0.11.0 Trigger `reply` (WI-39) | Versuche und Ausführungshistorie |
 | `run_events` | `id`, `run_id`, `sequence`, `timestamp`, `type`, `payload_json` | Strukturierte Events |
-| `run_actions` | `id`, `run_id`, `hook`, `ordinal`, `action_config_json`, `status`, `external_key`; ab 0.9.0 `effect_json` (WI-33) | Action-Journal |
+| `run_actions` | `id`, `run_id`, `hook`, `ordinal`, `action_config_json`, `status`, `external_key`; ab 0.9.0 `effect_json` (WI-33); ab 0.11.0 Hook `on_reply` und interne Action `reply_check` (WI-39) | Action-Journal |
 | `action_attempts` | `id`, `run_action_id`, `attempt`, `started_at`, `finished_at`, `error_json` | Retry-/Fehlerdiagnose |
 | `blocks` | `id`, `workflow_id`, `source_item_key_nullable`, `reason`, `created_at`, `cleared_at_nullable`, `generation`; ab 0.6.0 `last_status`, `cleared_run_id` (WI-30) | Persistente technische Blocks |
 | `locks` | `workflow_id`, `source_item_key`, `run_id`, `acquired_at` | Aktive Reservierungen |
-| `notifications` | `id`, `event_type`, `payload_json`, `delivery_state`, `attempts`, `created_at` | Systemmeldungen |
+| `notifications` | `id`, `event_type`, `payload_json`, `delivery_state`, `attempts`, `created_at`; ab 0.11.0 `dedupe_key` (WI-39) | Systemmeldungen |
+| `notification_deliveries` | `notification_id`, `channel_id`, `state`, `attempts`, `last_error`, `next_attempt_at`; ab 0.11.0 `thread_id`, `message_ts` (WI-39) | Zustellung je Kanal |
+| `notification_threads` (ab 0.11.0, WI-39) | `channel_id`, `workflow_id`, `source_id`, `item_key`, `chat_channel`, `thread_ts`, `created_at`, `last_message_at` | Slack-Thread je (Kanal, Workflow, Item) |
+| `notification_replies` (ab 0.11.0, WI-39) | `channel_id`, `chat_channel` + `ts` (eindeutig), `thread_id`, `workflow_id`, `item_key`, `user_id`, `user_name`, `permalink`, `text` (nur bis zur Verarbeitung), `config_snapshot` (bis zur Reservierung), `status`, `reason`, `run_id` | Antworten bis zu ihrem Lifecycle-Run (genau einmal) |
+| `notification_reminders` (ab 0.11.0, WI-39) | `notification_id`, `thread_id`, `due_at`, `filter_json`, `state`, `reason` | Erinnerungen von `notify` |
 | `cron_firings` | `workflow_id`, `scheduled_for`, `run_id_nullable`, `decision` | Cron-Idempotenz und Diagnose |
 | `item_history_gaps` (ab 0.9.0, WI-33) | `item_key`, `deleted_runs`, `newest_deleted_at` | Hinweis „ältere Einträge gemäß Aufbewahrung gelöscht“ im Item-Verlauf |
 | `schema_migrations` | `version`, `applied_at` | Updates |
@@ -681,6 +696,43 @@ Filter nur deklarativ, keine Shell-Filter, keine zusätzlichen UI-Filter/Textsuc
 ## 18. Benachrichtigungen
 
 **Workflow-Benachrichtigungen** über `source.comment` oder `shell`-Hook (z. B. Slack-Skript). **Kritische Orchestrator-Ereignisse** erhalten ein zentrales, konfigurierbares Benachrichtigungssystem, z. B. HTTP-Webhook/Slack-Webhook als erster Kanal: Retry-Block erstellt, Lifecycle endgültig gescheitert, Recovery fehlgeschlagen; ab 0.6.0 optional Retry-Block aufgehoben (`retry_block_cleared`, nicht im Default). Zustellung und Versuche werden gespeichert, Fehlzustellungen in GUI gezeigt. Die Orchestrierung darf bei Benachrichtigungsfehler nicht hängen. Secrets in Notification-URLs/-Headers schützen und redigieren.
+
+**Nachtrag 0.11.0 (WI-39) – Slack-Kanal mit Thread je Item und Antworten:** Ein Workflow, der ein Item an einen
+Menschen übergibt, meldet das aktiv; die Antwort landet als Kommentar in der Source, ohne Kontextwechsel.
+
+- **Kanal `type: slack`** (`bot_token_env`, optional `app_token_env`, `channel` = Channel-ID, `allowed_users`, `on`):
+  Web-API (`chat.postMessage`, `chat.getPermalink`, `reactions.add/remove`, `users.info`) über `fetch`, Socket Mode über
+  das Node-eigene `WebSocket` – keine neue Abhängigkeit, kein offener Port. Tokens nur aus der Umgebung, beim Redactor
+  registriert, nie in Logs, Events, API, DB oder Fehlertexten.
+- **Thread je (Workflow, Item)** (`notification_threads`): die erste Nachricht legt ihn an (Kopf: Item-Titel als Link,
+  Item-Schlüssel, Workflow), weitere gehen hinein; `thread: new` beginnt einen neuen. Zustellungen eines Threads laufen
+  in Reihenfolge (eine jüngere wartet auf eine ältere ausstehende), der Kopf wird genau einmal gepostet – auch nach
+  teilweisem Erfolg.
+- **Action `notify`** (§10) legt eine Benachrichtigung vom Typ `workflow_notify` mit genau einer Zustellung an (nicht
+  gefiltert durch `notifications.on`/Kanal-`on`), idempotent je (Run, Action). Zustellung wie bei Webhooks (Backoff,
+  `429` mit `Retry-After`, Speicherung jedes Versuchs, Retry in der UI). Optional **eine** Erinnerung nach
+  `remind_after`, nur wenn `remind_while` (Filter-Snapshot) dann `true` ist (`unknown` → keine, Log); eine Antwort im
+  Thread hebt sie auf (`notification_reminders`).
+- **Orchestrator-Ereignisse** dürfen auf einen `slack`-Kanal; mit Item gehen sie in den Thread `(Workflow, Item)`
+  (Thread bei Bedarf angelegt), sonst als Top-Level-Nachricht.
+- **Antworten** (`notification_replies`): Eine Antwort zählt nur bei passendem Kanal/Channel, bekanntem Thread, Absender
+  in `allowed_users` und neuer Nachricht (kein `subtype` außer `thread_broadcast` und `file_share` mit Text – Dateien werden ignoriert –, kein Bot). Reihenfolge beim Eingang:
+  prüfen → **synchron speichern** (eindeutig je Channel + `ts`) → Ack an Slack → verarbeiten; ignorierte Ereignisse werden
+  ebenfalls bestätigt. Secret-artiger Text (Prüfung aus WI-27) wird nicht gespeichert, sondern abgelehnt (Grund im
+  Thread, ❌). `{reply.*}` (Text als Klartext, max. 8 KiB, `<!--` entschärft; Benutzer, Anzeigename, `ts`, Permalink,
+  Channel) gibt es nur in `on_reply` und `reply_check`. Ohne `on_reply` werden Antworten ignoriert (die Erinnerung
+  wird trotzdem aufgehoben).
+- **`on_reply`** läuft als Lifecycle-Run (Trigger `reply`, §11), davor optional `reply_check` (stdin = Text; 0 ok,
+  1 abgelehnt mit Grund im Thread, ≥ 2/Timeout = gescheitert, per Retry wiederholbar). Rückmeldung in Slack best effort:
+  ⏳ beim Eingang, ✅ bei `success`, ❌ plus kurze Antwort bei Ablehnung/Fehler.
+- **Betrieb:** eine Slack-App je Instanz (Slack verteilt Ereignisse einer App auf eine ihrer Verbindungen; im Hub hat
+  jeder Workspace eigene Kanäle und eine eigene Verbindung, der Hub selbst nichts). Reconnect mit Backoff 1 s … 60 s,
+  Zustand in API/UI. Reload: neue Verbindung nur bei geänderten `app_token_env`-Variablen. Retention:
+  `retention.notification_threads` (Default 90 Tage); Antworten mit dem Lifecycle-Run. Schema v8 (Migration mit
+  Backup, kein Downgrade). Nicht enthalten: Slash-Commands, Buttons, Direktnachrichten, Antworten außerhalb von
+  Threads, hubweite Verbindung, andere Chat-Dienste (die Schnittstellen `ChatNotifier`/`ChatReplyFeedback` lassen einen
+  zweiten Anbieter zu). Details: [configuration-reference.md](configuration-reference.md) §3.1, §3.4.10, §3.4.11, §5;
+  [operations.md](operations.md) „Slack“.
 
 ## 19. Konfiguration, Reload, Dry-Run
 

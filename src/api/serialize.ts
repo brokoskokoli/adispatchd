@@ -6,7 +6,7 @@
 import { ACTIVE_STATUSES, isTerminalStatus, type TechnicalStatus } from '../core/index.js';
 import { workflowSecrets, type EffectiveWorkflow, type ParameterDefinition, type ParameterOptionsSource, type WorkflowConfig } from '../config/index.js';
 import { describeContainerExecute } from '../executors/index.js';
-import type { ActionAttemptRecord, BlockRecord, RunActionRecord, RunRecord } from '../persistence/index.js';
+import type { ActionAttemptRecord, BlockRecord, ReplyRecord, RunActionRecord, RunRecord } from '../persistence/index.js';
 import { checkDisplayName, displayCommand, type CronWorkflowStatus, type WorkflowConditionStatus, type WorkflowPlanningDiagnosis } from '../scheduler/index.js';
 
 /**
@@ -318,4 +318,44 @@ export function conditionsView(
 /** Block with UI helpers. */
 export function toBlockView(block: BlockRecord, extra: { affectedRunIds: string[]; sourceUrl: string | null; workflowName: string | null }): Record<string, unknown> {
   return { ...block, active: block.clearedAt === null, ...extra };
+}
+
+/** A chat reply (WI-39) as shown in the API: who, where, status – never the text or the workflow snapshot. */
+export interface ReplyView {
+  id: number;
+  channelId: string;
+  chatChannel: string;
+  ts: string;
+  threadId: number | null;
+  workflowId: string;
+  itemKey: string;
+  userId: string;
+  userName: string | null;
+  permalink: string | null;
+  status: ReplyRecord['status'];
+  reason: string | null;
+  runId: string | null;
+  receivedAt: string;
+  updatedAt: string;
+}
+
+/** {@link ReplyView} of a reply. */
+export function toReplyView(reply: ReplyRecord): ReplyView {
+  return {
+    id: reply.id,
+    channelId: reply.channelId,
+    chatChannel: reply.chatChannel,
+    ts: reply.ts,
+    threadId: reply.threadId,
+    workflowId: reply.workflowId,
+    itemKey: reply.itemKey,
+    userId: reply.userId,
+    userName: reply.userName,
+    permalink: reply.permalink,
+    status: reply.status,
+    reason: reply.reason,
+    runId: reply.runId,
+    receivedAt: reply.receivedAt,
+    updatedAt: reply.updatedAt,
+  };
 }

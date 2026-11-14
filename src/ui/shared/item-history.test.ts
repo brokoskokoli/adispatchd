@@ -208,7 +208,7 @@ describe('item history (WI-33, shared UI)', () => {
     const toggled: string[] = [];
     const c = timelineControls(h, { enabled: new Set(['hook']), ascending: false, githubAvailable: false }, { toggleKind: (k) => toggled.push(k), toggleOrder: () => toggled.push('order') });
     const boxes = c.find('input');
-    expect(boxes).toHaveLength(6); // no GitHub checkbox while the events are off
+    expect(boxes).toHaveLength(7); // incl. replies (WI-39); no GitHub checkbox while the events are off
     expect(boxes.filter((b) => b.attrs.checked !== undefined)).toHaveLength(1);
     (boxes[0]!.listeners.change as () => void)();
     expect(toggled).toEqual(['run_started']);
@@ -238,5 +238,38 @@ describe('item history (WI-33, shared UI)', () => {
     // Everything fits in the fresh page.
     expect(refreshEntries(loaded, null, [e('c', '3'), e('b', '2'), e('a', '1')], null)).toEqual({ entries: loaded, nextBefore: null });
     expect(refreshEntries([], null, [], null)).toEqual({ entries: [], nextBefore: null });
+  });
+});
+
+describe('item history – replies (WI-39, shared UI)', () => {
+  it('parses a reply entry (no text) and describes notify effects', () => {
+    const data = parseHistory({
+      source: 'repo_a',
+      itemId: '7',
+      item: null,
+      runs: [],
+      entries: [
+        {
+          key: 'reply:1',
+          kind: 'reply',
+          at: '2026-11-14T10:00:00.000Z',
+          cursor: 'c',
+          runId: 'run-1',
+          workflowId: 'coder',
+          workflowName: 'Coder',
+          replyId: 1,
+          user: 'Alex Example',
+          userId: 'U0123456789',
+          channelId: 'team',
+          status: 'done',
+          reason: null,
+          permalink: 'https://acme.slack.test/archives/C0123456789/p1',
+        },
+      ],
+    });
+    const entry = data?.entries[0];
+    expect(entry).toMatchObject({ kind: 'reply', user: 'Alex Example', userId: 'U0123456789', channelId: 'team', status: 'done' });
+    expect(triggerText('reply', 'Alex Example')).toBe('reply (answer in Slack by Alex Example)');
+    expect(effectLines(parseEffect({ notification: { id: 3, channel: 'team' } }))).toEqual(['message to team recorded']);
   });
 });

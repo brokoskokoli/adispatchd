@@ -55,8 +55,17 @@ notifications:
   # Central orchestrator notifications (Spec §18). Secrets come from environment variables:
   # channels:
   #   - type: webhook
-  #     url_env: SLACK_WEBHOOK_URL
+  #     url_env: OPS_WEBHOOK_URL
   #     headers_env: { Authorization: WEBHOOK_AUTH_HEADER }
+  #   # Slack (0.11.0): one thread per (workflow, item); replies in the thread run on_reply of the workflow.
+  #   # Tokens only in the service environment; without app_token_env the channel only sends.
+  #   # One Slack app per instance (docs/operations.md, section "Slack").
+  #   - id: team
+  #     type: slack
+  #     bot_token_env: SLACK_BOT_TOKEN      # xoxb-…: chat:write, reactions:write, channels:history
+  #     app_token_env: SLACK_APP_TOKEN      # xapp-…: connections:write (Socket Mode)
+  #     channel: C0123456789                # channel ID, not the name
+  #     allowed_users: [U0123456789]        # whose replies count
   on: [retry_block_created, lifecycle_action_failed, recovery_failed]   # optional also: retry_block_cleared
 
 # Web UI: external tools in the toolbar (optional). url = how the BROWSER reaches the tool.
@@ -285,6 +294,21 @@ on_cancel:
 # on_retry_unblock:
 #   - type: source.update
 #     labels: { add: [ready-for-coding], remove: [agent-blocked] }
+# Slack handover (0.11.0, needs a slack channel "team" in config.yaml): post into the item's thread and
+# continue with the answer given there (lifecycle run, trigger "reply").
+# on_result:
+#   needs_maintainer:
+#     - type: notify
+#       channel: team
+#       message: '{item.title}: {result.message}'
+#       remind_after: 4h
+#       remind_while: needs-maintainer
+# on_reply:
+#   - type: source.comment
+#     identity: maintainer
+#     message: '{reply.text}'
+#   - type: source.update
+#     labels: { add: [ready-for-coding], remove: [needs-maintainer] }
 `;
 
 const NIGHTLY_YAML = `# workflows/nightly-maintenance.yaml – time-triggered workflow (Spec §5.5). DISABLED example.

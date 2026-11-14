@@ -17,6 +17,7 @@ import {
   isHookName,
   isTechnicalFailure,
   isTerminalStatus,
+  LIFECYCLE_TRIGGERS,
   type BusinessResult,
   type Clock,
   type FinalizationTarget,
@@ -28,7 +29,7 @@ import {
   type TriggerType,
 } from '../core/index.js';
 import type { BlockRecord, BlockRepository } from './blocks.js';
-import { BlockedError, InvalidTransitionError, LockConflictError, NotFoundError, UnblockRunActiveError } from './errors.js';
+import { BlockedError, InvalidTransitionError, LockConflictError, NotFoundError, ReplyPendingError, UnblockRunActiveError } from './errors.js';
 import { RUN_STATUS_EVENT, type EventRepository } from './events.js';
 import { lockKeyFor } from './lock-keys.js';
 import { all, fromJson, get, iso, num, placeholders, run, str, toJson, transaction, type Params, type Row } from './sqlite.js';
@@ -201,6 +202,7 @@ export interface LockRecord {
 }
 
 const ACTIVE_SQL = `(${ACTIVE_STATUSES.map((s) => `'${s}'`).join(', ')})`;
+const LIFECYCLE_SQL = `(${LIFECYCLE_TRIGGERS.map((t) => `'${t}'`).join(', ')})`;
 
 /** Repository for `runs` and `locks`. */
 export class RunRepository {
@@ -215,7 +217,8 @@ export class RunRepository {
    * Atomically reserve a run: check + create the lock `(workflowId, lockKey)`
    * and insert the run in status `reserved`. Throws {@link LockConflictError}
    * if an active run holds the lock, {@link BlockedError} with `failIfBlocked`,
-   * {@link UnblockRunActiveError} for runs without item while the workflow's unblock run is active (WI-30).
+   * {@link UnblockRunActiveError} for runs without item while the workflow's unblock run is active (WI-30),
+   * {@link ReplyPendingError} for runs of an item with a waiting chat reply (WI-39; not for `reply` runs).
    */
   reserve(input: ReserveRunInput): RunRecord {
     if (input.triggerType === 'source' && !input.sourceItemKey) {
@@ -241,6 +244,15 @@ export class RunRepository {
       if (itemKey === null && input.triggerType !== 'unblock') {
         const unblock = this.activeUnblockRun(input.workflowId, null);
         if (unblock) throw new UnblockRunActiveError(input.workflowId, unblock.id);
+      }
+      // WI-39: a waiting chat reply of the item runs first (FIFO); no other run may overtake it.
+      if (itemKey !== null && input.triggerType !== 'reply') {
+        const reply = get(
+          this.db,
+          `SELECT id FROM notification_replies WHERE status = 'pending' AND workflow_id = ? AND item_key = ? ORDER BY id ASC LIMIT 1`,
+          [input.workflowId, itemKey],
+        );
+        if (reply) throw new ReplyPendingError(input.workflowId, itemKey, Number(reply.id));
       }
       const now = this.clock.now().toISOString();
       try {
@@ -440,10 +452,10 @@ export class RunRepository {
 
   /**
    * Number of active runs (all triggers incl. manual), optionally per workflow (Spec §7 concurrency).
-   * Lifecycle runs of removed blocks (trigger `unblock`, WI-30) start no worker and do not count.
+   * Lifecycle runs (triggers `unblock`, WI-30, and `reply`, WI-39) start no worker and do not count.
    */
   countActive(workflowId?: string, sourceId?: string): number {
-    const base = `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND trigger_type <> 'unblock'`;
+    const base = `SELECT COUNT(*) AS n FROM runs WHERE status IN ${ACTIVE_SQL} AND trigger_type NOT IN ${LIFECYCLE_SQL}`;
     const row =
       workflowId === undefined
         ? get(this.db, base)
@@ -530,7 +542,7 @@ export class RunRepository {
 
   /**
    * Latest run per item key (views: `run.last_*`, Spec §17). Keys without runs are absent.
-   * Lifecycle runs of removed blocks (trigger `unblock`, WI-30) are not considered.
+   * Lifecycle runs (triggers `unblock`, WI-30, and `reply`, WI-39) are not considered.
    */
   lastRunsForItems(
     itemKeys: readonly string[],
@@ -552,7 +564,7 @@ export class RunRepository {
         this.db,
         `SELECT * FROM (
            SELECT *, ROW_NUMBER() OVER (PARTITION BY source_item_key ORDER BY ${order}) AS rn
-           FROM runs WHERE source_item_key IN (${placeholders(chunk.length)}) AND trigger_type <> 'unblock'${filter}
+           FROM runs WHERE source_item_key IN (${placeholders(chunk.length)}) AND trigger_type NOT IN ${LIFECYCLE_SQL}${filter}
          ) WHERE rn = 1`,
         params,
       );

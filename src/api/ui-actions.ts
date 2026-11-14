@@ -24,9 +24,12 @@ import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
+  describeFindings,
   errorMessage,
+  maskSecrets,
   noopLogger,
   redactValue,
+  scanSecrets,
   SourceError,
   systemClock,
   type Clock,
@@ -35,6 +38,7 @@ import {
   type Redactor,
   type SourceAdapter,
   type SourceItem,
+  type SecretFinding,
 } from '../core/index.js';
 import type { ConfigManager } from '../config/index.js';
 import { neutralizeHtmlComments } from '../lifecycle/index.js';
@@ -42,7 +46,6 @@ import type { Repositories, UiActionKind, UiActionRecord, UiActionResult } from 
 import { valueProblem } from '../sources/index.js';
 import { isInteractive, type Principal } from './auth.js';
 import { ApiError } from './errors.js';
-import { describeFindings, maskSecrets, scanSecrets, type SecretFinding } from './secret-scan.js';
 
 /** Max length of a comment as sent (GitHub's limit). */
 export const MAX_COMMENT_LENGTH = 65_536;
@@ -87,7 +90,7 @@ export interface UiActionDeps {
 /**
  * Secrets in a comment text (best effort): values known to the shared
  * redactor (installation tokens, keys, token identities) and common token
- * formats (see secret-scan.ts). Only kinds and counts, never values.
+ * formats (see core/secret-scan.ts). Only kinds and counts, never values.
  */
 export function commentSecrets(text: string, redact: Redactor): SecretFinding[] {
   const findings = scanSecrets(text);

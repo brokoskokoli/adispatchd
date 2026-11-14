@@ -16,7 +16,7 @@ const SAMPLES = [
   'nothing secret here: ghp_short, AKIA123, sk-ant-x',
 ];
 
-describe('secret scan (comments, WI-27)', () => {
+describe('secret scan (comments WI-27, chat replies WI-39)', () => {
   it('server and UI use the same code', () => {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const body = (file: string) => readFileSync(file, 'utf8').replace(/^\/\*\*[\s\S]*?\*\/\n/, '');

@@ -14,7 +14,8 @@
  * - Optional TTL cache (Clock based) for workflow conditions; item checks run
  *   uncached by default.
  */
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import type { Readable, Writable } from 'node:stream';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -55,6 +56,8 @@ export interface ShellCheckSpec {
   env?: Readonly<Record<string, string>>;
   /** Working directory (default: the runner's temp directory for this check). */
   cwd?: string;
+  /** Text written to the standard input (WI-39 `reply_check`); default: no input (`/dev/null`). */
+  stdin?: string;
 }
 
 /** Kind of check, part of the context file. */
@@ -293,9 +296,18 @@ export class ShellCheckRunner {
       let spawnError: string | undefined;
       const handles: ReturnType<Timers['setTimeout']>[] = [];
 
-      const child = spawn(file, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+      const child = spawn(file, args, { cwd, env, stdio: [spec.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'], detached: true }) as ChildProcessByStdio<
+        Writable | null,
+        Readable,
+        Readable
+      >;
       child.stdout.on('data', (c: Buffer) => stdout.push(c));
       child.stderr.on('data', (c: Buffer) => stderr.push(c));
+      if (spec.stdin !== undefined && child.stdin) {
+        // A check that does not read its input (or exits early) must not fail with EPIPE.
+        child.stdin.on('error', () => undefined);
+        child.stdin.end(spec.stdin);
+      }
 
       const killGroup = (sig: NodeJS.Signals): void => {
         if (child.pid === undefined) return;

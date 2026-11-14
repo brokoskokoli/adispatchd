@@ -9,7 +9,7 @@
  * else `delivered` (also when no channel was subscribed).
  */
 import type { DatabaseSync } from 'node:sqlite';
-import type { Clock, NotificationEventType } from '../core/index.js';
+import type { Clock, NotificationType } from '../core/index.js';
 import { NotFoundError } from './errors.js';
 import { all, get, iso, run, str, transaction, type Params, type Row } from './sqlite.js';
 
@@ -19,7 +19,8 @@ export type DeliveryState = 'pending' | 'delivered' | 'failed';
 /** A persisted notification. Payload must not contain secrets. */
 export interface NotificationRecord {
   id: number;
-  eventType: NotificationEventType;
+  /** Orchestrator event or explicit message (WI-39: `workflow_notify`, `workflow_reminder`, `reply_feedback`). */
+  eventType: NotificationType;
   payload: Record<string, unknown>;
   deliveryState: DeliveryState;
   attempts: number;
@@ -45,11 +46,18 @@ export interface NotificationDeliveryRecord {
   deliveredAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Chat thread the message goes into (WI-39); `null` = top-level / webhook. */
+  threadId: number | null;
+  /** Timestamp of the posted chat message (WI-39), once delivered. */
+  messageTs: string | null;
 }
+
+/** Target of one delivery: a channel ID, optionally with the chat thread (WI-39). */
+export type DeliveryTarget = string | { channelId: string; threadId?: number | null };
 
 /** Outcome of one delivery attempt. */
 export type DeliveryAttemptOutcome =
-  | { success: true; status?: number | null }
+  | { success: true; status?: number | null; messageTs?: string | null }
   | { success: false; error: string; status?: number | null; nextAttemptAt: Date | string | null };
 
 /** Repository for `notifications`. */
@@ -60,15 +68,21 @@ export class NotificationRepository {
   ) {}
 
   /** Persist a new notification in state `pending` (due immediately). */
-  create(eventType: NotificationEventType, payload: Record<string, unknown>): NotificationRecord {
+  create(eventType: NotificationType, payload: Record<string, unknown>, dedupeKey: string | null = null): NotificationRecord {
     const now = this.clock.now().toISOString();
     const res = run(
       this.db,
-      `INSERT INTO notifications (event_type, payload_json, delivery_state, attempts, next_attempt_at, created_at, updated_at)
-       VALUES (?, ?, 'pending', 0, ?, ?, ?)`,
-      [eventType, JSON.stringify(payload), now, now, now],
+      `INSERT INTO notifications (event_type, payload_json, delivery_state, attempts, next_attempt_at, created_at, updated_at, dedupe_key)
+       VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)`,
+      [eventType, JSON.stringify(payload), now, now, now, dedupeKey],
     );
     return this.require(res.lastInsertRowid);
+  }
+
+  /** Notification with this dedupe key (WI-39: `notify` per run and action), or `null`. */
+  getByDedupeKey(dedupeKey: string): NotificationRecord | null {
+    const row = get(this.db, 'SELECT * FROM notifications WHERE dedupe_key = ?', [dedupeKey]);
+    return row ? toNotification(row) : null;
   }
 
   /** Notification by ID or `null`. */
@@ -138,19 +152,24 @@ export class NotificationRepository {
    * `delivered` (nothing to deliver).
    */
   createWithDeliveries(
-    eventType: NotificationEventType,
+    eventType: NotificationType,
     payload: Record<string, unknown>,
-    channelIds: readonly string[],
+    targets: readonly DeliveryTarget[],
+    options: { dedupeKey?: string | null } = {},
   ): { notification: NotificationRecord; deliveries: NotificationDeliveryRecord[] } {
     return transaction(this.db, () => {
-      const created = this.create(eventType, payload);
+      const created = this.create(eventType, payload, options.dedupeKey ?? null);
       const now = this.clock.now().toISOString();
-      for (const channelId of new Set(channelIds)) {
+      const seen = new Set<string>();
+      for (const target of targets) {
+        const { channelId, threadId } = typeof target === 'string' ? { channelId: target, threadId: null } : target;
+        if (seen.has(channelId)) continue;
+        seen.add(channelId);
         run(
           this.db,
-          `INSERT INTO notification_deliveries (notification_id, channel_id, state, attempts, next_attempt_at, created_at, updated_at)
-           VALUES (?, ?, 'pending', 0, ?, ?, ?)`,
-          [created.id, channelId, now, now, now],
+          `INSERT INTO notification_deliveries (notification_id, channel_id, state, attempts, next_attempt_at, created_at, updated_at, thread_id)
+           VALUES (?, ?, 'pending', 0, ?, ?, ?, ?)`,
+          [created.id, channelId, now, now, now, threadId ?? null],
         );
       }
       this.refreshAggregate(created.id);
@@ -171,19 +190,24 @@ export class NotificationRepository {
     return row ? toDelivery(row) : null;
   }
 
-  /** Pending deliveries due at `now`, oldest first. */
+  /**
+   * Pending deliveries due at `now`, oldest first. A delivery into a chat
+   * thread (WI-39) waits while an older delivery of the same thread is still
+   * pending (messages of a thread are delivered in order; the head message is posted once).
+   */
   listDueDeliveries(now: Date, limit = 100): NotificationDeliveryRecord[] {
     return all(
       this.db,
-      `SELECT * FROM notification_deliveries WHERE state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
-       ORDER BY next_attempt_at ASC, id ASC LIMIT ?`,
+      `SELECT * FROM notification_deliveries d WHERE d.state = 'pending' AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= ?)
+         AND ${NOT_WAITING_SQL}
+       ORDER BY d.next_attempt_at ASC, d.id ASC LIMIT ?`,
       [iso(now), limit],
     ).map(toDelivery);
   }
 
-  /** Earliest `next_attempt_at` of all pending deliveries, or `null`. */
+  /** Earliest `next_attempt_at` of all pending deliveries that do not wait for an older one, or `null`. */
   nextDeliveryDue(): string | null {
-    const row = get(this.db, `SELECT MIN(next_attempt_at) AS t FROM notification_deliveries WHERE state = 'pending'`);
+    const row = get(this.db, `SELECT MIN(d.next_attempt_at) AS t FROM notification_deliveries d WHERE d.state = 'pending' AND ${NOT_WAITING_SQL}`);
     return str(row?.t);
   }
 
@@ -211,8 +235,8 @@ export class NotificationRepository {
         run(
           this.db,
           `UPDATE notification_deliveries SET state = 'delivered', attempts = attempts + 1, last_status = ?, delivered_at = ?,
-             next_attempt_at = NULL, updated_at = ? WHERE id = ?`,
-          [status, now, now, deliveryId],
+             next_attempt_at = NULL, updated_at = ?, message_ts = COALESCE(?, message_ts) WHERE id = ?`,
+          [status, now, now, outcome.messageTs ?? null, deliveryId],
         );
       } else {
         const next = outcome.nextAttemptAt === null ? null : iso(outcome.nextAttemptAt);
@@ -287,6 +311,10 @@ export class NotificationRepository {
   }
 }
 
+/** Delivery `d` does not wait for an older pending delivery of the same chat thread. */
+const NOT_WAITING_SQL = `(d.thread_id IS NULL OR NOT EXISTS (SELECT 1 FROM notification_deliveries e
+    WHERE e.thread_id = d.thread_id AND e.state = 'pending' AND e.id < d.id))`;
+
 function toDelivery(row: Row): NotificationDeliveryRecord {
   return {
     id: Number(row.id),
@@ -300,13 +328,15 @@ function toDelivery(row: Row): NotificationDeliveryRecord {
     deliveredAt: str(row.delivered_at),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
+    threadId: row.thread_id === null || row.thread_id === undefined ? null : Number(row.thread_id),
+    messageTs: str(row.message_ts),
   };
 }
 
 function toNotification(row: Row): NotificationRecord {
   return {
     id: Number(row.id),
-    eventType: row.event_type as NotificationEventType,
+    eventType: row.event_type as NotificationType,
     payload: JSON.parse(String(row.payload_json)) as Record<string, unknown>,
     deliveryState: row.delivery_state as DeliveryState,
     attempts: Number(row.attempts),

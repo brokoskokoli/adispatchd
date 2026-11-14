@@ -58,6 +58,8 @@ export interface RetentionReport {
   deletedArtifacts: number;
   /** Orphaned artifact directories (WI-35) removed. */
   artifactOrphansRemoved: number;
+  /** Chat threads (WI-39) without a message since `retention.notification_threads`. */
+  deletedNotificationThreads: number;
   orphanDirsRemoved: number;
   /** Left-over token directories (WI-18) removed. */
   tokenDirsRemoved: number;
@@ -67,7 +69,7 @@ export interface RetentionReport {
 
 /** Options of {@link RetentionService}. */
 export interface RetentionServiceOptions {
-  repositories: Pick<Repositories, 'runs' | 'retention'> & Partial<Pick<Repositories, 'uiActions'>>;
+  repositories: Pick<Repositories, 'runs' | 'retention'> & Partial<Pick<Repositories, 'uiActions' | 'threads'>>;
   dataDir: string;
   /** Live retention settings (`config.global.retention`). */
   settings: () => RetentionConfig;
@@ -159,6 +161,7 @@ export class RetentionService {
       deletedUiActions: 0,
       deletedArtifacts: 0,
       artifactOrphansRemoved: 0,
+      deletedNotificationThreads: 0,
       orphanDirsRemoved: 0,
       tokenDirsRemoved: 0,
       errors: [],
@@ -181,6 +184,9 @@ export class RetentionService {
     const firingsBefore = cutoff(settings.completedRunsMs ?? CRON_FIRINGS_FALLBACK_MS);
     if (firingsBefore) report.deletedCronFirings = retention.deleteCronFirings(firingsBefore);
     report.deletedUiActions = this.options.repositories.uiActions?.deleteOlderThan(cutoff(settings.uiActionsMs)) ?? 0;
+    // WI-39: replies to a forgotten thread are ignored; replies with a run go with their run.
+    const threadsBefore = cutoff(settings.notificationThreadsMs ?? null);
+    if (threadsBefore) report.deletedNotificationThreads = this.options.repositories.threads?.deleteInactive(threadsBefore) ?? 0;
     const artifacts = this.options.artifacts;
     const artifactsBefore = cutoff(settings.artifactsMs);
     if (artifacts && !this.stopped) {
