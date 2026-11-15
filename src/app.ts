@@ -352,9 +352,10 @@ export interface AppOptions {
   /** HTTP client for notification webhooks (default global `fetch`). */
   notificationFetch?: FetchLike;
   /**
-   * Drain timeout before cancel-all. Used for API/GUI drain only when set
-   * (unbounded otherwise); the signal handlers get it from the CLI and
-   * default to 10 min there.
+   * Drain timeout before cancel-all on SIGTERM/SIGINT (`--drain-timeout`; the
+   * signal handlers get it from the CLI and default to 10 min there). A drain
+   * requested over the API/UI/hub never uses it: it waits without a deadline
+   * (WI-41).
    */
   drainTimeoutMs?: number;
   /** Time for cancelled runs before hooks are interrupted (default 2 min). */
@@ -829,12 +830,14 @@ export async function createApp(options: AppOptions): Promise<App> {
     redact: redactor.asRedactor,
     readiness,
     shutdown: (mode, reason) => {
-      // API/GUI drain waits for active runs without a deadline unless one was
-      // configured; the cancel phase is always bounded so a kill_failed run or
-      // a hanging on_cancel hook cannot block the service forever.
+      // A requested drain (API, CLI `drain`, UI, hub `drain`/`drain-all`) waits
+      // for active runs without a deadline – `drainTimeoutMs` bounds only the
+      // signal path (SIGTERM/systemctl stop; WI-41). It never lifts or extends
+      // the deadline of a running signal drain (the controller keeps the
+      // stricter one). The cancel phase is always bounded so a kill_failed run
+      // or a hanging on_cancel hook cannot block the service forever.
       void shutdown({
         mode,
-        ...(mode === 'drain' && options.drainTimeoutMs !== undefined ? { drainTimeoutMs: options.drainTimeoutMs } : {}),
         cancelTimeoutMs: options.cancelTimeoutMs ?? DEFAULT_CANCEL_TIMEOUT_MS,
         ...(reason ? { reason } : {}),
       });
