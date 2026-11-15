@@ -755,7 +755,8 @@ dessen Steuer-Token auf – **ohne Frist**: der Workspace wartet, bis seine Runs
 `--drain-timeout`, und der Hub beendet ihn nicht nach Zeit (seit WI-41; vorher brach der Workspace nach `--drain-timeout`
 ab). `stop`/`stop-all` rufen `cancel-all` auf. Ist die API nicht erreichbar, fällt der Hub auf SIGTERM zurück – bei einem
 Drain erst nach fünf weiteren Versuchen im Abstand von 2 s (Warnung im Log); dieser Rückfall ist wie jedes SIGTERM durch
-`--drain-timeout` begrenzt. Danach bleiben die Workspaces `stopped` (der Hub läuft weiter); `hub workspace start <id>` startet sie wieder.
+`--drain-timeout` begrenzt. Ein `drain` während eines laufenden `stop` ändert nichts; während eines `restart` (der Workspace
+drainiert nach SIGTERM bereits mit `--drain-timeout`) sorgt er nur dafür, dass der Workspace danach gestoppt bleibt. Danach bleiben die Workspaces `stopped` (der Hub läuft weiter); `hub workspace start <id>` startet sie wieder.
 
 **Sicherheit.** Die Sockets `slots.sock` und `hub.sock` sind nur für den Benutzer des Hubs lesbar/schreibbar (`0600`). Worker
 und Actions der Workspaces laufen unter demselben Benutzer und könnten sich daher verbinden (`hub.sock` erlaubt `pause`, `stop-all`

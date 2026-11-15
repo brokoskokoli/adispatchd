@@ -230,6 +230,58 @@ describe('WorkspaceSupervisor', () => {
     expect(spawner.last('docs').signals).toEqual(['SIGTERM', 'SIGTERM']);
   });
 
+  it('a second drain (e.g. drain, then drain-all) starts no second request: one retry chain, one SIGTERM (WI-41)', async () => {
+    const s = make({ drainControlRetry: { attempts: 2, delayMs: 1_000 } });
+    s.startEnabled();
+    await clock.advanceAsync(100);
+    controlOk = false;
+    await Promise.all([s.drain('coder'), s.drain('coder')]);
+    await s.drainAll();
+    expect(controlCalls.filter(([id]) => id === 'coder')).toHaveLength(1);
+    await clock.advanceAsync(5_000);
+    expect(controlCalls.filter(([id]) => id === 'coder')).toHaveLength(3);
+    // A second SIGTERM would be cancel-all in the child.
+    expect(spawner.last('coder').signals).toEqual(['SIGTERM']);
+  });
+
+  it('a drain during a stop changes nothing; during a restart it only keeps the workspace stopped (WI-41)', async () => {
+    controlOk = false;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const slow = make({
+      control: async (w, action) => {
+        controlCalls.push([w.id, action]);
+        await gate;
+        return controlOk;
+      },
+    });
+    slow.startEnabled();
+    await clock.advanceAsync(100);
+    const stopping = slow.stop('coder');
+    expect(slow.statusOfWorkspace('coder').transition).toBe('stopping');
+    await slow.drain('coder');
+    expect(slow.statusOfWorkspace('coder').transition).toBe('stopping');
+    release();
+    await stopping;
+    expect(controlCalls.filter(([id]) => id === 'coder')).toEqual([['coder', 'cancel-all']]);
+    expect(spawner.last('coder').signals).toEqual(['SIGTERM', 'SIGTERM']);
+    await clock.advanceAsync(60_000 + 10_000 + 5_000);
+    expect(spawner.last('coder').signals).toEqual(['SIGTERM', 'SIGTERM', 'SIGKILL']);
+
+    // Restart: the child already drains after SIGTERM (bounded); the drain sends nothing more, keeps the kill timer and
+    // only keeps the workspace from starting again.
+    await slow.restart('docs');
+    const before = controlCalls.length;
+    await slow.drain('docs');
+    expect(controlCalls).toHaveLength(before);
+    expect(slow.statusOfWorkspace('docs').transition).toBe('draining');
+    expect(spawner.last('docs').signals).toEqual(['SIGTERM']);
+    await clock.advanceAsync(60_000 + 10_000 + 5_000);
+    expect(spawner.last('docs').signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(spawner.of('docs')).toHaveLength(1);
+    expect(slow.statusOfWorkspace('docs').state).toBe('stopped');
+  });
+
   it('stop: cancel-all through the API; falls back to SIGTERM when the API does not answer; SIGKILL when the child hangs', async () => {
     controlOk = false;
     const s = make();

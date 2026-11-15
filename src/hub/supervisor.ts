@@ -250,12 +250,21 @@ export class WorkspaceSupervisor {
 
   /**
    * Let active runs finish (no timeout, WI-41: the child gets `POST /api/v1/shutdown/drain`, and the hub arms no kill
-   * timer), start nothing new, then stop; it stays stopped.
+   * timer), start nothing new, then stop; it stays stopped. A drain never starts a second request: while the
+   * workspace is already draining or stopping it changes nothing (it never weakens a stop); during a restart the
+   * child is already draining after SIGTERM (bounded, kill timer armed), so the drain only keeps it from starting
+   * again.
    */
   async drain(id: string): Promise<WorkspaceStatus> {
     const m = this.get(id);
     this.markStopped(m);
     if (!m.child) return this.statusOf(m);
+    if (m.transition === 'restarting') {
+      m.transition = 'draining';
+      this.changed();
+      return this.statusOf(m);
+    }
+    if (m.transition !== null) return this.statusOf(m);
     await this.requestExit(m, 'draining', 'drain', null);
     return this.statusOf(m);
   }
@@ -271,6 +280,7 @@ export class WorkspaceSupervisor {
       return this.statusOf(m);
     }
     m.transition = 'restarting';
+    this.clearTimer(m, 'control');
     this.changed();
     this.signal(m, 'SIGTERM');
     this.armKill(m, this.options.drainTimeoutMs + this.options.cancelTimeoutMs);
@@ -302,6 +312,7 @@ export class WorkspaceSupervisor {
         continue;
       }
       if (first) {
+        this.clearTimer(m, 'control');
         m.transition = 'stopping';
         this.signal(m, 'SIGTERM');
         this.armKill(m, this.options.drainTimeoutMs + this.options.cancelTimeoutMs);
@@ -535,6 +546,7 @@ export class WorkspaceSupervisor {
       return;
     }
     this.log.warn('control API not available: retrying the drain', { workspace: m.config.id, attempt, of: retry.attempts });
+    this.clearTimer(m, 'control');
     m.timers.control = this.timers.setTimeout(() => {
       m.timers.control = undefined;
       void (async () => {

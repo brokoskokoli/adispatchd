@@ -404,7 +404,6 @@ describe('hub with real workspace processes (WI-36)', () => {
   it('serves the hub API and the workspace UIs/APIs of two real processes under one port, with roles, audit and drain/stop/pause end to end (WI-37)', { timeout: 300_000 }, async () => {
     // A drain timeout far shorter than the runs: it bounds only SIGTERM, never a drain over the API (WI-41).
     await boot('2s');
-    const bootIssues = [nextIssue - 3, nextIssue - 2, nextIssue - 1];
     const base = `http://127.0.0.1:${ports.hub}`;
     const call = async (method: string, target: string, opts: { cookie?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<{ status: number; json: any; headers: Headers }> => {
       const res = await fetch(`${base}${target}`, {
@@ -484,20 +483,34 @@ describe('hub with real workspace processes (WI-36)', () => {
 
     // Drain all: runs keep going (gate closed), the workspaces show "draining", and stop on their own once the runs are done.
     expect((await call('POST', '/api/v1/hub/drain-all', { cookie: olga })).status).toBe(200);
-    await until('both workspaces drain', async () => (await status()).workspaces.every((w) => w.transition === 'draining') || undefined);
+    // A workspace without runs stops at once (both slots can be in one workspace).
+    await until('both workspaces drain', async () => (await status()).workspaces.every((w) => w.transition === 'draining' || w.state === 'stopped') || undefined);
     expect(runningWorkers()).toHaveLength(2);
     const draining = (await call('GET', '/api/v1/hub/workspaces', { cookie: victor })).json.workspaces as any[];
-    expect(draining.every((w) => w.transition === 'draining')).toBe(true);
+    expect(draining.every((w) => w.transition === 'draining' || w.state === 'stopped')).toBe(true);
     // Well past `--drain-timeout 2s` (WI-41): nothing was cancelled, the runs and the workspaces are still there.
     await new Promise((r) => setTimeout(r, 5_000));
     expect(runningWorkers()).toHaveLength(2);
-    expect((await status()).workspaces.every((w) => w.state === 'running' && w.transition === 'draining')).toBe(true);
+    // A workspace whose runs are still going keeps draining (one without runs may already have stopped: the 2 slots
+    // can both be in one workspace).
+    const afterTimeout = (await status()).workspaces;
+    expect(afterTimeout.some((w) => w.state === 'running')).toBe(true);
+    expect(afterTimeout.every((w) => (w.state === 'running' && w.transition === 'draining') || w.state === 'stopped')).toBe(true);
+    // The issues being worked on now (label `coding`; earlier tests may have left older ready issues behind).
+    const labelsOf = (repo: string, n: number): string[] => {
+      try {
+        return github.labels(repo, n);
+      } catch {
+        return [];
+      }
+    };
+    const inProgress = ['example/a', 'example/b'].flatMap((repo) => Array.from({ length: 200 }, (_, i) => [repo, i + 1] as const).filter(([r, n]) => labelsOf(r, n).includes('coding')));
+    expect(inProgress).toHaveLength(2);
     openGate();
     await until('workspaces stopped after the drain', async () => ((await status()).workspaces.every((w) => w.state === 'stopped' && w.pid === null) ? true : undefined), 120_000);
     // Both runs finished (on_success), none was cancelled (on_cancel would put ready-for-coding back).
-    const finished = ['example/a', 'example/b'].flatMap((repo) => bootIssues.map((n) => github.labels(repo, n)));
-    expect(finished.filter((l) => l.includes('done'))).toHaveLength(2);
-    expect(finished.filter((l) => l.includes('coding'))).toHaveLength(0);
+    expect(inProgress.map(([r, n]) => labelsOf(r, n))).toEqual([expect.arrayContaining(['done']), expect.arrayContaining(['done'])]);
+    expect(inProgress.every(([r, n]) => !labelsOf(r, n).includes('ready-for-coding'))).toBe(true);
     expect((await call('GET', '/w/w1/', { headers: { accept: 'text/html' } })).status).toBe(503);
     expect((await call('GET', '/w/w1/api/v1/status', { cookie: victor })).json.error.code).toBe('workspace_unavailable');
 

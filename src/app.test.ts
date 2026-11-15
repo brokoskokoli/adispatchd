@@ -180,7 +180,7 @@ describe('createApp', () => {
     const uninstall = installSignalHandlers(env.app, { target: target as never, drainTimeoutMs: 1_000, cancelTimeoutMs: 5_000, forceExit: () => undefined });
     const signalledAt = Date.now();
     target.emit('SIGTERM');
-    await new Promise((r) => setTimeout(r, 500));
+    await new Promise((r) => setTimeout(r, 800));
     expect((await env.request('POST', '/api/v1/shutdown/drain')).status).toBe(202);
     const exceeded = (): boolean => env.logger.records.some((e) => e.msg.includes('drain timeout exceeded'));
     for (let i = 0; i < 250 && !exceeded(); i++) await new Promise((r) => setTimeout(r, 20));
@@ -188,9 +188,9 @@ describe('createApp', () => {
     const elapsed = Date.now() - signalledAt;
     const result = await env.app.stopped;
     uninstall();
-    // The signal's deadline holds: 1 s from the signal – not lifted, and not 1 s from the API call (1.5 s).
+    // The signal's deadline holds: 1 s from the signal – not lifted, and not 1 s from the API call (1.8 s).
     expect(elapsed).toBeGreaterThanOrEqual(950);
-    expect(elapsed).toBeLessThan(1_450);
+    expect(elapsed).toBeLessThan(1_750);
     expect(result).toMatchObject({ exitCode: 0, shutdown: { outcome: 'cancelled' } });
     expect(await finalStatus(env, runId)).toBe('cancelled');
     expect(env.logger.records.filter((e) => e.msg.includes('drain timeout exceeded'))).toHaveLength(1);
