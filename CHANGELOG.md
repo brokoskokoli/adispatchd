@@ -3,6 +3,22 @@
 Alle nennenswerten Änderungen an `adispatchd` (Agent Dispatch Daemon). Format nach
 [Keep a Changelog](https://keepachangelog.com/de/1.1.0/), Versionen nach [Semantic Versioning](https://semver.org/lang/de/).
 
+## [Unreleased]
+
+### Behoben
+
+- **Ein angeforderter Drain hat wieder keine Frist** (WI-41). `POST /api/v1/shutdown/drain` – und damit
+  `adispatch drain`, UI „Drain“, `hub workspace drain`, `hub drain-all` und „Drain all“ in der Hub-Übersicht –
+  übernahm die Frist aus `--drain-timeout`, sobald eine gesetzt war. Unter dem Hub und unter systemd ist sie das immer:
+  Runs, die länger liefen, wurden nach `--drain-timeout` (Default 10 min) abgebrochen („drain timeout exceeded,
+  cancelling remaining runs“). Jetzt wartet ein solcher Drain, bis die Runs fertig sind; `--drain-timeout` gilt nur
+  für SIGTERM/SIGINT (`systemctl stop|restart`, Hub-Shutdown, `hub workspace restart`). Die Cancel-Phase bleibt
+  begrenzt. Ein SIGTERM während des Drains begrenzt ihn ab dem Signal; ein Drain während eines Signal-Drains hebt
+  dessen Frist nicht auf.
+- **Hub:** Antwortet die Steuer-API eines Workspaces bei `drain`/`drain-all` nicht, versucht der Hub sie fünfmal im
+  Abstand von 2 s erneut, bevor er auf SIGTERM zurückfällt (bisher sofort; der Rückfall ist wie jedes SIGTERM durch
+  `--drain-timeout` begrenzt und wird als Warnung geloggt).
+
 ## [0.11.0] – 2026-11-14
 
 DB-Schema v8 (Migration mit Backup beim ersten Start).

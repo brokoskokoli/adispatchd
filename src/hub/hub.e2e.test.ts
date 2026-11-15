@@ -138,9 +138,9 @@ const maxConcurrentSeen = (): number => {
 };
 const openGate = (): void => writeFileSync(path.join(marks, 'gate'), '');
 
-function startHub(): { exited: Promise<number | null> } {
+function startHub(drainTimeout = '30s'): { exited: Promise<number | null> } {
   hubOut = '';
-  const proc = spawn(process.execPath, ['--import', 'tsx', path.join(ROOT, 'src/cli/main.ts'), 'hub', 'start', '--config-dir', hubCfg, '--data-dir', hubData, '--drain-timeout', '30s', '--cancel-timeout', '10s'], {
+  const proc = spawn(process.execPath, ['--import', 'tsx', path.join(ROOT, 'src/cli/main.ts'), 'hub', 'start', '--config-dir', hubCfg, '--data-dir', hubData, '--drain-timeout', drainTimeout, '--cancel-timeout', '10s'], {
     cwd: ROOT,
     env: { ...process.env, ...env, ADISPATCH_TEST_GITHUB_URL: `http://127.0.0.1:${githubPort}`, NODE_OPTIONS: `--import=${PRELOAD}` },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -165,7 +165,7 @@ const status = async (): Promise<HubStatus> => {
 
 let nextIssue = 1;
 /** Fresh state for a test: gate closed, no markers, 2 new ready issues per repository, hub started and both workspaces connected. */
-async function boot(): Promise<HubStatus> {
+async function boot(drainTimeout?: string): Promise<HubStatus> {
   rmSync(path.join(marks, 'gate'), { force: true });
   rmSync(path.join(marks, 'counts'), { force: true });
   for (const f of readdirSync(path.join(marks, 'running'))) rmSync(path.join(marks, 'running', f), { force: true });
@@ -173,7 +173,7 @@ async function boot(): Promise<HubStatus> {
     for (let i = 0; i < 3; i++) github.createIssue(repo, { number: nextIssue + i, labels: ['ready-for-coding'] });
   }
   nextIssue += 3;
-  startHub();
+  startHub(drainTimeout);
   return until('both workspaces running and connected', async () => {
     const s = await status();
     return s.workspaces.every((w) => w.state === 'running' && w.connected) ? s : undefined;
@@ -402,7 +402,9 @@ describe('hub with real workspace processes (WI-36)', () => {
   });
 
   it('serves the hub API and the workspace UIs/APIs of two real processes under one port, with roles, audit and drain/stop/pause end to end (WI-37)', { timeout: 300_000 }, async () => {
-    await boot();
+    // A drain timeout far shorter than the runs: it bounds only SIGTERM, never a drain over the API (WI-41).
+    await boot('2s');
+    const bootIssues = [nextIssue - 3, nextIssue - 2, nextIssue - 1];
     const base = `http://127.0.0.1:${ports.hub}`;
     const call = async (method: string, target: string, opts: { cookie?: string; body?: unknown; headers?: Record<string, string> } = {}): Promise<{ status: number; json: any; headers: Headers }> => {
       const res = await fetch(`${base}${target}`, {
@@ -486,8 +488,16 @@ describe('hub with real workspace processes (WI-36)', () => {
     expect(runningWorkers()).toHaveLength(2);
     const draining = (await call('GET', '/api/v1/hub/workspaces', { cookie: victor })).json.workspaces as any[];
     expect(draining.every((w) => w.transition === 'draining')).toBe(true);
+    // Well past `--drain-timeout 2s` (WI-41): nothing was cancelled, the runs and the workspaces are still there.
+    await new Promise((r) => setTimeout(r, 5_000));
+    expect(runningWorkers()).toHaveLength(2);
+    expect((await status()).workspaces.every((w) => w.state === 'running' && w.transition === 'draining')).toBe(true);
     openGate();
     await until('workspaces stopped after the drain', async () => ((await status()).workspaces.every((w) => w.state === 'stopped' && w.pid === null) ? true : undefined), 120_000);
+    // Both runs finished (on_success), none was cancelled (on_cancel would put ready-for-coding back).
+    const finished = ['example/a', 'example/b'].flatMap((repo) => bootIssues.map((n) => github.labels(repo, n)));
+    expect(finished.filter((l) => l.includes('done'))).toHaveLength(2);
+    expect(finished.filter((l) => l.includes('coding'))).toHaveLength(0);
     expect((await call('GET', '/w/w1/', { headers: { accept: 'text/html' } })).status).toBe(503);
     expect((await call('GET', '/w/w1/api/v1/status', { cookie: victor })).json.error.code).toBe('workspace_unavailable');
 

@@ -104,7 +104,14 @@ export interface SupervisorOptions {
   probeIntervalMs?: number;
   /** Extra time after the escalation deadline before a child is killed with SIGKILL. */
   killGraceMs?: number;
+  /**
+   * A drain whose control-API call failed is retried this often, `delayMs` apart, before the hub falls back to
+   * SIGTERM (which the child drains only up to `--drain-timeout`; WI-41). Default 5 × 2 s.
+   */
+  drainControlRetry?: { attempts: number; delayMs: number };
 }
+
+const DEFAULT_DRAIN_CONTROL_RETRY = { attempts: 5, delayMs: 2_000 };
 
 const MAX_OUTPUT_LINE = 16 * 1024;
 
@@ -122,7 +129,7 @@ interface Managed {
   lastExit: WorkspaceStatus['lastExit'];
   nextRestartAt: Date | null;
   message: string | null;
-  timers: { restart?: TimerHandle; probe?: TimerHandle; stable?: TimerHandle; kill?: TimerHandle };
+  timers: { restart?: TimerHandle; probe?: TimerHandle; stable?: TimerHandle; kill?: TimerHandle; control?: TimerHandle };
   /** Incremented per spawn; callbacks of an older child are ignored. */
   generation: number;
   exited: Array<() => void>;
@@ -241,7 +248,10 @@ export class WorkspaceSupervisor {
     return this.statusOf(m);
   }
 
-  /** Let active runs finish (no timeout), start nothing new, then stop; it stays stopped. */
+  /**
+   * Let active runs finish (no timeout, WI-41: the child gets `POST /api/v1/shutdown/drain`, and the hub arms no kill
+   * timer), start nothing new, then stop; it stays stopped.
+   */
   async drain(id: string): Promise<WorkspaceStatus> {
     const m = this.get(id);
     this.markStopped(m);
@@ -429,6 +439,7 @@ export class WorkspaceSupervisor {
     this.clearTimer(m, 'probe');
     this.clearTimer(m, 'stable');
     this.clearTimer(m, 'kill');
+    this.clearTimer(m, 'control');
     m.child = null;
     m.trustToken = null;
     m.lastExit = { code, signal, at: this.clock.now().toISOString() };
@@ -492,21 +503,61 @@ export class WorkspaceSupervisor {
     finish();
   }
 
-  /** Ask the child to end: control API first (SIGTERM as fallback), SIGKILL when it does not end in time. */
+  /**
+   * Ask the child to end: control API first (SIGTERM as fallback), SIGKILL when it does not end in time. A drain
+   * through the API has no deadline (`boundMs` `null`): no kill timer. When the API does not answer, a drain is
+   * retried in the background before the signal fallback – that fallback (like every SIGTERM) is bounded by the
+   * child's `--drain-timeout`.
+   */
   private async requestExit(m: Managed, transition: 'draining' | 'stopping', action: 'drain' | 'cancel-all', boundMs: number | null): Promise<void> {
     const generation = m.generation;
     m.transition = transition;
+    this.clearTimer(m, 'control');
     this.changed();
     const ok = await this.options.control(m.config, action).catch(() => false);
-    if (m.generation !== generation || !m.child) return;
-    if (!ok) {
-      // The control API is not available (still starting, no token): the signal drains with the child's own timeouts.
-      this.log.warn('control API not available: signalling the workspace instead', { workspace: m.config.id, action });
-      this.signal(m, 'SIGTERM');
-      if (action === 'cancel-all') this.signal(m, 'SIGTERM');
-      boundMs = this.options.drainTimeoutMs + this.options.cancelTimeoutMs;
+    if (m.generation !== generation || !m.child || m.transition !== transition) return;
+    if (ok) {
+      if (boundMs !== null) this.armKill(m, boundMs);
+      return;
     }
-    if (boundMs !== null) this.armKill(m, boundMs);
+    if (action === 'drain') {
+      this.retryDrain(m, generation, 1);
+      return;
+    }
+    this.signalFallback(m, action);
+  }
+
+  /** Retry the control API for a drain; after the last attempt fall back to SIGTERM. */
+  private retryDrain(m: Managed, generation: number, attempt: number): void {
+    const retry = this.options.drainControlRetry ?? DEFAULT_DRAIN_CONTROL_RETRY;
+    if (attempt > retry.attempts) {
+      this.signalFallback(m, 'drain');
+      return;
+    }
+    this.log.warn('control API not available: retrying the drain', { workspace: m.config.id, attempt, of: retry.attempts });
+    m.timers.control = this.timers.setTimeout(() => {
+      m.timers.control = undefined;
+      void (async () => {
+        // Something else took over meanwhile (stop, restart, hub shutdown, a new child): leave it to that.
+        if (m.generation !== generation || !m.child || m.transition !== 'draining' || this.shuttingDown) return;
+        const ok = await this.options.control(m.config, 'drain').catch(() => false);
+        if (m.generation !== generation || !m.child || m.transition !== 'draining' || this.shuttingDown) return;
+        if (!ok) this.retryDrain(m, generation, attempt + 1);
+      })();
+    }, retry.delayMs);
+  }
+
+  /** The control API is not available (still starting, no token): the signal ends the child with its own timeouts. */
+  private signalFallback(m: Managed, action: 'drain' | 'cancel-all'): void {
+    this.log.warn(
+      action === 'drain'
+        ? 'control API not available: signalling the workspace instead (this drain is bounded by --drain-timeout)'
+        : 'control API not available: signalling the workspace instead',
+      { workspace: m.config.id, action },
+    );
+    this.signal(m, 'SIGTERM');
+    if (action === 'cancel-all') this.signal(m, 'SIGTERM');
+    this.armKill(m, this.options.drainTimeoutMs + this.options.cancelTimeoutMs);
   }
 
   private signal(m: Managed, signal: NodeJS.Signals): void {

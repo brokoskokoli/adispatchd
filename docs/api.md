@@ -269,7 +269,7 @@ Dry-Run) bedeutet: Hub-Limit erreicht, Hub pausiert oder nicht erreichbar; `capa
 | POST | `/api/v1/scheduler/pause` | – | `200` Status (nur automatische Starts pausiert) |
 | POST | `/api/v1/scheduler/resume` | – | `200` Status; sofortiger Planungsschritt |
 | PATCH | `/api/v1/scheduler/runtime` | `{"maxConcurrent": 3}` bzw. `null` = YAML-Wert | `200` Status |
-| POST | `/api/v1/shutdown/drain` | – | `202 {"accepted":true,"mode":"drain","activeRuns":[…]}` – keine neuen Runs, aktive laufen zu Ende, dann Prozessende (Exit 0) |
+| POST | `/api/v1/shutdown/drain` | – | `202 {"accepted":true,"mode":"drain","activeRuns":[…]}` – keine neuen Runs, aktive laufen zu Ende, dann Prozessende (Exit 0). **Ohne Frist**, auch wenn die Instanz mit `--drain-timeout` läuft (unter systemd und dem Hub immer): diese Frist gilt nur für SIGTERM/SIGINT. Ein späteres SIGTERM begrenzt den Drain ab dem Signal; ein Drain während eines Signal-Drains hebt dessen Frist nicht auf und verlängert sie nicht (seit WI-41) |
 | POST | `/api/v1/shutdown/cancel-all` | `{"reason"?}` | `202` – alle Runs abbrechen (`on_cancel` bzw. `on_error`, wenn `on_cancel` nicht definiert ist), dann stoppen. Ein Cancel-All während eines Drains eskaliert ihn |
 
 ### Workflows
@@ -862,7 +862,7 @@ Anmeldung des Abschnitts [Anmeldung und Rollen](#anmeldung-und-rollen-seit-040-w
 
 Die Wirkung der Aktionen entspricht den gleichnamigen Befehlen der Steuer-Schnittstelle (unten): `pause`/`resume` – keine neuen
 **automatischen** Runs hub-weit; `stop`/`stop-all` – `cancel-all`, danach bleibt der Workspace gestoppt; `drain`/`drain-all` –
-aktive Runs laufen zu Ende, dann stoppt der Workspace; `restart` – Drain (begrenzt durch `--drain-timeout`), dann neu starten;
+aktive Runs laufen zu Ende (ohne Frist, seit WI-41), dann stoppt der Workspace; `restart` – Drain (begrenzt durch `--drain-timeout`), dann neu starten;
 `start` – gestoppten, fehlgeschlagenen oder deaktivierten Workspace starten. Alle Aktionen kehren zurück, sobald die
 Anforderung verschickt ist; `transition` im Workspace zeigt den Verlauf. Fehler: `404 unknown_workspace`, `409 invalid_state`
 (z. B. `start` eines laufenden Workspaces), `409 shutting_down`, `400 invalid_request`. **Jede** dieser Aktionen – auch eine
@@ -951,10 +951,10 @@ Operationen (`HubControl` in `src/hub/control-server.ts`) im Hub auf.
 | GET | `/status` | `HubStatus` (s. u.) |
 | POST | `/pause`, `/resume` | keine neuen **automatischen** Runs in allen Workspaces / wieder erlauben (laufende Runs enden regulär, manuelle Starts bleiben möglich) |
 | POST | `/stop-all` | `cancel-all` in allen Workspaces (`on_cancel`), sie bleiben danach gestoppt |
-| POST | `/drain-all` | alle Workspaces: keine neuen Runs, aktive laufen zu Ende, dann stoppen sie |
+| POST | `/drain-all` | alle Workspaces: keine neuen Runs, aktive laufen zu Ende (ohne Frist), dann stoppen sie |
 | POST | `/workspaces/:id/start` | gestoppten, fehlgeschlagenen oder deaktivierten Workspace starten (`409 invalid_state`, wenn er läuft) |
 | POST | `/workspaces/:id/stop` | `cancel-all` dieses Workspaces; bleibt gestoppt |
-| POST | `/workspaces/:id/drain` | Drain ohne Frist; bleibt gestoppt |
+| POST | `/workspaces/:id/drain` | Drain ohne Frist (`POST /api/v1/shutdown/drain` des Workspaces, kein Kill-Timer im Hub); bleibt gestoppt |
 | POST | `/workspaces/:id/restart` | Drain (begrenzt durch `--drain-timeout`, danach Cancel), dann neu starten |
 
 Antwort jeder erfolgreichen Anfrage: `200 {"ok": true, "status": HubStatus}`; Fehler: `{"error": {"code", "message"}}` mit

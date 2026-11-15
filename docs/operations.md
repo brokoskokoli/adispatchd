@@ -163,7 +163,7 @@ das nächste `service install`.
 | `systemctl stop` / `restart` | SIGTERM an den **Hauptprozess** → Drain bis `--drain-timeout`, dann Cancel-All (`on_cancel` bzw. `on_error`) bis `--cancel-timeout`, danach werden Hooks unterbrochen (Recovery setzt sie beim nächsten Start fort) | 0 | gestoppt |
 | zweites SIGTERM (`systemctl kill --kill-whom=main --signal=SIGTERM adispatchd`) | sofort Cancel-All | 0 | gestoppt |
 | drittes Signal | sofortiger Exit (Recovery räumt beim nächsten Start auf) | 1 | – |
-| `adispatch drain` / UI „Drain“ | keine neuen Runs, aktive laufen zu Ende, dann Ende | 0 | inactive, **kein** Neustart |
+| `adispatch drain` / UI „Drain“ | keine neuen Runs, aktive laufen zu Ende – **ohne Frist**, `--drain-timeout` gilt hier nicht (seit WI-41) –, dann Ende | 0 | inactive, **kein** Neustart |
 | `adispatch cancel-all` / UI „Cancel All“ | alle Runs abbrechen, `on_cancel` bzw. `on_error`, dann Ende | 0 | inactive, **kein** Neustart |
 | Konfigurations-/Startfehler (ungültige YAML, Instanz-Lock belegt, DB-Schema neuer als der Code) | Start abgebrochen | 78 (EX_CONFIG) | **kein** Neustart (`RestartPreventExitStatus=78`) – Fehler beheben, dann `systemctl start` |
 | Absturz / Exit ≠ 0 | – | ≠ 0 | Neustart nach 5 s → Recovery |
@@ -179,7 +179,9 @@ das nächste `service install`.
 - **`Restart=on-failure`**: Ein absichtlicher Shutdown über UI/CLI endet mit Exit 0 und wird **nicht** als Crash neu gestartet.
 - **Lange Runs:** Ein Agent-Run dauert oft länger als der Drain-Timeout. `systemctl stop` kann einen vollständigen Drain daher
   nicht garantieren – für geplante Stopps vorher `adispatch drain --wait` ausführen (beliebig lange, ohne Timeout)
-  und erst danach `systemctl stop`/Update/Reboot.
+  und erst danach `systemctl stop`/Update/Reboot. `--drain-timeout` begrenzt nur den Signal-Pfad (SIGTERM/SIGINT,
+  `systemctl stop|restart`), nie einen Drain über API, CLI oder UI; `--timeout` von `drain --wait` begrenzt nur das Warten
+  der CLI. Ein `systemctl stop` **während** eines solchen Drains begrenzt ihn ab dem Signal auf `--drain-timeout`.
 - **Absturz unter systemd:** Stirbt der Hauptprozess, beendet systemd (bei `KillMode=mixed`) auch alle Worker der cgroup per
   SIGKILL. Die Recovery findet beim Neustart die Prozessgruppen daher i. d. R. bereits beendet und finalisiert die Runs als
   `crashed` mit `on_crash` bzw. `on_error` (zählt als technischer Fehler, ggf. Retry-Block). Verwaiste, noch lebende Worker (Recovery tötet
@@ -749,8 +751,11 @@ Cancel-All), ein drittes beendet alle Kinder hart und den Hub (Recovery räumt b
 wenn alle Kinder beendet sind, und gibt dann Sockets und Instanzsperre frei; ein Kind, das trotz Frist nicht endet, wird
 mit SIGKILL beendet. Kindprozesse laufen in einer **eigenen Prozessgruppe**: Ctrl-C im Terminal erreicht nur den Hub, der
 die Signale weiterreicht. `hub workspace drain <id>` und `drain-all` rufen `POST /api/v1/shutdown/drain` des Workspaces mit
-dessen Steuer-Token auf (ohne Frist), `stop`/`stop-all` das `cancel-all`; ist die API nicht erreichbar, fällt der Hub auf
-SIGTERM zurück. Danach bleiben die Workspaces `stopped` (der Hub läuft weiter); `hub workspace start <id>` startet sie wieder.
+dessen Steuer-Token auf – **ohne Frist**: der Workspace wartet, bis seine Runs fertig sind, auch wenn das länger dauert als
+`--drain-timeout`, und der Hub beendet ihn nicht nach Zeit (seit WI-41; vorher brach der Workspace nach `--drain-timeout`
+ab). `stop`/`stop-all` rufen `cancel-all` auf. Ist die API nicht erreichbar, fällt der Hub auf SIGTERM zurück – bei einem
+Drain erst nach fünf weiteren Versuchen im Abstand von 2 s (Warnung im Log); dieser Rückfall ist wie jedes SIGTERM durch
+`--drain-timeout` begrenzt. Danach bleiben die Workspaces `stopped` (der Hub läuft weiter); `hub workspace start <id>` startet sie wieder.
 
 **Sicherheit.** Die Sockets `slots.sock` und `hub.sock` sind nur für den Benutzer des Hubs lesbar/schreibbar (`0600`). Worker
 und Actions der Workspaces laufen unter demselben Benutzer und könnten sich daher verbinden (`hub.sock` erlaubt `pause`, `stop-all`

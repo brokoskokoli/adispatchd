@@ -108,6 +108,94 @@ describe('createApp', () => {
     await again.shutdown();
   });
 
+  /** A run that keeps running until the test writes `release`; returns its id once it is running. */
+  async function startSlowRun(env: AppEnv, item: number, appExtra: Parameters<AppEnv['createApp']>[0] = {}): Promise<{ runId: string; release: () => void }> {
+    const release = path.join(env.marks, 'release');
+    sourceWorkflow(env, 'slow', env.script('slow.sh', `while [ ! -f "${release}" ]; do sleep 0.05; done`), 'on_cancel:\n  - type: source.update\n    labels: { add: [cancelled] }\n');
+    env.github.createIssue(REPO_A, { number: item, title: 'slow' });
+    env.app = await env.createApp(appExtra);
+    await env.app.start();
+    await env.app.ready;
+    const start = await env.request('POST', '/api/v1/workflows/slow/start', { item: String(item) });
+    const runId = start.json.run.id as string;
+    await env.waitRun(runId, (r) => r.status === 'running');
+    return { runId, release: () => writeFileSync(release, '') };
+  }
+
+  async function finalStatus(env: AppEnv, runId: string): Promise<string> {
+    const again = await env.createApp();
+    try {
+      return again.persistence.runs.get(runId)!.status;
+    } finally {
+      await again.shutdown();
+    }
+  }
+
+  it('API drain waits without a deadline even when a drain timeout is configured (WI-41)', async () => {
+    const env = await createAppEnv();
+    envs.push(env);
+    // Like an instance under the hub or systemd: `--drain-timeout` is always set.
+    const { runId, release } = await startSlowRun(env, 7, { drainTimeoutMs: 200 });
+    const res = await env.request('POST', '/api/v1/shutdown/drain');
+    expect(res.status).toBe(202);
+    expect(res.json).toMatchObject({ accepted: true, mode: 'drain', activeRuns: [runId] });
+    let stopped = false;
+    void env.app.stopped.then(() => (stopped = true));
+    // Well past the configured drain timeout: the run is still running, nothing was cancelled.
+    await new Promise((r) => setTimeout(r, 1_000));
+    expect(stopped).toBe(false);
+    expect(env.app.persistence.runs.get(runId)!.status).toBe('running');
+    expect(env.app.controller.status.draining).toBe(true);
+    expect(env.logger.records.some((e) => e.msg.includes('drain timeout exceeded'))).toBe(false);
+    release();
+    const result = await env.app.stopped;
+    expect(result).toMatchObject({ exitCode: 0, shutdown: { outcome: 'drained', leftActive: [] } });
+    expect(await finalStatus(env, runId)).toBe('completed');
+    expect(env.github.labels(REPO_A, 7)).not.toContain('cancelled');
+  });
+
+  it('SIGTERM during an API drain bounds it with the drain timeout, counted from the signal (WI-41)', async () => {
+    const env = await createAppEnv();
+    envs.push(env);
+    const { runId } = await startSlowRun(env, 8, { drainTimeoutMs: 200 });
+    expect((await env.request('POST', '/api/v1/shutdown/drain')).status).toBe(202);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(env.app.persistence.runs.get(runId)!.status).toBe('running');
+    const target = new EventEmitter();
+    const uninstall = installSignalHandlers(env.app, { target: target as never, drainTimeoutMs: 300, cancelTimeoutMs: 5_000, forceExit: () => undefined });
+    const signalledAt = Date.now();
+    target.emit('SIGTERM');
+    const result = await env.app.stopped;
+    uninstall();
+    expect(Date.now() - signalledAt).toBeGreaterThanOrEqual(250);
+    expect(result).toMatchObject({ exitCode: 0, shutdown: { outcome: 'cancelled' } });
+    expect(await finalStatus(env, runId)).toBe('cancelled');
+  });
+
+  it('an API drain during a SIGTERM drain neither lifts nor extends its deadline (WI-41)', async () => {
+    const env = await createAppEnv();
+    envs.push(env);
+    const { runId } = await startSlowRun(env, 9, { drainTimeoutMs: 1_000 });
+    const target = new EventEmitter();
+    const uninstall = installSignalHandlers(env.app, { target: target as never, drainTimeoutMs: 1_000, cancelTimeoutMs: 5_000, forceExit: () => undefined });
+    const signalledAt = Date.now();
+    target.emit('SIGTERM');
+    await new Promise((r) => setTimeout(r, 500));
+    expect((await env.request('POST', '/api/v1/shutdown/drain')).status).toBe(202);
+    const exceeded = (): boolean => env.logger.records.some((e) => e.msg.includes('drain timeout exceeded'));
+    for (let i = 0; i < 250 && !exceeded(); i++) await new Promise((r) => setTimeout(r, 20));
+    expect(exceeded()).toBe(true);
+    const elapsed = Date.now() - signalledAt;
+    const result = await env.app.stopped;
+    uninstall();
+    // The signal's deadline holds: 1 s from the signal – not lifted, and not 1 s from the API call (1.5 s).
+    expect(elapsed).toBeGreaterThanOrEqual(950);
+    expect(elapsed).toBeLessThan(1_450);
+    expect(result).toMatchObject({ exitCode: 0, shutdown: { outcome: 'cancelled' } });
+    expect(await finalStatus(env, runId)).toBe('cancelled');
+    expect(env.logger.records.filter((e) => e.msg.includes('drain timeout exceeded'))).toHaveLength(1);
+  });
+
   it('SIGTERM drains with timeout, then cancels; a second signal escalates; a third forces exit', async () => {
     const env = await createAppEnv();
     envs.push(env);

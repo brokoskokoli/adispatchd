@@ -173,6 +173,63 @@ describe('WorkspaceSupervisor', () => {
     expect(s.statusOfWorkspace('docs').state).toBe('running');
   });
 
+  it('drain through the control API has no deadline: no signal and no SIGKILL, however long the runs take (WI-41)', async () => {
+    const s = make();
+    s.startEnabled();
+    await clock.advanceAsync(100);
+    await s.drain('coder');
+    expect(controlCalls).toEqual([['coder', 'drain']]);
+    // Far beyond drain timeout + cancel timeout + kill grace (60 s + 10 s + 5 s).
+    await clock.advanceAsync(24 * 60 * 60_000);
+    expect(spawner.last('coder').signals).toEqual([]);
+    expect(s.statusOfWorkspace('coder')).toMatchObject({ state: 'running', transition: 'draining' });
+    spawner.last('coder').exit(0);
+    expect(s.statusOfWorkspace('coder')).toMatchObject({ state: 'stopped', transition: null });
+  });
+
+  it('drain: retries the control API when it does not answer at first, without signalling (WI-41)', async () => {
+    const s = make({ drainControlRetry: { attempts: 3, delayMs: 1_000 } });
+    s.startEnabled();
+    await clock.advanceAsync(100);
+    controlOk = false;
+    await s.drain('coder');
+    expect(controlCalls).toEqual([['coder', 'drain']]);
+    await clock.advanceAsync(1_000);
+    expect(controlCalls).toHaveLength(2);
+    controlOk = true;
+    await clock.advanceAsync(1_000);
+    expect(controlCalls).toEqual([['coder', 'drain'], ['coder', 'drain'], ['coder', 'drain']]);
+    await clock.advanceAsync(24 * 60 * 60_000);
+    expect(controlCalls).toHaveLength(3);
+    expect(spawner.last('coder').signals).toEqual([]);
+    expect(s.statusOfWorkspace('coder').transition).toBe('draining');
+  });
+
+  it('drain: falls back to SIGTERM (bounded by the drain timeout) only after the retries; a stop ends the retries (WI-41)', async () => {
+    const s = make({ drainControlRetry: { attempts: 2, delayMs: 1_000 } });
+    s.startEnabled();
+    await clock.advanceAsync(100);
+    controlOk = false;
+    await s.drain('coder');
+    await clock.advanceAsync(1_000);
+    expect(spawner.last('coder').signals).toEqual([]);
+    await clock.advanceAsync(1_000);
+    expect(controlCalls).toEqual([['coder', 'drain'], ['coder', 'drain'], ['coder', 'drain']]);
+    expect(spawner.last('coder').signals).toEqual(['SIGTERM']);
+    await clock.advanceAsync(60_000 + 10_000 + 5_000);
+    expect(spawner.last('coder').signals).toEqual(['SIGTERM', 'SIGKILL']);
+    expect(s.statusOfWorkspace('docs').state).toBe('running');
+
+    // A stop during the retries takes over: no further drain attempts, no drain fallback.
+    await s.drain('docs');
+    controlCalls.length = 0;
+    await s.stop('docs');
+    expect(controlCalls).toEqual([['docs', 'cancel-all']]);
+    await clock.advanceAsync(10_000);
+    expect(controlCalls).toEqual([['docs', 'cancel-all']]);
+    expect(spawner.last('docs').signals).toEqual(['SIGTERM', 'SIGTERM']);
+  });
+
   it('stop: cancel-all through the API; falls back to SIGTERM when the API does not answer; SIGKILL when the child hangs', async () => {
     controlOk = false;
     const s = make();

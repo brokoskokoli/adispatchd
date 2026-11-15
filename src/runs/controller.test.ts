@@ -578,6 +578,23 @@ on_success:
     expect((await handle.done).status).toBe('cancelled');
   });
 
+  it('a later drain without a timeout keeps the deadline of a running bounded drain and a looser one does not extend it (WI-41)', async () => {
+    const waiter = env.script('wait.sh', `while [ ! -f "${env.marks}/never" ]; do sleep 0.02; done`);
+    const snapshot = await env.snapshot(workflowYaml(waiter));
+    const h = await readyHarness();
+    const run = env.reserve(snapshot);
+    const handle = h.controller.startRun(run.id);
+    await waitForStatus(h, env.p, run.id, 'running');
+    const startedAt = Date.now();
+    const drain = h.controller.shutdown({ mode: 'drain', drainTimeoutMs: 300, cancelTimeoutMs: 10_000 });
+    await waitForSystemStatus(h, (s) => s.draining);
+    expect(h.controller.shutdown({ mode: 'drain', cancelTimeoutMs: 10_000 })).toBe(drain); // API drain: no deadline
+    void h.controller.shutdown({ mode: 'drain', drainTimeoutMs: 60_000, cancelTimeoutMs: 60_000 }); // looser: ignored
+    expect(await drain).toEqual({ outcome: 'cancelled', leftActive: [] });
+    expect((await handle.done).status).toBe('cancelled');
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  });
+
   it('forced stop: cancel timeout interrupts on_cancel, the run stays finalizing and recovery completes it', async () => {
     const sleeper = env.script('sleep.sh', 'exec sleep 30');
     const once = path.join(env.marks, 'hook-ran-once');
