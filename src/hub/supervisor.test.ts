@@ -244,6 +244,29 @@ describe('WorkspaceSupervisor', () => {
     expect(spawner.last('coder').signals).toEqual(['SIGTERM']);
   });
 
+  it('a drain retry still waiting for the control API ends when a restart takes over, even if a drain follows (WI-41)', async () => {
+    let release: (() => void) | undefined;
+    const s = make({
+      drainControlRetry: { attempts: 3, delayMs: 1_000 },
+      control: async (w, action) => {
+        controlCalls.push([w.id, action]);
+        if (controlCalls.length > 1) await new Promise<void>((r) => (release = r));
+        return false;
+      },
+    });
+    s.startEnabled();
+    await clock.advanceAsync(100);
+    await s.drain('coder');
+    await clock.advanceAsync(1_000); // first retry: the control call hangs
+    expect(controlCalls).toHaveLength(2);
+    await s.restart('coder'); // SIGTERM #1 (bounded drain in the child)
+    await s.drain('coder'); // keeps it stopped afterwards
+    release!();
+    await clock.advanceAsync(10_000);
+    expect(controlCalls).toHaveLength(2);
+    expect(spawner.last('coder').signals).toEqual(['SIGTERM']); // never a second SIGTERM (= cancel-all)
+  });
+
   it('a drain during a stop changes nothing; during a restart it only keeps the workspace stopped (WI-41)', async () => {
     controlOk = false;
     let release!: () => void;

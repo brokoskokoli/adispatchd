@@ -132,6 +132,8 @@ interface Managed {
   timers: { restart?: TimerHandle; probe?: TimerHandle; stable?: TimerHandle; kill?: TimerHandle; control?: TimerHandle };
   /** Incremented per spawn; callbacks of an older child are ignored. */
   generation: number;
+  /** Incremented per exit request (drain, stop, restart, hub shutdown); a drain retry of an older request stops (WI-41). */
+  request: number;
   exited: Array<() => void>;
 }
 
@@ -166,6 +168,7 @@ export class WorkspaceSupervisor {
         message: null,
         timers: {},
         generation: 0,
+        request: 0,
         exited: [],
       });
     }
@@ -280,6 +283,7 @@ export class WorkspaceSupervisor {
       return this.statusOf(m);
     }
     m.transition = 'restarting';
+    m.request++;
     this.clearTimer(m, 'control');
     this.changed();
     this.signal(m, 'SIGTERM');
@@ -312,6 +316,7 @@ export class WorkspaceSupervisor {
         continue;
       }
       if (first) {
+        m.request++;
         this.clearTimer(m, 'control');
         m.transition = 'stopping';
         this.signal(m, 'SIGTERM');
@@ -522,24 +527,25 @@ export class WorkspaceSupervisor {
    */
   private async requestExit(m: Managed, transition: 'draining' | 'stopping', action: 'drain' | 'cancel-all', boundMs: number | null): Promise<void> {
     const generation = m.generation;
+    const request = ++m.request;
     m.transition = transition;
     this.clearTimer(m, 'control');
     this.changed();
     const ok = await this.options.control(m.config, action).catch(() => false);
-    if (m.generation !== generation || !m.child || m.transition !== transition) return;
+    if (m.generation !== generation || m.request !== request || !m.child || m.transition !== transition) return;
     if (ok) {
       if (boundMs !== null) this.armKill(m, boundMs);
       return;
     }
     if (action === 'drain') {
-      this.retryDrain(m, generation, 1);
+      this.retryDrain(m, generation, request, 1);
       return;
     }
     this.signalFallback(m, action);
   }
 
   /** Retry the control API for a drain; after the last attempt fall back to SIGTERM. */
-  private retryDrain(m: Managed, generation: number, attempt: number): void {
+  private retryDrain(m: Managed, generation: number, request: number, attempt: number): void {
     const retry = this.options.drainControlRetry ?? DEFAULT_DRAIN_CONTROL_RETRY;
     if (attempt > retry.attempts) {
       this.signalFallback(m, 'drain');
@@ -551,10 +557,11 @@ export class WorkspaceSupervisor {
       m.timers.control = undefined;
       void (async () => {
         // Something else took over meanwhile (stop, restart, hub shutdown, a new child): leave it to that.
-        if (m.generation !== generation || !m.child || m.transition !== 'draining' || this.shuttingDown) return;
+        const current = (): boolean => m.generation === generation && m.request === request && !!m.child && m.transition === 'draining' && !this.shuttingDown;
+        if (!current()) return;
         const ok = await this.options.control(m.config, 'drain').catch(() => false);
-        if (m.generation !== generation || !m.child || m.transition !== 'draining' || this.shuttingDown) return;
-        if (!ok) this.retryDrain(m, generation, attempt + 1);
+        if (!current()) return;
+        if (!ok) this.retryDrain(m, generation, request, attempt + 1);
       })();
     }, retry.delayMs);
   }
